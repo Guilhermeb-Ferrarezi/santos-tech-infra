@@ -5,6 +5,7 @@ import rateLimit from '@fastify/rate-limit'
 import { env } from '@santos-tech/env'
 import { errorHandler } from '@/shared/errors/error-handler'
 import { logRequest } from '@/shared/logger/mongo-transport'
+import { authRoutes } from '@/modules/auth/auth.routes'
 
 export async function buildApp() {
   const app = Fastify({ logger: true })
@@ -36,7 +37,8 @@ export async function buildApp() {
 
   app.setErrorHandler(errorHandler)
 
-  // Auth routes registered in Task 8 — placeholder for now
+  await app.register(authRoutes, { prefix: '/auth' })
+
   app.get('/health', async () => ({ ok: true }))
 
   return app
