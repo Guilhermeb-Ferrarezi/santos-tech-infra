@@ -7,6 +7,7 @@ import { errorHandler } from '@/shared/errors/error-handler'
 import { logRequest } from '@/shared/logger/mongo-transport'
 import { authRoutes } from '@/modules/auth/auth.routes'
 import { authGuardPlugin } from '@/shared/middleware/auth-guard'
+import { registerOAuth } from '@/modules/auth/auth.oauth'
 
 export async function buildApp() {
   const app = Fastify({ logger: true })
@@ -41,6 +42,7 @@ export async function buildApp() {
   app.setErrorHandler(errorHandler)
 
   await app.register(authRoutes, { prefix: '/auth' })
+  await app.register(registerOAuth)
 
   app.get('/health', async () => ({ ok: true }))
 
