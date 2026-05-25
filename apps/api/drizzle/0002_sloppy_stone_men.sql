@@ -1,0 +1,1 @@
+CREATE INDEX "password_resets_user_id_idx" ON "password_resets" USING btree ("user_id");
