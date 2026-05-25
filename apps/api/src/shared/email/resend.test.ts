@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { generateResetToken } from './resend'
+import { generateResetToken, hashResetToken } from './resend'
 
 describe('generateResetToken', () => {
   it('retorna token e hash distintos', () => {
@@ -20,8 +20,6 @@ describe('generateResetToken', () => {
 
   it('mesmo token sempre produz mesmo hash', () => {
     const { token, hash } = generateResetToken()
-    const { createHash } = require('crypto')
-    const expectedHash = createHash('sha256').update(token).digest('hex')
-    expect(hash).toBe(expectedHash)
+    expect(hashResetToken(token)).toBe(hash)
   })
 })
