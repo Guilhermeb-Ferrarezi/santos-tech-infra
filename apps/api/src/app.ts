@@ -6,6 +6,7 @@ import { env } from '@santos-tech/env'
 import { errorHandler } from '@/shared/errors/error-handler'
 import { logRequest } from '@/shared/logger/mongo-transport'
 import { authRoutes } from '@/modules/auth/auth.routes'
+import { authGuardPlugin } from '@/shared/middleware/auth-guard'
 
 export async function buildApp() {
   const app = Fastify({ logger: true })
@@ -18,6 +19,8 @@ export async function buildApp() {
   await app.register(cookie, {
     secret: env.JWT_SECRET,
   })
+
+  await app.register(authGuardPlugin)
 
   await app.register(rateLimit, {
     max: 100,
