@@ -25,24 +25,4 @@ export function createEnv(input: Record<string, unknown> = process.env): Env {
   return result.data
 }
 
-let env: Env | undefined
-
-export function getEnv(): Env {
-  if (!env) {
-    env = createEnv()
-  }
-  return env
-}
-
-// Only attempt to initialize env in non-test environments
-// In tests, use createEnv() directly or getEnv() after setting up process.env
-if (process.env.NODE_ENV !== 'test') {
-  try {
-    env = createEnv()
-  } catch (error) {
-    // In production/development, this should fail loudly
-    if (process.env.NODE_ENV === 'production') {
-      throw error
-    }
-  }
-}
+export const env: Env = createEnv()

@@ -1,0 +1,2 @@
+[test]
+envFile = ".env.test"
