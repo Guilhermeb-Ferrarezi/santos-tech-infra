@@ -1,0 +1,9 @@
+{
+  "name": "santos-tech-infra",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "bun run --filter @santos-tech/api dev",
+    "build": "bun run --filter '*' build"
+  }
+}

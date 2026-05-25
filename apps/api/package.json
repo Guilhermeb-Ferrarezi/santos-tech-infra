@@ -1,0 +1,31 @@
+{
+  "name": "@santos-tech/api",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --watch src/app.ts",
+    "start": "bun run src/app.ts",
+    "test": "bun test",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun run src/db/migrate.ts"
+  },
+  "dependencies": {
+    "fastify": "^5.3.3",
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^10.0.2",
+    "@fastify/oauth2": "^8.0.0",
+    "@fastify/rate-limit": "^10.2.2",
+    "drizzle-orm": "^0.41.0",
+    "pg": "^8.14.1",
+    "mongodb": "^6.14.2",
+    "jose": "^5.10.0",
+    "zod": "^3.24.2",
+    "@santos-tech/env": "workspace:*",
+    "@santos-tech/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.11",
+    "drizzle-kit": "^0.30.6",
+    "typescript": "^5.8.3"
+  }
+}
