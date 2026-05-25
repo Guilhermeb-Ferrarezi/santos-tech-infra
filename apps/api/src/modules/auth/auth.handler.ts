@@ -1,7 +1,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { eq } from 'drizzle-orm'
 import { db } from '@/db/client'
-import { users, sessions } from '@/db/schema'
+import { users, sessions, passwordResets } from '@/db/schema'
 import { env } from '@santos-tech/env'
 import { AppError } from '@/shared/errors/app-error'
 import {
@@ -13,6 +13,11 @@ import {
   hashRefreshToken,
   cookieOptions,
 } from './auth.service'
+import {
+  generateResetToken,
+  hashResetToken,
+  sendPasswordResetEmail,
+} from '@/shared/email/resend'
 
 type RegisterBody = { email: string; name: string; password: string }
 type LoginBody = { email: string; password: string }
@@ -135,4 +140,54 @@ export async function refreshHandler(request: FastifyRequest, reply: FastifyRepl
     .setCookie('refresh_token', newRefresh, { ...opts, maxAge: 7 * 24 * 60 * 60 })
 
   return reply.status(204).send()
+}
+
+export async function forgotPasswordHandler(
+  request: FastifyRequest<{ Body: { email: string } }>,
+  reply: FastifyReply,
+) {
+  const { email } = request.body
+
+  const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1)
+
+  if (user) {
+    await db.delete(passwordResets).where(eq(passwordResets.userId, user.id))
+
+    const { token, hash } = generateResetToken()
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000)
+
+    await db.insert(passwordResets).values({ userId: user.id, tokenHash: hash, expiresAt })
+
+    const resetUrl = `${env.CORS_ORIGIN}/reset-password?token=${token}`
+    await sendPasswordResetEmail(email, resetUrl)
+  }
+
+  return reply.status(200).send({ message: 'ok' })
+}
+
+export async function resetPasswordHandler(
+  request: FastifyRequest<{ Body: { token: string; newPassword: string } }>,
+  reply: FastifyReply,
+) {
+  const { token, newPassword } = request.body
+
+  const tokenHash = hashResetToken(token)
+  const [reset] = await db
+    .select()
+    .from(passwordResets)
+    .where(eq(passwordResets.tokenHash, tokenHash))
+    .limit(1)
+
+  if (!reset || reset.expiresAt < new Date()) {
+    throw new AppError(400, 'INVALID_TOKEN', 'Link de recuperação inválido ou expirado')
+  }
+
+  await db
+    .update(users)
+    .set({ passwordHash: await hashPassword(newPassword) })
+    .where(eq(users.id, reset.userId))
+
+  await db.delete(passwordResets).where(eq(passwordResets.id, reset.id))
+
+  return reply.status(200).send({ message: 'ok' })
 }
