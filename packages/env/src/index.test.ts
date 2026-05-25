@@ -15,6 +15,8 @@ describe('createEnv', () => {
       COOKIE_DOMAIN: 'localhost',
       CORS_ORIGIN: 'http://localhost:5173',
       NODE_ENV: 'test',
+      RESEND_API_KEY: 'test-resend-api-key',
+      RESEND_FROM_EMAIL: 'noreply@santos-tech.com',
     }
 
     const env = createEnv(vars)
