@@ -3,7 +3,7 @@
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "bun run --filter @santos-tech/api dev",
+    "dev": "bun --env-file=.env --watch apps/api/src/app.ts",
     "build": "bun run --filter '*' build"
   }
 }
