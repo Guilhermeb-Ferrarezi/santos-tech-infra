@@ -187,6 +187,7 @@ export async function resetPasswordHandler(
     .set({ passwordHash: await hashPassword(newPassword) })
     .where(eq(users.id, reset.userId))
 
+  await db.delete(sessions).where(eq(sessions.userId, reset.userId))
   await db.delete(passwordResets).where(eq(passwordResets.id, reset.id))
 
   return reply.status(200).send({ message: 'ok' })
