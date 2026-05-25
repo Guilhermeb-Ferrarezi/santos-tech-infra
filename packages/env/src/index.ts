@@ -12,6 +12,8 @@ const schema = z.object({
   COOKIE_DOMAIN: z.string().min(1),
   CORS_ORIGIN: z.string().min(1),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  RESEND_API_KEY: z.string().min(1),
+  RESEND_FROM_EMAIL: z.string().email(),
 })
 
 export type Env = z.infer<typeof schema>
