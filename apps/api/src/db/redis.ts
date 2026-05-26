@@ -5,13 +5,11 @@ const client = createClient({ url: env.REDIS_URL })
 
 client.on('error', (err) => console.error('Redis error:', err))
 
-let connected = false
+let connectPromise: Promise<void> | null = null
 
-async function connect() {
-  if (!connected) {
-    await client.connect()
-    connected = true
-  }
+function connect() {
+  if (!connectPromise) connectPromise = client.connect()
+  return connectPromise
 }
 
 export const redis = {

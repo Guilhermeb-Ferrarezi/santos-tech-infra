@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { SignJWT, jwtVerify } from 'jose'
 import { env } from '@santos-tech/env'
 
@@ -41,7 +42,7 @@ export async function verifyRefreshToken(token: string): Promise<string> {
 }
 
 export function hashRefreshToken(token: string): string {
-  return require('node:crypto').createHash('sha256').update(token).digest('hex')
+  return createHash('sha256').update(token).digest('hex')
 }
 
 export function cookieOptions(env_: typeof env) {
