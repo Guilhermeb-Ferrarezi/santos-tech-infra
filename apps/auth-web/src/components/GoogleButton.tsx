@@ -2,7 +2,7 @@ export default function GoogleButton() {
   return (
     <button
       type="button"
-      onClick={() => { window.location.href = '/auth/google' }}
+      onClick={() => { window.location.href = `${import.meta.env.VITE_API_URL ?? ''}/auth/google` }}
       className="w-full flex items-center justify-center gap-3 px-4 py-2.5 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
     >
       <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
