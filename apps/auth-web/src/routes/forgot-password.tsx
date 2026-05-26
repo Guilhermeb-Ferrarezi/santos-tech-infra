@@ -11,18 +11,18 @@ export default function ForgotPasswordPage() {
   const mutation = useMutation({
     mutationFn: () => forgotPassword(email),
     onSuccess: () => setSent(true),
-    onError: () => setSent(true), // Sempre mostra sucesso para não revelar se email existe
+    onError: () => setSent(true),
   })
 
   if (sent) {
     return (
       <AuthLayout>
-        <h2 className="text-2xl font-bold text-[#0E2937] mb-2">Verifique seu email</h2>
-        <p className="text-sm text-[#496B84] mb-6">
+        <h2 className="text-3xl font-bold text-[#0E2937] mb-2">Verifique seu email</h2>
+        <p className="text-base text-[#496B84] mb-6">
           Se este email estiver cadastrado, você receberá um link de recuperação em instantes.
           Verifique também sua caixa de spam.
         </p>
-        <a href="/" className="text-sm text-[#187ABF] hover:underline">
+        <a href="/" className="text-base text-[#187ABF] hover:underline">
           ← Voltar para o login
         </a>
       </AuthLayout>
@@ -31,17 +31,17 @@ export default function ForgotPasswordPage() {
 
   return (
     <AuthLayout>
-      <h2 className="text-2xl font-bold text-[#0E2937] mb-1">Recuperar senha</h2>
-      <p className="text-sm text-[#496B84] mb-6">
+      <h2 className="text-3xl font-bold text-[#0E2937] mb-1">Recuperar senha</h2>
+      <p className="text-base text-[#496B84] mb-8">
         Digite seu email e enviaremos um link para criar uma nova senha.
       </p>
 
       <form
         onSubmit={e => { e.preventDefault(); mutation.mutate() }}
-        className="flex flex-col gap-4"
+        className="flex flex-col gap-5"
       >
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="email" className="text-sm font-medium text-[#0E2937]">Email</Label>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="email" className="text-sm font-semibold text-[#0E2937]">Email</Label>
           <input
             id="email"
             type="email"
@@ -49,20 +49,20 @@ export default function ForgotPasswordPage() {
             onChange={e => setEmail(e.target.value)}
             placeholder="seu@email.com"
             required
-            className="w-full px-3 py-2.5 border border-gray-200 rounded-lg bg-[#F5F8FA] text-sm focus:outline-none focus:border-[#187ABF] focus:bg-white transition-colors"
+            className="w-full px-4 py-3.5 border border-gray-200 rounded-xl bg-[#F5F8FA] text-base focus:outline-none focus:border-[#187ABF] focus:bg-white transition-colors"
           />
         </div>
 
         <button
           type="submit"
           disabled={mutation.isPending}
-          className="w-full py-2.5 bg-[#0DB88F] hover:bg-[#0aa37f] text-white font-semibold rounded-lg transition-colors disabled:opacity-60"
+          className="w-full py-3.5 bg-[#0DB88F] hover:bg-[#0aa37f] text-white text-base font-semibold rounded-xl transition-colors disabled:opacity-60"
         >
           {mutation.isPending ? 'Enviando...' : 'Enviar link de recuperação'}
         </button>
       </form>
 
-      <a href="/" className="block text-center mt-4 text-sm text-[#187ABF] hover:underline">
+      <a href="/" className="block text-center mt-5 text-base text-[#187ABF] hover:underline">
         ← Voltar para o login
       </a>
     </AuthLayout>

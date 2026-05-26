@@ -27,11 +27,11 @@ export default function ResetPasswordPage() {
   if (!search.token) {
     return (
       <AuthLayout>
-        <h2 className="text-2xl font-bold text-[#0E2937] mb-2">Link inválido</h2>
-        <p className="text-sm text-[#496B84] mb-4">
+        <h2 className="text-3xl font-bold text-[#0E2937] mb-2">Link inválido</h2>
+        <p className="text-base text-[#496B84] mb-5">
           Este link de recuperação é inválido ou expirou.
         </p>
-        <a href="/forgot-password" className="text-sm text-[#187ABF] hover:underline">
+        <a href="/forgot-password" className="text-base text-[#187ABF] hover:underline">
           Solicitar novo link →
         </a>
       </AuthLayout>
@@ -50,14 +50,14 @@ export default function ResetPasswordPage() {
 
   return (
     <AuthLayout>
-      <h2 className="text-2xl font-bold text-[#0E2937] mb-1">Nova senha</h2>
-      <p className="text-sm text-[#496B84] mb-6">
+      <h2 className="text-3xl font-bold text-[#0E2937] mb-1">Nova senha</h2>
+      <p className="text-base text-[#496B84] mb-8">
         Digite e confirme sua nova senha.
       </p>
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="password" className="text-sm font-medium text-[#0E2937]">Nova senha</Label>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="password" className="text-sm font-semibold text-[#0E2937]">Nova senha</Label>
           <PasswordInput
             id="password"
             value={password}
@@ -68,8 +68,8 @@ export default function ResetPasswordPage() {
           />
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="confirm" className="text-sm font-medium text-[#0E2937]">Confirmar senha</Label>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="confirm" className="text-sm font-semibold text-[#0E2937]">Confirmar senha</Label>
           <PasswordInput
             id="confirm"
             value={confirm}
@@ -84,14 +84,14 @@ export default function ResetPasswordPage() {
         <button
           type="submit"
           disabled={mutation.isPending}
-          className="w-full py-2.5 bg-[#0DB88F] hover:bg-[#0aa37f] text-white font-semibold rounded-lg transition-colors disabled:opacity-60"
+          className="w-full py-3.5 bg-[#0DB88F] hover:bg-[#0aa37f] text-white text-base font-semibold rounded-xl transition-colors disabled:opacity-60"
         >
           {mutation.isPending ? 'Salvando...' : 'Redefinir senha'}
         </button>
       </form>
 
       {mutation.isError && (
-        <a href="/forgot-password" className="block text-center mt-4 text-sm text-[#187ABF] hover:underline">
+        <a href="/forgot-password" className="block text-center mt-5 text-base text-[#187ABF] hover:underline">
           Solicitar novo link →
         </a>
       )}
