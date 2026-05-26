@@ -1,7 +1,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { eq, or } from 'drizzle-orm'
 import { db } from '@/db/client'
-import { users, sessions } from '@/db/schema'
+import { users, sessions, customRoles } from '@/db/schema'
 import { redis } from '@/db/redis'
 import { env } from '@santos-tech/env'
 import { AppError } from '@/shared/errors/app-error'
@@ -22,6 +22,28 @@ import {
 
 type RegisterBody = { email: string; name: string; password: string }
 type LoginBody = { identifier: string; password: string }
+
+type DbUser = typeof users.$inferSelect
+
+async function buildUserProfile(user: DbUser) {
+  let permissions: Record<string, string[]> | null = null
+  if (user.role === 4 && user.customRoleId) {
+    const [cr] = await db.select().from(customRoles).where(eq(customRoles.id, user.customRoleId)).limit(1)
+    if (cr) permissions = cr.permissions as Record<string, string[]>
+  }
+  return {
+    id: user.id,
+    email: user.email,
+    username: user.username ?? null,
+    name: user.name,
+    role: user.role,
+    customRoleId: user.customRoleId ?? null,
+    avatarUrl: user.avatarUrl ?? null,
+    suspendedAt: user.suspendedAt ? user.suspendedAt.toISOString() : null,
+    permissions,
+    createdAt: user.createdAt.toISOString(),
+  }
+}
 
 export async function registerHandler(
   request: FastifyRequest<{ Body: RegisterBody }>,
@@ -75,16 +97,7 @@ export async function loginHandler(
     .setCookie('access_token', accessToken, { ...opts, maxAge: 15 * 60 })
     .setCookie('refresh_token', refreshToken, { ...opts, maxAge: 7 * 24 * 60 * 60 })
 
-  return reply.send({
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      avatarUrl: user.avatarUrl,
-      createdAt: user.createdAt.toISOString(),
-    },
-  })
+  return reply.send({ user: await buildUserProfile(user) })
 }
 
 export async function logoutHandler(_request: FastifyRequest, reply: FastifyReply) {
@@ -111,16 +124,7 @@ export async function meHandler(request: FastifyRequest, reply: FastifyReply) {
 
   redis.set(`user:last_seen:${user.id}`, '1', { EX: 5 * 60 }).catch(() => {})
 
-  return reply.send({
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      avatarUrl: user.avatarUrl,
-      createdAt: user.createdAt.toISOString(),
-    },
-  })
+  return reply.send({ user: await buildUserProfile(user) })
 }
 
 export async function refreshHandler(request: FastifyRequest, reply: FastifyReply) {
@@ -174,7 +178,7 @@ export async function forgotPasswordHandler(
     const { token, hash } = generateResetToken()
     await redis.set(`pwd_reset:${hash}`, user.id, { EX: 60 * 60 })
 
-    const resetUrl = `${env.CORS_ORIGIN}/reset-password?token=${token}`
+    const resetUrl = `${env.AUTH_WEB_ORIGIN ?? env.CORS_ORIGIN}/reset-password?token=${token}`
     await sendPasswordResetEmail(email, resetUrl)
   }
 

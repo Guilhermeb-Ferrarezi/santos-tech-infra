@@ -11,6 +11,7 @@ const schema = z.object({
   PORT: z.coerce.number().default(3000),
   COOKIE_DOMAIN: z.string().min(1),
   CORS_ORIGIN: z.string().min(1),
+  AUTH_WEB_ORIGIN: z.string().min(1).optional(),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   RESEND_API_KEY: z.string().min(1),
   RESEND_FROM_EMAIL: z.string().email(),

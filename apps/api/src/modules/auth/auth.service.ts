@@ -41,7 +41,7 @@ export async function verifyRefreshToken(token: string): Promise<string> {
 }
 
 export function hashRefreshToken(token: string): string {
-  return Bun.hash(token).toString(16)
+  return require('node:crypto').createHash('sha256').update(token).digest('hex')
 }
 
 export function cookieOptions(env_: typeof env) {
