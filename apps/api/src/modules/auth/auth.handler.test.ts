@@ -51,7 +51,7 @@ describe('POST /auth/login', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/auth/login',
-      payload: { email, password: 'minha-senha-123' },
+      payload: { identifier: email, password: 'minha-senha-123' },
     })
     expect(res.statusCode).toBe(200)
     expect(res.headers['set-cookie']).toBeDefined()
@@ -61,7 +61,7 @@ describe('POST /auth/login', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/auth/login',
-      payload: { email: 'naoexiste@test.com', password: 'senha-errada' },
+      payload: { identifier: 'naoexiste@test.com', password: 'senha-errada' },
     })
     expect(res.statusCode).toBe(401)
   })

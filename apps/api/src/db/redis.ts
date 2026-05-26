@@ -1,8 +1,24 @@
 import { createClient } from 'redis'
 import { env } from '@santos-tech/env'
 
-export const redis = createClient({ url: env.REDIS_URL })
+const client = createClient({ url: env.REDIS_URL })
 
-redis.on('error', (err) => console.error('Redis error:', err))
+client.on('error', (err) => console.error('Redis error:', err))
 
-await redis.connect()
+let connected = false
+
+async function connect() {
+  if (!connected) {
+    await client.connect()
+    connected = true
+  }
+}
+
+export const redis = {
+  get: async (key: string) => { await connect(); return client.get(key) },
+  set: async (key: string, value: string, options?: { EX?: number }) => {
+    await connect()
+    return options?.EX ? client.set(key, value, { EX: options.EX }) : client.set(key, value)
+  },
+  del: async (key: string) => { await connect(); return client.del(key) },
+}
