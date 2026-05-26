@@ -1,7 +1,8 @@
 import type { FastifyRequest, FastifyReply } from 'fastify'
-import { eq } from 'drizzle-orm'
+import { eq, or } from 'drizzle-orm'
 import { db } from '@/db/client'
-import { users, sessions, passwordResets } from '@/db/schema'
+import { users, sessions } from '@/db/schema'
+import { redis } from '@/db/redis'
 import { env } from '@santos-tech/env'
 import { AppError } from '@/shared/errors/app-error'
 import {
@@ -20,7 +21,7 @@ import {
 } from '@/shared/email/resend'
 
 type RegisterBody = { email: string; name: string; password: string }
-type LoginBody = { email: string; password: string }
+type LoginBody = { identifier: string; password: string }
 
 export async function registerHandler(
   request: FastifyRequest<{ Body: RegisterBody }>,
@@ -45,9 +46,11 @@ export async function loginHandler(
   request: FastifyRequest<{ Body: LoginBody }>,
   reply: FastifyReply,
 ) {
-  const { email, password } = request.body
+  const { identifier, password } = request.body
 
-  const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1)
+  const [user] = await db.select().from(users).where(
+    or(eq(users.email, identifier), eq(users.username, identifier))
+  ).limit(1)
   if (!user || !user.passwordHash) {
     throw new AppError(401, 'INVALID_CREDENTIALS', 'Email ou senha inválidos')
   }
@@ -73,7 +76,14 @@ export async function loginHandler(
     .setCookie('refresh_token', refreshToken, { ...opts, maxAge: 7 * 24 * 60 * 60 })
 
   return reply.send({
-    user: { id: user.id, email: user.email, name: user.name, createdAt: user.createdAt.toISOString() },
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      avatarUrl: user.avatarUrl,
+      createdAt: user.createdAt.toISOString(),
+    },
   })
 }
 
@@ -95,11 +105,21 @@ export async function meHandler(request: FastifyRequest, reply: FastifyReply) {
 
   const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1)
   if (!user) throw new AppError(401, 'UNAUTHORIZED', 'Usuário não encontrado')
+  if (user.suspendedAt) throw new AppError(403, 'ACCOUNT_SUSPENDED', 'Conta suspensa')
 
   ;(request as any).userId = user.id
 
+  redis.set(`user:last_seen:${user.id}`, '1', { EX: 5 * 60 }).catch(() => {})
+
   return reply.send({
-    user: { id: user.id, email: user.email, name: user.name, createdAt: user.createdAt.toISOString() },
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      avatarUrl: user.avatarUrl,
+      createdAt: user.createdAt.toISOString(),
+    },
   })
 }
 
@@ -151,12 +171,8 @@ export async function forgotPasswordHandler(
   const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1)
 
   if (user) {
-    await db.delete(passwordResets).where(eq(passwordResets.userId, user.id))
-
     const { token, hash } = generateResetToken()
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000)
-
-    await db.insert(passwordResets).values({ userId: user.id, tokenHash: hash, expiresAt })
+    await redis.set(`pwd_reset:${hash}`, user.id, { EX: 60 * 60 })
 
     const resetUrl = `${env.CORS_ORIGIN}/reset-password?token=${token}`
     await sendPasswordResetEmail(email, resetUrl)
@@ -172,23 +188,19 @@ export async function resetPasswordHandler(
   const { token, newPassword } = request.body
 
   const tokenHash = hashResetToken(token)
-  const [reset] = await db
-    .select()
-    .from(passwordResets)
-    .where(eq(passwordResets.tokenHash, tokenHash))
-    .limit(1)
+  const userId = await redis.get(`pwd_reset:${tokenHash}`)
 
-  if (!reset || reset.expiresAt < new Date()) {
+  if (!userId) {
     throw new AppError(400, 'INVALID_TOKEN', 'Link de recuperação inválido ou expirado')
   }
 
   await db
     .update(users)
     .set({ passwordHash: await hashPassword(newPassword) })
-    .where(eq(users.id, reset.userId))
+    .where(eq(users.id, userId))
 
-  await db.delete(sessions).where(eq(sessions.userId, reset.userId))
-  await db.delete(passwordResets).where(eq(passwordResets.id, reset.id))
+  await db.delete(sessions).where(eq(sessions.userId, userId))
+  await redis.del(`pwd_reset:${tokenHash}`)
 
   return reply.status(200).send({ message: 'ok' })
 }

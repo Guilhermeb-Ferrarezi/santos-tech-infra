@@ -24,14 +24,14 @@ export async function registerOAuth(app: FastifyInstance) {
 
   app.get('/auth/google/callback', async (request, reply) => {
     if ((request.query as any).error) {
-      throw new AppError(401, 'OAUTH_DENIED', 'Autenticação Google negada')
+      return reply.redirect(`${env.CORS_ORIGIN}/?error=oauth_denied`)
     }
 
     let token: { access_token: string }
     try {
       token = await (app as any).googleOAuth.getAccessTokenFromAuthorizationCodeFlow(request)
     } catch {
-      throw new AppError(401, 'OAUTH_FAILED', 'Falha ao obter token do Google')
+      return reply.redirect(`${env.CORS_ORIGIN}/?error=oauth_failed`)
     }
 
     const profileRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
@@ -41,7 +41,7 @@ export async function registerOAuth(app: FastifyInstance) {
 
     const [user] = await db.select().from(users).where(eq(users.email, profile.email)).limit(1)
     if (!user) {
-      throw new AppError(401, 'ACCOUNT_NOT_FOUND', 'Nenhuma conta encontrada com este email Google. Cadastre-se primeiro.')
+      return reply.redirect(`${env.CORS_ORIGIN}/?error=account_not_found`)
     }
 
     const existing = await db
