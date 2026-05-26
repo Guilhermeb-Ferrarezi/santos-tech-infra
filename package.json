@@ -4,6 +4,8 @@
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "dev": "bun --env-file=.env --watch apps/api/src/app.ts",
-    "build": "bun run --filter '*' build"
+    "build": "bun run --filter '*' build",
+    "test": "bun test",
+    "test:unit": "SKIP_INTEGRATION=1 bun test"
   }
 }

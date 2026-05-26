@@ -6,7 +6,6 @@
     "dev": "bun run --watch src/app.ts",
     "start": "bun run src/app.ts",
     "test": "bun test",
-    "test:unit": "SKIP_INTEGRATION=1 bun test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/db/migrate.ts"
   },
