@@ -14,6 +14,7 @@ const schema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   RESEND_API_KEY: z.string().min(1),
   RESEND_FROM_EMAIL: z.string().email(),
+  REDIS_URL: z.string().min(1),
 })
 
 export type Env = z.infer<typeof schema>

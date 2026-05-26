@@ -17,6 +17,7 @@ describe('createEnv', () => {
       NODE_ENV: 'test',
       RESEND_API_KEY: 'test-resend-api-key',
       RESEND_FROM_EMAIL: 'noreply@santos-tech.com',
+      REDIS_URL: 'redis://localhost:6379',
     }
 
     const env = createEnv(vars)
