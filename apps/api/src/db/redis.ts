@@ -8,7 +8,12 @@ client.on('error', (err) => console.error('Redis error:', err))
 let connectPromise: Promise<void> | null = null
 
 function connect() {
-  if (!connectPromise) connectPromise = client.connect()
+  if (!connectPromise) {
+    connectPromise = client.connect().catch((err) => {
+      connectPromise = null
+      throw err
+    })
+  }
   return connectPromise
 }
 

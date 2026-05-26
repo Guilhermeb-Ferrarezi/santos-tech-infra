@@ -7,13 +7,16 @@ import { eq } from 'drizzle-orm'
 import { generateResetToken, hashResetToken } from '@/shared/email/resend'
 import type { FastifyInstance } from 'fastify'
 
+const SKIP = process.env.SKIP_INTEGRATION === '1'
+
 let app: FastifyInstance
 
 beforeAll(async () => {
+  if (SKIP) return
   app = await buildApp()
 })
 
-describe('POST /auth/forgot-password', () => {
+describe.skipIf(SKIP)('POST /auth/forgot-password', () => {
   it('retorna 200 para email existente', async () => {
     const email = `forgot-${Date.now()}@santos-tech.com`
     await app.inject({
@@ -40,7 +43,7 @@ describe('POST /auth/forgot-password', () => {
   })
 })
 
-describe('POST /auth/reset-password', () => {
+describe.skipIf(SKIP)('POST /auth/reset-password', () => {
   it('redefine senha com token válido e permite novo login', async () => {
     const email = `reset-${Date.now()}@santos-tech.com`
     await app.inject({

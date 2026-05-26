@@ -2,11 +2,16 @@ import { describe, it, expect, beforeAll } from 'bun:test'
 import { buildApp } from '@/app'
 import type { FastifyInstance } from 'fastify'
 
+const SKIP = process.env.SKIP_INTEGRATION === '1'
+
 let app: FastifyInstance
 
-beforeAll(async () => { app = await buildApp() })
+beforeAll(async () => {
+  if (SKIP) return
+  app = await buildApp()
+})
 
-describe('GET /auth/google', () => {
+describe.skipIf(SKIP)('GET /auth/google', () => {
   it('redireciona para o Google', async () => {
     const res = await app.inject({ method: 'GET', url: '/auth/google' })
     expect(res.statusCode).toBe(302)
@@ -14,12 +19,13 @@ describe('GET /auth/google', () => {
   })
 })
 
-describe('GET /auth/google/callback — com erro', () => {
-  it('retorna 401 quando OAuth é negado', async () => {
+describe.skipIf(SKIP)('GET /auth/google/callback — com erro', () => {
+  it('redireciona de volta ao frontend quando OAuth é negado', async () => {
     const res = await app.inject({
       method: 'GET',
       url: '/auth/google/callback?error=access_denied',
     })
-    expect([400, 401]).toContain(res.statusCode)
+    expect(res.statusCode).toBe(302)
+    expect(res.headers.location).toContain('error=oauth_denied')
   })
 })

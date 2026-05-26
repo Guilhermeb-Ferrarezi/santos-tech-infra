@@ -2,13 +2,16 @@ import { describe, it, expect, beforeAll } from 'bun:test'
 import { buildApp } from '@/app'
 import type { FastifyInstance } from 'fastify'
 
+const SKIP = process.env.SKIP_INTEGRATION === '1'
+
 let app: FastifyInstance
 
 beforeAll(async () => {
+  if (SKIP) return
   app = await buildApp()
 })
 
-describe('POST /auth/register', () => {
+describe.skipIf(SKIP)('POST /auth/register', () => {
   it('cria usuário e retorna 201', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -40,7 +43,7 @@ describe('POST /auth/register', () => {
   })
 })
 
-describe('POST /auth/login', () => {
+describe.skipIf(SKIP)('POST /auth/login', () => {
   it('retorna 200 e seta cookies httpOnly', async () => {
     const email = `login-${Date.now()}@santos-tech.com`
     await app.inject({
