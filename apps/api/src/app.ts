@@ -28,8 +28,8 @@ export async function buildApp() {
     timeWindow: '1 minute',
   })
 
-  app.addHook('onResponse', async (request, reply) => {
-    await logRequest({
+  app.addHook('onResponse', (request, reply) => {
+    void logRequest({
       method: request.method,
       path: request.routeOptions?.url ?? request.url,
       status: reply.statusCode,
@@ -37,6 +37,7 @@ export async function buildApp() {
       ip: request.ip,
       durationMs: Math.round(reply.elapsedTime),
     })
+    return Promise.resolve()
   })
 
   app.setErrorHandler(errorHandler)
