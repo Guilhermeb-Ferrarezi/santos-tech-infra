@@ -39,10 +39,16 @@ export async function registerOAuth(app: FastifyInstance) {
     const profileRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
       headers: { Authorization: `Bearer ${token.access_token}` },
     })
+    if (!profileRes.ok) {
+      app.log.error({ status: profileRes.status }, 'google userinfo fetch failed')
+      return reply.redirect(`${authWebOrigin}/?error=oauth_failed`)
+    }
     const profile = (await profileRes.json()) as { id: string; email: string; name: string }
+    app.log.info({ email: profile.email, id: profile.id }, 'google oauth profile')
 
     const [user] = await db.select().from(users).where(eq(users.email, profile.email)).limit(1)
     if (!user) {
+      app.log.warn({ email: profile.email }, 'google oauth: account not found')
       return reply.redirect(`${authWebOrigin}/?error=account_not_found`)
     }
 
