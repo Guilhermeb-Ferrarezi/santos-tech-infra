@@ -29,15 +29,15 @@ export async function registerOAuth(app: FastifyInstance) {
       return reply.redirect(`${authWebOrigin}/?error=oauth_denied`)
     }
 
-    let token: { access_token: string }
+    let tokenResult: { token: { access_token: string } }
     try {
-      token = await (app as any).googleOAuth.getAccessTokenFromAuthorizationCodeFlow(request)
+      tokenResult = await (app as any).googleOAuth.getAccessTokenFromAuthorizationCodeFlow(request)
     } catch {
       return reply.redirect(`${authWebOrigin}/?error=oauth_failed`)
     }
 
     const profileRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-      headers: { Authorization: `Bearer ${token.access_token}` },
+      headers: { Authorization: `Bearer ${tokenResult.token.access_token}` },
     })
     if (!profileRes.ok) {
       app.log.error({ status: profileRes.status }, 'google userinfo fetch failed')
