@@ -22,16 +22,18 @@ export async function registerOAuth(app: FastifyInstance) {
     scope: ['email', 'profile'],
   })
 
+  const authWebOrigin = env.AUTH_WEB_ORIGIN ?? env.CORS_ORIGIN.split(',')[0].trim()
+
   app.get('/auth/google/callback', async (request, reply) => {
     if ((request.query as any).error) {
-      return reply.redirect(`${env.CORS_ORIGIN}/?error=oauth_denied`)
+      return reply.redirect(`${authWebOrigin}/?error=oauth_denied`)
     }
 
     let token: { access_token: string }
     try {
       token = await (app as any).googleOAuth.getAccessTokenFromAuthorizationCodeFlow(request)
     } catch {
-      return reply.redirect(`${env.CORS_ORIGIN}/?error=oauth_failed`)
+      return reply.redirect(`${authWebOrigin}/?error=oauth_failed`)
     }
 
     const profileRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
@@ -41,7 +43,7 @@ export async function registerOAuth(app: FastifyInstance) {
 
     const [user] = await db.select().from(users).where(eq(users.email, profile.email)).limit(1)
     if (!user) {
-      return reply.redirect(`${env.CORS_ORIGIN}/?error=account_not_found`)
+      return reply.redirect(`${authWebOrigin}/?error=account_not_found`)
     }
 
     const existing = await db
@@ -72,6 +74,6 @@ export async function registerOAuth(app: FastifyInstance) {
       .setCookie('access_token', accessToken, { ...opts, maxAge: 15 * 60 })
       .setCookie('refresh_token', refreshToken, { ...opts, maxAge: 7 * 24 * 60 * 60 })
 
-    return reply.redirect(env.CORS_ORIGIN)
+    return reply.redirect(authWebOrigin)
   })
 }
