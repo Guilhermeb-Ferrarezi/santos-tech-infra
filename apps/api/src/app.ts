@@ -12,8 +12,12 @@ import { registerOAuth } from '@/modules/auth/auth.oauth'
 export async function buildApp() {
   const app = Fastify({ logger: true })
 
+  const allowedOrigins = env.CORS_ORIGIN.split(',').map((s) => s.trim())
   await app.register(cors, {
-    origin: env.CORS_ORIGIN,
+    origin: (origin, cb) => {
+      if (!origin || allowedOrigins.includes(origin)) return cb(null, true)
+      cb(new Error('Not allowed by CORS'), false)
+    },
     credentials: true,
   })
 
