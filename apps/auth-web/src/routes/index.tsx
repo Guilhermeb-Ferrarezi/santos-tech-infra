@@ -11,6 +11,10 @@ import { ApiError } from '@/lib/api'
 export default function LoginPage() {
   const search = useSearch({ strict: false }) as { redirect?: string; reset?: string; error?: string }
   const navigate = useNavigate()
+
+  // TanStack Router v1 usa JSON.parse nos search params, então URLs padrão
+  // (?redirect=https://...) não chegam via useSearch. Lê direto da URL como fallback.
+  const rawRedirect = search.redirect ?? new URLSearchParams(window.location.search).get('redirect') ?? undefined
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -20,7 +24,7 @@ export default function LoginPage() {
     queryFn: me,
     retry: false,
     select: (data) => {
-      if (data?.user) window.location.href = getSafeRedirect(search.redirect)
+      if (data?.user) window.location.href = getSafeRedirect(rawRedirect)
       return data
     },
   })
@@ -28,7 +32,7 @@ export default function LoginPage() {
   const mutation = useMutation({
     mutationFn: () => login(identifier, password),
     onSuccess: () => {
-      window.location.href = getSafeRedirect(search.redirect)
+      window.location.href = getSafeRedirect(rawRedirect)
     },
     onError: (err) => {
       setError(err instanceof ApiError ? err.message : 'Erro ao entrar')
