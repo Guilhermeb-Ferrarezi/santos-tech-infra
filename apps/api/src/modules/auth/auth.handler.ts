@@ -82,7 +82,7 @@ export async function loginHandler(
     throw new AppError(401, 'INVALID_CREDENTIALS', 'Email ou senha inválidos')
   }
 
-  const { accessToken, refreshToken } = await generateTokens(user.id, user.email)
+  const { accessToken, refreshToken } = await generateTokens(Number(user.id), user.email)
 
   const expiresAt = new Date()
   expiresAt.setDate(expiresAt.getDate() + 7)
@@ -193,11 +193,13 @@ export async function resetPasswordHandler(
   const { token, newPassword } = request.body
 
   const tokenHash = hashResetToken(token)
-  const userId = await redis.get(`pwd_reset:${tokenHash}`)
+  const userIdStr = await redis.get(`pwd_reset:${tokenHash}`)
 
-  if (!userId) {
+  if (!userIdStr) {
     throw new AppError(400, 'INVALID_TOKEN', 'Link de recuperação inválido ou expirado')
   }
+
+  const userId = Number(userIdStr)
 
   await db
     .update(users)

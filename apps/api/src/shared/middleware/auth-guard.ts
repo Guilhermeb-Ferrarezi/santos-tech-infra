@@ -8,7 +8,7 @@ declare module 'fastify' {
     authGuard: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
   }
   interface FastifyRequest {
-    userId: string
+    userId: number
   }
 }
 

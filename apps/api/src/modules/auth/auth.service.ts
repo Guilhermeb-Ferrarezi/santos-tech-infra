@@ -15,8 +15,8 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return Bun.password.verify(password, hash)
 }
 
-export async function generateTokens(userId: string, email?: string) {
-  const payload: Record<string, unknown> = { sub: userId }
+export async function generateTokens(userId: number, email?: string) {
+  const payload: Record<string, unknown> = { sub: String(userId) }
   if (email) payload.email = email
 
   const accessToken = await new SignJWT(payload)
@@ -25,7 +25,7 @@ export async function generateTokens(userId: string, email?: string) {
     .setIssuedAt()
     .sign(ACCESS_SECRET)
 
-  const refreshToken = await new SignJWT({ sub: userId })
+  const refreshToken = await new SignJWT({ sub: String(userId) })
     .setProtectedHeader({ alg: 'HS256' })
     .setExpirationTime(REFRESH_TTL)
     .setIssuedAt()
@@ -34,14 +34,14 @@ export async function generateTokens(userId: string, email?: string) {
   return { accessToken, refreshToken }
 }
 
-export async function verifyAccessToken(token: string): Promise<string> {
+export async function verifyAccessToken(token: string): Promise<number> {
   const { payload } = await jwtVerify(token, ACCESS_SECRET)
-  return payload.sub as string
+  return Number(payload.sub)
 }
 
-export async function verifyRefreshToken(token: string): Promise<string> {
+export async function verifyRefreshToken(token: string): Promise<number> {
   const { payload } = await jwtVerify(token, REFRESH_SECRET)
-  return payload.sub as string
+  return Number(payload.sub)
 }
 
 export function hashRefreshToken(token: string): string {

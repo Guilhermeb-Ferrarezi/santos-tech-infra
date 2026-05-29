@@ -1,8 +1,8 @@
-import { pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+import { pgTable, serial, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core'
 import { customRoles } from './custom-roles'
 
 export const users = pgTable('users', {
-  id: uuid('id').primaryKey().defaultRandom(),
+  id: serial('id').primaryKey(),
   email: text('email').notNull().unique(),
   username: text('username').unique(),
   name: text('name').notNull(),
