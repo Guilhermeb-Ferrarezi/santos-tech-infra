@@ -15,8 +15,11 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return Bun.password.verify(password, hash)
 }
 
-export async function generateTokens(userId: string) {
-  const accessToken = await new SignJWT({ sub: userId })
+export async function generateTokens(userId: string, email?: string) {
+  const payload: Record<string, unknown> = { sub: userId }
+  if (email) payload.email = email
+
+  const accessToken = await new SignJWT(payload)
     .setProtectedHeader({ alg: 'HS256' })
     .setExpirationTime(ACCESS_TTL)
     .setIssuedAt()

@@ -66,7 +66,7 @@ export async function registerOAuth(app: FastifyInstance) {
       })
     }
 
-    const { accessToken, refreshToken } = await generateTokens(user.id)
+    const { accessToken, refreshToken } = await generateTokens(user.id, user.email)
     const expiresAt = new Date()
     expiresAt.setDate(expiresAt.getDate() + 7)
     await db.insert(sessions).values({

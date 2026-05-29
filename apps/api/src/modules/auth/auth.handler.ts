@@ -82,7 +82,7 @@ export async function loginHandler(
     throw new AppError(401, 'INVALID_CREDENTIALS', 'Email ou senha inválidos')
   }
 
-  const { accessToken, refreshToken } = await generateTokens(user.id)
+  const { accessToken, refreshToken } = await generateTokens(user.id, user.email)
 
   const expiresAt = new Date()
   expiresAt.setDate(expiresAt.getDate() + 7)
@@ -146,7 +146,8 @@ export async function refreshHandler(request: FastifyRequest, reply: FastifyRepl
     throw new AppError(401, 'UNAUTHORIZED', 'Sessão expirada')
   }
 
-  const { accessToken, refreshToken: newRefresh } = await generateTokens(userId)
+  const [refreshUser] = await db.select({ email: users.email }).from(users).where(eq(users.id, userId)).limit(1)
+  const { accessToken, refreshToken: newRefresh } = await generateTokens(userId, refreshUser?.email)
 
   const expiresAt = new Date()
   expiresAt.setDate(expiresAt.getDate() + 7)
