@@ -4,7 +4,7 @@ import { env } from '@santos-tech/env'
 
 const ACCESS_SECRET = new TextEncoder().encode(env.JWT_SECRET)
 const REFRESH_SECRET = new TextEncoder().encode(env.JWT_REFRESH_SECRET)
-const ACCESS_TTL = '15m'
+const ACCESS_TTL = process.env.JWT_ACCESS_TTL ?? '2h'
 const REFRESH_TTL = '7d'
 
 export async function hashPassword(password: string): Promise<string> {
