@@ -16,7 +16,7 @@
     "@fastify/rate-limit": "^10.2.2",
     "@santos-tech/contracts": "workspace:*",
     "@santos-tech/env": "workspace:*",
-    "drizzle-orm": "^0.41.0",
+    "drizzle-orm": "^0.45.2",
     "fastify": "^5.3.3",
     "fastify-plugin": "^5.1.0",
     "jose": "^5.10.0",
@@ -28,7 +28,7 @@
   },
   "devDependencies": {
     "@types/pg": "^8.11.11",
-    "drizzle-kit": "^0.30.6",
+    "drizzle-kit": "^0.31.10",
     "typescript": "^5.8.3"
   }
 }
