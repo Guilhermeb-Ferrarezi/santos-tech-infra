@@ -26,6 +26,14 @@ func TestBuildGeneratePrompt(t *testing.T) {
 	if !strings.Contains(rewrite, "<p>Olá</p>") || !strings.Contains(rewrite, "deixa mais curto") {
 		t.Error("prompt de rewrite deveria conter o html atual e a instrução")
 	}
+
+	spam := buildGeneratePrompt(generateRequest{Task: "spamcheck", Subject: "GANHE AGORA", HTML: "<p>oferta</p>"})
+	if !strings.Contains(spam, "GANHE AGORA") || !strings.Contains(spam, "<p>oferta</p>") {
+		t.Error("prompt de spamcheck deveria conter assunto e html")
+	}
+	if !strings.Contains(spam, `"score"`) || !strings.Contains(spam, `"issues"`) {
+		t.Error("prompt de spamcheck deveria pedir o JSON com score/issues")
+	}
 }
 
 func TestParseGenerateResult(t *testing.T) {
@@ -62,5 +70,10 @@ func TestParseGenerateResult(t *testing.T) {
 	subjects, err := parseGenerateResult(`{"subjects":["a","b","c"]}`)
 	if err != nil || len(subjects.Subjects) != 3 {
 		t.Fatalf("subjects: err=%v res=%+v", err, subjects)
+	}
+
+	spam, err := parseGenerateResult(`{"score":72,"summary":"ok","issues":[{"level":"alto","text":"muito caps"}]}`)
+	if err != nil || spam.Score == nil || *spam.Score != 72 || len(spam.Issues) != 1 {
+		t.Fatalf("spamcheck: err=%v res=%+v", err, spam)
 	}
 }

@@ -14,20 +14,30 @@ import (
 
 // generateRequest é o corpo de POST /claude/generate.
 type generateRequest struct {
-	Task     string `json:"task"`     // "email" | "rewrite" | "subjects" (default: email)
+	Task     string `json:"task"`     // "email" | "rewrite" | "subjects" | "spamcheck" (default: email)
 	Brief    string `json:"brief"`    // descrição do que gerar / instrução de reescrita
 	Tone     string `json:"tone"`     // tom desejado (opcional)
 	Audience string `json:"audience"` // público-alvo (opcional)
-	HTML     string `json:"html"`     // conteúdo atual (obrigatório em "rewrite")
+	Subject  string `json:"subject"`  // assunto a analisar (opcional em "spamcheck")
+	HTML     string `json:"html"`     // conteúdo atual (obrigatório em "rewrite"/"spamcheck")
+}
+
+// spamIssue é um problema de entregabilidade apontado pela análise de spam.
+type spamIssue struct {
+	Level string `json:"level"` // "alto" | "medio" | "baixo"
+	Text  string `json:"text"`
 }
 
 // generateResult é o que devolvemos ao chamador (o painel de email).
 type generateResult struct {
-	Subject   string   `json:"subject,omitempty"`
-	Preheader string   `json:"preheader,omitempty"` // texto de pré-visualização (já embutido oculto no HTML)
-	HTML      string   `json:"html,omitempty"`
-	Text      string   `json:"text,omitempty"`
-	Subjects  []string `json:"subjects,omitempty"`
+	Subject   string      `json:"subject,omitempty"`
+	Preheader string      `json:"preheader,omitempty"` // texto de pré-visualização (já embutido oculto no HTML)
+	HTML      string      `json:"html,omitempty"`
+	Text      string      `json:"text,omitempty"`
+	Subjects  []string    `json:"subjects,omitempty"`
+	Score     *int        `json:"score,omitempty"`   // nota 0-100 (spamcheck)
+	Summary   string      `json:"summary,omitempty"` // resumo da análise (spamcheck)
+	Issues    []spamIssue `json:"issues,omitempty"`  // problemas encontrados (spamcheck)
 }
 
 // handleGenerate gera conteúdo de email/template num único turno (stateless): não
@@ -43,9 +53,9 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		req.Task = "email"
 	}
 	switch req.Task {
-	case "rewrite":
+	case "rewrite", "spamcheck":
 		if strings.TrimSpace(req.HTML) == "" {
-			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "informe o html a reescrever"))
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "informe o html"))
 			return
 		}
 	case "email", "subjects":
@@ -54,7 +64,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	default:
-		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "task inválida (use email, rewrite ou subjects)"))
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "task inválida (use email, rewrite, subjects ou spamcheck)"))
 		return
 	}
 
@@ -144,6 +154,16 @@ func buildGeneratePrompt(req generateRequest) string {
 	case "rewrite":
 		fmt.Fprintf(&b, "Reescreva/ajuste o email HTML abaixo conforme a instrução, preservando as merge tags {{name}} e {{email}}.\nInstrução: %s\nTom desejado: %s\n\nHTML atual:\n%s\n\n", req.Brief, tone, req.HTML)
 		writeEmailFormatRules(&b)
+	case "spamcheck":
+		subject := strings.TrimSpace(req.Subject)
+		if subject == "" {
+			subject = "(sem assunto informado)"
+		}
+		fmt.Fprintf(&b, "Avalie o email abaixo quanto à ENTREGABILIDADE e risco de cair em spam.\nAssunto: %s\n\nHTML:\n%s\n\n", subject, req.HTML)
+		b.WriteString("Considere: palavras-gatilho de spam, excesso de MAIÚSCULAS e pontos de exclamação, proporção alta de imagens vs texto, muitos links ou links suspeitos, ausência de versão em texto, ausência de descadastro, imagens sem alt, assunto enganoso.\n")
+		b.WriteString("Dê uma nota de 0 a 100 (100 = ótima entregabilidade, risco baixo), um resumo curto e a lista de problemas, cada um com nível \"alto\", \"medio\" ou \"baixo\".\n\n")
+		b.WriteString(`Responda EXCLUSIVAMENTE com um JSON válido, sem cercas de código, no formato:`)
+		b.WriteString("\n{\"score\": 0, \"summary\": \"...\", \"issues\": [{\"level\": \"alto\", \"text\": \"...\"}]}\n")
 	default: // "email"
 		fmt.Fprintf(&b, "Crie um email pronto.\nBriefing: %s\nTom: %s\nPúblico: %s\n\n", req.Brief, tone, audience)
 		writeEmailFormatRules(&b)
@@ -174,7 +194,8 @@ func parseGenerateResult(raw string) (*generateResult, error) {
 	if err := json.Unmarshal([]byte(s), &res); err != nil {
 		return nil, err
 	}
-	if res.Subject == "" && res.HTML == "" && res.Text == "" && len(res.Subjects) == 0 {
+	if res.Subject == "" && res.HTML == "" && res.Text == "" && len(res.Subjects) == 0 &&
+		res.Score == nil && res.Summary == "" && len(res.Issues) == 0 {
 		return nil, fmt.Errorf("resposta vazia")
 	}
 	return &res, nil
