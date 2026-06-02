@@ -125,13 +125,16 @@ func (a *claudeAuth) start(claudeBin string) (state, authURL string, err error) 
 	if err != nil {
 		return "", "", err
 	}
+	// PTY bem largo: o setup-token imprime uma URL longa que, a 80 colunas, seria
+	// quebrada em várias linhas e truncaria a captura.
+	_ = pty.Setsize(ptmx, &pty.Winsize{Rows: 200, Cols: 1000})
 	buf := &safeBuffer{}
 	go func() { _, _ = copyInto(buf, ptmx) }()
 
 	// Espera a URL aparecer (até 20s).
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		if m := urlRe.FindString(buf.String()); m != "" {
+		if m := urlRe.FindString(cleanTTY(buf.String())); m != "" {
 			state = newUUID()
 			a.mu.Lock()
 			a.pend[state] = &pendingAuth{ptmx: ptmx, cmd: cmd, buf: buf, created: time.Now()}
@@ -164,17 +167,25 @@ func (a *claudeAuth) complete(state, code string) (string, error) {
 	// Aguarda o token aparecer / o processo terminar (até 30s).
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if m := tokenRe.FindString(p.buf.String()); m != "" {
+		if m := tokenRe.FindString(cleanTTY(p.buf.String())); m != "" {
 			_, _ = p.cmd.Process.Wait()
 			return m, nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	// Fallback: última linha não vazia.
-	if t := lastNonEmptyLine(p.buf.String()); t != "" {
+	if t := lastNonEmptyLine(cleanTTY(p.buf.String())); t != "" {
 		return t, nil
 	}
 	return "", errTokenNotFound(p.buf.String())
+}
+
+// ansiRe casa sequências de escape ANSI (cores, cursor) que o TUI pode emitir.
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?=]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)`)
+
+// cleanTTY remove escapes ANSI e CRs da saída do PTY para casar URL/token de forma estável.
+func cleanTTY(s string) string {
+	return strings.ReplaceAll(ansiRe.ReplaceAllString(s, ""), "\r", "")
 }
 
 // gc remove fluxos pendentes com mais de 5min.
