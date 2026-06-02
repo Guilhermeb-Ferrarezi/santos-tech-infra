@@ -31,11 +31,51 @@ var errBusy = appErr(http.StatusConflict, "BUSY", "Já há um turno em andamento
 type SessionManager struct {
 	s    *Server
 	mu   sync.Mutex
-	runs map[string]*exec.Cmd // convID -> processo do turno atual (para interrupção)
+	runs map[string]*exec.Cmd               // convID -> processo do turno atual (para interrupção)
+	subs map[string]map[chan turnEvent]bool // convID -> WSs conectados (assinantes dos eventos)
 }
 
 func newSessionManager(s *Server) *SessionManager {
-	return &SessionManager{s: s, runs: map[string]*exec.Cmd{}}
+	return &SessionManager{s: s, runs: map[string]*exec.Cmd{}, subs: map[string]map[chan turnEvent]bool{}}
+}
+
+// Subscribe registra um assinante (WS) para os eventos de uma conversa. O turno roda
+// independente do WS — assinar só serve para receber o stream ao vivo enquanto conectado.
+func (m *SessionManager) Subscribe(convID string) (<-chan turnEvent, func()) {
+	ch := make(chan turnEvent, 256)
+	m.mu.Lock()
+	if m.subs[convID] == nil {
+		m.subs[convID] = map[chan turnEvent]bool{}
+	}
+	m.subs[convID][ch] = true
+	m.mu.Unlock()
+	return ch, func() {
+		m.mu.Lock()
+		delete(m.subs[convID], ch)
+		if len(m.subs[convID]) == 0 {
+			delete(m.subs, convID)
+		}
+		m.mu.Unlock()
+		close(ch)
+	}
+}
+
+func (m *SessionManager) hasSubs(convID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.subs[convID]) > 0
+}
+
+// dispatch envia um evento a todos os assinantes (não-bloqueante: descarta se o buffer encher).
+func (m *SessionManager) dispatch(convID string, ev turnEvent) {
+	m.mu.Lock()
+	for ch := range m.subs[convID] {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+	m.mu.Unlock()
 }
 
 // Interrupt encerra o turno em andamento de uma conversa (SIGTERM — o CLI salva a sessão).
@@ -50,14 +90,18 @@ func (m *SessionManager) Interrupt(convID string) bool {
 	return true
 }
 
-// RunTurn executa um turno completo: trava a conversa, persiste o prompt, faz spawn
-// do claude, transmite os eventos via emit e persiste as mensagens.
-func (m *SessionManager) RunTurn(ctx context.Context, conv *Conversation, prompt string, emit func(turnEvent)) error {
-	ok, _ := m.s.acquireTurn(ctx, conv.ID)
-	if !ok {
-		return errBusy
+// RunTurn executa um turno completo, DESACOPLADO do WebSocket: roda em background
+// (sobrevive ao app fechar / WS cair), transmite via dispatch para os assinantes e
+// persiste as mensagens. Ao terminar, envia push se ninguém estiver conectado.
+func (m *SessionManager) RunTurn(conv *Conversation, prompt string) {
+	ctx := context.Background()
+	if ok, _ := m.s.acquireTurn(ctx, conv.ID); !ok {
+		m.dispatch(conv.ID, turnEvent{Type: "busy"})
+		return
 	}
-	defer m.s.releaseTurn(context.Background(), conv.ID)
+	defer m.s.releaseTurn(ctx, conv.ID)
+
+	emit := func(ev turnEvent) { m.dispatch(conv.ID, ev) }
 
 	_ = m.s.setConversationStatus(ctx, conv.ID, StatusRunning)
 	m.s.setState(ctx, conv.ID, StatusRunning)
@@ -79,14 +123,39 @@ func (m *SessionManager) RunTurn(ctx context.Context, conv *Conversation, prompt
 		status = StatusError
 		emit(turnEvent{Type: "error", Code: "TURN_FAILED", Message: err.Error()})
 	}
-	_ = m.s.setConversationStatus(context.Background(), conv.ID, status)
-	m.s.setState(context.Background(), conv.ID, status)
+	_ = m.s.setConversationStatus(ctx, conv.ID, status)
+	m.s.setState(ctx, conv.ID, status)
 	if err == nil && !conv.SessionStarted {
-		_ = m.s.markSessionStarted(context.Background(), conv.ID)
+		_ = m.s.markSessionStarted(ctx, conv.ID)
 		conv.SessionStarted = true
 	}
 	emit(turnEvent{Type: "done"})
-	return err
+
+	// Push só se ninguém estiver assistindo (app em background / fechado).
+	if !m.hasSubs(conv.ID) {
+		m.s.notifyTurnDone(ctx, conv, status)
+	}
+}
+
+// RunTurnCollect roda um turno e coleta o texto do assistente (usado pelo /compact).
+func (m *SessionManager) RunTurnCollect(conv *Conversation, prompt string) (string, error) {
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+	go m.RunTurn(conv, prompt)
+	var b strings.Builder
+	for ev := range events {
+		switch ev.Type {
+		case "delta":
+			b.WriteString(ev.Text)
+		case "busy":
+			return "", errBusy
+		case "error":
+			return b.String(), fmt.Errorf("%s", ev.Message)
+		case "done":
+			return b.String(), nil
+		}
+	}
+	return b.String(), nil
 }
 
 // claudeArgs monta os argumentos do CLI para um turno.

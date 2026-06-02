@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"net/http"
-	"sync"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -50,12 +49,20 @@ func (s *Server) handleConversationWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	var writeMu sync.Mutex
-	emit := func(ev turnEvent) {
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		_ = wsjson.Write(ctx, c, ev)
-	}
+	// Assina os eventos da conversa. O turno roda independente deste WS (background),
+	// então sair do app NÃO mata o turno; reconectar reata o stream ao vivo.
+	events, unsub := s.mgr.Subscribe(conv.ID)
+	defer unsub()
+
+	// Writer único: drena o canal de eventos para o WS.
+	go func() {
+		for ev := range events {
+			if err := wsjson.Write(ctx, c, ev); err != nil {
+				cancel()
+				return
+			}
+		}
+	}()
 
 	for {
 		var msg wsInbound
@@ -66,14 +73,10 @@ func (s *Server) handleConversationWS(w http.ResponseWriter, r *http.Request) {
 		case "prompt":
 			fresh, err := s.conversationByID(ctx, id, uid)
 			if err != nil || fresh == nil {
-				emit(turnEvent{Type: "error", Code: "NOT_FOUND", Message: "Conversa não encontrada"})
+				s.mgr.dispatch(conv.ID, turnEvent{Type: "error", Code: "NOT_FOUND", Message: "Conversa não encontrada"})
 				continue
 			}
-			go func(conv *Conversation, text string) {
-				if err := s.mgr.RunTurn(ctx, conv, text, emit); err == errBusy {
-					emit(turnEvent{Type: "busy"})
-				}
-			}(fresh, msg.Text)
+			go s.mgr.RunTurn(fresh, msg.Text)
 		case "interrupt":
 			s.mgr.Interrupt(id)
 		}

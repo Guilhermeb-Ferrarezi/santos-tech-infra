@@ -25,6 +25,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Login do app mobile (troca email/senha por token JSON).
 	mux.HandleFunc("POST /claude/auth/session", s.rateLimit(10, min, s.handleMobileSession))
 
+	// Push notifications (registra Expo push token do dispositivo).
+	mux.HandleFunc("POST /claude/push/register", s.authGuard(s.handlePushRegister))
+
 	// OAuth do Claude (assinatura) — fluxo URL via PTY.
 	mux.HandleFunc("POST /claude/auth/login", s.authGuard(s.handleClaudeAuthLogin))
 	mux.HandleFunc("POST /claude/auth/callback", s.authGuard(s.handleClaudeAuthCallback))

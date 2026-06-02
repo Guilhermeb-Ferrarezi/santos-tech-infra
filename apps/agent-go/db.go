@@ -59,6 +59,13 @@ CREATE TABLE IF NOT EXISTS claude_credentials (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO claude_credentials (id, status) VALUES (1, 'logged_out') ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS claude_push_tokens (
+  token      TEXT PRIMARY KEY,
+  user_id    BIGINT NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_push_user ON claude_push_tokens(user_id);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
@@ -228,4 +235,30 @@ func (s *Server) oauthToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return decrypt(s.cfg.EncryptionKey, enc)
+}
+
+// ── Push tokens (Expo) ───────────────────────────────────────────────────────
+
+func (s *Server) savePushToken(ctx context.Context, userID int64, token string) error {
+	_, err := s.db.Exec(ctx,
+		`INSERT INTO claude_push_tokens (token, user_id) VALUES ($1,$2)
+		 ON CONFLICT (token) DO UPDATE SET user_id=$2`, token, userID)
+	return err
+}
+
+func (s *Server) pushTokensForUser(ctx context.Context, userID int64) ([]string, error) {
+	rows, err := s.db.Query(ctx, `SELECT token FROM claude_push_tokens WHERE user_id=$1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }

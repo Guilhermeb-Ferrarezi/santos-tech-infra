@@ -74,22 +74,17 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Roda um turno de sumarização (síncrono), coletando o texto do assistente.
+	// Roda um turno de sumarização, coletando o texto do assistente.
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 	const prompt = "Resuma de forma concisa todo o contexto, decisões e estado atual desta conversa, " +
 		"para servir de memória ao continuar numa nova sessão. Responda apenas com o resumo."
-	var b strings.Builder
-	collect := func(ev turnEvent) {
-		if ev.Type == "delta" {
-			b.WriteString(ev.Text)
-		}
-	}
-	if err := s.mgr.RunTurn(ctx, conv, prompt, collect); err != nil {
+	raw, err := s.mgr.RunTurnCollect(conv, prompt)
+	if err != nil {
 		writeErr(w, appErr(http.StatusBadGateway, "COMPACT_FAILED", "Falha ao resumir: "+err.Error()))
 		return
 	}
-	summary := strings.TrimSpace(b.String())
+	summary := strings.TrimSpace(raw)
 
 	// Recomeça a sessão e deixa o resumo como seed do próximo turno.
 	newSession := newUUID()
