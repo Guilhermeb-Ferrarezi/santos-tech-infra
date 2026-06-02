@@ -23,10 +23,11 @@ type Server struct {
 	rdb    *redis.Client
 	email  *emailClient
 	google *oauth2.Config
+	r2     *R2 // uploads (Cloudflare R2); nil = desabilitado
 }
 
 func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: db, rdb: rdb, email: newEmailClient(cfg)}
+	s := &Server{cfg: cfg, db: db, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg)}
 	if cfg.GoogleClientID != "" {
 		s.google = &oauth2.Config{
 			ClientID:     cfg.GoogleClientID,

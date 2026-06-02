@@ -93,6 +93,11 @@ func (s *Server) updatePassword(ctx context.Context, userID int64, hash string) 
 	return err
 }
 
+func (s *Server) updateAvatarURL(ctx context.Context, userID int64, url string) error {
+	_, err := s.db.Exec(ctx, `UPDATE users SET avatar_url=$1 WHERE id=$2`, url, userID)
+	return err
+}
+
 func (s *Server) setMFA(ctx context.Context, userID int64, enabled bool, secret *string) error {
 	_, err := s.db.Exec(ctx, `UPDATE users SET mfa_enabled=$1, totp_secret=$2 WHERE id=$3`, enabled, secret, userID)
 	return err

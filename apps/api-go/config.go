@@ -21,6 +21,13 @@ type Config struct {
 	EmailAPIURL        string // ex: https://mails.santos-tech.com/api
 	EmailAPIKey        string
 	Production         bool
+
+	// Cloudflare R2 (S3-compatível) para uploads (ex: avatares). Vazio = desabilitado.
+	R2AccountID string
+	R2AccessKey string
+	R2SecretKey string
+	R2Bucket    string
+	R2PublicURL string // base pública (CDN), ex: https://cdn.santos-tech.com
 }
 
 func LoadConfig() Config {
@@ -39,6 +46,11 @@ func LoadConfig() Config {
 		EmailAPIURL:        strings.TrimRight(getEnv("EMAIL_API_URL", "https://mails.santos-tech.com/api"), "/"),
 		EmailAPIKey:        mustEnv("EMAIL_API_KEY"),
 		Production:         getEnv("NODE_ENV", "development") == "production",
+		R2AccountID:        getEnv("CF_ACCOUNT_ID", ""),
+		R2AccessKey:        getEnv("CF_R2_ACCESS_KEY", ""),
+		R2SecretKey:        getEnv("CF_R2_SECRET_KEY", ""),
+		R2Bucket:           getEnv("CF_R2_BUCKET_NAME", ""),
+		R2PublicURL:        strings.TrimRight(getEnv("CF_R2_PUBLIC_URL", ""), "/"),
 	}
 	if c.AuthWebOrigin == "" && len(c.CORSOrigins) > 0 {
 		c.AuthWebOrigin = c.CORSOrigins[0]
