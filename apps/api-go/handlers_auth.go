@@ -89,7 +89,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// MFA ativo: não emite tokens; devolve desafio pro 2º passo (/auth/mfa/verify)
 	if u.MFAEnabled {
 		challenge := randomToken(24)
-		if err := s.rdb.Set(r.Context(), "mfa_challenge:"+challenge, u.ID, 5*time.Minute).Err(); err != nil {
+		if err := s.rdb.Set(r.Context(), "mfa_challenge:"+challenge, u.ID, 10*time.Minute).Err(); err != nil {
 			writeErr(w, err)
 			return
 		}
