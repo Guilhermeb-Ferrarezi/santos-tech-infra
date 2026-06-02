@@ -21,6 +21,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// WebSocket de chat.
 	mux.HandleFunc("GET /claude/conversations/{id}/ws", s.handleConversationWS)
 
+	// Geração one-shot (stateless) — usada pelo painel de email (via PAT).
+	mux.HandleFunc("POST /claude/generate", s.rateLimit(10, min, s.authGuard(s.handleGenerate)))
+
 	// Controles na camada de orquestração.
 	mux.HandleFunc("POST /claude/conversations/{id}/model", s.authGuard(s.handleSetModel))
 	mux.HandleFunc("POST /claude/conversations/{id}/compact", s.authGuard(s.handleCompact))

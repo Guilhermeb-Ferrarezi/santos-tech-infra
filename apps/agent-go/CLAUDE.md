@@ -57,6 +57,7 @@ rate limit por rota+IP).
 | POST | `/claude/conversations/{id}/model` | troca modelo `{model}` |
 | POST | `/claude/conversations/{id}/compact` | compacta contexto |
 | POST | `/claude/conversations/{id}/clear` | zera contexto |
+| POST | `/claude/generate` | geração one-shot stateless `{task, brief, tone?}` → `{subject, html, text}` |
 | POST | `/claude/auth/login` | inicia OAuth (PTY) → `{state, authUrl}`; ou `{token}` direto |
 | POST | `/claude/auth/callback` | `{state, code}` → captura e cifra o token |
 | POST | `/claude/auth/logout` | limpa o token |
@@ -65,6 +66,12 @@ rate limit por rota+IP).
 **WebSocket** — cliente envia `{type:"prompt", text}` ou `{type:"interrupt"}`; servidor
 emite `init` · `delta` (texto ao vivo) · `tool_use` · `tool_result` · `result` ·
 `error` · `busy` · `done`.
+
+**Auth** — todas as rotas (exceto health) exigem um usuário **admin**, via JWT de sessão
+(cookie/Bearer) **ou** um Personal Access Token do auth (`Authorization: Bearer st_…`, validado
+na tabela `api_keys` compartilhada). `POST /claude/generate` é **stateless** (não cria conversa
+nem persiste) e roda o Claude com ambiente mínimo: só o OAuth da assinatura, **sem** `--add-dir`,
+MCP, `--dangerously-skip-permissions` ou tokens de infra.
 
 ## Rodar (local)
 

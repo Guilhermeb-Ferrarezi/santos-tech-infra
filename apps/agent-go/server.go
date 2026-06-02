@@ -96,9 +96,9 @@ func (s *Server) authenticate(r *http.Request) (int64, error) {
 	if token == "" {
 		return 0, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado")
 	}
-	uid, err := verifyToken(token, s.cfg.JWTSecret)
+	uid, err := s.resolveToken(r.Context(), token)
 	if err != nil {
-		return 0, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
+		return 0, err
 	}
 	role, err := s.userRole(r.Context(), uid)
 	if err != nil {
@@ -106,6 +106,27 @@ func (s *Server) authenticate(r *http.Request) (int64, error) {
 	}
 	if role != RoleAdmin {
 		return 0, appErr(http.StatusForbidden, "FORBIDDEN", "Acesso restrito a administradores")
+	}
+	return uid, nil
+}
+
+// resolveToken aceita um JWT de sessão ou um Personal Access Token (prefixo "st_",
+// validado contra a tabela api_keys compartilhada com o auth), devolvendo o userID.
+// A exigência de papel admin continua sendo feita em authenticate.
+func (s *Server) resolveToken(ctx context.Context, token string) (int64, error) {
+	if strings.HasPrefix(token, "st_") {
+		uid, err := s.userIDByAPIKeyHash(ctx, sha256Hex(token))
+		if err != nil {
+			return 0, err
+		}
+		if uid == 0 {
+			return 0, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
+		}
+		return uid, nil
+	}
+	uid, err := verifyToken(token, s.cfg.JWTSecret)
+	if err != nil {
+		return 0, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
 	}
 	return uid, nil
 }

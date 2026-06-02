@@ -66,6 +66,18 @@ CREATE TABLE IF NOT EXISTS claude_push_tokens (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_push_user ON claude_push_tokens(user_id);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+  id           BIGSERIAL PRIMARY KEY,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  key_prefix   TEXT NOT NULL,
+  key_hash     TEXT NOT NULL UNIQUE,
+  last_used_at TIMESTAMPTZ,
+  expires_at   TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
@@ -82,6 +94,21 @@ func (s *Server) userRole(ctx context.Context, userID int64) (int16, error) {
 		return 0, nil
 	}
 	return role, err
+}
+
+// userIDByAPIKeyHash valida um Personal Access Token (tabela api_keys compartilhada
+// com o auth) pelo hash: devolve o user_id se válido e não expirado, marcando o
+// último uso. (0, nil) significa token inválido/expirado.
+func (s *Server) userIDByAPIKeyHash(ctx context.Context, hash string) (int64, error) {
+	var userID int64
+	err := s.db.QueryRow(ctx,
+		`UPDATE api_keys SET last_used_at=now()
+		 WHERE key_hash=$1 AND (expires_at IS NULL OR expires_at > now())
+		 RETURNING user_id`, hash).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return userID, err
 }
 
 // ── Conversas ────────────────────────────────────────────────────────────────
