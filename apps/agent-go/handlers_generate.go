@@ -23,10 +23,11 @@ type generateRequest struct {
 
 // generateResult é o que devolvemos ao chamador (o painel de email).
 type generateResult struct {
-	Subject  string   `json:"subject,omitempty"`
-	HTML     string   `json:"html,omitempty"`
-	Text     string   `json:"text,omitempty"`
-	Subjects []string `json:"subjects,omitempty"`
+	Subject   string   `json:"subject,omitempty"`
+	Preheader string   `json:"preheader,omitempty"` // texto de pré-visualização (já embutido oculto no HTML)
+	HTML      string   `json:"html,omitempty"`
+	Text      string   `json:"text,omitempty"`
+	Subjects  []string `json:"subjects,omitempty"`
 }
 
 // handleGenerate gera conteúdo de email/template num único turno (stateless): não
@@ -153,10 +154,11 @@ func buildGeneratePrompt(req generateRequest) string {
 func writeEmailFormatRules(b *strings.Builder) {
 	b.WriteString("Regras do corpo:\n")
 	b.WriteString("- Use as merge tags {{name}} e {{email}} quando fizer sentido personalizar.\n")
-	b.WriteString("- O HTML deve ser inline e responsivo, apenas o conteúdo (sem <html>, <head> ou <body>).\n\n")
+	b.WriteString("- O HTML deve ser inline e responsivo, apenas o conteúdo (sem <html>, <head> ou <body>).\n")
+	b.WriteString("- Comece o HTML com um pré-cabeçalho OCULTO (preheader): um <div style=\"display:none;max-height:0;overflow:hidden;mso-hide:all;\"> com 40 a 90 caracteres que resumem o email — é o texto que aparece ao lado do assunto na caixa de entrada.\n\n")
 	b.WriteString(`Responda EXCLUSIVAMENTE com um JSON válido, sem cercas de código, no formato:`)
-	b.WriteString("\n{\"subject\": \"...\", \"html\": \"...\", \"text\": \"...\"}\n")
-	b.WriteString("onde \"text\" é a versão em texto puro do email.\n")
+	b.WriteString("\n{\"subject\": \"...\", \"preheader\": \"...\", \"html\": \"...\", \"text\": \"...\"}\n")
+	b.WriteString("onde \"preheader\" é o mesmo texto do pré-cabeçalho oculto e \"text\" é a versão em texto puro do email.\n")
 }
 
 // parseGenerateResult extrai o objeto JSON da resposta do modelo, tolerando cercas
