@@ -12,6 +12,7 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/register", s.rateLimit(5, min, s.handleRegister))
 	mux.HandleFunc("POST /auth/login", s.rateLimit(10, min, s.handleLogin))
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
+	mux.HandleFunc("GET /auth/logout", s.handleLogoutGet)
 	mux.HandleFunc("GET /auth/me", s.handleMe)
 	mux.HandleFunc("POST /auth/refresh", s.rateLimit(20, min, s.handleRefresh))
 

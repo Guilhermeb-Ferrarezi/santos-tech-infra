@@ -104,14 +104,40 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": s.buildProfile(r.Context(), u)})
 }
 
-func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+// endSession apaga a sessão (pelo refresh cookie) e limpa os cookies.
+func (s *Server) endSession(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("refresh_token"); err == nil && c.Value != "" {
 		if sid, _, _, e := s.sessionByHash(r.Context(), hashRefreshToken(c.Value)); e == nil {
 			_ = s.deleteSession(r.Context(), sid)
 		}
 	}
 	s.clearAuthCookies(w)
+}
+
+// POST /auth/logout — para clientes via XHR (204).
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	s.endSession(w, r)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// GET /auth/logout?redirect=... — desloga e redireciona (logout via link).
+func (s *Server) handleLogoutGet(w http.ResponseWriter, r *http.Request) {
+	s.endSession(w, r)
+	dest := s.cfg.AuthWebOrigin
+	if rd := r.URL.Query().Get("redirect"); rd != "" && s.allowedRedirect(rd) {
+		dest = rd
+	}
+	http.Redirect(w, r, dest, http.StatusFound)
+}
+
+// allowedRedirect evita open-redirect: só permite origens conhecidas.
+func (s *Server) allowedRedirect(url string) bool {
+	for _, o := range s.cfg.CORSOrigins {
+		if o != "" && strings.HasPrefix(url, o) {
+			return true
+		}
+	}
+	return s.cfg.AuthWebOrigin != "" && strings.HasPrefix(url, s.cfg.AuthWebOrigin)
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
