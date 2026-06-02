@@ -17,6 +17,9 @@ type Config struct {
 	JWTSecret   string
 	CORSOrigins []string
 
+	// URL da API de auth central (para o endpoint de login do app mobile).
+	AuthAPIURL string
+
 	// Cifragem do token OAuth do Claude em repouso (AES-256-GCM → 32 bytes).
 	EncryptionKey string
 
@@ -41,6 +44,7 @@ func LoadConfig() Config {
 		RedisURL:      mustEnv("REDIS_URL"),
 		JWTSecret:     mustEnv("JWT_SECRET"),
 		CORSOrigins:   splitCSV(getEnv("CORS_ORIGIN", "")),
+		AuthAPIURL:    strings.TrimRight(getEnv("AUTH_API_URL", "https://api.santos-tech.com"), "/"),
 		EncryptionKey: mustEnv("ENCRYPTION_KEY"),
 
 		WorkspaceRoot: getEnv("CLAUDE_WORKSPACE_ROOT", "/data/workspaces"),

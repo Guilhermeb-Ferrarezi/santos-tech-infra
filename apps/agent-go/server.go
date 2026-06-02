@@ -44,7 +44,12 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" && (len(s.cfg.CORSOrigins) == 0 || slices.Contains(s.cfg.CORSOrigins, origin)) {
+		// Fail-closed: com allowlist vazia, só reflete origin (com credenciais) em dev.
+		allowed := slices.Contains(s.cfg.CORSOrigins, origin)
+		if len(s.cfg.CORSOrigins) == 0 && !s.cfg.Production {
+			allowed = true
+		}
+		if origin != "" && allowed {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}

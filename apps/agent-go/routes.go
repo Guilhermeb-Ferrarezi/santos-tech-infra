@@ -22,6 +22,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /claude/conversations/{id}/compact", s.authGuard(s.handleCompact))
 	mux.HandleFunc("POST /claude/conversations/{id}/clear", s.authGuard(s.handleClear))
 
+	// Login do app mobile (troca email/senha por token JSON).
+	mux.HandleFunc("POST /claude/auth/session", s.rateLimit(10, min, s.handleMobileSession))
+
 	// OAuth do Claude (assinatura) — fluxo URL via PTY.
 	mux.HandleFunc("POST /claude/auth/login", s.authGuard(s.handleClaudeAuthLogin))
 	mux.HandleFunc("POST /claude/auth/callback", s.authGuard(s.handleClaudeAuthCallback))
