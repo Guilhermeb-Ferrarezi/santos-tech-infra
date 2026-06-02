@@ -3,9 +3,8 @@
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "bun --env-file=.env --watch apps/api/src/app.ts",
-    "build": "bun run --filter '*' build",
-    "test": "bun test",
-    "test:unit": "SKIP_INTEGRATION=1 bun test"
+    "dev": "docker compose -f infra/docker-compose.yml up --build",
+    "dev:auth": "cd apps/api-go && go run .",
+    "build": "bun run --filter '*' build"
   }
 }
