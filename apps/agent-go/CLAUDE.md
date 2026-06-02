@@ -67,11 +67,12 @@ rate limit por rota+IP).
 emite `init` · `delta` (texto ao vivo) · `tool_use` · `tool_result` · `result` ·
 `error` · `busy` · `done`.
 
-**Auth** — todas as rotas (exceto health) exigem um usuário **admin**, via JWT de sessão
-(cookie/Bearer) **ou** um Personal Access Token do auth (`Authorization: Bearer st_…`, validado
-na tabela `api_keys` compartilhada). `POST /claude/generate` é **stateless** (não cria conversa
-nem persiste) e roda o Claude com ambiente mínimo: só o OAuth da assinatura, **sem** `--add-dir`,
-MCP, `--dangerously-skip-permissions` ou tokens de infra.
+**Auth** — autentica via JWT de sessão (cookie/Bearer) **ou** Personal Access Token do auth
+(`Authorization: Bearer st_…`, validado na tabela `api_keys` compartilhada). As rotas
+privilegiadas (conversas, controle, OAuth) exigem **admin**. **Exceção:** `POST /claude/generate`
+aceita **qualquer usuário autenticado** — é **stateless** e roda o Claude em sandbox: só o OAuth
+da assinatura, **sem** `--add-dir`, MCP, `--dangerously-skip-permissions` ou tokens de infra,
+então não precisa do papel admin.
 
 ## Rodar (local)
 

@@ -89,6 +89,26 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// authGuardUser autentica qualquer usuário válido (JWT de sessão ou PAT) SEM exigir
+// admin. Usado apenas pelo /claude/generate, que é sandbox (sem tools, --add-dir,
+// MCP, --dangerously-skip-permissions ou tokens de infra) — então não precisa do
+// papel admin que protege as rotas privilegiadas de conversa.
+func (s *Server) authGuardUser(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := bearerToken(r)
+		if token == "" {
+			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
+			return
+		}
+		uid, err := s.resolveToken(r.Context(), token)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), userIDKey, uid)))
+	}
+}
+
 // authenticate valida o token e o papel admin, retornando o userID. Reusável
 // fora do middleware (ex: upgrade de WebSocket).
 func (s *Server) authenticate(r *http.Request) (int64, error) {
