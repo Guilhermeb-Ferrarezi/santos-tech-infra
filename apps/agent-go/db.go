@@ -144,6 +144,21 @@ func (s *Server) updateConversationModel(ctx context.Context, id string, userID 
 	return err
 }
 
+func (s *Server) updateConversationTitle(ctx context.Context, id string, userID int64, title string) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE claude_conversations SET title=$1, updated_at=now() WHERE id=$2 AND user_id=$3`,
+		title, id, userID)
+	return err
+}
+
+// setTitleIfEmpty define o título só se ainda estiver vazio (usado pelo auto-título).
+func (s *Server) setTitleIfEmpty(ctx context.Context, id, title string) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE claude_conversations SET title=$1, updated_at=now()
+		 WHERE id=$2 AND (title IS NULL OR title = '')`, title, id)
+	return err
+}
+
 func (s *Server) setConversationStatus(ctx context.Context, id, status string) error {
 	_, err := s.db.Exec(ctx,
 		`UPDATE claude_conversations SET status=$1, updated_at=now() WHERE id=$2`, status, id)

@@ -90,6 +90,37 @@ func (m *SessionManager) Interrupt(convID string) bool {
 	return true
 }
 
+// InterruptAll encerra TODOS os turnos em andamento (kill switch). Retorna quantos.
+func (m *SessionManager) InterruptAll() int {
+	m.mu.Lock()
+	cmds := make([]*exec.Cmd, 0, len(m.runs))
+	for _, c := range m.runs {
+		cmds = append(cmds, c)
+	}
+	m.mu.Unlock()
+	n := 0
+	for _, c := range cmds {
+		if c.Process != nil {
+			_ = c.Process.Signal(syscall.SIGTERM)
+			n++
+		}
+	}
+	return n
+}
+
+// deriveTitle gera um título curto a partir do 1º prompt (primeira linha, até 48 chars).
+func deriveTitle(prompt string) string {
+	line := strings.TrimSpace(prompt)
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	line = strings.TrimLeft(line, "/#-* ")
+	if r := []rune(line); len(r) > 48 {
+		line = strings.TrimSpace(string(r[:48])) + "…"
+	}
+	return line
+}
+
 // RunTurn executa um turno completo, DESACOPLADO do WebSocket: roda em background
 // (sobrevive ao app fechar / WS cair), transmite via dispatch para os assinantes e
 // persiste as mensagens. Ao terminar, envia push se ninguém estiver conectado.
@@ -109,6 +140,15 @@ func (m *SessionManager) RunTurn(conv *Conversation, prompt string) {
 		ConversationID: conv.ID, Role: "user", Kind: "text",
 		Content: map[string]any{"text": prompt},
 	})
+
+	// Auto-título no 1º turno, se ainda não tiver.
+	if (conv.Title == nil || *conv.Title == "") && !conv.SessionStarted {
+		if title := deriveTitle(prompt); title != "" {
+			_ = m.s.setTitleIfEmpty(ctx, conv.ID, title)
+			conv.Title = &title
+			m.dispatch(conv.ID, turnEvent{Type: "title", Text: title})
+		}
+	}
 
 	// Seed pendente (deixado por /compact): vira contexto da nova sessão.
 	effective := prompt

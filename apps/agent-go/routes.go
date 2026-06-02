@@ -12,7 +12,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /claude/conversations", s.authGuard(s.handleListConversations))
 	mux.HandleFunc("POST /claude/conversations", s.rateLimit(20, min, s.authGuard(s.handleCreateConversation)))
 	mux.HandleFunc("GET /claude/conversations/{id}", s.authGuard(s.handleGetConversation))
+	mux.HandleFunc("PATCH /claude/conversations/{id}", s.authGuard(s.handleRenameConversation))
 	mux.HandleFunc("DELETE /claude/conversations/{id}", s.authGuard(s.handleDeleteConversation))
+
+	// Kill switch — para todos os turnos em andamento.
+	mux.HandleFunc("POST /claude/stop-all", s.authGuard(s.handleStopAll))
 
 	// WebSocket de chat.
 	mux.HandleFunc("GET /claude/conversations/{id}/ws", s.handleConversationWS)

@@ -44,6 +44,34 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, conv)
 }
 
+// PATCH /claude/conversations/{id} — renomeia a conversa.
+func (s *Server) handleRenameConversation(w http.ResponseWriter, r *http.Request) {
+	conv := s.loadConv(w, r)
+	if conv == nil {
+		return
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	_ = decodeJSON(r, &body)
+	title := strings.TrimSpace(body.Title)
+	if title == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "Campo 'title' obrigatório"))
+		return
+	}
+	if err := s.updateConversationTitle(r.Context(), conv.ID, conv.UserID, title); err != nil {
+		writeErr(w, err)
+		return
+	}
+	conv.Title = &title
+	writeJSON(w, http.StatusOK, conv)
+}
+
+// POST /claude/stop-all — kill switch: encerra todos os turnos em andamento.
+func (s *Server) handleStopAll(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"stopped": s.mgr.InterruptAll()})
+}
+
 // POST /claude/conversations/{id}/clear — zera o contexto (rotaciona o session_id).
 func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {
 	conv := s.loadConv(w, r)
