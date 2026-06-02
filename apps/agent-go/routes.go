@@ -24,6 +24,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Geração one-shot (stateless) — usada pelo painel de email (via PAT).
 	// Sandbox: qualquer usuário autenticado (não exige admin como o resto do /claude).
 	mux.HandleFunc("POST /claude/generate", s.rateLimit(10, min, s.authGuardUser(s.handleGenerate)))
+	// Variante streaming (SSE) da geração — mesmo sandbox.
+	mux.HandleFunc("POST /claude/generate/stream", s.rateLimit(10, min, s.authGuardUser(s.handleGenerateStream)))
 
 	// Controles na camada de orquestração.
 	mux.HandleFunc("POST /claude/conversations/{id}/model", s.authGuard(s.handleSetModel))

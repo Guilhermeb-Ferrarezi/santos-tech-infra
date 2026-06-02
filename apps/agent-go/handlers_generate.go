@@ -48,23 +48,8 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
-	req.Task = strings.TrimSpace(req.Task)
-	if req.Task == "" {
-		req.Task = "email"
-	}
-	switch req.Task {
-	case "rewrite", "spamcheck":
-		if strings.TrimSpace(req.HTML) == "" {
-			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "informe o html"))
-			return
-		}
-	case "email", "subjects", "insights":
-		if strings.TrimSpace(req.Brief) == "" {
-			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "informe um brief"))
-			return
-		}
-	default:
-		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "task inválida (use email, rewrite, subjects, spamcheck ou insights)"))
+	if err := normalizeGenerate(&req); err != nil {
+		writeErr(w, err)
 		return
 	}
 
