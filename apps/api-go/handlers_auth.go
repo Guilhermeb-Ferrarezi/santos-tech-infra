@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -130,14 +131,20 @@ func (s *Server) handleLogoutGet(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, dest, http.StatusFound)
 }
 
-// allowedRedirect evita open-redirect: só permite origens conhecidas.
-func (s *Server) allowedRedirect(url string) bool {
+// allowedRedirect evita open-redirect: compara a ORIGEM exata (scheme://host),
+// não apenas o prefixo — senão "https://mails.santos-tech.com.evil.com" passaria.
+func (s *Server) allowedRedirect(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	origin := u.Scheme + "://" + u.Host
 	for _, o := range s.cfg.CORSOrigins {
-		if o != "" && strings.HasPrefix(url, o) {
+		if o != "" && origin == o {
 			return true
 		}
 	}
-	return s.cfg.AuthWebOrigin != "" && strings.HasPrefix(url, s.cfg.AuthWebOrigin)
+	return s.cfg.AuthWebOrigin != "" && origin == s.cfg.AuthWebOrigin
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
