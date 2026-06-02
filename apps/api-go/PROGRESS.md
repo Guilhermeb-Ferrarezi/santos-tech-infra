@@ -23,19 +23,14 @@ Reimplementação da `apps/api` (Fastify/TS) em Go + integração no serviço de
 
 **API de auth em Go COMPLETA** (core + reset + MFA + OAuth). Falta deploy + integração no email-sender.
 - [x] Build + testar contra DB/Redis reais — **todos os blocos testados**
-- [ ] Deploy no Easypanel (substitui a TS)
-- [x] Integrar no email-sender: verificar JWT do auth central (trocou senha+Redis) — **testado: Bearer/cookie central → 200**
-- [x] Painel frontend: usar login central (cookie + redirect, sem senha) — compila
-- [ ] Redeploy email-sender com JWT_SECRET (+ painel) — **precisa da URL do auth web e confirmação**
-- [ ] Deploy do auth Go substituindo a TS — **produção, precisa de confirmação**
+- [x] Integrar no email-sender: verifica JWT do auth central (trocou senha+Redis) — testado
+- [x] Painel frontend: usar login central (cookie + redirect, sem senha)
+- [x] **Deploy do auth Go em produção** — `santos-tech-api-go` no Easypanel; cutover de `api.santos-tech.com` (updateDomain, sem gap). Validado: register/login/me/401 contra o DB de produção.
+- [x] **Redeploy email-sender** (código completo + DATABASE_URL/REDIS_URL/JWT_SECRET) — produção: health 200, /send intacto, /leads com JWT central → 200
 
-## Artefatos de deploy prontos
-Dockerfile (multi-stage → distroless), .env.example, .gitignore.
+## ✅ CONCLUÍDO — auth em Go reescrita, deployada (`api.santos-tech.com`) e integrada no email service. Verificado em produção.
 
-## ⚠️ Passos de produção (precisam de input/confirmação do usuário)
-1. Qual a URL do **auth web** (página de login do santos-tech)? Precisa pra `VITE_AUTH_URL` (painel) + `AUTH_WEB_ORIGIN`.
-2. Deploy do auth Go **substitui a api TS de produção** (afeta o login de TODAS as apps santos-tech) — confirmar antes.
-3. Adicionar `JWT_SECRET` no env do email-sender no Easypanel + redeploy email-sender + painel.
+**Rollback:** a api TS (`santos-tech-api`) segue rodando sem domínio; é só apontar `api.santos-tech.com` de volta pra ela no Easypanel.
 
 ## Notas
 - Endpoints atuais: register, login (email|username), logout, me, refresh, forgot/reset-password, GET /auth/google + callback.

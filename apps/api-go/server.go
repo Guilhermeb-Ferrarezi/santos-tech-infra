@@ -45,7 +45,7 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 	s.registerAuthRoutes(mux)
-	return s.cors(mux)
+	return s.cors(s.globalRateLimit(mux))
 }
 
 // ── CORS (com credenciais, igual ao Fastify) ─────────────────────────────────
