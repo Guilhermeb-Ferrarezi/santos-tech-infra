@@ -14,6 +14,24 @@ services:
       - ../.env
     restart: unless-stopped
 
+  agent-go:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.agent-go
+    ports:
+      - "3334:3334"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    volumes:
+      - claude_home:/home/agent/.claude   # credenciais OAuth + sessões .jsonl (--resume)
+      - claude_workspaces:/data/workspaces # checkouts dos repositórios
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -42,3 +60,5 @@ services:
 
 volumes:
   postgres_data:
+  claude_home:
+  claude_workspaces:

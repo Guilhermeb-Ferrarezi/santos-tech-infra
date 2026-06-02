@@ -1,0 +1,23 @@
+# Imagem do orquestrador do Claude. NÃO é distroless: precisa de shell + node + git
+# para rodar o `claude` CLI, os MCP servers (npx) e clonar repositórios.
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY apps/agent-go/go.mod apps/agent-go/go.sum ./
+RUN go mod download
+COPY apps/agent-go/ .
+RUN CGO_ENABLED=0 go build -trimpath -o /agent-go .
+
+FROM node:22-bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates ripgrep curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g @anthropic-ai/claude-code \
+ && useradd -m -u 1001 agent \
+ && mkdir -p /data/workspaces /home/agent/.claude \
+ && chown -R agent:agent /data /home/agent/.claude
+COPY --from=build /agent-go /usr/local/bin/agent-go
+USER agent
+ENV HOME=/home/agent \
+    CLAUDE_WORKSPACE_ROOT=/data/workspaces
+EXPOSE 3334
+ENTRYPOINT ["agent-go"]
