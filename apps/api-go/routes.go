@@ -16,6 +16,9 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /auth/me", s.handleMe)
 	mux.HandleFunc("POST /auth/refresh", s.rateLimit(20, min, s.handleRefresh))
 
+	// Preferências de UI do usuário (merge no JSONB users.preferences — precisa de sessão)
+	mux.HandleFunc("PATCH /auth/me/preferences", s.rateLimit(30, min, s.authGuard(s.handlePreferencesUpdate)))
+
 	// API tokens (PAT) — gestão da própria conta (precisa de sessão)
 	mux.HandleFunc("POST /auth/api-keys", s.rateLimit(10, min, s.authGuard(s.handleCreateAPIKey)))
 	mux.HandleFunc("GET /auth/api-keys", s.authGuard(s.handleListAPIKeys))

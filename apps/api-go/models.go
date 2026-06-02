@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Papéis: 1=Student, 2=Teacher, 3=Admin, 4=Custom
 const (
@@ -23,6 +26,7 @@ type User struct {
 	TOTPSecret   *string
 	SuspendedAt  *time.Time
 	CreatedAt    time.Time
+	Preferences  json.RawMessage // JSONB de preferências de UI (free-form)
 }
 
 // UserProfile é o que vai pro cliente (sem dados sensíveis).
@@ -38,4 +42,5 @@ type UserProfile struct {
 	SuspendedAt  *string             `json:"suspendedAt"`
 	Permissions  map[string][]string `json:"permissions"`
 	CreatedAt    string              `json:"createdAt"`
+	Preferences  json.RawMessage     `json:"preferences"`
 }
