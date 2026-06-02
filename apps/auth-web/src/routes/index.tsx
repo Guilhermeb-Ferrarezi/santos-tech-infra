@@ -5,7 +5,7 @@ import { Label } from '@radix-ui/react-label'
 import AuthLayout from '@/components/AuthLayout'
 import GoogleButton from '@/components/GoogleButton'
 import PasswordInput from '@/components/PasswordInput'
-import { login, me, getSafeRedirect } from '@/lib/auth'
+import { login, me, getSafeRedirect, verifyMfa, sendMfaEmail } from '@/lib/auth'
 import { ApiError } from '@/lib/api'
 
 export default function LoginPage() {
@@ -18,6 +18,10 @@ export default function LoginPage() {
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  // 2º passo do MFA: quando setado, a tela troca pro formulário do código.
+  const [mfaChallenge, setMfaChallenge] = useState<string | null>(null)
+  const [code, setCode] = useState('')
+  const [emailSent, setEmailSent] = useState(false)
 
   useQuery({
     queryKey: ['me'],
@@ -29,13 +33,39 @@ export default function LoginPage() {
     },
   })
 
+  function finishLogin() {
+    window.location.href = getSafeRedirect(rawRedirect)
+  }
+
   const mutation = useMutation({
     mutationFn: () => login(identifier, password),
-    onSuccess: () => {
-      window.location.href = getSafeRedirect(rawRedirect)
+    onSuccess: (res) => {
+      // MFA ativo: não há sessão ainda, vamos pro passo do código.
+      if ('mfaRequired' in res) {
+        setError('')
+        setMfaChallenge(res.challenge)
+        return
+      }
+      finishLogin()
     },
     onError: (err) => {
       setError(err instanceof ApiError ? err.message : 'Erro ao entrar')
+    },
+  })
+
+  const verify = useMutation({
+    mutationFn: () => verifyMfa(mfaChallenge!, code),
+    onSuccess: finishLogin,
+    onError: (err) => {
+      setError(err instanceof ApiError ? err.message : 'Código inválido')
+    },
+  })
+
+  const sendEmail = useMutation({
+    mutationFn: () => sendMfaEmail(mfaChallenge!),
+    onSuccess: () => setEmailSent(true),
+    onError: (err) => {
+      setError(err instanceof ApiError ? err.message : 'Falha ao enviar o código')
     },
   })
 
@@ -43,6 +73,19 @@ export default function LoginPage() {
     e.preventDefault()
     setError('')
     mutation.mutate()
+  }
+
+  function handleVerify(e: React.FormEvent) {
+    e.preventDefault()
+    setError('')
+    verify.mutate()
+  }
+
+  function backToLogin() {
+    setMfaChallenge(null)
+    setCode('')
+    setEmailSent(false)
+    setError('')
   }
 
   return (
@@ -69,6 +112,66 @@ export default function LoginPage() {
         </div>
       )}
 
+      {mfaChallenge ? (
+        <>
+          <h2 className="text-3xl font-bold text-[#0E2937] mb-1">Verificação em duas etapas</h2>
+          <p className="text-base text-[#496B84] mb-8">
+            Digite o código do seu app autenticador — ou use o enviado por email ou um código de
+            recuperação.
+          </p>
+
+          {emailSent && (
+            <div className="mb-5 p-4 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700">
+              Enviamos um código para o seu email.
+            </div>
+          )}
+
+          <form onSubmit={handleVerify} className="flex flex-col gap-5">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="code" className="text-sm font-semibold text-[#0E2937]">Código de verificação</Label>
+              <input
+                id="code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                autoFocus
+                value={code}
+                onChange={e => setCode(e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 8))}
+                placeholder="000000"
+                required
+                className="w-full px-4 py-3.5 border border-gray-200 rounded-xl bg-[#F5F8FA] text-center text-2xl font-mono tracking-[0.4em] focus:outline-none focus:border-[#187ABF] focus:bg-white transition-colors"
+              />
+            </div>
+
+            {error && <p className="text-sm text-red-600">{error}</p>}
+
+            <button
+              type="submit"
+              disabled={verify.isPending || code.length < 6}
+              className="w-full py-3.5 bg-[#0DB88F] hover:bg-[#0aa37f] text-white text-base font-semibold rounded-xl transition-colors disabled:opacity-60"
+            >
+              {verify.isPending ? 'Verificando...' : 'Verificar'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setError(''); sendEmail.mutate() }}
+              disabled={sendEmail.isPending}
+              className="text-center text-sm text-[#187ABF] hover:underline disabled:opacity-60"
+            >
+              {sendEmail.isPending ? 'Enviando...' : 'Enviar código por email'}
+            </button>
+
+            <button
+              type="button"
+              onClick={backToLogin}
+              className="text-center text-sm text-gray-500 hover:underline"
+            >
+              Voltar ao login
+            </button>
+          </form>
+        </>
+      ) : (
+      <>
       <h2 className="text-3xl font-bold text-[#0E2937] mb-1">Entrar</h2>
       <p className="text-base text-[#496B84] mb-8">Acesse sua conta Santos Tech</p>
 
@@ -119,6 +222,8 @@ export default function LoginPage() {
       </div>
 
       <GoogleButton />
+      </>
+      )}
     </AuthLayout>
   )
 }
