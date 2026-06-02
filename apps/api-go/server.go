@@ -85,13 +85,34 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
 			return
 		}
-		uid, err := verifyToken(token, s.cfg.JWTSecret)
+		uid, err := s.resolveToken(r.Context(), token)
 		if err != nil {
-			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado"))
+			writeErr(w, err)
 			return
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), userIDKey, uid)))
 	}
+}
+
+// resolveToken aceita tanto um JWT de sessão quanto um Personal Access Token
+// (prefixo "st_"), devolvendo o userID. Erros já vêm como *AppError prontos para
+// writeErr; uma falha de banco no caminho do PAT vira 500.
+func (s *Server) resolveToken(ctx context.Context, token string) (int64, error) {
+	if strings.HasPrefix(token, "st_") {
+		uid, err := s.userIDByAPIKeyHash(ctx, sha256Hex(token))
+		if err != nil {
+			return 0, err
+		}
+		if uid == 0 {
+			return 0, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
+		}
+		return uid, nil
+	}
+	uid, err := verifyToken(token, s.cfg.JWTSecret)
+	if err != nil {
+		return 0, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
+	}
+	return uid, nil
 }
 
 func userIDFrom(r *http.Request) int64 {

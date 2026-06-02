@@ -35,6 +35,17 @@ CREATE TABLE IF NOT EXISTS recovery_codes (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_recovery_codes_user ON recovery_codes(user_id);
+CREATE TABLE IF NOT EXISTS api_keys (
+  id           BIGSERIAL PRIMARY KEY,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  key_prefix   TEXT NOT NULL,
+  key_hash     TEXT NOT NULL UNIQUE,
+  last_used_at TIMESTAMPTZ,
+  expires_at   TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
@@ -139,4 +150,65 @@ func (s *Server) linkOAuth(ctx context.Context, userID int64, provider, provider
 		 ON CONFLICT (provider, provider_id) DO NOTHING`,
 		userID, provider, providerID)
 	return err
+}
+
+// ── API tokens (Personal Access Tokens) ──────────────────────────────────────
+
+// APIKey é a visão segura de um token (sem o segredo) devolvida na listagem.
+type APIKey struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Prefix     string     `json:"prefix"`
+	LastUsedAt *time.Time `json:"lastUsedAt"`
+	ExpiresAt  *time.Time `json:"expiresAt"`
+	CreatedAt  time.Time  `json:"createdAt"`
+}
+
+func (s *Server) insertAPIKey(ctx context.Context, userID int64, name, prefix, hash string, expires *time.Time) (id int64, created time.Time, err error) {
+	err = s.db.QueryRow(ctx,
+		`INSERT INTO api_keys (user_id, name, key_prefix, key_hash, expires_at)
+		 VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at`,
+		userID, name, prefix, hash, expires).Scan(&id, &created)
+	return
+}
+
+func (s *Server) listAPIKeys(ctx context.Context, userID int64) ([]APIKey, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT id, name, key_prefix, last_used_at, expires_at, created_at
+		 FROM api_keys WHERE user_id=$1 ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []APIKey{}
+	for rows.Next() {
+		var k APIKey
+		if err := rows.Scan(&k.ID, &k.Name, &k.Prefix, &k.LastUsedAt, &k.ExpiresAt, &k.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+func (s *Server) deleteAPIKey(ctx context.Context, userID, id int64) (bool, error) {
+	tag, err := s.db.Exec(ctx, `DELETE FROM api_keys WHERE id=$1 AND user_id=$2`, id, userID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// userIDByAPIKeyHash valida um PAT pelo hash: devolve o user_id se o token existe e
+// não expirou, marcando o último uso. (0, nil) significa token inválido/expirado.
+func (s *Server) userIDByAPIKeyHash(ctx context.Context, hash string) (int64, error) {
+	var userID int64
+	err := s.db.QueryRow(ctx,
+		`UPDATE api_keys SET last_used_at=now()
+		 WHERE key_hash=$1 AND (expires_at IS NULL OR expires_at > now())
+		 RETURNING user_id`, hash).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return userID, err
 }

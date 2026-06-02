@@ -16,6 +16,11 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /auth/me", s.handleMe)
 	mux.HandleFunc("POST /auth/refresh", s.rateLimit(20, min, s.handleRefresh))
 
+	// API tokens (PAT) — gestão da própria conta (precisa de sessão)
+	mux.HandleFunc("POST /auth/api-keys", s.rateLimit(10, min, s.authGuard(s.handleCreateAPIKey)))
+	mux.HandleFunc("GET /auth/api-keys", s.authGuard(s.handleListAPIKeys))
+	mux.HandleFunc("DELETE /auth/api-keys/{id}", s.authGuard(s.handleDeleteAPIKey))
+
 	// Reset de senha (envia email — limite apertado)
 	mux.HandleFunc("POST /auth/forgot-password", s.rateLimit(3, 5*min, s.handleForgotPassword))
 	mux.HandleFunc("POST /auth/reset-password", s.rateLimit(10, min, s.handleResetPassword))
