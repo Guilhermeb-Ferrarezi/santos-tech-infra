@@ -58,13 +58,13 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "informe o html"))
 			return
 		}
-	case "email", "subjects":
+	case "email", "subjects", "insights":
 		if strings.TrimSpace(req.Brief) == "" {
 			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "informe um brief"))
 			return
 		}
 	default:
-		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "task inválida (use email, rewrite, subjects ou spamcheck)"))
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "task inválida (use email, rewrite, subjects, spamcheck ou insights)"))
 		return
 	}
 
@@ -164,6 +164,11 @@ func buildGeneratePrompt(req generateRequest) string {
 		b.WriteString("Dê uma nota de 0 a 100 (100 = ótima entregabilidade, risco baixo), um resumo curto e a lista de problemas, cada um com nível \"alto\", \"medio\" ou \"baixo\".\n\n")
 		b.WriteString(`Responda EXCLUSIVAMENTE com um JSON válido, sem cercas de código, no formato:`)
 		b.WriteString("\n{\"score\": 0, \"summary\": \"...\", \"issues\": [{\"level\": \"alto\", \"text\": \"...\"}]}\n")
+	case "insights":
+		fmt.Fprintf(&b, "Você recebeu as métricas de email marketing abaixo. Dê recomendações práticas e priorizadas para melhorar taxa de abertura, cliques e entregabilidade.\n\nMétricas:\n%s\n\n", req.Brief)
+		b.WriteString("Seja específico e acionável (ex: testar assuntos mais curtos, segmentar inativos, ajustar horário de envio, reduzir links). Use \"level\" como prioridade: \"alto\" = maior impacto.\n\n")
+		b.WriteString(`Responda EXCLUSIVAMENTE com um JSON válido, sem cercas de código, no formato:`)
+		b.WriteString("\n{\"summary\": \"...\", \"issues\": [{\"level\": \"alto\", \"text\": \"...\"}]}\n")
 	default: // "email"
 		fmt.Fprintf(&b, "Crie um email pronto.\nBriefing: %s\nTom: %s\nPúblico: %s\n\n", req.Brief, tone, audience)
 		writeEmailFormatRules(&b)
