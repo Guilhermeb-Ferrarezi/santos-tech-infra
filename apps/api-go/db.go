@@ -29,6 +29,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_bytes BIGINT NOT NULL DEFAULT 524288000;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS recovery_codes (
   id         BIGSERIAL PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -56,12 +57,12 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 // uuid colunas vêm com ::text pra escanear direto em string.
-const userCols = `id, email, username, name, password_hash, avatar_url, role, custom_role_id::text, mfa_enabled, totp_secret, suspended_at, created_at, preferences, quota_bytes`
+const userCols = `id, email, username, name, password_hash, avatar_url, role, custom_role_id::text, mfa_enabled, totp_secret, suspended_at, created_at, preferences, quota_bytes, email_verified_at`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Name, &u.PasswordHash, &u.AvatarURL,
-		&u.Role, &u.CustomRoleID, &u.MFAEnabled, &u.TOTPSecret, &u.SuspendedAt, &u.CreatedAt, &u.Preferences, &u.QuotaBytes)
+		&u.Role, &u.CustomRoleID, &u.MFAEnabled, &u.TOTPSecret, &u.SuspendedAt, &u.CreatedAt, &u.Preferences, &u.QuotaBytes, &u.EmailVerifiedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -176,7 +177,8 @@ func (s *Server) buildProfile(ctx context.Context, u *User) *UserProfile {
 	p := &UserProfile{
 		ID: u.ID, Email: u.Email, Username: u.Username, Name: u.Name, Role: u.Role,
 		CustomRoleID: u.CustomRoleID, AvatarURL: u.AvatarURL, MFAEnabled: u.MFAEnabled,
-		CreatedAt: u.CreatedAt.UTC().Format(time.RFC3339), Preferences: prefs,
+		EmailVerified: u.EmailVerifiedAt != nil,
+		CreatedAt:     u.CreatedAt.UTC().Format(time.RFC3339), Preferences: prefs,
 	}
 	if u.SuspendedAt != nil {
 		v := u.SuspendedAt.UTC().Format(time.RFC3339)

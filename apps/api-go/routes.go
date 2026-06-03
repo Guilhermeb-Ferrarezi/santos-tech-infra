@@ -41,6 +41,10 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/forgot-password", s.rateLimit(3, 5*min, s.handleForgotPassword))
 	mux.HandleFunc("POST /auth/reset-password", s.rateLimit(10, min, s.handleResetPassword))
 
+	// Verificação do email da conta (precisa de sessão; envia email — limite apertado)
+	mux.HandleFunc("POST /auth/email-verify/send", s.rateLimit(3, 5*min, s.authGuard(s.handleEmailVerifySend)))
+	mux.HandleFunc("POST /auth/email-verify/confirm", s.rateLimit(10, min, s.authGuard(s.handleEmailVerifyConfirm)))
+
 	// MFA — gestão (precisa de sessão)
 	mux.HandleFunc("POST /auth/mfa/setup", s.authGuard(s.handleMFASetup))
 	mux.HandleFunc("POST /auth/mfa/enable", s.authGuard(s.handleMFAEnable))
