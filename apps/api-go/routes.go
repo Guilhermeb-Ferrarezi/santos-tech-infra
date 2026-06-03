@@ -22,6 +22,9 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Upload de avatar (multipart → R2 → users.avatar_url; precisa de sessão)
 	mux.HandleFunc("POST /auth/avatar", s.rateLimit(10, min, s.authGuard(s.handleAvatarUpload)))
 
+	// Upload genérico de imagem (multipart → R2 → devolve URL; ex: foto de remetente)
+	mux.HandleFunc("POST /auth/upload", s.rateLimit(10, min, s.authGuard(s.handleImageUpload)))
+
 	// API tokens (PAT) — gestão da própria conta (precisa de sessão)
 	mux.HandleFunc("POST /auth/api-keys", s.rateLimit(10, min, s.authGuard(s.handleCreateAPIKey)))
 	mux.HandleFunc("GET /auth/api-keys", s.authGuard(s.handleListAPIKeys))
