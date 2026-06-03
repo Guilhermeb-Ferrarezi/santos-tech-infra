@@ -64,6 +64,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Lockout de login por conta (complementa o limite por IP): trava após N falhas
+// numa janela, mitigando credential-stuffing distribuído contra uma única conta.
+const (
+	maxLoginFails   = 10
+	loginFailWindow = 15 * time.Minute
+)
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Identifier string `json:"identifier"`
@@ -73,15 +80,25 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
-	u, err := s.userByIdentifier(r.Context(), strings.TrimSpace(body.Identifier))
+	ident := strings.TrimSpace(body.Identifier)
+	lockKey := "login_fail:" + strings.ToLower(ident)
+	if n, _ := s.rdb.Get(r.Context(), lockKey).Int(); n >= maxLoginFails {
+		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
+		return
+	}
+	u, err := s.userByIdentifier(r.Context(), ident)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	if u == nil || u.PasswordHash == nil || !verifyPassword(body.Password, *u.PasswordHash) {
+		if cnt, _ := s.rdb.Incr(r.Context(), lockKey).Result(); cnt == 1 {
+			s.rdb.Expire(r.Context(), lockKey, loginFailWindow)
+		}
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_CREDENTIALS", "Email ou senha inválidos"))
 		return
 	}
+	s.rdb.Del(r.Context(), lockKey) // credenciais válidas → zera o contador
 	if u.SuspendedAt != nil {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta suspensa"))
 		return

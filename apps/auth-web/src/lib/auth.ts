@@ -59,11 +59,13 @@ export function getSafeRedirect(param: string | null | undefined): string {
   if (!param) return fallback
   try {
     const url = new URL(param)
-    const ok =
+    // Exige https (http só em dev) pra evitar downgrade; localhost só em dev.
+    const schemeOK = url.protocol === 'https:' || (import.meta.env.DEV && url.protocol === 'http:')
+    const hostOK =
       url.hostname === 'santos-tech.com' ||
       url.hostname.endsWith('.santos-tech.com') ||
-      url.hostname === 'localhost'
-    return ok ? param : fallback
+      (import.meta.env.DEV && url.hostname === 'localhost')
+    return schemeOK && hostOK ? param : fallback
   } catch {
     return fallback
   }

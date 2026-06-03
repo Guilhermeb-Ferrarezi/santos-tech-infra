@@ -157,6 +157,13 @@ func (s *Server) deleteSession(ctx context.Context, sessionID string) error {
 	return err
 }
 
+// deleteExpiredSessions remove as sessões já vencidas. Sem isso a tabela cresce
+// pra sempre (sessões abandonadas sem logout nunca saem), degradando sessionByHash.
+func (s *Server) deleteExpiredSessions(ctx context.Context) (int64, error) {
+	tag, err := s.db.Exec(ctx, `DELETE FROM sessions WHERE expires_at < now()`)
+	return tag.RowsAffected(), err
+}
+
 func (s *Server) deleteUserSessions(ctx context.Context, userID int64) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM sessions WHERE user_id=$1`, userID)
 	return err
