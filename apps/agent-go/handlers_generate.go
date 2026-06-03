@@ -140,7 +140,12 @@ func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime s
 		if werr := os.WriteFile(filepath.Join(dir, name), data, 0o600); werr != nil {
 			return "", werr
 		}
-		args = append(args, "--allowedTools", "Read", "--add-dir", dir)
+		// Pra o Claude LER o arquivo no modo -p, o --allowedTools sozinho não bastava
+		// (ele respondia "sem acesso a ferramentas"). Usamos a mesma combinação
+		// comprovada do caminho de sessão: --dangerously-skip-permissions --add-dir.
+		// A diferença de segurança é o ENV: aqui é mínimo (só OAuth, SEM tokens de
+		// infra) e o dir é um temp que só contém a imagem.
+		args = append(args, "--dangerously-skip-permissions", "--add-dir", dir)
 		prompt = "Há uma imagem anexada no arquivo ./" + name +
 			" (no diretório de trabalho atual). Use a ferramenta Read para visualizá-la e leve-a em conta na resposta.\n\n" + prompt
 	}
