@@ -79,9 +79,10 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name      *string `json:"name"`
-		Role      *int16  `json:"role"`
-		Suspended *bool   `json:"suspended"`
+		Name       *string `json:"name"`
+		Role       *int16  `json:"role"`
+		Suspended  *bool   `json:"suspended"`
+		QuotaBytes *int64  `json:"quotaBytes"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
@@ -89,6 +90,10 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Role != nil && (*body.Role < RoleStudent || *body.Role > RoleAdmin) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "role inválido"))
+		return
+	}
+	if body.QuotaBytes != nil && *body.QuotaBytes < 0 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "quotaBytes inválido"))
 		return
 	}
 	// Self-proteção: admin não pode se auto-suspender (evita lockout).
@@ -102,7 +107,7 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	u, err := s.updateUserAdmin(r.Context(), id, body.Name, body.Role)
+	u, err := s.updateUserAdmin(r.Context(), id, body.Name, body.Role, body.QuotaBytes)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -183,5 +188,7 @@ func adminUserJSON(u *User) map[string]any {
 		"suspendedAt": u.SuspendedAt,
 		"createdAt":   u.CreatedAt.UTC().Format(time.RFC3339),
 		"mfaEnabled":  u.MFAEnabled,
+		"quotaBytes":  u.QuotaBytes,
+		"pending":     u.PasswordHash == nil, // convite não aceito (sem senha definida)
 	}
 }

@@ -27,6 +27,7 @@ type User struct {
 	SuspendedAt  *time.Time
 	CreatedAt    time.Time
 	Preferences  json.RawMessage // JSONB de preferências de UI (free-form)
+	QuotaBytes   int64           // limite de armazenamento da caixa (mailbox), em bytes
 }
 
 // UserProfile é o que vai pro cliente (sem dados sensíveis).

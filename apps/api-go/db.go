@@ -56,12 +56,12 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 // uuid colunas vêm com ::text pra escanear direto em string.
-const userCols = `id, email, username, name, password_hash, avatar_url, role, custom_role_id::text, mfa_enabled, totp_secret, suspended_at, created_at, preferences`
+const userCols = `id, email, username, name, password_hash, avatar_url, role, custom_role_id::text, mfa_enabled, totp_secret, suspended_at, created_at, preferences, quota_bytes`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Name, &u.PasswordHash, &u.AvatarURL,
-		&u.Role, &u.CustomRoleID, &u.MFAEnabled, &u.TOTPSecret, &u.SuspendedAt, &u.CreatedAt, &u.Preferences)
+		&u.Role, &u.CustomRoleID, &u.MFAEnabled, &u.TOTPSecret, &u.SuspendedAt, &u.CreatedAt, &u.Preferences, &u.QuotaBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -122,11 +122,11 @@ func (s *Server) listUsersByDomain(ctx context.Context, domain string) ([]User, 
 }
 
 // updateUserAdmin atualiza nome e/ou role (campos nil são ignorados via COALESCE).
-func (s *Server) updateUserAdmin(ctx context.Context, id int64, name *string, role *int16) (*User, error) {
+func (s *Server) updateUserAdmin(ctx context.Context, id int64, name *string, role *int16, quotaBytes *int64) (*User, error) {
 	return scanUser(s.db.QueryRow(ctx,
-		`UPDATE users SET name = COALESCE($2, name), role = COALESCE($3, role)
+		`UPDATE users SET name = COALESCE($2, name), role = COALESCE($3, role), quota_bytes = COALESCE($4, quota_bytes)
 		 WHERE id = $1 RETURNING `+userCols,
-		id, name, role))
+		id, name, role, quotaBytes))
 }
 
 // setUserSuspended seta (now()) ou limpa (NULL) o suspended_at.
