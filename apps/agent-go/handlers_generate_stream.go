@@ -131,12 +131,12 @@ func normalizeGenerate(req *generateRequest) error {
 		if strings.TrimSpace(req.HTML) == "" {
 			return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "informe o html")
 		}
-	case "email", "subjects", "insights":
+	case "email", "subjects", "insights", "command":
 		if strings.TrimSpace(req.Brief) == "" {
 			return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "informe um brief")
 		}
 	default:
-		return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "task inválida (use email, rewrite, subjects, spamcheck ou insights)")
+		return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "task inválida (use email, rewrite, subjects, spamcheck, insights ou command)")
 	}
 	return nil
 }

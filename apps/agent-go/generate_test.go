@@ -83,6 +83,24 @@ func TestParseGenerateResult(t *testing.T) {
 	}
 }
 
+func TestNormalizeGenerateCommand(t *testing.T) {
+	// command com brief é válido
+	req := generateRequest{Task: "command", Brief: "abre os logs"}
+	if err := normalizeGenerate(&req); err != nil {
+		t.Fatalf("command válido foi rejeitado: %v", err)
+	}
+	// command sem brief → erro
+	empty := generateRequest{Task: "command"}
+	if err := normalizeGenerate(&empty); err == nil {
+		t.Error("command sem brief deveria falhar")
+	}
+	// task desconhecida → erro
+	bad := generateRequest{Task: "xpto", Brief: "x"}
+	if err := normalizeGenerate(&bad); err == nil {
+		t.Error("task inválida deveria falhar")
+	}
+}
+
 func TestBuildCommandPrompt(t *testing.T) {
 	p := buildGeneratePrompt(generateRequest{
 		Task:    "command",
