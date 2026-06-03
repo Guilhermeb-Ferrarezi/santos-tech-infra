@@ -147,6 +147,7 @@ func buildGeneratePrompt(req generateRequest) string {
 		c.WriteString("- Se o pedido fala em \"falha/falhou/falharam/erro/bounce\", use view_logs com args.status = \"failed\". Se fala em \"enviados/entregues\", status = \"sent\".\n")
 		c.WriteString("- Use \"navigate\" SOMENTE quando o usuário pede explicitamente para abrir/ir/mostrar uma TELA, sem um filtro mais específico.\n")
 		c.WriteString("- Se o usuário pede para escrever/criar um email e usar/levar pro disparo, gere um assunto e um HTML curtos e use prefill_compose.\n")
+		c.WriteString("- Se pede para ALTERAR/descadastrar/reativar/renomear um lead, use update_lead com query (nome ou email) e só os campos que mudam. O painel pede confirmação antes de aplicar — no reply, peça a confirmação.\n")
 		c.WriteString("- Preencha SEMPRE os args que a ação escolhida pede.\n\n")
 
 		c.WriteString("Exemplos (pedido → JSON):\n")
@@ -154,7 +155,8 @@ func buildGeneratePrompt(req generateRequest) string {
 		c.WriteString("\"qual a taxa de abertura?\" → {\"action\":\"answer\",\"args\":{},\"reply\":\"Sua taxa de abertura está em X%.\"}\n")
 		c.WriteString("\"ver os envios que falharam\" → {\"action\":\"view_logs\",\"args\":{\"status\":\"failed\"},\"reply\":\"Abrindo os envios que falharam.\"}\n")
 		c.WriteString("\"abre os templates\" → {\"action\":\"navigate\",\"args\":{\"page\":\"templates\"},\"reply\":\"Abrindo os templates.\"}\n")
-		c.WriteString("\"escreve um convite curto pro curso e põe no disparo\" → {\"action\":\"prefill_compose\",\"args\":{\"subject\":\"Convite: curso de robótica\",\"html\":\"<p>Olá, {{name}}! Vem conhecer nosso curso.</p>\"},\"reply\":\"Levei um rascunho pro Disparar.\"}\n\n")
+		c.WriteString("\"escreve um convite curto pro curso e põe no disparo\" → {\"action\":\"prefill_compose\",\"args\":{\"subject\":\"Convite: curso de robótica\",\"html\":\"<p>Olá, {{name}}! Vem conhecer nosso curso.</p>\"},\"reply\":\"Levei um rascunho pro Disparar.\"}\n")
+		c.WriteString("\"descadastra a ana\" → {\"action\":\"update_lead\",\"args\":{\"query\":\"ana\",\"status\":\"unsubscribed\"},\"reply\":\"Quer mesmo descadastrar a Ana? Confirme no painel.\"}\n\n")
 
 		c.WriteString("Regras de saída:\n")
 		c.WriteString("- \"action\" é exatamente um id do catálogo (ou \"answer\").\n")
