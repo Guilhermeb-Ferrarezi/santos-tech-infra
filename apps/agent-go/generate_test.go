@@ -76,4 +76,26 @@ func TestParseGenerateResult(t *testing.T) {
 	if err != nil || spam.Score == nil || *spam.Score != 72 || len(spam.Issues) != 1 {
 		t.Fatalf("spamcheck: err=%v res=%+v", err, spam)
 	}
+
+	cmd, err := parseGenerateResult(`{"action":"navigate","args":{"page":"logs"},"reply":"Abrindo os logs."}`)
+	if err != nil || cmd.Action != "navigate" || cmd.Args["page"] != "logs" || cmd.Reply == "" {
+		t.Fatalf("command: err=%v res=%+v", err, cmd)
+	}
+}
+
+func TestBuildCommandPrompt(t *testing.T) {
+	p := buildGeneratePrompt(generateRequest{
+		Task:    "command",
+		Brief:   "me mostra os envios que falharam",
+		Context: "Ações:\n- view_logs(status): abre os logs",
+	})
+	if !strings.Contains(p, "me mostra os envios que falharam") {
+		t.Error("prompt de command deveria conter o pedido do usuário")
+	}
+	if !strings.Contains(p, "view_logs") {
+		t.Error("prompt de command deveria conter o catálogo (context)")
+	}
+	if !strings.Contains(p, `"action"`) || !strings.Contains(p, `"reply"`) {
+		t.Error("prompt de command deveria pedir JSON com action/reply")
+	}
 }

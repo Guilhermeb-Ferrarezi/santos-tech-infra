@@ -14,12 +14,13 @@ import (
 
 // generateRequest é o corpo de POST /claude/generate.
 type generateRequest struct {
-	Task     string `json:"task"`     // "email" | "rewrite" | "subjects" | "spamcheck" (default: email)
-	Brief    string `json:"brief"`    // descrição do que gerar / instrução de reescrita
+	Task     string `json:"task"`     // "email" | "rewrite" | "subjects" | "spamcheck" | "command" (default: email)
+	Brief    string `json:"brief"`    // descrição do que gerar / instrução de reescrita / pedido do usuário (command)
 	Tone     string `json:"tone"`     // tom desejado (opcional)
 	Audience string `json:"audience"` // público-alvo (opcional)
 	Subject  string `json:"subject"`  // assunto a analisar (opcional em "spamcheck")
 	HTML     string `json:"html"`     // conteúdo atual (obrigatório em "rewrite"/"spamcheck")
+	Context  string `json:"context"`  // catálogo de ações + dados (task "command"); montado pelo painel
 }
 
 // spamIssue é um problema de entregabilidade apontado pela análise de spam.
@@ -38,6 +39,11 @@ type generateResult struct {
 	Score     *int        `json:"score,omitempty"`   // nota 0-100 (spamcheck)
 	Summary   string      `json:"summary,omitempty"` // resumo da análise (spamcheck)
 	Issues    []spamIssue `json:"issues,omitempty"`  // problemas encontrados (spamcheck)
+	// task "command": ação escolhida pelo LLM (o painel valida e executa), seus
+	// argumentos (strings) e a resposta curta em PT-BR para o usuário.
+	Action string            `json:"action,omitempty"`
+	Args   map[string]string `json:"args,omitempty"`
+	Reply  string            `json:"reply,omitempty"`
 }
 
 // handleGenerate gera conteúdo de email/template num único turno (stateless): não
@@ -127,6 +133,25 @@ func buildGeneratePrompt(req generateRequest) string {
 		audience = "leads da Santos Tech"
 	}
 
+	// A task "command" tem um sistema de prompt próprio (assistente do painel, não
+	// redator), então é tratada antes do cabeçalho de redação.
+	if req.Task == "command" {
+		var c strings.Builder
+		c.WriteString("Você é o assistente do painel de email da Santos Tech. Responda em português do Brasil.\n")
+		c.WriteString("NÃO use ferramentas, NÃO acesse arquivos e NÃO rode comandos. Sua única saída é um JSON.\n\n")
+		fmt.Fprintf(&c, "Pedido do usuário:\n%s\n\n", strings.TrimSpace(req.Brief))
+		fmt.Fprintf(&c, "%s\n\n", strings.TrimSpace(req.Context))
+		c.WriteString("Escolha UMA ação do catálogo acima que melhor atende ao pedido. ")
+		c.WriteString("Se nenhuma ação servir (ex.: é só uma pergunta), use action \"answer\" e responda no campo reply.\n")
+		c.WriteString("Regras:\n")
+		c.WriteString("- \"action\" deve ser exatamente um id de ação do catálogo (ou \"answer\").\n")
+		c.WriteString("- \"args\" contém apenas os parâmetros daquela ação, todos como string. Use {} se não houver.\n")
+		c.WriteString("- \"reply\": 1 a 2 frases em PT-BR dizendo o que você fez ou respondendo a pergunta.\n\n")
+		c.WriteString("Responda EXCLUSIVAMENTE com um JSON válido, sem cercas de código, no formato:\n")
+		c.WriteString("{\"action\": \"...\", \"args\": {\"...\": \"...\"}, \"reply\": \"...\"}\n")
+		return c.String()
+	}
+
 	var b strings.Builder
 	b.WriteString("Você é um redator de email marketing da Santos Tech.\n")
 	b.WriteString("Responda em português do Brasil. NÃO use ferramentas, NÃO acesse arquivos e NÃO rode comandos — apenas escreva.\n\n")
@@ -185,7 +210,8 @@ func parseGenerateResult(raw string) (*generateResult, error) {
 		return nil, err
 	}
 	if res.Subject == "" && res.HTML == "" && res.Text == "" && len(res.Subjects) == 0 &&
-		res.Score == nil && res.Summary == "" && len(res.Issues) == 0 {
+		res.Score == nil && res.Summary == "" && len(res.Issues) == 0 &&
+		res.Action == "" && res.Reply == "" {
 		return nil, fmt.Errorf("resposta vazia")
 	}
 	return &res, nil
