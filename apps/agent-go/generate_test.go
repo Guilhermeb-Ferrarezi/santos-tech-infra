@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildGeneratePrompt(t *testing.T) {
-	email := buildGeneratePrompt(generateRequest{Task: "email", Brief: "convite pro curso de robótica"})
+	email := buildGeneratePrompt(generateRequest{Task: "email", Brief: "convite pro curso de robótica"}, false)
 	if !strings.Contains(email, "convite pro curso de robótica") {
 		t.Error("prompt de email deveria conter o briefing")
 	}
@@ -17,17 +17,17 @@ func TestBuildGeneratePrompt(t *testing.T) {
 		t.Error("prompt deveria mencionar as merge tags")
 	}
 
-	subjects := buildGeneratePrompt(generateRequest{Task: "subjects", Brief: "promoção de matrículas"})
+	subjects := buildGeneratePrompt(generateRequest{Task: "subjects", Brief: "promoção de matrículas"}, false)
 	if !strings.Contains(subjects, `"subjects"`) {
 		t.Error("prompt de subjects deveria pedir o JSON com subjects")
 	}
 
-	rewrite := buildGeneratePrompt(generateRequest{Task: "rewrite", Brief: "deixa mais curto", HTML: "<p>Olá</p>"})
+	rewrite := buildGeneratePrompt(generateRequest{Task: "rewrite", Brief: "deixa mais curto", HTML: "<p>Olá</p>"}, false)
 	if !strings.Contains(rewrite, "<p>Olá</p>") || !strings.Contains(rewrite, "deixa mais curto") {
 		t.Error("prompt de rewrite deveria conter o html atual e a instrução")
 	}
 
-	spam := buildGeneratePrompt(generateRequest{Task: "spamcheck", Subject: "GANHE AGORA", HTML: "<p>oferta</p>"})
+	spam := buildGeneratePrompt(generateRequest{Task: "spamcheck", Subject: "GANHE AGORA", HTML: "<p>oferta</p>"}, false)
 	if !strings.Contains(spam, "GANHE AGORA") || !strings.Contains(spam, "<p>oferta</p>") {
 		t.Error("prompt de spamcheck deveria conter assunto e html")
 	}
@@ -124,7 +124,7 @@ func TestBuildCommandPrompt(t *testing.T) {
 		Task:    "command",
 		Brief:   "me mostra os envios que falharam",
 		Context: "Ações:\n- view_logs(status): abre os logs",
-	})
+	}, false)
 	if !strings.Contains(p, "me mostra os envios que falharam") {
 		t.Error("prompt de command deveria conter o pedido do usuário")
 	}
@@ -133,5 +133,22 @@ func TestBuildCommandPrompt(t *testing.T) {
 	}
 	if !strings.Contains(p, `"action"`) || !strings.Contains(p, `"reply"`) {
 		t.Error("prompt de command deveria pedir JSON com action/reply")
+	}
+}
+
+func TestBuildPromptWithImage(t *testing.T) {
+	// Sem imagem: proíbe ferramentas.
+	noImg := buildGeneratePrompt(generateRequest{Task: "email", Brief: "x"}, false)
+	if !strings.Contains(noImg, "NÃO use ferramentas") {
+		t.Error("sem imagem deveria proibir ferramentas")
+	}
+	// Com imagem: NÃO pode proibir ferramentas (senão o modelo recusa o Read) e
+	// deve mandar usar o Read.
+	withImg := buildGeneratePrompt(generateRequest{Task: "command", Brief: "o que é isso?"}, true)
+	if strings.Contains(withImg, "NÃO use ferramentas") {
+		t.Error("com imagem NÃO deveria proibir ferramentas")
+	}
+	if !strings.Contains(withImg, "Read") {
+		t.Error("com imagem deveria instruir a usar o Read")
 	}
 }

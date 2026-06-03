@@ -90,7 +90,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := s.generateOnce(r.Context(), buildGeneratePrompt(req), req.ImageBase64, req.ImageMime)
+	raw, err := s.generateOnce(r.Context(), buildGeneratePrompt(req, strings.TrimSpace(req.ImageBase64) != ""), req.ImageBase64, req.ImageMime)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -185,7 +185,7 @@ func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime s
 
 // buildGeneratePrompt monta a instrução conforme a tarefa. Em todos os casos o
 // modelo é instruído a responder EXCLUSIVAMENTE com JSON (sem cercas, sem ferramentas).
-func buildGeneratePrompt(req generateRequest) string {
+func buildGeneratePrompt(req generateRequest, hasImage bool) string {
 	tone := strings.TrimSpace(req.Tone)
 	if tone == "" {
 		tone = "profissional, claro e acolhedor"
@@ -195,12 +195,19 @@ func buildGeneratePrompt(req generateRequest) string {
 		audience = "leads da Santos Tech"
 	}
 
+	// Restrição de ferramentas: por padrão NENHUMA; mas com imagem anexada o modelo
+	// PRECISA do Read pra vê-la — senão ele obedece o "não use ferramentas" e recusa.
+	toolRule := "NÃO use ferramentas, NÃO acesse arquivos e NÃO rode comandos."
+	if hasImage {
+		toolRule = "Use a ferramenta Read para abrir a imagem anexada (arquivo no diretório de trabalho atual) ANTES de responder. Não use nenhuma outra ferramenta."
+	}
+
 	// A task "command" tem um sistema de prompt próprio (assistente do painel, não
 	// redator), então é tratada antes do cabeçalho de redação.
 	if req.Task == "command" {
 		var c strings.Builder
 		c.WriteString("Você é o assistente do painel de email da Santos Tech. Responda em português do Brasil.\n")
-		c.WriteString("NÃO use ferramentas, NÃO acesse arquivos e NÃO rode comandos. Sua única saída é um JSON.\n\n")
+		c.WriteString(toolRule + " Sua única saída é um JSON.\n\n")
 		fmt.Fprintf(&c, "%s\n\n", strings.TrimSpace(req.Context))
 		fmt.Fprintf(&c, "Pedido do usuário: %s\n\n", strings.TrimSpace(req.Brief))
 
@@ -232,7 +239,7 @@ func buildGeneratePrompt(req generateRequest) string {
 
 	var b strings.Builder
 	b.WriteString("Você é um redator de email marketing da Santos Tech.\n")
-	b.WriteString("Responda em português do Brasil. NÃO use ferramentas, NÃO acesse arquivos e NÃO rode comandos — apenas escreva.\n\n")
+	b.WriteString("Responda em português do Brasil. " + toolRule + "\n\n")
 
 	switch req.Task {
 	case "subjects":

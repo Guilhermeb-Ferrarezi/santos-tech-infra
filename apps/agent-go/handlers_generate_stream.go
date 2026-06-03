@@ -39,7 +39,7 @@ func (s *Server) handleGenerateStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	fl.Flush()
 
-	if err := s.generateStream(r.Context(), buildGeneratePrompt(req), w, fl); err != nil {
+	if err := s.generateStream(r.Context(), buildGeneratePrompt(req, false), w, fl); err != nil {
 		sseEvent(w, fl, "error", map[string]string{"message": err.Error()})
 	}
 }
