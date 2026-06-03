@@ -81,6 +81,11 @@ func TestParseGenerateResult(t *testing.T) {
 	if err != nil || cmd.Action != "navigate" || cmd.Args["page"] != "logs" || cmd.Reply == "" {
 		t.Fatalf("command: err=%v res=%+v", err, cmd)
 	}
+
+	multi, err := parseGenerateResult(`{"actions":[{"action":"create_segment","args":{"name":"Alunos"}},{"action":"create_lead","args":{"email":"a@x.com"}}],"reply":"Confirme no painel."}`)
+	if err != nil || len(multi.Actions) != 2 || multi.Actions[0].Action != "create_segment" || multi.Actions[1].Args["email"] != "a@x.com" {
+		t.Fatalf("command multi: err=%v res=%+v", err, multi)
+	}
 }
 
 func TestNormalizeGenerateCommand(t *testing.T) {

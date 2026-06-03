@@ -39,11 +39,19 @@ type generateResult struct {
 	Score     *int        `json:"score,omitempty"`   // nota 0-100 (spamcheck)
 	Summary   string      `json:"summary,omitempty"` // resumo da análise (spamcheck)
 	Issues    []spamIssue `json:"issues,omitempty"`  // problemas encontrados (spamcheck)
-	// task "command": ação escolhida pelo LLM (o painel valida e executa), seus
-	// argumentos (strings) e a resposta curta em PT-BR para o usuário.
-	Action string            `json:"action,omitempty"`
+	// task "command": uma ou mais ações escolhidas pelo LLM (o painel valida e
+	// executa, em ordem) + a resposta curta em PT-BR. Action/Args ficam por
+	// compatibilidade (ação única); Actions é a forma preferida (permite vários
+	// passos num pedido, ex: "cria um segmento E cadastra um lead").
+	Action  string            `json:"action,omitempty"`
+	Args    map[string]string `json:"args,omitempty"`
+	Actions []commandAction   `json:"actions,omitempty"`
+	Reply   string            `json:"reply,omitempty"`
+}
+
+type commandAction struct {
+	Action string            `json:"action"`
 	Args   map[string]string `json:"args,omitempty"`
-	Reply  string            `json:"reply,omitempty"`
 }
 
 // handleGenerate gera conteúdo de email/template num único turno (stateless): não
@@ -142,28 +150,29 @@ func buildGeneratePrompt(req generateRequest) string {
 		fmt.Fprintf(&c, "%s\n\n", strings.TrimSpace(req.Context))
 		fmt.Fprintf(&c, "Pedido do usuário: %s\n\n", strings.TrimSpace(req.Brief))
 
-		c.WriteString("Como decidir a ação:\n")
-		c.WriteString("- Se for uma PERGUNTA (quantos, qual, quanto, quando, qual a taxa…), NÃO navegue. Use action \"answer\" e responda no campo reply USANDO os dados acima. Só diga que não sabe se o dado não estiver disponível.\n")
+		c.WriteString("Você devolve uma LISTA de ações (campo \"actions\") que o painel executa em ordem. ")
+		c.WriteString("O pedido pode pedir VÁRIAS coisas (ex.: \"cria um segmento E cadastra um lead\") — então inclua uma ação para cada parte. Se for uma só, a lista tem um item.\n\n")
+
+		c.WriteString("Como decidir as ações:\n")
+		c.WriteString("- Se for uma PERGUNTA (quantos, qual, quanto, quando, qual a taxa…), NÃO navegue. Use a ação \"answer\" e responda no campo reply USANDO os dados acima. Só diga que não sabe se o dado não estiver disponível.\n")
 		c.WriteString("- Se o pedido fala em \"falha/falhou/falharam/erro/bounce\", use view_logs com args.status = \"failed\". Se fala em \"enviados/entregues\", status = \"sent\".\n")
-		c.WriteString("- Use \"navigate\" SOMENTE quando o usuário pede explicitamente para abrir/ir/mostrar uma TELA, sem um filtro mais específico.\n")
-		c.WriteString("- Se o usuário pede para escrever/criar um email e usar/levar pro disparo, gere um assunto e um HTML curtos e use prefill_compose.\n")
-		c.WriteString("- Se pede para ALTERAR/descadastrar/reativar/renomear um lead, use update_lead com query (nome ou email) e só os campos que mudam. O painel pede confirmação antes de aplicar — no reply, peça a confirmação.\n")
-		c.WriteString("- Preencha SEMPRE os args que a ação escolhida pede.\n\n")
+		c.WriteString("- Use \"navigate\" SOMENTE quando o usuário pede explicitamente para abrir/ir a uma TELA, sem outra ação possível.\n")
+		c.WriteString("- Se o usuário pede para CRIAR/cadastrar um lead, use create_lead (email obrigatório). Para CRIAR um segmento, use create_segment (name obrigatório; ex.: \"segmento de alunos\" → name \"Alunos\", tags \"aluno\").\n")
+		c.WriteString("- Se pede para ALTERAR/descadastrar/reativar/renomear um lead, use update_lead.\n")
+		c.WriteString("- Se pede para escrever/criar um email e levar pro disparo, gere assunto+HTML curtos e use prefill_compose.\n")
+		c.WriteString("- Mutações (create_*/update_*) são CONFIRMADAS no painel antes de aplicar — NÃO peça pro usuário fazer manualmente nem diga que só faz uma por vez; apenas liste as ações. Preencha SEMPRE os args pedidos.\n\n")
 
 		c.WriteString("Exemplos (pedido → JSON):\n")
-		c.WriteString("\"quantos leads ativos eu tenho?\" → {\"action\":\"answer\",\"args\":{},\"reply\":\"Você tem 2 leads ativos.\"}\n")
-		c.WriteString("\"qual a taxa de abertura?\" → {\"action\":\"answer\",\"args\":{},\"reply\":\"Sua taxa de abertura está em X%.\"}\n")
-		c.WriteString("\"ver os envios que falharam\" → {\"action\":\"view_logs\",\"args\":{\"status\":\"failed\"},\"reply\":\"Abrindo os envios que falharam.\"}\n")
-		c.WriteString("\"abre os templates\" → {\"action\":\"navigate\",\"args\":{\"page\":\"templates\"},\"reply\":\"Abrindo os templates.\"}\n")
-		c.WriteString("\"escreve um convite curto pro curso e põe no disparo\" → {\"action\":\"prefill_compose\",\"args\":{\"subject\":\"Convite: curso de robótica\",\"html\":\"<p>Olá, {{name}}! Vem conhecer nosso curso.</p>\"},\"reply\":\"Levei um rascunho pro Disparar.\"}\n")
-		c.WriteString("\"descadastra a ana\" → {\"action\":\"update_lead\",\"args\":{\"query\":\"ana\",\"status\":\"unsubscribed\"},\"reply\":\"Quer mesmo descadastrar a Ana? Confirme no painel.\"}\n\n")
+		c.WriteString("\"quantos leads ativos eu tenho?\" → {\"actions\":[{\"action\":\"answer\"}],\"reply\":\"Você tem 2 leads ativos.\"}\n")
+		c.WriteString("\"ver os envios que falharam\" → {\"actions\":[{\"action\":\"view_logs\",\"args\":{\"status\":\"failed\"}}],\"reply\":\"Abrindo os envios que falharam.\"}\n")
+		c.WriteString("\"descadastra a ana\" → {\"actions\":[{\"action\":\"update_lead\",\"args\":{\"query\":\"ana\",\"status\":\"unsubscribed\"}}],\"reply\":\"Confirme no painel para descadastrar a Ana.\"}\n")
+		c.WriteString("\"cria um segmento de alunos e cadastra o lead joao@x.com\" → {\"actions\":[{\"action\":\"create_segment\",\"args\":{\"name\":\"Alunos\",\"tags\":\"aluno\"}},{\"action\":\"create_lead\",\"args\":{\"email\":\"joao@x.com\",\"tags\":\"aluno\"}}],\"reply\":\"Vou criar o segmento Alunos e cadastrar joao@x.com — confirme no painel.\"}\n\n")
 
 		c.WriteString("Regras de saída:\n")
-		c.WriteString("- \"action\" é exatamente um id do catálogo (ou \"answer\").\n")
-		c.WriteString("- \"args\": só os parâmetros daquela ação, todos como string. Use {} se não houver.\n")
-		c.WriteString("- \"reply\": 1 a 2 frases em PT-BR dizendo o que fez ou respondendo a pergunta.\n\n")
+		c.WriteString("- Cada item de \"actions\" tem \"action\" (id exato do catálogo, ou \"answer\") e \"args\" (só os parâmetros daquela ação, todos string; omita se não houver).\n")
+		c.WriteString("- \"reply\": 1 a 2 frases em PT-BR dizendo o que fez/vai fazer ou respondendo a pergunta.\n\n")
 		c.WriteString("Responda EXCLUSIVAMENTE com um JSON válido, sem cercas de código, no formato:\n")
-		c.WriteString("{\"action\": \"...\", \"args\": {\"...\": \"...\"}, \"reply\": \"...\"}\n")
+		c.WriteString("{\"actions\": [{\"action\": \"...\", \"args\": {\"...\": \"...\"}}], \"reply\": \"...\"}\n")
 		return c.String()
 	}
 
@@ -226,7 +235,7 @@ func parseGenerateResult(raw string) (*generateResult, error) {
 	}
 	if res.Subject == "" && res.HTML == "" && res.Text == "" && len(res.Subjects) == 0 &&
 		res.Score == nil && res.Summary == "" && len(res.Issues) == 0 &&
-		res.Action == "" && res.Reply == "" {
+		res.Action == "" && len(res.Actions) == 0 && res.Reply == "" {
 		return nil, fmt.Errorf("resposta vazia")
 	}
 	return &res, nil
