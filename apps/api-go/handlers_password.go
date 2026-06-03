@@ -71,6 +71,14 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uid, _ := strconv.ParseInt(idStr, 10, 64)
+	// Antes de gravar: se o usuário ainda não tinha senha (convite pendente),
+	// esta é a PRIMEIRA senha — manda o email de "conta ativada" depois.
+	u, err := s.userByID(r.Context(), uid)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	firstPassword := u != nil && u.PasswordHash == nil
 	newHash, err := hashPassword(body.NewPassword)
 	if err != nil {
 		writeErr(w, err)
@@ -82,5 +90,27 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.deleteUserSessions(r.Context(), uid)
 	s.rdb.Del(r.Context(), "pwd_reset:"+hash)
+	if firstPassword {
+		go s.sendWelcomeEmail(u.Email, u.Name)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
+}
+
+// sendWelcomeEmail confirma a ativação da conta quando a pessoa define a senha
+// pela primeira vez (convite aceito).
+func (s *Server) sendWelcomeEmail(to, name string) {
+	greet := "Olá!"
+	if name != "" {
+		greet = fmt.Sprintf("Olá, %s!", name)
+	}
+	html := fmt.Sprintf(`<p>%s</p>
+<p>Sua senha foi criada e a sua conta Santos Tech está <strong>ativa</strong>. 🎉</p>
+<p><a href="%s" style="color:#187ABF">Clique aqui para entrar</a> com o seu email e a senha que você acabou de definir.</p>
+<p>Esse mesmo login dá acesso à sua caixa de email @santos-tech.com.</p>
+<p>Se não foi você quem ativou a conta, avise um administrador imediatamente.</p>`, greet, s.cfg.AuthWebOrigin)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	if err := s.email.send(ctx, to, "Conta ativada — Santos Tech", html); err != nil {
+		slog.Error("falha ao enviar email de boas-vindas", "err", err)
+	}
 }
