@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base32"
 	"fmt"
 	"net/http"
@@ -152,13 +153,25 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido"))
 		return
 	}
+	// Teto de tentativas por challenge: sem isso, o OTP de email (6 dígitos) seria
+	// retentável até o limite por IP (burlável). Após N falhas, invalida o desafio.
+	attempts, _ := s.rdb.Incr(r.Context(), "mfa_attempts:"+body.Challenge).Result()
+	if attempts == 1 {
+		s.rdb.Expire(r.Context(), "mfa_attempts:"+body.Challenge, 10*time.Minute)
+	}
+	if attempts > 5 {
+		s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "mfa_attempts:"+body.Challenge)
+		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Faça login novamente."))
+		return
+	}
 	code := strings.TrimSpace(body.Code)
 	valid := false
 	if u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret) {
 		valid = true
 	}
 	if !valid {
-		if ec, e := s.rdb.Get(r.Context(), "mfa_email:"+body.Challenge).Result(); e == nil && ec != "" && ec == code {
+		if ec, e := s.rdb.Get(r.Context(), "mfa_email:"+body.Challenge).Result(); e == nil && ec != "" &&
+			subtle.ConstantTimeCompare([]byte(ec), []byte(code)) == 1 {
 			valid = true
 			s.rdb.Del(r.Context(), "mfa_email:"+body.Challenge)
 		}
@@ -170,7 +183,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
 		return
 	}
-	s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge)
+	s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_attempts:"+body.Challenge)
 	if err := s.issueSession(r.Context(), w, u); err != nil {
 		writeErr(w, err)
 		return
