@@ -88,6 +88,60 @@ func (s *Server) insertUser(ctx context.Context, email, name, passwordHash strin
 		email, name, passwordHash))
 }
 
+// Domínio das contas internas gerenciadas pela tela de Usuários do painel.
+const staffDomain = "santos-tech.com"
+
+// insertUserWithRole cria um usuário SEM senha (password_hash NULL) e com o role
+// dado. Ele não consegue logar até definir a senha pelo convite (reset-password).
+func (s *Server) insertUserWithRole(ctx context.Context, email, name string, role int16) (*User, error) {
+	return scanUser(s.db.QueryRow(ctx,
+		`INSERT INTO users (email, name, role) VALUES ($1,$2,$3) RETURNING `+userCols,
+		email, name, role))
+}
+
+// listUsersByDomain devolve os usuários cujo email termina em @<domain>, do mais
+// recente para o mais antigo.
+func (s *Server) listUsersByDomain(ctx context.Context, domain string) ([]User, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT `+userCols+` FROM users WHERE email LIKE '%@' || $1 ORDER BY created_at DESC`,
+		domain)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	users := []User{}
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, *u)
+	}
+	return users, rows.Err()
+}
+
+// updateUserAdmin atualiza nome e/ou role (campos nil são ignorados via COALESCE).
+func (s *Server) updateUserAdmin(ctx context.Context, id int64, name *string, role *int16) (*User, error) {
+	return scanUser(s.db.QueryRow(ctx,
+		`UPDATE users SET name = COALESCE($2, name), role = COALESCE($3, role)
+		 WHERE id = $1 RETURNING `+userCols,
+		id, name, role))
+}
+
+// setUserSuspended seta (now()) ou limpa (NULL) o suspended_at.
+func (s *Server) setUserSuspended(ctx context.Context, id int64, suspended bool) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE users SET suspended_at = CASE WHEN $2 THEN now() ELSE NULL END WHERE id = $1`,
+		id, suspended)
+	return err
+}
+
+// deleteUser remove o usuário (cascata em recovery_codes/api_keys via FK).
+func (s *Server) deleteUser(ctx context.Context, id int64) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	return err
+}
+
 func (s *Server) updatePassword(ctx context.Context, userID int64, hash string) error {
 	_, err := s.db.Exec(ctx, `UPDATE users SET password_hash=$1 WHERE id=$2`, hash, userID)
 	return err

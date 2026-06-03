@@ -30,6 +30,13 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /auth/api-keys", s.authGuard(s.handleListAPIKeys))
 	mux.HandleFunc("DELETE /auth/api-keys/{id}", s.authGuard(s.handleDeleteAPIKey))
 
+	// Gestão admin de usuários @santos-tech.com (exige role=Admin)
+	mux.HandleFunc("GET /auth/admin/users", s.adminGuard(s.handleListAdminUsers))
+	mux.HandleFunc("POST /auth/admin/users", s.rateLimit(10, min, s.adminGuard(s.handleCreateAdminUser)))
+	mux.HandleFunc("PATCH /auth/admin/users/{id}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateAdminUser)))
+	mux.HandleFunc("POST /auth/admin/users/{id}/invite", s.rateLimit(5, min, s.adminGuard(s.handleInviteAdminUser)))
+	mux.HandleFunc("DELETE /auth/admin/users/{id}", s.adminGuard(s.handleDeleteAdminUser))
+
 	// Reset de senha (envia email — limite apertado)
 	mux.HandleFunc("POST /auth/forgot-password", s.rateLimit(3, 5*min, s.handleForgotPassword))
 	mux.HandleFunc("POST /auth/reset-password", s.rateLimit(10, min, s.handleResetPassword))

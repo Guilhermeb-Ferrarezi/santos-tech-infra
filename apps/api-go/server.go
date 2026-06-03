@@ -95,6 +95,23 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// adminGuard exige sessão válida E role de administrador. Reaproveita authGuard
+// para resolver o token e injetar o userID; depois carrega o usuário e checa o role.
+func (s *Server) adminGuard(next http.HandlerFunc) http.HandlerFunc {
+	return s.authGuard(func(w http.ResponseWriter, r *http.Request) {
+		u, err := s.userByID(r.Context(), userIDFrom(r))
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if u == nil || u.Role != RoleAdmin {
+			writeErr(w, appErr(http.StatusForbidden, "FORBIDDEN", "Acesso restrito a administradores"))
+			return
+		}
+		next(w, r)
+	})
+}
+
 // resolveToken aceita tanto um JWT de sessão quanto um Personal Access Token
 // (prefixo "st_"), devolvendo o userID. Erros já vêm como *AppError prontos para
 // writeErr; uma falha de banco no caminho do PAT vira 500.

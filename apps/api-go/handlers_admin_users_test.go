@@ -1,0 +1,79 @@
+package main
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// adminGuard sem cookie/Authorization retorna 401 ANTES de tocar no banco.
+func TestAdminGuardNoToken(t *testing.T) {
+	s := testServer(Config{})
+	h := s.adminGuard(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	w := httptest.NewRecorder()
+	h(w, httptest.NewRequest("GET", "/auth/admin/users", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("code=%d, esperado 401", w.Code)
+	}
+}
+
+// handleCreateAdminUser com corpo inválido → 400 antes do banco.
+func TestCreateAdminUserBadBody(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	s.handleCreateAdminUser(w, httptest.NewRequest("POST", "/auth/admin/users", strings.NewReader("xxx")))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}
+
+// localPart inválido (vazio / com @ / com espaço) → 400 antes do banco.
+func TestCreateAdminUserBadLocalPart(t *testing.T) {
+	s := testServer(Config{})
+	for _, body := range []string{
+		`{"localPart":"","name":"X"}`,
+		`{"localPart":"joao@x","name":"X"}`,
+		`{"localPart":"jo ao","name":"X"}`,
+	} {
+		w := httptest.NewRecorder()
+		s.handleCreateAdminUser(w, httptest.NewRequest("POST", "/auth/admin/users", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body=%s code=%d, esperado 400", body, w.Code)
+		}
+	}
+}
+
+// role fora de {1,2,3} → 400 antes do banco.
+func TestCreateAdminUserBadRole(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	s.handleCreateAdminUser(w, httptest.NewRequest("POST", "/auth/admin/users",
+		strings.NewReader(`{"localPart":"joao","name":"João","role":9}`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}
+
+// id não-numérico → 400 antes do banco.
+func TestUpdateAdminUserBadID(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("PATCH", "/auth/admin/users/abc", strings.NewReader(`{}`))
+	r.SetPathValue("id", "abc")
+	s.handleUpdateAdminUser(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}
+
+func TestDeleteAdminUserBadID(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("DELETE", "/auth/admin/users/abc", nil)
+	r.SetPathValue("id", "abc")
+	s.handleDeleteAdminUser(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}
