@@ -3,14 +3,33 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
+
+const maxImageBytes = 8 << 20 // 8 MB
+
+// imageExtFromMime valida o mime e devolve a extensão do arquivo.
+func imageExtFromMime(mime string) (string, bool) {
+	switch mime {
+	case "image/png":
+		return "png", true
+	case "image/jpeg":
+		return "jpg", true
+	case "image/webp":
+		return "webp", true
+	case "image/gif":
+		return "gif", true
+	}
+	return "", false
+}
 
 // generateRequest é o corpo de POST /claude/generate.
 type generateRequest struct {
@@ -21,6 +40,10 @@ type generateRequest struct {
 	Subject  string `json:"subject"`  // assunto a analisar (opcional em "spamcheck")
 	HTML     string `json:"html"`     // conteúdo atual (obrigatório em "rewrite"/"spamcheck")
 	Context  string `json:"context"`  // catálogo de ações + dados (task "command"); montado pelo painel
+	// Imagem opcional (multimodal): base64 + mime. O painel sobe a foto e a manda
+	// aqui; gravamos num dir temporário e o Claude a lê via Read (escopado).
+	ImageBase64 string `json:"imageBase64"`
+	ImageMime   string `json:"imageMime"`
 }
 
 // spamIssue é um problema de entregabilidade apontado pela análise de spam.
@@ -67,7 +90,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := s.generateOnce(r.Context(), buildGeneratePrompt(req))
+	raw, err := s.generateOnce(r.Context(), buildGeneratePrompt(req), req.ImageBase64, req.ImageMime)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -83,7 +106,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 // generateOnce roda `claude -p --output-format json` num turno isolado e devolve o
 // texto final (campo .result). Sem MCP, sem --add-dir, sem skip-permissions e sem
 // tokens de infra no ambiente — é redação de texto, não automação.
-func (s *Server) generateOnce(ctx context.Context, prompt string) (string, error) {
+func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime string) (string, error) {
 	dir, err := os.MkdirTemp(s.cfg.WorkspaceRoot, "gen-*")
 	if err != nil {
 		if dir, err = os.MkdirTemp("", "gen-*"); err != nil {
@@ -95,8 +118,34 @@ func (s *Server) generateOnce(ctx context.Context, prompt string) (string, error
 	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(cctx, s.cfg.ClaudeBin,
-		"-p", "--output-format", "json", "--model", s.cfg.DefaultModel)
+	args := []string{"-p", "--output-format", "json", "--model", s.cfg.DefaultModel}
+
+	// Imagem anexada (multimodal): grava no dir temporário e habilita SÓ o Read,
+	// escopado nesse dir (que só contém a imagem; o env já é mínimo). O Claude lê a
+	// imagem antes de responder. Mantém o resto do sandbox (sem skip-permissions,
+	// sem outras tools, sem MCP).
+	if strings.TrimSpace(imageB64) != "" {
+		ext, ok := imageExtFromMime(imageMime)
+		if !ok {
+			return "", fmt.Errorf("formato de imagem não suportado (use png, jpeg, webp ou gif)")
+		}
+		data, derr := base64.StdEncoding.DecodeString(imageB64)
+		if derr != nil {
+			return "", fmt.Errorf("imagem inválida: %w", derr)
+		}
+		if len(data) == 0 || len(data) > maxImageBytes {
+			return "", fmt.Errorf("imagem vazia ou grande demais (máx 8MB)")
+		}
+		name := "anexo." + ext
+		if werr := os.WriteFile(filepath.Join(dir, name), data, 0o600); werr != nil {
+			return "", werr
+		}
+		args = append(args, "--allowedTools", "Read", "--add-dir", dir)
+		prompt = "Há uma imagem anexada no arquivo ./" + name +
+			" (no diretório de trabalho atual). Use a ferramenta Read para visualizá-la e leve-a em conta na resposta.\n\n" + prompt
+	}
+
+	cmd := exec.CommandContext(cctx, s.cfg.ClaudeBin, args...)
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(prompt)
 

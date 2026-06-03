@@ -88,6 +88,19 @@ func TestParseGenerateResult(t *testing.T) {
 	}
 }
 
+func TestImageExtFromMime(t *testing.T) {
+	for mime, want := range map[string]string{
+		"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif",
+	} {
+		if got, ok := imageExtFromMime(mime); !ok || got != want {
+			t.Errorf("imageExtFromMime(%q)=%q,%v quer %q", mime, got, ok, want)
+		}
+	}
+	if _, ok := imageExtFromMime("application/pdf"); ok {
+		t.Error("pdf não deveria ser imagem")
+	}
+}
+
 func TestNormalizeGenerateCommand(t *testing.T) {
 	// command com brief é válido
 	req := generateRequest{Task: "command", Brief: "abre os logs"}
