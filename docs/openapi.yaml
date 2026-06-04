@@ -731,11 +731,17 @@ paths:
           description: Deve ser `S256` (único método suportado).
       responses:
         "302":
-          description: Redireciona para o chooser de contas do auth-web
+          description: |
+            Redireciona o navegador. Em caso de sucesso, para a tela de escolha
+            de contas do auth-web (`/oauth/choose?request_id=...`). Se o client
+            e o redirect_uri são válidos mas a requisição é malformada
+            (response_type != code ou PKCE ausente/diferente de S256), redireciona
+            para o próprio redirect_uri com `?error=unsupported_response_type`
+            ou `?error=invalid_request` (e `state`, se enviado), conforme a spec OAuth.
           headers:
             Location:
-              schema: { type: string }
-              description: "`{AUTH_WEB_ORIGIN}/oauth/choose?request_id={id}`"
+              schema:
+                type: string
         "400":
           description: client_id ou redirect_uri inválidos (erro JSON direto)
           content:
@@ -746,11 +752,6 @@ paths:
                   value: { code: VALIDATION_ERROR, message: "client_id e redirect_uri são obrigatórios" }
                 client:
                   value: { code: INVALID_CLIENT, message: "Aplicação ou redirect_uri inválidos" }
-        "302 (erro)":
-          description: |
-            Redirect para `redirect_uri?error=<code>[&state=<state>]` quando o
-            client/redirect já foram validados mas outra condição falhou.
-            Valores possíveis de `error`: `unsupported_response_type`, `invalid_request`.
         "429":
           $ref: "#/components/responses/RateLimited"
 
