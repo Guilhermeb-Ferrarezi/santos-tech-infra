@@ -1,0 +1,28 @@
+{
+  "name": "@santos-tech/whats",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.0",
+    "pg": "^8.13.0",
+    "ioredis": "^5.4.0",
+    "ws": "^8.18.0",
+    "jsonwebtoken": "^9.0.2",
+    "qrcode": "^1.5.4",
+    "pino": "^9.5.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/ws": "^8.5.13",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/qrcode": "^1.5.5",
+    "typescript": "^6.0.3"
+  }
+}
