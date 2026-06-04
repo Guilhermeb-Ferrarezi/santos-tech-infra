@@ -38,6 +38,12 @@ test("stripQuotedReply remove citações, cabeçalho de reply e assinatura", () 
   expect(stripQuotedReply(text)).toBe("ok pode marcar")
 })
 
+test("corta cabeçalho de reply do Gmail quebrado em duas linhas", () => {
+  const text =
+    "fica 329,90, com duas pessoas fica 300 pra cada um\n\n\nEm qui., 4 de jun. de 2026 às 19:15, Claude <claude@santos-tech.com>\nescreveu:\n> O agente pediu ajuda"
+  expect(stripQuotedReply(text)).toBe("fica 329,90, com duas pessoas fica 300 pra cada um")
+})
+
 test("texto vazio após limpeza vira null", () => {
   const r = parseEscalationReply(
     { from: "guibferrarezi@gmail.com", subject: "Re: [whats:5511@s.whatsapp.net]", text: "> só citação" },

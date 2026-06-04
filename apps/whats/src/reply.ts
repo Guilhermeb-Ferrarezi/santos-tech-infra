@@ -19,9 +19,15 @@ export interface EscalationReply {
 export function stripQuotedReply(text: string): string {
   const lines = text.split(/\r?\n/)
   const out: string[] = []
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
     if (/^\s*>/.test(line)) continue
-    if (/^(Em|On)\b.*\b(escreveu|wrote):\s*$/i.test(line)) break
+    // Cabeçalho "Em ..., Fulano <x@y> escreveu:" — o Gmail pode quebrá-lo em mais
+    // de uma linha; junta a janela seguinte antes de testar o sufixo.
+    if (/^(Em|On)\b/.test(line)) {
+      const window = [line, lines[i + 1] ?? "", lines[i + 2] ?? ""].join(" ")
+      if (/\b(escreveu|wrote):/i.test(window)) break
+    }
     if (/^--\s*$/.test(line)) break
     out.push(line)
   }
