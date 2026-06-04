@@ -25,9 +25,7 @@ func mfaEmailAcctCDKey(uid int64) string { return fmt.Sprintf("mfa_email_acct_cd
 func (s *Server) sendChallengeEmailCode(ctx context.Context, challenge, email string) {
 	code := emailCode()
 	s.rdb.Set(ctx, "mfa_email:"+challenge, code, 10*time.Minute)
-	html := fmt.Sprintf(`<p>Seu código de verificação Santos Tech:</p>
-<p style="font-size:28px;font-weight:bold;letter-spacing:4px">%s</p>
-<p>Expira em 10 minutos. Se não foi você, ignore.</p>`, code)
+	html := emailCodeHTML(code, "Use o código abaixo para concluir o seu login:")
 	go func(to string) {
 		c, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
@@ -70,9 +68,7 @@ func (s *Server) handleMFAEmailCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.rdb.Set(r.Context(), mfaEmailAcctCDKey(uid), "1", mfaEmailAcctCooldown)
-	html := fmt.Sprintf(`<p>Seu código de verificação Santos Tech:</p>
-<p style="font-size:28px;font-weight:bold;letter-spacing:4px">%s</p>
-<p>Expira em 10 minutos. Se não foi você, ignore.</p>`, code)
+	html := emailCodeHTML(code, "Use o código abaixo para confirmar a alteração do 2FA da sua conta:")
 	go func(to string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()

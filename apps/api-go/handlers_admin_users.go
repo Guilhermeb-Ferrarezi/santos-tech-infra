@@ -167,10 +167,10 @@ func (s *Server) sendInvite(ctx context.Context, u *User) {
 }
 
 func (s *Server) sendInviteEmail(to, name, url string) {
-	html := fmt.Sprintf(`<p>Olá, %s!</p>
-<p>Você foi convidado para acessar a plataforma Santos Tech.</p>
-<p><a href="%s" style="color:#187ABF">Clique aqui para definir sua senha</a> e ativar sua conta.</p>
-<p>Este link expira em <strong>72 horas</strong>.</p>`, name, url)
+	html := emailLayout(emailGreeting(name) + fmt.Sprintf(`<p style="margin:0">Você foi convidado para acessar a <strong>plataforma Santos Tech</strong>. Defina sua senha para ativar a conta:</p>
+%s
+<p style="margin:0;color:#496B84;font-size:13px">Este link expira em <strong>72 horas</strong>. Se você não esperava este convite, ignore este email.</p>
+%s`, emailButton(url, "Definir minha senha"), emailLinkFallback(url)))
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	if err := s.email.send(ctx, to, "Seu acesso à Santos Tech", html); err != nil {

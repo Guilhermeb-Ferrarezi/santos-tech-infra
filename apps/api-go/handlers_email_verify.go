@@ -47,9 +47,7 @@ func (s *Server) handleEmailVerifySend(w http.ResponseWriter, r *http.Request) {
 	}
 	s.rdb.Del(r.Context(), emailVerifyAttKey(uid))
 	s.rdb.Set(r.Context(), emailVerifyCDKey(uid), "1", emailVerifyCooldown)
-	html := fmt.Sprintf(`<p>Seu código de verificação Santos Tech:</p>
-<p style="font-size:28px;font-weight:bold;letter-spacing:4px">%s</p>
-<p>Expira em 10 minutos. Se não foi você, ignore.</p>`, code)
+	html := emailCodeHTML(code, "Use o código abaixo para verificar o seu email:")
 	go func(to string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
