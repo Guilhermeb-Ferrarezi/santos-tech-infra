@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 // GET /auth/google — redireciona pro consentimento do Google.
@@ -80,6 +81,18 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.linkOAuth(r.Context(), u.ID, "google", profile.ID)
+
+	// MFA ativo: OAuth não pode contornar o 2º fator. Não emite sessão — cria o
+	// mesmo desafio do login por senha e manda o auth-web pro passo do código.
+	if u.MFAEnabled {
+		challenge := randomToken(24)
+		if err := s.rdb.Set(r.Context(), "mfa_challenge:"+challenge, u.ID, 10*time.Minute).Err(); err != nil {
+			fail("oauth_failed")
+			return
+		}
+		http.Redirect(w, r, origin+"/?mfa_challenge="+challenge, http.StatusFound)
+		return
+	}
 
 	if err := s.issueSession(r.Context(), w, u); err != nil {
 		fail("oauth_failed")

@@ -19,7 +19,11 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   // 2º passo do MFA: quando setado, a tela troca pro formulário do código.
-  const [mfaChallenge, setMfaChallenge] = useState<string | null>(null)
+  // Inicia preenchido quando o callback do OAuth redireciona com ?mfa_challenge=
+  // (login Google com MFA ativo — a sessão só sai depois do código).
+  const [mfaChallenge, setMfaChallenge] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get('mfa_challenge'),
+  )
   const [code, setCode] = useState('')
   const [emailSent, setEmailSent] = useState(false)
 
