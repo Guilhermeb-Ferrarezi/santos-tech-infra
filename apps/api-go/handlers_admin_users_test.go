@@ -77,3 +77,21 @@ func TestDeleteAdminUserBadID(t *testing.T) {
 		t.Fatalf("code=%d, esperado 400", w.Code)
 	}
 }
+
+// email completo inválido (ou sem email e sem localPart) → 400 antes do banco.
+func TestCreateAdminUserBadEmail(t *testing.T) {
+	s := testServer(Config{})
+	for _, body := range []string{
+		`{"email":"sem-arroba","name":"X"}`,
+		`{"email":"a@b","name":"X"}`,
+		`{"email":"a b@c.com","name":"X"}`,
+		`{"name":"X"}`,
+		`{"email":"ok@exemplo.com","name":""}`,
+	} {
+		w := httptest.NewRecorder()
+		s.handleCreateAdminUser(w, httptest.NewRequest("POST", "/auth/admin/users", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body=%s code=%d, esperado 400", body, w.Code)
+		}
+	}
+}

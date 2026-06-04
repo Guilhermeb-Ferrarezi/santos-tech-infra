@@ -13,9 +13,14 @@ import (
 
 var localPartRe = regexp.MustCompile(`^[a-z0-9._%+-]+$`)
 
-// handleCreateAdminUser cria um usuário @santos-tech.com sem senha e dispara o convite.
+var emailRe = regexp.MustCompile(`^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$`)
+
+// handleCreateAdminUser cria um usuário sem senha e dispara o convite. Aceita
+// `email` completo (qualquer domínio) ou `localPart` (vira @santos-tech.com);
+// `email` tem precedência se os dois vierem.
 func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
+		Email     string `json:"email"`
 		LocalPart string `json:"localPart"`
 		Name      string `json:"name"`
 		Role      int16  `json:"role"`
@@ -24,10 +29,29 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
+	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
 	body.LocalPart = strings.TrimSpace(strings.ToLower(body.LocalPart))
 	body.Name = strings.TrimSpace(body.Name)
-	if body.LocalPart == "" || body.Name == "" || !localPartRe.MatchString(body.LocalPart) {
-		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "localPart e nome são obrigatórios (sem @ ou espaços)"))
+	if body.Name == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome é obrigatório"))
+		return
+	}
+	var email string
+	switch {
+	case body.Email != "":
+		if !emailRe.MatchString(body.Email) {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "email inválido"))
+			return
+		}
+		email = body.Email
+	case body.LocalPart != "":
+		if !localPartRe.MatchString(body.LocalPart) {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "localPart inválido (sem @ ou espaços)"))
+			return
+		}
+		email = body.LocalPart + "@" + staffDomain
+	default:
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "informe email ou localPart"))
 		return
 	}
 	if body.Role == 0 {
@@ -38,7 +62,6 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email := body.LocalPart + "@" + staffDomain
 	existing, err := s.userByEmail(r.Context(), email)
 	if err != nil {
 		writeErr(w, err)
