@@ -15,6 +15,11 @@ export default function LoginPage() {
   // TanStack Router v1 usa JSON.parse nos search params, então URLs padrão
   // (?redirect=https://...) não chegam via useSearch. Lê direto da URL como fallback.
   const rawRedirect = search.redirect ?? new URLSearchParams(window.location.search).get('redirect') ?? undefined
+  // Fluxo OAuth provider: chegamos aqui via "Usar outra conta" do chooser.
+  // Após logar, voltamos ao chooser com o mesmo request_id.
+  const requestId = new URLSearchParams(window.location.search).get('request_id')
+  // Login Google com MFA: o callback devolve return_to junto do desafio.
+  const mfaReturnTo = new URLSearchParams(window.location.search).get('return_to')
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -40,6 +45,7 @@ export default function LoginPage() {
     queryKey: ['me'],
     queryFn: me,
     retry: false,
+    enabled: !requestId,
     select: (data) => {
       if (data?.user) window.location.href = getSafeRedirect(rawRedirect)
       return data
@@ -47,6 +53,14 @@ export default function LoginPage() {
   })
 
   function finishLogin() {
+    if (requestId) {
+      window.location.href = `/oauth/choose?request_id=${encodeURIComponent(requestId)}`
+      return
+    }
+    if (mfaReturnTo && mfaReturnTo.startsWith('/') && !mfaReturnTo.startsWith('//')) {
+      window.location.href = mfaReturnTo
+      return
+    }
     window.location.href = getSafeRedirect(rawRedirect)
   }
 
@@ -275,7 +289,7 @@ export default function LoginPage() {
         <div className="flex-1 h-px bg-gray-200" />
       </div>
 
-      <GoogleButton />
+      <GoogleButton returnTo={requestId ? `/oauth/choose?request_id=${requestId}` : undefined} />
       </>
       )}
     </AuthLayout>
