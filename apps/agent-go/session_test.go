@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +40,36 @@ func TestClaudeArgsResumesStartedSession(t *testing.T) {
 		t.Fatalf("turno seguinte não deveria usar --session-id: %v", args)
 	}
 	assertPairValue(t, args, "--resume", "sess-1")
+}
+
+func TestClaudeArgsToolsDisabledDropsToolAccess(t *testing.T) {
+	m := testManager()
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1", ToolsDisabled: true}
+	args := m.claudeArgs(conv)
+
+	if slices.Contains(args, "--add-dir") {
+		t.Fatalf("tools_disabled não deveria passar --add-dir: %v", args)
+	}
+	if !slices.Contains(args, "--disallowed-tools") {
+		t.Fatalf("tools_disabled deveria passar --disallowed-tools: %v", args)
+	}
+	// a string de tools deve conter as embutidas
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "Bash") || !strings.Contains(joined, "Write") {
+		t.Fatalf("--disallowed-tools deveria cobrir Bash/Write: %v", args)
+	}
+}
+
+func TestClaudeArgsToolsEnabledKeepsAddDir(t *testing.T) {
+	m := testManager()
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1", ToolsDisabled: false}
+	args := m.claudeArgs(conv)
+	if !slices.Contains(args, "--add-dir") {
+		t.Fatalf("tools habilitadas deveria manter --add-dir: %v", args)
+	}
+	if slices.Contains(args, "--disallowed-tools") {
+		t.Fatalf("tools habilitadas não deveria passar --disallowed-tools: %v", args)
+	}
 }
 
 func TestDeltaTextExtractsTextDelta(t *testing.T) {

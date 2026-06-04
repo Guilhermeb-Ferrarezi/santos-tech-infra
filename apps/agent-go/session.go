@@ -216,10 +216,16 @@ func (m *SessionManager) claudeArgs(conv *Conversation) []string {
 		"--include-partial-messages",
 		"--dangerously-skip-permissions",
 		"--model", conv.Model,
-		"--add-dir", conv.Workdir,
 	}
-	if mcp := m.s.mcpConfigPath(conv); fileExists(mcp) {
-		args = append(args, "--mcp-config", mcp, "--strict-mcp-config")
+	if conv.ToolsDisabled {
+		// Gate de processo: terceiros (whats-agent) não executam nenhuma ferramenta,
+		// mesmo que a mensagem tente induzir. Sem --add-dir e sem MCP.
+		args = append(args, "--disallowed-tools", strings.Join(builtinTools, ","))
+	} else {
+		args = append(args, "--add-dir", conv.Workdir)
+		if mcp := m.s.mcpConfigPath(conv); fileExists(mcp) {
+			args = append(args, "--mcp-config", mcp, "--strict-mcp-config")
+		}
 	}
 	if conv.SessionStarted {
 		args = append(args, "--resume", conv.SessionID)
