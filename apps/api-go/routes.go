@@ -76,4 +76,9 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// OAuth Google
 	mux.HandleFunc("GET /auth/google", s.handleGoogleStart)
 	mux.HandleFunc("GET /auth/google/callback", s.handleGoogleCallback)
+
+	// OAuth provider ("Entrar com Santos Tech") — authorization code + PKCE
+	mux.HandleFunc("GET /oauth/authorize", s.rateLimit(30, min, s.handleOAuthAuthorize))
+	mux.HandleFunc("POST /oauth/authorize/confirm", s.rateLimit(20, min, s.handleOAuthConfirm))
+	mux.HandleFunc("POST /oauth/token", s.rateLimit(20, min, s.handleOAuthToken))
 }
