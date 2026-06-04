@@ -207,6 +207,9 @@ func (m *SessionManager) claudeArgs(conv *Conversation) []string {
 		"--include-partial-messages",
 		"--model", conv.Model,
 	}
+	if conv.Effort != "" {
+		args = append(args, "--effort", conv.Effort)
+	}
 	if conv.ToolsDisabled {
 		// Gate de processo: terceiros (whats-agent) não executam NENHUMA ferramenta,
 		// mesmo que a mensagem tente induzir. Usamos uma allow-list VAZIA em vez de

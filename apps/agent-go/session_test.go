@@ -131,3 +131,18 @@ func valueAt(args []string, i int) string {
 	}
 	return "<fim>"
 }
+
+func TestClaudeArgsEffortPassesFlag(t *testing.T) {
+	m := testManager()
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1", Effort: "high"}
+	args := m.claudeArgs(conv)
+	assertPairValue(t, args, "--effort", "high")
+}
+
+func TestClaudeArgsEffortVazioOmiteFlag(t *testing.T) {
+	m := testManager()
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1"}
+	if slices.Contains(m.claudeArgs(conv), "--effort") {
+		t.Fatalf("sem effort não deveria passar --effort")
+	}
+}

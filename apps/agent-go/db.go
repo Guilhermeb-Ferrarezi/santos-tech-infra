@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS claude_conversations (
   session_id      UUID NOT NULL,
   session_started BOOLEAN NOT NULL DEFAULT false,
   tools_disabled  BOOLEAN NOT NULL DEFAULT false,
+  effort          TEXT NOT NULL DEFAULT '',
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -45,6 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_conv_user ON claude_conversations(user_id, update
 -- Migração idempotente: a tabela já existia em produção sem esta coluna
 -- (CREATE TABLE IF NOT EXISTS é no-op e não a adicionaria).
 ALTER TABLE claude_conversations ADD COLUMN IF NOT EXISTS tools_disabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE claude_conversations ADD COLUMN IF NOT EXISTS effort TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS claude_messages (
   id              BIGSERIAL PRIMARY KEY,
@@ -118,12 +120,12 @@ func (s *Server) userIDByAPIKeyHash(ctx context.Context, hash string) (int64, er
 
 // ── Conversas ────────────────────────────────────────────────────────────────
 
-const convCols = `id::text, user_id, title, repo, workdir, model, status, session_id::text, session_started, tools_disabled, created_at, updated_at`
+const convCols = `id::text, user_id, title, repo, workdir, model, status, session_id::text, session_started, tools_disabled, effort, created_at, updated_at`
 
 func scanConversation(row pgx.Row) (*Conversation, error) {
 	var c Conversation
 	err := row.Scan(&c.ID, &c.UserID, &c.Title, &c.Repo, &c.Workdir, &c.Model, &c.Status,
-		&c.SessionID, &c.SessionStarted, &c.ToolsDisabled, &c.CreatedAt, &c.UpdatedAt)
+		&c.SessionID, &c.SessionStarted, &c.ToolsDisabled, &c.Effort, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -135,9 +137,9 @@ func scanConversation(row pgx.Row) (*Conversation, error) {
 
 func (s *Server) insertConversation(ctx context.Context, c *Conversation) error {
 	_, err := s.db.Exec(ctx,
-		`INSERT INTO claude_conversations (id, user_id, title, repo, workdir, model, status, session_id, session_started, tools_disabled)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		c.ID, c.UserID, c.Title, c.Repo, c.Workdir, c.Model, c.Status, c.SessionID, c.SessionStarted, c.ToolsDisabled)
+		`INSERT INTO claude_conversations (id, user_id, title, repo, workdir, model, status, session_id, session_started, tools_disabled, effort)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		c.ID, c.UserID, c.Title, c.Repo, c.Workdir, c.Model, c.Status, c.SessionID, c.SessionStarted, c.ToolsDisabled, c.Effort)
 	return err
 }
 

@@ -28,6 +28,7 @@ type Conversation struct {
 	SessionID      string    `json:"sessionId"`
 	SessionStarted bool      `json:"-"` // true após o 1º turno da sessão atual
 	ToolsDisabled  bool      `json:"toolsDisabled"`
+	Effort         string    `json:"effort"` // vazio = default do CLI; low|medium|high|xhigh|max
 	CreatedAt      time.Time `json:"createdAt"`
 	UpdatedAt      time.Time `json:"updatedAt"`
 }

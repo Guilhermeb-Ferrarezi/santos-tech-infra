@@ -12,7 +12,11 @@ type createConvBody struct {
 	Repo          string `json:"repo"`
 	Model         string `json:"model"`
 	ToolsDisabled bool   `json:"toolsDisabled"`
+	Effort        string `json:"effort"`
 }
+
+// validEfforts são os níveis aceitos pelo claude CLI (--effort). Vazio = default.
+var validEfforts = map[string]bool{"": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 
 func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request) {
 	convs, err := s.listConversations(r.Context(), userIDFrom(r))
@@ -31,6 +35,11 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 	if model == "" {
 		model = s.cfg.DefaultModel
 	}
+	effort := strings.TrimSpace(body.Effort)
+	if !validEfforts[effort] {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "effort inválido (low|medium|high|xhigh|max)"))
+		return
+	}
 
 	conv := &Conversation{
 		ID:            newUUID(),
@@ -39,6 +48,7 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 		Status:        StatusIdle,
 		SessionID:     newUUID(),
 		ToolsDisabled: body.ToolsDisabled,
+		Effort:        effort,
 	}
 	conv.Workdir = filepath.Join(s.cfg.WorkspaceRoot, conv.ID)
 	if t := strings.TrimSpace(body.Title); t != "" {
