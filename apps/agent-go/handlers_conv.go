@@ -8,9 +8,10 @@ import (
 )
 
 type createConvBody struct {
-	Title string `json:"title"`
-	Repo  string `json:"repo"`
-	Model string `json:"model"`
+	Title         string `json:"title"`
+	Repo          string `json:"repo"`
+	Model         string `json:"model"`
+	ToolsDisabled bool   `json:"toolsDisabled"`
 }
 
 func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request) {
@@ -32,11 +33,12 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 	}
 
 	conv := &Conversation{
-		ID:        newUUID(),
-		UserID:    userIDFrom(r),
-		Model:     model,
-		Status:    StatusIdle,
-		SessionID: newUUID(),
+		ID:            newUUID(),
+		UserID:        userIDFrom(r),
+		Model:         model,
+		Status:        StatusIdle,
+		SessionID:     newUUID(),
+		ToolsDisabled: body.ToolsDisabled,
 	}
 	conv.Workdir = filepath.Join(s.cfg.WorkspaceRoot, conv.ID)
 	if t := strings.TrimSpace(body.Title); t != "" {

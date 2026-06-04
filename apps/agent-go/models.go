@@ -27,6 +27,7 @@ type Conversation struct {
 	Status         string    `json:"status"`
 	SessionID      string    `json:"sessionId"`
 	SessionStarted bool      `json:"-"` // true após o 1º turno da sessão atual
+	ToolsDisabled  bool      `json:"toolsDisabled"`
 	CreatedAt      time.Time `json:"createdAt"`
 	UpdatedAt      time.Time `json:"updatedAt"`
 }
