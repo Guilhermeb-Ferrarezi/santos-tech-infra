@@ -21,4 +21,8 @@ export const config = {
   corsOrigins: (process.env.ALLOWED_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
   sessionDir: process.env.SESSION_DIR ?? "/data/baileys",
   debounceMs: Number(process.env.DEBOUNCE_MS ?? "8000"),
+  // Escalação: email avisado quando o agente sinaliza [[escalar]]. Vazio = desligado.
+  escalateEmail: process.env.ESCALATE_EMAIL ?? "",
+  mailsAPI: (process.env.MAILS_API ?? "https://mails.santos-tech.com/api").replace(/\/$/, ""),
+  emailApiKey: process.env.EMAIL_API_KEY ?? "",
 }

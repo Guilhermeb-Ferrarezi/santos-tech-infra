@@ -6,6 +6,8 @@ import { allowlistSet, conversationFor, recordSeen, saveMessage } from "./db"
 import { autoReplyEnabled, pushSim, setSimTyping } from "./redis"
 import { runTurn } from "./agent"
 import { emitEvent } from "./events"
+import { extractEscalation } from "./escalate"
+import { sendEmail } from "./email"
 
 // JID sintético do simulador do dashboard: 1 chat de teste por admin.
 const SIM_SUFFIX = "@simulator"
@@ -93,7 +95,11 @@ async function fireTurn(jid: string, text: string, toolsDisabled: boolean) {
     await presence(jid, true)
     const isFirst = (await conversationFor(jid)) === null
     const reply = await runTurn(jid, text, toolsDisabled, isFirst)
-    if (reply) await send(jid, reply)
+    // Escalação: o modelo sinaliza [[escalar: motivo]] e o harness manda o email —
+    // o marcador nunca chega ao contato.
+    const { text: clean, reason } = extractEscalation(reply)
+    if (reason !== null) void escalate(jid, text, reason, clean)
+    if (clean) await send(jid, clean)
   } catch (e) {
     console.error("turno falhou", jid, e) // silêncio: não responde quebrado
   } finally {
@@ -104,6 +110,26 @@ async function fireTurn(jid: string, text: string, toolsDisabled: boolean) {
 
 // Saída plugável: chats do simulador escrevem no transcript Redis em vez do WhatsApp.
 // É o que permite a bancada do dashboard usar o MESMO bufferTurn/fireTurn dos reais.
+// escalate avisa o dono por email que o agente precisou de ajuda num chat.
+async function escalate(jid: string, question: string, reason: string, replied: string) {
+  if (!config.escalateEmail) {
+    console.error("escalação sinalizada mas ESCALATE_EMAIL não configurado", jid)
+    return
+  }
+  const who = jid.endsWith("@simulator") ? `Simulador (${jid})` : jid
+  const body =
+    `O agente do WhatsApp pediu ajuda.\n\n` +
+    `Chat: ${who}\n` +
+    `Motivo: ${reason || "(não informado)"}\n\n` +
+    `Mensagem recebida:\n${question}\n\n` +
+    (replied ? `Resposta enviada ao contato:\n${replied}\n` : `Nenhuma resposta foi enviada ao contato.\n`)
+  try {
+    await sendEmail(config.escalateEmail, `WhatsApp: agente pediu ajuda (${who})`, body)
+  } catch (e) {
+    console.error("falha ao enviar email de escalação", jid, e)
+  }
+}
+
 async function send(jid: string, text: string) {
   if (jid.endsWith(SIM_SUFFIX)) {
     await pushSim(simUID(jid), "bot", text)
