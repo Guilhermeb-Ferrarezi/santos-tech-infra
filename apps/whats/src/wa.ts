@@ -2,7 +2,7 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason } from "baileys"
 import type { WASocket } from "baileys"
 import { config } from "./config"
 import { decideMessage } from "./router"
-import { allowlistSet, conversationFor } from "./db"
+import { allowlistSet, conversationFor, recordSeen } from "./db"
 import { autoReplyEnabled } from "./redis"
 import { runTurn } from "./agent"
 
@@ -44,6 +44,13 @@ export async function startWhatsApp(): Promise<void> {
       const jid = msg.key.remoteJid ?? ""
       const text = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? ""
       const hasMedia = !!(msg.message?.imageMessage || msg.message?.audioMessage || msg.message?.videoMessage || msg.message?.documentMessage)
+      // Radar: registra todo chat que mandou mensagem (mesmo fora da allowlist) pra
+      // UI listar e permitir com um clique. Ignora status e canais.
+      if (!msg.key.fromMe && jid && !jid.endsWith("@broadcast") && !jid.endsWith("@newsletter")) {
+        recordSeen(jid, msg.pushName ?? "", text || (hasMedia ? "[mídia]" : "")).catch((e) =>
+          console.error("recordSeen falhou", jid, e),
+        )
+      }
       const d = decideMessage({
         jid,
         fromMe: !!msg.key.fromMe,

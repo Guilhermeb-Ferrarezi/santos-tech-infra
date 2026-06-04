@@ -2,7 +2,7 @@ import { createServer, IncomingMessage, ServerResponse } from "http"
 import jwt from "jsonwebtoken"
 import QRCode from "qrcode"
 import { config } from "./config"
-import { listAllowlist, addAllow, removeAllow, userRole } from "./db"
+import { listAllowlist, addAllow, removeAllow, listSeen, userRole } from "./db"
 import { waStatus, logoutWhatsApp } from "./wa"
 import { autoReplyEnabled, setAutoReply } from "./redis"
 
@@ -79,6 +79,7 @@ export function startHTTP() {
         await logoutWhatsApp()
         return send(res, 200, { ok: true })
       }
+      if (req.method === "GET" && url === `${b}/seen`) return send(res, 200, { items: await listSeen() })
       if (req.method === "GET" && url === `${b}/allowlist`) return send(res, 200, { items: await listAllowlist() })
       if (req.method === "POST" && url === `${b}/allowlist`) {
         const { jid, label } = await body(req)
