@@ -221,7 +221,13 @@ func (m *SessionManager) claudeArgs(conv *Conversation) []string {
 		// sem ele, em modo -p (não-interativo) toda ferramenta fora da allow-list é
 		// negada automaticamente (inclusive as chamadas por um subagent). Sem --add-dir
 		// e sem MCP.
-		args = append(args, "--allowed-tools", "")
+		// Exceção cirúrgica: WebSearch pode ser liberado sozinho (busca pública, sem
+		// URL arbitrária — diferente do WebFetch, que seria canal de exfiltração).
+		if conv.WebSearch {
+			args = append(args, "--allowed-tools", "WebSearch")
+		} else {
+			args = append(args, "--allowed-tools", "")
+		}
 	} else {
 		args = append(args, "--dangerously-skip-permissions")
 		args = append(args, "--add-dir", conv.Workdir)

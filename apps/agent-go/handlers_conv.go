@@ -12,6 +12,7 @@ type createConvBody struct {
 	Repo          string `json:"repo"`
 	Model         string `json:"model"`
 	ToolsDisabled bool   `json:"toolsDisabled"`
+	WebSearch     bool   `json:"webSearch"`
 	Effort        string `json:"effort"`
 }
 
@@ -48,6 +49,7 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 		Status:        StatusIdle,
 		SessionID:     newUUID(),
 		ToolsDisabled: body.ToolsDisabled,
+		WebSearch:     body.WebSearch,
 		Effort:        effort,
 	}
 	conv.Workdir = filepath.Join(s.cfg.WorkspaceRoot, conv.ID)

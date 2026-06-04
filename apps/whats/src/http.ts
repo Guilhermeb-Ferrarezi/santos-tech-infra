@@ -122,12 +122,12 @@ export function startHTTP() {
         return send(res, 200, await getAgentConfig())
       }
       if (req.method === "POST" && url === `${b}/agent-config`) {
-        const { model, effort } = await body(req)
+        const { model, effort, webSearch } = await body(req)
         if (typeof model !== "string" || !VALID_MODELS.has(model))
           return send(res, 400, { code: "BAD_REQUEST", message: "model inválido (haiku|sonnet|opus ou vazio)" })
         if (typeof effort !== "string" || !VALID_EFFORTS.has(effort))
           return send(res, 400, { code: "BAD_REQUEST", message: "effort inválido (low|medium|high|xhigh|max ou vazio)" })
-        await setAgentConfig({ model, effort })
+        await setAgentConfig({ model, effort, webSearch: !!webSearch })
         return send(res, 200, await getAgentConfig())
       }
       // Reinicia a conversa de um chat: desvincula; a próxima mensagem cria conversa

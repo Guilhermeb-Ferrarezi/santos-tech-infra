@@ -146,3 +146,19 @@ func TestClaudeArgsEffortVazioOmiteFlag(t *testing.T) {
 		t.Fatalf("sem effort não deveria passar --effort")
 	}
 }
+
+func TestClaudeArgsToolsDisabledComWebSearchLiberaSoBusca(t *testing.T) {
+	m := testManager()
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1", ToolsDisabled: true, WebSearch: true}
+	args := m.claudeArgs(conv)
+	assertPairValue(t, args, "--allowed-tools", "WebSearch")
+	if slices.Contains(args, "--add-dir") || slices.Contains(args, "--dangerously-skip-permissions") {
+		t.Fatalf("web search não deveria reabrir add-dir/skip-permissions: %v", args)
+	}
+}
+
+func TestClaudeArgsToolsDisabledSemWebSearchSegueVazio(t *testing.T) {
+	m := testManager()
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1", ToolsDisabled: true}
+	assertPairValue(t, m.claudeArgs(conv), "--allowed-tools", "")
+}

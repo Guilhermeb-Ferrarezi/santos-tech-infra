@@ -27,11 +27,11 @@ export function finalTextFromEvents(events: TurnEvent[]): string {
 async function ensureConversation(jid: string, toolsDisabled: boolean): Promise<string> {
   const existing = await conversationFor(jid)
   if (existing) return existing
-  const { model, effort } = await getAgentConfig()
+  const { model, effort, webSearch } = await getAgentConfig()
   const res = await fetch(`${config.agentURL}/conversations`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceToken()}` },
-    body: JSON.stringify({ title: `WhatsApp ${jid}`, toolsDisabled, model, effort }),
+    body: JSON.stringify({ title: `WhatsApp ${jid}`, toolsDisabled, model, effort, webSearch }),
   })
   if (!res.ok) throw new Error(`criar conversa falhou: HTTP ${res.status}`)
   const conv = (await res.json()) as { id: string }

@@ -24,15 +24,17 @@ export async function initAutoReply(): Promise<void> {
 
 const MODEL_KEY = "whats:model"
 const EFFORT_KEY = "whats:effort"
+const WEBSEARCH_KEY = "whats:websearch"
 
 export interface AgentConfig {
   model: string
   effort: string
+  webSearch: boolean
 }
 
 export async function getAgentConfig(): Promise<AgentConfig> {
-  const [model, effort] = await redis.mget(MODEL_KEY, EFFORT_KEY)
-  return { model: model ?? "", effort: effort ?? "" }
+  const [model, effort, web] = await redis.mget(MODEL_KEY, EFFORT_KEY, WEBSEARCH_KEY)
+  return { model: model ?? "", effort: effort ?? "", webSearch: web === "1" }
 }
 
 export async function setAgentConfig(cfg: AgentConfig): Promise<void> {
@@ -41,6 +43,7 @@ export async function setAgentConfig(cfg: AgentConfig): Promise<void> {
   else m.del(MODEL_KEY)
   if (cfg.effort.trim()) m.set(EFFORT_KEY, cfg.effort.trim())
   else m.del(EFFORT_KEY)
+  m.set(WEBSEARCH_KEY, cfg.webSearch ? "1" : "0")
   await m.exec()
 }
 
