@@ -124,6 +124,7 @@ func (s *Server) handleOAuthConfirm(w http.ResponseWriter, r *http.Request) {
 		qq.Set("state", req.State)
 	}
 	dest.RawQuery = qq.Encode()
+	w.Header().Set("Cache-Control", "no-store") // a URL contém o code de uso único
 	writeJSON(w, http.StatusOK, map[string]string{"redirectTo": dest.String()})
 }
 
@@ -204,7 +205,10 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta indisponível"))
 		return
 	}
-	_ = s.deleteSession(r.Context(), sid) // rotaciona, como /auth/refresh
+	// Rotaciona criando uma sessão NOVA (id diferente): o fluxo OAuth não tem
+	// cookies — o app cliente guarda os próprios tokens, então a sessão é
+	// deliberadamente desacoplada do cookie multi-conta "accounts" do navegador.
+	_ = s.deleteSession(r.Context(), sid)
 	s.writeTokenResponse(w, r, u)
 }
 
@@ -219,6 +223,7 @@ func (s *Server) writeTokenResponse(w http.ResponseWriter, r *http.Request, u *U
 		writeErr(w, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store") // resposta carrega credenciais (RFC 6749 §5.1)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token": access, "refresh_token": refresh,
 		"token_type": "Bearer", "expires_in": int(accessTTL.Seconds()),
