@@ -79,6 +79,35 @@ export async function sendAccountEmailCode(): Promise<void> {
   await apiFetch('/auth/mfa/email-code', { method: 'POST' })
 }
 
+// ── Multi-conta + OAuth provider ─────────────────────────────────────────────
+
+export type Account = {
+  sessionId: string
+  name: string
+  email: string
+  avatarUrl?: string | null
+  active: boolean
+}
+
+export async function listAccounts(): Promise<{ accounts: Account[] }> {
+  return apiFetch<{ accounts: Account[] }>('/auth/accounts')
+}
+
+export async function removeAccount(sessionId: string): Promise<void> {
+  await apiFetch(`/auth/accounts/${sessionId}`, { method: 'DELETE' })
+}
+
+// Confirma a conta escolhida no fluxo OAuth; devolve a URL de retorno pro app.
+export async function confirmAuthorize(
+  requestId: string,
+  sessionId: string,
+): Promise<{ redirectTo: string }> {
+  return apiFetch<{ redirectTo: string }>('/oauth/authorize/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ requestId, sessionId }),
+  })
+}
+
 export function getSafeRedirect(param: string | null | undefined): string {
   const fallback = import.meta.env.VITE_REDIRECT_DEFAULT ?? '/'
   if (!param) return fallback

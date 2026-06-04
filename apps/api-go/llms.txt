@@ -53,7 +53,8 @@
   permissions, avatarUrl, mfaEnabled, mfaMethod, mfaTotp, mfaEmail,
   emailVerified, suspendedAt, createdAt, preferences (JSONB livre de UI)
 - `PATCH /auth/me/preferences {…}` — merge no JSONB de preferências
-- `GET /auth/google` · `GET /auth/google/callback` — OAuth (respeita MFA)
+- `GET /auth/google[?return_to=/caminho]` · `GET /auth/google/callback` — OAuth
+  (respeita MFA; `return_to` preservado no cookie de state e devolvido no redirect)
 
 ### Senha e verificação
 - `POST /auth/forgot-password {email}` — link de redefinição (resposta uniforme)
@@ -72,6 +73,40 @@
 ### Sudo
 - `POST /auth/sudo/verify {code?|password?}` — eleva por 15min (re-emite access)
 
+### Multi-conta (chooser estilo Google)
+
+Cookie assinado `accounts` (HMAC-SHA256, httpOnly) indexa até 5 sessões do
+navegador. Não requer `access_token` — basta o cookie `accounts`.
+
+- `GET /auth/accounts` → `{accounts:[{sessionId,name,email,avatarUrl,active}]}`
+  — lista contas vivas (sessões mortas são podadas automaticamente)
+- `DELETE /auth/accounts/{sessionId}` → 204 | 404 `ACCOUNT_NOT_FOUND`
+  — remove da lista e revoga a sessão no banco
+- `POST /auth/accounts/{sessionId}/activate` → 200 `{user}` | 401
+  `SESSION_EXPIRED` | 403 `ACCOUNT_SUSPENDED` (rate 20/min)
+  — rotaciona a sessão escolhida e seta os cookies `access_token` + `refresh_token`
+
+### OAuth provider ("Entrar com Santos Tech") — authorization code + PKCE S256
+
+Fluxo em 3 passos; **PKCE S256 obrigatório**; code de uso único (TTL 60s);
+tokens retornam no **corpo** (sem cookies).
+
+1. **Authorize** `GET /oauth/authorize?client_id&redirect_uri&response_type=code`
+   `&code_challenge&code_challenge_method=S256[&state]` → 302 para
+   `{AUTH_WEB_ORIGIN}/oauth/choose?request_id=` | 400 JSON se client/redirect
+   inválidos | 302 `?error=unsupported_response_type|invalid_request` no
+   redirect validado. Rate 30/min.
+2. **Confirm** `POST /oauth/authorize/confirm {requestId,sessionId}` (cookie
+   `accounts`) → 200 `{redirectTo}` | 400 | 410 `REQUEST_EXPIRED` | 401
+   `SESSION_EXPIRED` | 403 `ACCOUNT_SUSPENDED`. Rate 20/min.
+3. **Token** `POST /oauth/token` (form-urlencoded):
+   - `grant_type=authorization_code` com `code,client_id,redirect_uri,code_verifier`
+     → 200 `{access_token,refresh_token,token_type:Bearer,expires_in:7200}`
+   - `grant_type=refresh_token` com `refresh_token` → mesma resposta
+   - Erros: 400 `VALIDATION_ERROR`|`INVALID_GRANT`|`UNSUPPORTED_GRANT_TYPE` ·
+     401 `INVALID_GRANT` · 403 `ACCOUNT_SUSPENDED`. Rate 20/min.
+   - Cabeçalho `Cache-Control: no-store` sempre presente.
+
 ### PAT / uploads / admin
 - `POST /auth/api-keys {name}` — cria PAT `st_...` (**exige sudo**)
 - `GET /auth/api-keys` · `DELETE /auth/api-keys/{id}`
@@ -79,6 +114,12 @@
 - `GET /auth/admin/users` · `POST /auth/admin/users` ·
   `PATCH /auth/admin/users/{id}` · `POST /auth/admin/users/{id}/invite` ·
   `DELETE /auth/admin/users/{id}` (**exige sudo**) — gestão admin (role 3)
+- `GET /auth/admin/oauth-clients` → `{clients:[{id,clientId,name,redirectUris,isActive,createdAt}]}`
+- `POST /auth/admin/oauth-clients {clientId,name,redirectUris}` → 201 |
+  400 | 409 `CLIENT_ALREADY_EXISTS` (rate 10/min)
+- `PATCH /auth/admin/oauth-clients/{id} {name?,redirectUris?,isActive?}` → 200 |
+  400 | 404 (rate 20/min)
+- `DELETE /auth/admin/oauth-clients/{id}` → 204 | 404 (**exige sudo**)
 
 ## Claude Agent — `api.santos-tech.com/claude`
 

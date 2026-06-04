@@ -9,16 +9,20 @@ import (
 	"time"
 )
 
-// issueSession gera tokens, grava a sessão (refresh hash) e seta os cookies.
-func (s *Server) issueSession(ctx context.Context, w http.ResponseWriter, u *User) error {
+// issueSession gera tokens, grava a sessão (refresh hash), seta os cookies e
+// anexa a sessão ao cookie multi-conta "accounts". replaceSIDs: sessões antigas
+// a tirar da lista (ex.: rotação de refresh).
+func (s *Server) issueSession(ctx context.Context, w http.ResponseWriter, r *http.Request, u *User, replaceSIDs ...string) error {
 	access, refresh, err := generateTokens(s.cfg.JWTSecret, s.cfg.JWTRefreshSecret, u.ID, u.Email)
 	if err != nil {
 		return err
 	}
-	if err := s.createSession(ctx, u.ID, hashRefreshToken(refresh), time.Now().Add(refreshTTL)); err != nil {
+	sid, err := s.createSession(ctx, u.ID, hashRefreshToken(refresh), time.Now().Add(refreshTTL))
+	if err != nil {
 		return err
 	}
 	s.setAuthCookies(w, access, refresh)
+	s.appendAccount(w, r, sid, replaceSIDs...)
 	return nil
 }
 
@@ -123,18 +127,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.issueSession(r.Context(), w, u); err != nil {
+	if err := s.issueSession(r.Context(), w, r, u); err != nil {
 		writeErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": s.buildProfile(r.Context(), u)})
 }
 
-// endSession apaga a sessão (pelo refresh cookie) e limpa os cookies.
+// endSession apaga a sessão (pelo refresh cookie), limpa os cookies ativos e
+// tira a conta do cookie multi-conta. As demais contas permanecem no chooser.
 func (s *Server) endSession(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("refresh_token"); err == nil && c.Value != "" {
 		if sid, _, _, e := s.sessionByHash(r.Context(), hashRefreshToken(c.Value)); e == nil {
 			_ = s.deleteSession(r.Context(), sid)
+			s.removeAccount(w, r, sid)
 		}
 	}
 	s.clearAuthCookies(w)
@@ -230,7 +236,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.deleteSession(r.Context(), sid) // rotaciona
-	if err := s.issueSession(r.Context(), w, u); err != nil {
+	if err := s.issueSession(r.Context(), w, r, u, sid); err != nil {
 		writeErr(w, err)
 		return
 	}

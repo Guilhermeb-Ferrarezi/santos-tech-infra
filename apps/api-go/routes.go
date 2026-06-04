@@ -39,6 +39,12 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Excluir usuário é destrutivo: exige sudo mode (confirmação recente de identidade).
 	mux.HandleFunc("DELETE /auth/admin/users/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteAdminUser)))
 
+	// Gestão admin de aplicações OAuth ("Entrar com Santos Tech")
+	mux.HandleFunc("GET /auth/admin/oauth-clients", s.adminGuard(s.handleListOAuthClients))
+	mux.HandleFunc("POST /auth/admin/oauth-clients", s.rateLimit(10, min, s.adminGuard(s.handleCreateOAuthClient)))
+	mux.HandleFunc("PATCH /auth/admin/oauth-clients/{id}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateOAuthClient)))
+	mux.HandleFunc("DELETE /auth/admin/oauth-clients/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteOAuthClient)))
+
 	// Reset de senha (envia email — limite apertado)
 	mux.HandleFunc("POST /auth/forgot-password", s.rateLimit(3, 5*min, s.handleForgotPassword))
 	mux.HandleFunc("POST /auth/reset-password", s.rateLimit(10, min, s.handleResetPassword))
@@ -62,6 +68,11 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Sudo mode — confirma a identidade pra ações sensíveis (eleva por 15min)
 	mux.HandleFunc("POST /auth/sudo/verify", s.rateLimit(10, min, s.authGuard(s.handleSudoVerify)))
 
+	// Multi-conta no navegador (cookie assinado "accounts" — chooser estilo Google)
+	mux.HandleFunc("GET /auth/accounts", s.handleAccountsList)
+	mux.HandleFunc("DELETE /auth/accounts/{sessionId}", s.handleAccountDelete)
+	mux.HandleFunc("POST /auth/accounts/{sessionId}/activate", s.rateLimit(20, min, s.handleAccountActivate))
+
 	// Saúde agregada do ecossistema — autenticada (sessão ou PAT)
 	mux.HandleFunc("GET /status", s.rateLimit(30, min, s.authGuard(s.handleStatus)))
 
@@ -71,4 +82,9 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// OAuth Google
 	mux.HandleFunc("GET /auth/google", s.handleGoogleStart)
 	mux.HandleFunc("GET /auth/google/callback", s.handleGoogleCallback)
+
+	// OAuth provider ("Entrar com Santos Tech") — authorization code + PKCE
+	mux.HandleFunc("GET /oauth/authorize", s.rateLimit(30, min, s.handleOAuthAuthorize))
+	mux.HandleFunc("POST /oauth/authorize/confirm", s.rateLimit(20, min, s.handleOAuthConfirm))
+	mux.HandleFunc("POST /oauth/token", s.rateLimit(20, min, s.handleOAuthToken))
 }

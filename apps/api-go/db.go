@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -50,6 +51,14 @@ CREATE TABLE IF NOT EXISTS api_keys (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id     TEXT NOT NULL UNIQUE,
+  name          TEXT NOT NULL,
+  redirect_uris TEXT[] NOT NULL,
+  is_active     BOOLEAN NOT NULL DEFAULT true,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
@@ -59,6 +68,9 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 
 // uuid colunas vêm com ::text pra escanear direto em string.
 const userCols = `id, email, username, name, password_hash, avatar_url, role, custom_role_id::text, mfa_enabled, totp_secret, suspended_at, created_at, preferences, quota_bytes, email_verified_at, mfa_method`
+
+// userCols com prefixo "u." pra queries com JOIN em sessions.
+var userCols2 = "u." + strings.ReplaceAll(userCols, ", ", ", u.")
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
@@ -197,11 +209,13 @@ func (s *Server) buildProfile(ctx context.Context, u *User) *UserProfile {
 
 // ── Sessões (refresh tokens) ─────────────────────────────────────────────────
 
-func (s *Server) createSession(ctx context.Context, userID int64, refreshHash string, expires time.Time) error {
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO sessions (user_id, refresh_token_hash, expires_at) VALUES ($1,$2,$3)`,
-		userID, refreshHash, expires)
-	return err
+// createSession grava a sessão e devolve o id (usado no cookie "accounts").
+func (s *Server) createSession(ctx context.Context, userID int64, refreshHash string, expires time.Time) (string, error) {
+	var id string
+	err := s.db.QueryRow(ctx,
+		`INSERT INTO sessions (user_id, refresh_token_hash, expires_at) VALUES ($1,$2,$3) RETURNING id::text`,
+		userID, refreshHash, expires).Scan(&id)
+	return id, err
 }
 
 func (s *Server) sessionByHash(ctx context.Context, hash string) (sessionID string, userID int64, expires time.Time, err error) {
@@ -226,6 +240,53 @@ func (s *Server) deleteExpiredSessions(ctx context.Context) (int64, error) {
 func (s *Server) deleteUserSessions(ctx context.Context, userID int64) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM sessions WHERE user_id=$1`, userID)
 	return err
+}
+
+// sessionUserByID devolve o usuário de uma sessão VIVA (nil se expirada/inexistente).
+func (s *Server) sessionUserByID(ctx context.Context, sessionID string) (*User, error) {
+	return scanUser(s.db.QueryRow(ctx,
+		`SELECT `+userCols2+` FROM sessions s JOIN users u ON u.id = s.user_id
+		 WHERE s.id = $1::uuid AND s.expires_at > now()`, sessionID))
+}
+
+// AccountSummary é a visão de uma conta no chooser multi-conta.
+type AccountSummary struct {
+	SessionID string  `json:"sessionId"`
+	Name      string  `json:"name"`
+	Email     string  `json:"email"`
+	AvatarURL *string `json:"avatarUrl"`
+	Active    bool    `json:"active"`
+}
+
+// accountSummaries resolve os ids do cookie em contas vivas, preservando a
+// ordem do cookie (sessões mortas simplesmente não voltam).
+func (s *Server) accountSummaries(ctx context.Context, ids []string) ([]AccountSummary, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT s.id::text, u.name, u.email, u.avatar_url
+		 FROM sessions s JOIN users u ON u.id = s.user_id
+		 WHERE s.id = ANY($1::uuid[]) AND s.expires_at > now() AND u.suspended_at IS NULL`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byID := map[string]AccountSummary{}
+	for rows.Next() {
+		var a AccountSummary
+		if err := rows.Scan(&a.SessionID, &a.Name, &a.Email, &a.AvatarURL); err != nil {
+			return nil, err
+		}
+		byID[a.SessionID] = a
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]AccountSummary, 0, len(byID))
+	for _, id := range ids {
+		if a, ok := byID[id]; ok {
+			out = append(out, a)
+		}
+	}
+	return out, nil
 }
 
 // ── OAuth ────────────────────────────────────────────────────────────────────
@@ -297,4 +358,77 @@ func (s *Server) userIDByAPIKeyHash(ctx context.Context, hash string) (int64, er
 		return 0, nil
 	}
 	return userID, err
+}
+
+// ── OAuth clients (aplicações "Entrar com Santos Tech") ─────────────────────
+
+type OAuthClient struct {
+	ID           string    `json:"id"`
+	ClientID     string    `json:"clientId"`
+	Name         string    `json:"name"`
+	RedirectURIs []string  `json:"redirectUris"`
+	IsActive     bool      `json:"isActive"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+const oauthClientCols = `id::text, client_id, name, redirect_uris, is_active, created_at`
+
+func scanOAuthClient(row pgx.Row) (*OAuthClient, error) {
+	var c OAuthClient
+	err := row.Scan(&c.ID, &c.ClientID, &c.Name, &c.RedirectURIs, &c.IsActive, &c.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (s *Server) oauthClientByClientID(ctx context.Context, clientID string) (*OAuthClient, error) {
+	return scanOAuthClient(s.db.QueryRow(ctx,
+		`SELECT `+oauthClientCols+` FROM oauth_clients WHERE client_id=$1`, clientID))
+}
+
+func (s *Server) listOAuthClients(ctx context.Context) ([]OAuthClient, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT `+oauthClientCols+` FROM oauth_clients ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []OAuthClient{}
+	for rows.Next() {
+		c, err := scanOAuthClient(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *c)
+	}
+	return out, rows.Err()
+}
+
+func (s *Server) insertOAuthClient(ctx context.Context, clientID, name string, uris []string) (*OAuthClient, error) {
+	return scanOAuthClient(s.db.QueryRow(ctx,
+		`INSERT INTO oauth_clients (client_id, name, redirect_uris) VALUES ($1,$2,$3)
+		 RETURNING `+oauthClientCols, clientID, name, uris))
+}
+
+// updateOAuthClient atualiza campos não-nil (COALESCE, padrão updateUserAdmin).
+func (s *Server) updateOAuthClient(ctx context.Context, id string, name *string, uris []string, active *bool) (*OAuthClient, error) {
+	return scanOAuthClient(s.db.QueryRow(ctx,
+		`UPDATE oauth_clients SET
+		   name = COALESCE($2, name),
+		   redirect_uris = COALESCE($3, redirect_uris),
+		   is_active = COALESCE($4, is_active)
+		 WHERE id = $1::uuid RETURNING `+oauthClientCols,
+		id, name, uris, active))
+}
+
+func (s *Server) deleteOAuthClient(ctx context.Context, id string) (bool, error) {
+	tag, err := s.db.Exec(ctx, `DELETE FROM oauth_clients WHERE id=$1::uuid`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }

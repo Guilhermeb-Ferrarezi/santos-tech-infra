@@ -39,12 +39,18 @@ servers:
 tags:
   - name: Auth
     description: Login, registro, sessão e tokens
+  - name: Accounts
+    description: Multi-conta no navegador (chooser estilo Google)
   - name: Password
     description: Recuperação e redefinição de senha
   - name: MFA
     description: Autenticação em dois fatores (TOTP, email OTP, recovery codes)
   - name: OAuth
     description: Login social via Google
+  - name: OAuthProvider
+    description: Servidor OAuth 2.0 ("Entrar com Santos Tech") — authorization code + PKCE S256
+  - name: Admin
+    description: Gestão administrativa (requer role Admin)
   - name: System
     description: Saúde do serviço
 
@@ -505,7 +511,19 @@ paths:
       description: |
         Seta um cookie `oauth_state` (CSRF, 10min) e redireciona para o consentimento
         do Google. Requer `GOOGLE_CLIENT_ID` configurado.
+
+        O parâmetro opcional `return_to` (apenas caminho relativo, ex.: `/oauth/choose?request_id=…`)
+        é preservado no cookie `oauth_state` e devolvido pelo callback ao redirecionar.
+        Usado pelo fluxo OAuth provider para retornar ao chooser após o login Google.
       security: []
+      parameters:
+        - name: return_to
+          in: query
+          required: false
+          schema: { type: string, example: "/oauth/choose?request_id=abc123" }
+          description: |
+            Caminho relativo de retorno (só `/…`, nunca `//host`). Evita
+            open-redirect: valores que não começam com `/` ou começam com `//` são ignorados.
       responses:
         "302":
           description: Redireciona para o Google
@@ -533,6 +551,9 @@ paths:
 
         Sempre responde **302**; o resultado é sinalizado via query `error` no destino:
         `oauth_denied`, `oauth_failed`, `account_not_found`.
+
+        Se `return_to` foi passado no `GET /auth/google`, ele é devolvido na
+        URL de destino (sucesso) ou como `&return_to=` no desafio MFA.
       security: []
       parameters:
         - name: code
@@ -551,6 +572,497 @@ paths:
             Location: { schema: { type: string, format: uri } }
             Set-Cookie:
               $ref: "#/components/headers/AuthCookies"
+
+  # ── Multi-conta ──────────────────────────────────────────────────────────────
+
+  /auth/accounts:
+    get:
+      tags: [Accounts]
+      summary: Listar contas conhecidas neste navegador
+      description: |
+        Lê o cookie assinado `accounts` (HMAC-SHA256, httpOnly) e devolve as
+        contas cujas sessões ainda estão vivas no banco (sessões mortas são
+        podadas automaticamente do cookie).
+
+        O campo `active` indica qual conta corresponde ao `refresh_token` atual.
+        Não requer `access_token` — basta o cookie `accounts`.
+      security: []
+      responses:
+        "200":
+          description: Lista de contas (pode ser vazia)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: "#/components/schemas/AccountSummary" }
+                required: [accounts]
+              example:
+                accounts:
+                  - sessionId: "a1b2c3d4-0000-0000-0000-000000000001"
+                    name: "Maria Aluna"
+                    email: "maria@santos-tech.com"
+                    avatarUrl: null
+                    active: true
+                  - sessionId: "a1b2c3d4-0000-0000-0000-000000000002"
+                    name: "João Admin"
+                    email: "joao@santos-tech.com"
+                    avatarUrl: "https://r2.santos-tech.com/avatars/joao.jpg"
+                    active: false
+
+  /auth/accounts/{sessionId}:
+    delete:
+      tags: [Accounts]
+      summary: Remover conta da lista
+      description: |
+        Remove o `sessionId` do cookie `accounts` e revoga a sessão correspondente
+        no banco. Se o `sessionId` não estiver na lista do cookie deste navegador,
+        responde 404.
+      security: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: ID da sessão a remover (UUID).
+      responses:
+        "204":
+          description: Conta removida da lista e sessão revogada
+        "404":
+          description: Sessão não encontrada na lista deste navegador
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: ACCOUNT_NOT_FOUND, message: "Conta não encontrada neste navegador" }
+
+  /auth/accounts/{sessionId}/activate:
+    post:
+      tags: [Accounts]
+      summary: Ativar uma conta da lista
+      description: |
+        Troca a conta ativa no `auth-web`: rotaciona a sessão escolhida (a antiga
+        é revogada) e seta os cookies `access_token` + `refresh_token` para o
+        usuário dessa sessão.
+
+        Rate limit: **20 req/min por IP**.
+      security: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: ID da sessão a ativar (deve estar no cookie `accounts`).
+      responses:
+        "200":
+          description: Conta ativada — novos cookies de sessão setados
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/AuthCookies"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "401":
+          description: Sessão não encontrada ou expirada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SESSION_EXPIRED, message: "Sessão expirada — entre novamente" }
+        "403":
+          description: Conta suspensa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: ACCOUNT_SUSPENDED, message: "Conta suspensa" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── OAuth provider ("Entrar com Santos Tech") ─────────────────────────────────
+
+  /oauth/authorize:
+    get:
+      tags: [OAuthProvider]
+      summary: Iniciar autorização OAuth
+      description: |
+        Valida o client e redireciona o navegador para o chooser de contas do
+        `auth-web` (`/oauth/choose?request_id=`). O estado da autorização é
+        guardado no Redis (TTL 10min).
+
+        **Erros antes da validação do redirect** (client_id/redirect_uri inválidos)
+        são devolvidos como JSON diretamente — nunca como redirect para URI não
+        confiável (requisito OAuth RFC 6749 §4.1.2.1).
+
+        **Erros após a validação** são enviados como `?error=` no redirect_uri
+        validado (comportamento padrão OAuth).
+
+        Rate limit: **30 req/min por IP**.
+      security: []
+      parameters:
+        - name: client_id
+          in: query
+          required: true
+          schema: { type: string }
+          description: Identificador do app cliente (1-64 chars alfanuméricos, `_` ou `-`).
+        - name: redirect_uri
+          in: query
+          required: true
+          schema: { type: string, format: uri }
+          description: URI de retorno (deve constar na lista cadastrada do client).
+        - name: response_type
+          in: query
+          required: true
+          schema: { type: string, enum: [code] }
+          description: Deve ser `code` (authorization code flow).
+        - name: state
+          in: query
+          required: false
+          schema: { type: string }
+          description: Valor opaco de CSRF — devolvido intacto no redirect de retorno.
+        - name: code_challenge
+          in: query
+          required: true
+          schema: { type: string }
+          description: "PKCE challenge: base64url(SHA-256(code_verifier)), sem padding."
+        - name: code_challenge_method
+          in: query
+          required: true
+          schema: { type: string, enum: [S256] }
+          description: Deve ser `S256` (único método suportado).
+      responses:
+        "302":
+          description: |
+            Redireciona o navegador. Em caso de sucesso, para a tela de escolha
+            de contas do auth-web (`/oauth/choose?request_id=...`). Se o client
+            e o redirect_uri são válidos mas a requisição é malformada
+            (response_type != code ou PKCE ausente/diferente de S256), redireciona
+            para o próprio redirect_uri com `?error=unsupported_response_type`
+            ou `?error=invalid_request` (e `state`, se enviado), conforme a spec OAuth.
+          headers:
+            Location:
+              schema:
+                type: string
+        "400":
+          description: client_id ou redirect_uri inválidos (erro JSON direto)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                validacao:
+                  value: { code: VALIDATION_ERROR, message: "client_id e redirect_uri são obrigatórios" }
+                client:
+                  value: { code: INVALID_CLIENT, message: "Aplicação ou redirect_uri inválidos" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /oauth/authorize/confirm:
+    post:
+      tags: [OAuthProvider]
+      summary: Confirmar autorização (conta escolhida)
+      description: |
+        Chamado pelo chooser do `auth-web` depois que o usuário escolhe a conta.
+        Valida a sessão escolhida, emite o `code` (uso único, TTL 60s) e devolve a
+        URL de retorno para o app cliente (com `?code=` e `?state=` se aplicável).
+
+        Requer o cookie `accounts` (não requer `access_token`).
+
+        Rate limit: **20 req/min por IP**.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                requestId:
+                  type: string
+                  description: ID da autorização pendente (devolvido pelo `/oauth/authorize`).
+                sessionId:
+                  type: string
+                  format: uuid
+                  description: Sessão escolhida pelo usuário (deve estar no cookie `accounts`).
+              required: [requestId, sessionId]
+      responses:
+        "200":
+          description: Code emitido — devolve a URL de retorno para o app
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  redirectTo:
+                    type: string
+                    format: uri
+                    description: URL completa do redirect_uri com `?code=` (e `?state=` se presente).
+                required: [redirectTo]
+              example:
+                redirectTo: "https://app.exemplo.com/callback?code=abc123&state=xyz"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          description: Sessão não encontrada no cookie ou expirada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SESSION_EXPIRED, message: "Sessão expirada — entre novamente" }
+        "403":
+          description: Conta suspensa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: ACCOUNT_SUSPENDED, message: "Conta suspensa" }
+        "410":
+          description: Autorização expirou (TTL 10min do Redis esgotado)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: REQUEST_EXPIRED, message: "Autorização expirou — recomece a partir do app" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /oauth/token:
+    post:
+      tags: [OAuthProvider]
+      summary: Trocar code ou refresh token por tokens de acesso
+      description: |
+        Endpoint de token OAuth 2.0 (RFC 6749 §3.2). Aceita dois grant types:
+
+        **`authorization_code`** — troca o `code` (uso único, TTL 60s) por tokens.
+        PKCE S256 é obrigatório: `code_verifier` deve ser verificado contra o
+        `code_challenge` enviado em `/oauth/authorize`.
+
+        **`refresh_token`** — rotaciona a sessão e emite novos tokens. A sessão
+        antiga é revogada; os novos tokens são devolvidos no corpo (sem cookies).
+
+        Tokens retornam no **corpo da resposta** (sem cookies) — o app cliente
+        é responsável pelo armazenamento.
+
+        Rate limit: **20 req/min por IP**.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                grant_type:
+                  type: string
+                  enum: [authorization_code, refresh_token]
+                  description: Tipo de concessão OAuth.
+                code:
+                  type: string
+                  description: "authorization_code: code recebido no callback."
+                client_id:
+                  type: string
+                  description: "authorization_code: identificador do app cliente."
+                redirect_uri:
+                  type: string
+                  format: uri
+                  description: "authorization_code: deve ser idêntico ao do authorize."
+                code_verifier:
+                  type: string
+                  description: "authorization_code: segredo PKCE original (antes do hash)."
+                refresh_token:
+                  type: string
+                  description: "refresh_token: token de refresh emitido anteriormente."
+              required: [grant_type]
+      responses:
+        "200":
+          description: Tokens emitidos
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthTokenResponse" }
+              example:
+                access_token: "eyJhbGciOiJIUzI1NiJ9..."
+                refresh_token: "eyJhbGciOiJIUzI1NiJ9..."
+                token_type: "Bearer"
+                expires_in: 7200
+        "400":
+          description: Parâmetros inválidos ou code expirado/já usado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                validacao:
+                  value: { code: VALIDATION_ERROR, message: "code, client_id, redirect_uri e code_verifier são obrigatórios" }
+                grant_invalido:
+                  value: { code: INVALID_GRANT, message: "code inválido ou expirado" }
+                grant_type:
+                  value: { code: UNSUPPORTED_GRANT_TYPE, message: "grant_type deve ser authorization_code ou refresh_token" }
+        "401":
+          description: refresh_token inválido ou sessão expirada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: INVALID_GRANT, message: "Sessão expirada" }
+        "403":
+          description: Conta suspensa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: ACCOUNT_SUSPENDED, message: "Conta indisponível" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── Admin: gestão de aplicações OAuth ────────────────────────────────────────
+
+  /auth/admin/oauth-clients:
+    get:
+      tags: [Admin]
+      summary: Listar aplicações OAuth cadastradas
+      description: |
+        Retorna todas as aplicações OAuth registradas, ordenadas por data de criação
+        (mais recentes primeiro). Requer role Admin.
+      responses:
+        "200":
+          description: Lista de aplicações
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  clients:
+                    type: array
+                    items: { $ref: "#/components/schemas/OAuthClient" }
+                required: [clients]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Admin]
+      summary: Criar nova aplicação OAuth
+      description: |
+        Cadastra uma nova aplicação OAuth ("Entrar com Santos Tech"). O `clientId`
+        deve ser único (1-64 chars alfanuméricos, `_` ou `-`) e ao menos um
+        `redirect_uri` válido (scheme + host) deve ser informado.
+
+        Rate limit: **10 req/min por IP**.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clientId:
+                  type: string
+                  pattern: '^[a-zA-Z0-9_-]{1,64}$'
+                  description: Identificador único da aplicação.
+                name:
+                  type: string
+                  description: Nome exibido no chooser de contas.
+                redirectUris:
+                  type: array
+                  items: { type: string, format: uri }
+                  minItems: 1
+                  description: Lista de redirect URIs autorizados.
+              required: [clientId, name, redirectUris]
+      responses:
+        "201":
+          description: Aplicação criada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthClient" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Já existe aplicação com este client_id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: CLIENT_ALREADY_EXISTS, message: "Já existe uma aplicação com este client_id" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/admin/oauth-clients/{id}:
+    patch:
+      tags: [Admin]
+      summary: Atualizar aplicação OAuth
+      description: |
+        Atualiza campos da aplicação (todos opcionais — só os enviados são alterados).
+        O `id` é o UUID interno (não o `clientId`).
+
+        Rate limit: **20 req/min por IP**.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: UUID interno da aplicação.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: Novo nome da aplicação.
+                redirectUris:
+                  type: array
+                  items: { type: string, format: uri }
+                  minItems: 1
+                  description: Nova lista de redirect URIs (substitui inteiramente a anterior).
+                isActive:
+                  type: boolean
+                  description: Habilitar/desabilitar a aplicação.
+      responses:
+        "200":
+          description: Aplicação atualizada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthClient" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Aplicação não encontrada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "Aplicação não encontrada" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [Admin]
+      summary: Excluir aplicação OAuth
+      description: |
+        Remove permanentemente a aplicação OAuth. Exige **sudo mode** (confirmação
+        recente de identidade via `POST /auth/sudo/verify`).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: UUID interno da aplicação.
+      responses:
+        "204":
+          description: Aplicação excluída
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sudo mode não ativo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SUDO_REQUIRED, message: "Confirme sua identidade para continuar" }
+        "404":
+          description: Aplicação não encontrada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "Aplicação não encontrada" }
 
 components:
   securitySchemes:
@@ -691,6 +1203,73 @@ components:
           type: string
           description: Token de uso único (10min) para o 2º passo do login.
       required: [mfaRequired, challenge]
+
+    AccountSummary:
+      type: object
+      description: Visão de uma conta conhecida no cookie multi-conta deste navegador.
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+          description: ID da sessão (referência para activate/delete).
+        name:
+          type: string
+          description: Nome do usuário.
+        email:
+          type: string
+          format: email
+        avatarUrl:
+          type: [string, "null"]
+          description: URL do avatar no R2 (null se não configurado).
+        active:
+          type: boolean
+          description: Verdadeiro se esta sessão corresponde ao `refresh_token` atual.
+      required: [sessionId, name, email, avatarUrl, active]
+
+    OAuthClient:
+      type: object
+      description: Aplicação OAuth registrada ("Entrar com Santos Tech").
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUID interno (usado nas rotas PATCH/DELETE).
+        clientId:
+          type: string
+          description: Identificador público da aplicação (passado em `/oauth/authorize`).
+        name:
+          type: string
+          description: Nome exibido no chooser de contas.
+        redirectUris:
+          type: array
+          items: { type: string, format: uri }
+          description: Lista de redirect URIs autorizados.
+        isActive:
+          type: boolean
+          description: Se falso, o fluxo de autorização é bloqueado para este client.
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, clientId, name, redirectUris, isActive, createdAt]
+
+    OAuthTokenResponse:
+      type: object
+      description: Resposta de tokens do endpoint `/oauth/token` (RFC 6749 §5.1).
+      properties:
+        access_token:
+          type: string
+          description: JWT HS256 de acesso (TTL 2h).
+        refresh_token:
+          type: string
+          description: JWT HS256 de refresh (TTL 7d). Uso único — rotacionado a cada chamada.
+        token_type:
+          type: string
+          const: Bearer
+        expires_in:
+          type: integer
+          description: Duração do access_token em segundos.
+          example: 7200
+      required: [access_token, refresh_token, token_type, expires_in]
 
 # Por padrão, as rotas exigem o access_token (cookie ou Bearer).
 # Rotas públicas sobrescrevem com `security: []`.

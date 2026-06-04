@@ -3,19 +3,27 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
-// GET /auth/google — redireciona pro consentimento do Google.
+// GET /auth/google?return_to=/caminho — redireciona pro consentimento do Google.
+// return_to (opcional, só caminho relativo) é devolvido pelo callback — usado
+// pelo fluxo OAuth provider pra voltar ao chooser com o request_id.
 func (s *Server) handleGoogleStart(w http.ResponseWriter, r *http.Request) {
 	if s.google == nil {
 		writeErr(w, appErr(http.StatusInternalServerError, "OAUTH_DISABLED", "OAuth não configurado"))
 		return
 	}
 	state := randomToken(16)
+	cookieVal := state
+	// Só caminho relativo ("/x"), nunca "//host" — evita open-redirect.
+	if rt := r.URL.Query().Get("return_to"); strings.HasPrefix(rt, "/") && !strings.HasPrefix(rt, "//") {
+		cookieVal = state + "|" + rt
+	}
 	http.SetCookie(w, &http.Cookie{
-		Name: "oauth_state", Value: state, Path: "/",
+		Name: "oauth_state", Value: cookieVal, Path: "/",
 		HttpOnly: true, Secure: s.cfg.Production, SameSite: http.SameSiteLaxMode, MaxAge: 600,
 	})
 	http.Redirect(w, r, s.google.AuthCodeURL(state), http.StatusFound)
@@ -38,9 +46,14 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		fail("oauth_failed")
 		return
 	}
-	// valida state (CSRF)
+	// valida state (CSRF) — o cookie pode carregar "|return_to" após o state
 	sc, err := r.Cookie("oauth_state")
-	if err != nil || sc.Value == "" || sc.Value != q.Get("state") {
+	if err != nil || sc.Value == "" {
+		fail("oauth_failed")
+		return
+	}
+	state, returnTo, _ := strings.Cut(sc.Value, "|")
+	if state != q.Get("state") {
 		fail("oauth_failed")
 		return
 	}
@@ -94,15 +107,22 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		if u.MFAMethod == "email" {
 			s.sendChallengeEmailCode(r.Context(), challenge, u.Email)
 		}
-		http.Redirect(w, r,
-			origin+"/?mfa_challenge="+challenge+"&mfa_method="+u.MFAMethod+"&mfa_methods="+strings.Join(mfaMethods(u), ","),
-			http.StatusFound)
+		dest := origin + "/?mfa_challenge=" + challenge + "&mfa_method=" + u.MFAMethod +
+			"&mfa_methods=" + strings.Join(mfaMethods(u), ",")
+		if returnTo != "" {
+			dest += "&return_to=" + url.QueryEscape(returnTo)
+		}
+		http.Redirect(w, r, dest, http.StatusFound)
 		return
 	}
 
-	if err := s.issueSession(r.Context(), w, u); err != nil {
+	if err := s.issueSession(r.Context(), w, r, u); err != nil {
 		fail("oauth_failed")
 		return
 	}
-	http.Redirect(w, r, origin, http.StatusFound)
+	dest := origin
+	if returnTo != "" {
+		dest = origin + returnTo
+	}
+	http.Redirect(w, r, dest, http.StatusFound)
 }
