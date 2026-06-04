@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS claude_conversations (
 );
 CREATE INDEX IF NOT EXISTS idx_conv_user ON claude_conversations(user_id, updated_at DESC);
 
+-- Migração idempotente: a tabela já existia em produção sem esta coluna
+-- (CREATE TABLE IF NOT EXISTS é no-op e não a adicionaria).
+ALTER TABLE claude_conversations ADD COLUMN IF NOT EXISTS tools_disabled BOOLEAN NOT NULL DEFAULT false;
+
 CREATE TABLE IF NOT EXISTS claude_messages (
   id              BIGSERIAL PRIMARY KEY,
   conversation_id UUID NOT NULL REFERENCES claude_conversations(id) ON DELETE CASCADE,
