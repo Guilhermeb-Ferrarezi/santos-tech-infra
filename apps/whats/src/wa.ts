@@ -1,5 +1,5 @@
-import { makeWASocket, useMultiFileAuthState, DisconnectReason } from "@whiskeysockets/baileys"
-import type { WASocket } from "@whiskeysockets/baileys"
+import { makeWASocket, useMultiFileAuthState, DisconnectReason } from "baileys"
+import type { WASocket } from "baileys"
 import { config } from "./config"
 import { decideMessage } from "./router"
 import { allowlistSet, conversationFor } from "./db"
@@ -34,7 +34,8 @@ export async function startWhatsApp(): Promise<void> {
     if (u.connection === "close") {
       status = "disconnected"
       const code = (u.lastDisconnect?.error as any)?.output?.statusCode
-      if (code !== DisconnectReason.loggedOut) startWhatsApp().catch(() => {})
+      // backoff de 3s evita martelar o servidor do WhatsApp em loop de reconexão
+      if (code !== DisconnectReason.loggedOut) setTimeout(() => startWhatsApp().catch(() => {}), 3000)
     }
   })
 
