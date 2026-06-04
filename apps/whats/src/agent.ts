@@ -1,7 +1,7 @@
 import WebSocket from "ws"
 import { config } from "./config"
 import { serviceToken } from "./jwt"
-import { PERSONA_SEED } from "./persona"
+import { getPersona } from "./persona"
 import { conversationFor, linkChat } from "./db"
 
 interface TurnEvent {
@@ -43,7 +43,7 @@ export async function runTurn(jid: string, text: string, toolsDisabled: boolean,
   const wsURL = `${config.agentURL.replace(/^http/, "ws")}/conversations/${convID}/ws`
   const ws = new WebSocket(wsURL, { headers: { Authorization: `Bearer ${serviceToken()}` } })
   const events: TurnEvent[] = []
-  const prompt = isFirst ? `${PERSONA_SEED}\n\n---\n\nMensagem recebida: ${text}` : text
+  const prompt = isFirst ? `${await getPersona()}\n\n---\n\nMensagem recebida: ${text}` : text
 
   return new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => { ws.close(); reject(new Error("turno expirou")) }, 120_000)

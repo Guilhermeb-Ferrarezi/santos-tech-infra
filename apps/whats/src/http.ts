@@ -6,6 +6,7 @@ import { listAllowlist, addAllow, removeAllow, listSeen, listMessages, userRole,
 import { waStatus, logoutWhatsApp, injectSimMessage, simJID } from "./wa"
 import { autoReplyEnabled, setAutoReply, listSim, clearSim, simTyping } from "./redis"
 import { serveSSE, emitEvent } from "./events"
+import { getPersona, setPersona, personaIsDefault, DEFAULT_PERSONA } from "./persona"
 
 const ROLE_ADMIN = 3
 
@@ -90,6 +91,19 @@ export function startHTTP() {
         await logoutWhatsApp()
         return send(res, 200, { ok: true })
       }
+      // Persona: prompt do agente, editável. Vale para conversas NOVAS (o seed entra
+      // no 1º turno); texto vazio restaura o padrão.
+      if (req.method === "GET" && url === `${b}/persona`) {
+        return send(res, 200, { text: await getPersona(), isDefault: await personaIsDefault(), default: DEFAULT_PERSONA })
+      }
+      if (req.method === "POST" && url === `${b}/persona`) {
+        const { text } = await body(req)
+        if (typeof text !== "string" || text.length > 4000)
+          return send(res, 400, { code: "BAD_REQUEST", message: "text deve ser string de até 4000 caracteres" })
+        await setPersona(text)
+        return send(res, 200, { text: await getPersona(), isDefault: await personaIsDefault() })
+      }
+
       // Simulador: bancada do pipeline real (ver spec do dashboard)
       if (req.method === "GET" && url === `${b}/sim`) {
         return send(res, 200, { messages: await listSim(uid), typing: await simTyping(uid) })

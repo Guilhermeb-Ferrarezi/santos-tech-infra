@@ -1,7 +1,29 @@
-// Seed enviado no 1º turno de cada conversa de terceiro: instrui o agente a responder
-// como o Guilherme (tom direto, informal, português BR), curto, sem se declarar bot.
-export const PERSONA_SEED =
+import { redis } from "./redis"
+
+// Persona padrão: instrui o agente a responder como o Guilherme (tom direto,
+// informal, português BR), curto, sem se declarar bot. Editável pelo dashboard —
+// o texto vigente fica no Redis e este é o fallback.
+export const DEFAULT_PERSONA =
   "Você está respondendo mensagens de WhatsApp em nome do Guilherme, como se fosse ele. " +
   "Tom: direto, informal, português brasileiro, mensagens curtas como as de um chat. " +
   "Nunca diga que é uma IA nem um assistente. Se não souber algo pessoal, responda de forma " +
   "natural e evasiva sem inventar fatos. Não use formatação markdown."
+
+const PERSONA_KEY = "whats:persona"
+
+// getPersona devolve o prompt vigente (Redis) ou o padrão.
+export async function getPersona(): Promise<string> {
+  const custom = await redis.get(PERSONA_KEY)
+  return custom?.trim() ? custom : DEFAULT_PERSONA
+}
+
+// setPersona grava um prompt novo; texto vazio remove o override (volta ao padrão).
+// Vale para conversas NOVAS — as existentes já receberam o seed no 1º turno.
+export async function setPersona(text: string): Promise<void> {
+  if (text.trim()) await redis.set(PERSONA_KEY, text.trim())
+  else await redis.del(PERSONA_KEY)
+}
+
+export async function personaIsDefault(): Promise<boolean> {
+  return !(await redis.get(PERSONA_KEY))?.trim()
+}
