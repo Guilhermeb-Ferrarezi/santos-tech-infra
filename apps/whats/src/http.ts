@@ -2,9 +2,9 @@ import { createServer, IncomingMessage, ServerResponse } from "http"
 import jwt from "jsonwebtoken"
 import QRCode from "qrcode"
 import { config } from "./config"
-import { listAllowlist, addAllow, removeAllow, listSeen, userRole } from "./db"
-import { waStatus, logoutWhatsApp } from "./wa"
-import { autoReplyEnabled, setAutoReply } from "./redis"
+import { listAllowlist, addAllow, removeAllow, listSeen, userRole, unlinkChat } from "./db"
+import { waStatus, logoutWhatsApp, injectSimMessage, simJID } from "./wa"
+import { autoReplyEnabled, setAutoReply, listSim, clearSim, simTyping } from "./redis"
 
 const ROLE_ADMIN = 3
 
@@ -24,22 +24,23 @@ function cors(req: IncomingMessage, res: ServerResponse) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type")
 }
 
-// admin valida o JWT do auth central (cookie access_token ou Bearer) e exige o papel
-// admin consultando a tabela users — o JWT do ecossistema não carrega claim de role.
-async function admin(req: IncomingMessage): Promise<boolean> {
+// adminUserID valida o JWT do auth central (cookie access_token ou Bearer) e exige o
+// papel admin consultando a tabela users — o JWT do ecossistema não carrega claim de
+// role. Devolve o userID (sub) ou null (fail-closed).
+async function adminUserID(req: IncomingMessage): Promise<number | null> {
   let token = ""
   const cookie = req.headers.cookie ?? ""
   const m = /(?:^|;\s*)access_token=([^;]+)/.exec(cookie)
   if (m) token = decodeURIComponent(m[1]!)
   else if (req.headers.authorization?.startsWith("Bearer ")) token = req.headers.authorization.slice(7)
-  if (!token) return false
+  if (!token) return null
   try {
     const claims = jwt.verify(token, config.jwtSecret, { algorithms: ["HS256"] }) as { sub?: string }
     const uid = Number(claims.sub)
-    if (!Number.isInteger(uid) || uid <= 0) return false
-    return (await userRole(uid)) === ROLE_ADMIN
+    if (!Number.isInteger(uid) || uid <= 0) return null
+    return (await userRole(uid)) === ROLE_ADMIN ? uid : null
   } catch {
-    return false
+    return null
   }
 }
 
@@ -59,7 +60,8 @@ export function startHTTP() {
 
       if (req.method === "GET" && url === `${b}/health`) return send(res, 200, { service: "whats", status: "ok" })
 
-      if (!(await admin(req))) return send(res, 401, { code: "UNAUTHORIZED", message: "sessão inválida" })
+      const uid = await adminUserID(req)
+      if (uid === null) return send(res, 401, { code: "UNAUTHORIZED", message: "sessão inválida" })
 
       if (req.method === "GET" && url === `${b}/status`) {
         const s = waStatus()
@@ -79,6 +81,23 @@ export function startHTTP() {
         await logoutWhatsApp()
         return send(res, 200, { ok: true })
       }
+      // Simulador: bancada do pipeline real (ver spec do dashboard)
+      if (req.method === "GET" && url === `${b}/sim`) {
+        return send(res, 200, { messages: await listSim(uid), typing: await simTyping(uid) })
+      }
+      if (req.method === "POST" && url === `${b}/sim/send`) {
+        const { text } = await body(req)
+        if (!text || typeof text !== "string" || !text.trim())
+          return send(res, 400, { code: "BAD_REQUEST", message: "text obrigatório" })
+        await injectSimMessage(uid, text.trim())
+        return send(res, 202, { ok: true })
+      }
+      if (req.method === "POST" && url === `${b}/sim/reset`) {
+        await clearSim(uid)
+        await unlinkChat(simJID(uid))
+        return send(res, 200, { ok: true })
+      }
+
       if (req.method === "GET" && url === `${b}/seen`) return send(res, 200, { items: await listSeen() })
       if (req.method === "GET" && url === `${b}/allowlist`) return send(res, 200, { items: await listAllowlist() })
       if (req.method === "POST" && url === `${b}/allowlist`) {

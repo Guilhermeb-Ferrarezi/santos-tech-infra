@@ -78,6 +78,12 @@ export async function conversationFor(jid: string): Promise<string | null> {
   return r.rows[0]?.conversation_id ?? null
 }
 
+// unlinkChat desfaz o vínculo chat→conversa (reset do simulador): a próxima mensagem
+// cria uma conversa nova no agent-go; a antiga permanece lá (auditoria).
+export async function unlinkChat(jid: string): Promise<void> {
+  await pool.query("DELETE FROM whats_chats WHERE jid=$1", [jid])
+}
+
 export async function linkChat(jid: string, conversationID: string): Promise<void> {
   await pool.query(
     "INSERT INTO whats_chats (jid, conversation_id) VALUES ($1,$2) ON CONFLICT (jid) DO NOTHING",
