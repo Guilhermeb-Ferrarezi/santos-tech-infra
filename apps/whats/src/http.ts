@@ -2,7 +2,7 @@ import { createServer, IncomingMessage, ServerResponse } from "http"
 import jwt from "jsonwebtoken"
 import QRCode from "qrcode"
 import { config } from "./config"
-import { listAllowlist, addAllow, removeAllow, listSeen, listMessages, userRole, unlinkChat } from "./db"
+import { listAllowlist, addAllow, removeAllow, listSeen, listMessages, userRole, unlinkChat, listKnowledge, deleteKnowledge } from "./db"
 import { waStatus, logoutWhatsApp, injectSimMessage, simJID } from "./wa"
 import { autoReplyEnabled, setAutoReply, listSim, clearSim, simTyping, getAgentConfig, setAgentConfig } from "./redis"
 import { serveSSE, emitEvent } from "./events"
@@ -106,6 +106,15 @@ export function startHTTP() {
           return send(res, 400, { code: "BAD_REQUEST", message: "text deve ser string de até 4000 caracteres" })
         await setPersona(text)
         return send(res, 200, { text: await getPersona(), isDefault: await personaIsDefault() })
+      }
+
+      // Memória auto-aprendida: escalações + respostas do dono (FAQ do agente).
+      if (req.method === "GET" && url === `${b}/knowledge`) return send(res, 200, { items: await listKnowledge() })
+      if (req.method === "DELETE" && url.startsWith(`${b}/knowledge/`)) {
+        const id = Number(url.slice(`${b}/knowledge/`.length))
+        if (!Number.isInteger(id) || id <= 0) return send(res, 400, { code: "BAD_REQUEST", message: "id inválido" })
+        await deleteKnowledge(id)
+        return send(res, 200, { ok: true })
       }
 
       // Config do agente: modelo/effort das conversas novas (vazio = default).

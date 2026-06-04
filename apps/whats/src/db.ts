@@ -20,6 +20,15 @@ CREATE TABLE IF NOT EXISTS whats_seen_chats (
   preview TEXT NOT NULL DEFAULT '',
   last_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS whats_knowledge (
+  id          BIGSERIAL PRIMARY KEY,
+  jid         TEXT NOT NULL,
+  question    TEXT NOT NULL,
+  reason      TEXT NOT NULL DEFAULT '',
+  answer      TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  answered_at TIMESTAMPTZ
+);
 CREATE TABLE IF NOT EXISTS whats_messages (
   id        BIGSERIAL PRIMARY KEY,
   jid       TEXT NOT NULL,
@@ -88,6 +97,46 @@ export async function listMessages(
     [jid],
   )
   return r.rows.reverse()
+}
+
+// ── Memória auto-aprendida (escalações → FAQ) ────────────────────────────────
+
+// insertPendingKnowledge registra a pergunta escalada (sem resposta ainda).
+export async function insertPendingKnowledge(jid: string, question: string, reason: string): Promise<void> {
+  await pool.query("INSERT INTO whats_knowledge (jid, question, reason) VALUES ($1,$2,$3)", [jid, question, reason])
+}
+
+// answerLatestPending grava a resposta do dono na escalação pendente mais recente
+// do chat. Devolve true se havia pendência.
+export async function answerLatestPending(jid: string, answer: string): Promise<boolean> {
+  const r = await pool.query(
+    `UPDATE whats_knowledge SET answer=$2, answered_at=now()
+     WHERE id = (SELECT id FROM whats_knowledge WHERE jid=$1 AND answer IS NULL ORDER BY id DESC LIMIT 1)
+     RETURNING id`,
+    [jid, answer],
+  )
+  return (r.rowCount ?? 0) > 0
+}
+
+// listFacts devolve os fatos respondidos (a memória usada nos turnos).
+export async function listFacts(): Promise<{ id: number; question: string; answer: string }[]> {
+  const r = await pool.query(
+    "SELECT id, question, answer FROM whats_knowledge WHERE answer IS NOT NULL ORDER BY id DESC LIMIT 500",
+  )
+  return r.rows
+}
+
+export async function listKnowledge(): Promise<
+  { id: number; jid: string; question: string; answer: string | null; createdAt: string }[]
+> {
+  const r = await pool.query(
+    "SELECT id, jid, question, answer, created_at FROM whats_knowledge ORDER BY id DESC LIMIT 200",
+  )
+  return r.rows.map((x) => ({ id: x.id, jid: x.jid, question: x.question, answer: x.answer, createdAt: x.created_at }))
+}
+
+export async function deleteKnowledge(id: number): Promise<void> {
+  await pool.query("DELETE FROM whats_knowledge WHERE id=$1", [id])
 }
 
 // userRole devolve o papel do usuário na tabela compartilhada do auth central

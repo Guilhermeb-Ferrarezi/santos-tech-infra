@@ -2,8 +2,9 @@ import WebSocket from "ws"
 import { config } from "./config"
 import { serviceToken } from "./jwt"
 import { getPersona } from "./persona"
-import { conversationFor, linkChat } from "./db"
+import { conversationFor, linkChat, listFacts } from "./db"
 import { getAgentConfig } from "./redis"
+import { rankFacts, factsNote } from "./knowledge"
 
 interface TurnEvent {
   type: string
@@ -45,13 +46,16 @@ export async function runTurn(jid: string, text: string, toolsDisabled: boolean,
   const wsURL = `${config.agentURL.replace(/^http/, "ws")}/conversations/${convID}/ws`
   const ws = new WebSocket(wsURL, { headers: { Authorization: `Bearer ${serviceToken()}` } })
   const events: TurnEvent[] = []
-  let prompt = text
+  // Memória auto-aprendida: fatos respondidos pelo dono relevantes à mensagem
+  // entram como nota interna — o agente responde direto, sem re-escalar.
+  const facts = rankFacts(text, await listFacts().catch(() => []))
+  let prompt = factsNote(facts) + text
   if (isFirst) {
     // Seed: persona + config real do agente (pra assinatura/citações não serem chute).
     const { model, effort } = await getAgentConfig()
     const m = model || "sonnet"
     const cfgLine = `Config do agente: modelo=${m.replace("[1m]", "")}, effort=${effort || "padrão"}, contexto=${m.includes("[1m]") ? "1M" : "200k"}`
-    prompt = `${await getPersona()}\n\n${cfgLine}\n\n---\n\nMensagem recebida: ${text}`
+    prompt = `${await getPersona()}\n\n${cfgLine}\n\n---\n\n${factsNote(facts)}Mensagem recebida: ${text}`
   }
 
   return new Promise<string>((resolve, reject) => {

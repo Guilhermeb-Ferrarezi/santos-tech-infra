@@ -2,7 +2,7 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason } from "baileys"
 import type { WASocket } from "baileys"
 import { config } from "./config"
 import { decideMessage } from "./router"
-import { allowlistSet, conversationFor, recordSeen, saveMessage } from "./db"
+import { allowlistSet, conversationFor, recordSeen, saveMessage, insertPendingKnowledge, answerLatestPending } from "./db"
 import { autoReplyEnabled, pushSim, setSimTyping } from "./redis"
 import { runTurn } from "./agent"
 import { emitEvent } from "./events"
@@ -117,6 +117,9 @@ async function escalate(jid: string, question: string, reason: string, replied: 
     return
   }
   const who = jid.endsWith("@simulator") ? `Simulador (${jid})` : jid
+  // Memória auto-aprendida: a pergunta fica pendente; a resposta do dono (por
+  // email) completa o par P→R e vira fato consultado nos próximos turnos.
+  insertPendingKnowledge(jid, question, reason).catch((e) => console.error("pendência de memória falhou", jid, e))
   const body =
     `O agente do WhatsApp pediu ajuda.\n\n` +
     `Chat: ${who}\n` +
@@ -136,6 +139,11 @@ async function escalate(jid: string, question: string, reason: string, replied: 
 // conversa — o agente a transmite no tom dele (e a informação fica no contexto
 // pra perguntas futuras). Reusa o fireTurn: lock, typing, escalação e envio.
 export async function deliverOwnerReply(jid: string, info: string): Promise<void> {
+  // Completa o par P→R na memória (se havia escalação pendente deste chat).
+  await answerLatestPending(jid, info).catch((e) => {
+    console.error("gravar resposta na memória falhou", jid, e)
+    return false
+  })
   const prompt =
     `[nota interna do Guilherme — o contato NÃO viu isto e NÃO mandou mensagem agora] ` +
     `Resposta pra dúvida pendente deste chat: "${info}". ` +
