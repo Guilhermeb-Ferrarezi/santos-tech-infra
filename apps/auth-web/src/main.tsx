@@ -13,6 +13,7 @@ import ForgotPasswordPage from '@/routes/forgot-password'
 import ResetPasswordPage from '@/routes/reset-password'
 import ConfirmAccessPage from '@/routes/confirm'
 import OAuthChoosePage from '@/routes/oauth-choose'
+import SwitchAccountPage from '@/routes/switch-account'
 import '@/styles.css'
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -23,9 +24,10 @@ const forgotRoute = createRoute({ getParentRoute: () => rootRoute, path: '/forgo
 const resetRoute = createRoute({ getParentRoute: () => rootRoute, path: '/reset-password', component: ResetPasswordPage })
 const confirmRoute = createRoute({ getParentRoute: () => rootRoute, path: '/confirm', component: ConfirmAccessPage })
 const oauthChooseRoute = createRoute({ getParentRoute: () => rootRoute, path: '/oauth/choose', component: OAuthChoosePage })
+const switchAccountRoute = createRoute({ getParentRoute: () => rootRoute, path: '/switch-account', component: SwitchAccountPage })
 
 const router = createRouter({
-  routeTree: rootRoute.addChildren([loginRoute, forgotRoute, resetRoute, confirmRoute, oauthChooseRoute]),
+  routeTree: rootRoute.addChildren([loginRoute, forgotRoute, resetRoute, confirmRoute, oauthChooseRoute, switchAccountRoute]),
 })
 
 declare module '@tanstack/react-router' {

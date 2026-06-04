@@ -108,6 +108,11 @@ export async function confirmAuthorize(
   })
 }
 
+// Ativa a conta escolhida (rotaciona a sessão e seta os cookies ativos).
+export async function activateAccount(sessionId: string): Promise<AuthResponse> {
+  return apiFetch<AuthResponse>(`/auth/accounts/${sessionId}/activate`, { method: 'POST' })
+}
+
 export function getSafeRedirect(param: string | null | undefined): string {
   const fallback = import.meta.env.VITE_REDIRECT_DEFAULT ?? '/'
   if (!param) return fallback
