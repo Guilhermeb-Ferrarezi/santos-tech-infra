@@ -24,8 +24,17 @@ export default function LoginPage() {
   const [mfaChallenge, setMfaChallenge] = useState<string | null>(
     () => new URLSearchParams(window.location.search).get('mfa_challenge'),
   )
+  // Método preferido (mostrado primeiro, estilo GitHub) e métodos disponíveis.
+  const [mfaMethod, setMfaMethod] = useState<'totp' | 'email'>(
+    () => (new URLSearchParams(window.location.search).get('mfa_method') === 'email' ? 'email' : 'totp'),
+  )
+  const [mfaMethods, setMfaMethods] = useState<string[]>(
+    () => (new URLSearchParams(window.location.search).get('mfa_methods') ?? '').split(',').filter(Boolean),
+  )
   const [code, setCode] = useState('')
-  const [emailSent, setEmailSent] = useState(false)
+  const [emailSent, setEmailSent] = useState(
+    () => new URLSearchParams(window.location.search).get('mfa_method') === 'email',
+  )
 
   useQuery({
     queryKey: ['me'],
@@ -47,6 +56,9 @@ export default function LoginPage() {
       // MFA ativo: não há sessão ainda, vamos pro passo do código.
       if ('mfaRequired' in res) {
         setError('')
+        setMfaMethod(res.method === 'email' ? 'email' : 'totp')
+        setMfaMethods(res.methods ?? [])
+        setEmailSent(res.method === 'email') // o backend já enviou o código
         setMfaChallenge(res.challenge)
         return
       }
@@ -120,13 +132,14 @@ export default function LoginPage() {
         <>
           <h2 className="text-3xl font-bold text-[#0E2937] mb-1">Verificação em duas etapas</h2>
           <p className="text-base text-[#496B84] mb-8">
-            Digite o código do seu app autenticador — ou use o enviado por email ou um código de
-            recuperação.
+            {mfaMethod === 'email'
+              ? 'Enviamos um código de 6 dígitos para o seu email.'
+              : 'Digite o código do seu app autenticador.'}
           </p>
 
-          {emailSent && (
+          {mfaMethod === 'email' && emailSent && (
             <div className="mb-5 p-4 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700">
-              Enviamos um código para o seu email.
+              Código enviado. Confira sua caixa de entrada (e o spam).
             </div>
           )}
 
@@ -156,14 +169,51 @@ export default function LoginPage() {
               {verify.isPending ? 'Verificando...' : 'Verificar'}
             </button>
 
-            <button
-              type="button"
-              onClick={() => { setError(''); sendEmail.mutate() }}
-              disabled={sendEmail.isPending}
-              className="text-center text-sm text-[#187ABF] hover:underline disabled:opacity-60"
-            >
-              {sendEmail.isPending ? 'Enviando...' : 'Enviar código por email'}
-            </button>
+            <div className="rounded-xl border border-gray-200 bg-[#F5F8FA] p-4 text-sm">
+              <p className="font-semibold text-[#0E2937] mb-2">Está com problemas?</p>
+              <ul className="flex flex-col gap-1.5">
+                {mfaMethod === 'totp' && (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => { setError(''); setMfaMethod('email'); sendEmail.mutate() }}
+                      disabled={sendEmail.isPending}
+                      className="text-[#187ABF] hover:underline disabled:opacity-60"
+                    >
+                      {sendEmail.isPending ? 'Enviando...' : 'Enviar um código por email'}
+                    </button>
+                  </li>
+                )}
+                {mfaMethod === 'email' && (
+                  <>
+                    {mfaMethods.includes('totp') && (
+                      <li>
+                        <button
+                          type="button"
+                          onClick={() => { setError(''); setMfaMethod('totp') }}
+                          className="text-[#187ABF] hover:underline"
+                        >
+                          Usar o app autenticador
+                        </button>
+                      </li>
+                    )}
+                    <li>
+                      <button
+                        type="button"
+                        onClick={() => { setError(''); sendEmail.mutate() }}
+                        disabled={sendEmail.isPending}
+                        className="text-[#187ABF] hover:underline disabled:opacity-60"
+                      >
+                        {sendEmail.isPending ? 'Reenviando...' : 'Reenviar o código'}
+                      </button>
+                    </li>
+                  </>
+                )}
+                <li className="text-[#496B84]">
+                  Sem acesso? Use um dos seus <span className="font-medium">códigos de recuperação</span> no campo acima.
+                </li>
+              </ul>
+            </div>
 
             <button
               type="button"

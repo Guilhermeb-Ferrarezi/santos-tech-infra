@@ -5,12 +5,24 @@ export type User = {
   email: string
   name: string
   createdAt: string
+  avatarUrl?: string | null
+  username?: string | null
+  mfaEnabled?: boolean
+  mfaMethod?: 'totp' | 'email'
+  mfaTotp?: boolean
+  mfaEmail?: boolean
 }
 
 export type AuthResponse = { user: User }
 
 // Login com MFA ativo não emite sessão: devolve um desafio pro 2º passo.
-export type MfaChallenge = { mfaRequired: true; challenge: string }
+// method = o preferido do usuário (mostrado primeiro); methods = os disponíveis.
+export type MfaChallenge = {
+  mfaRequired: true
+  challenge: string
+  method?: 'totp' | 'email'
+  methods?: string[]
+}
 export type LoginResult = AuthResponse | MfaChallenge
 
 export async function login(identifier: string, password: string): Promise<LoginResult> {
@@ -52,6 +64,19 @@ export async function resetPassword(token: string, newPassword: string): Promise
     method: 'POST',
     body: JSON.stringify({ token, newPassword }),
   })
+}
+
+// Sudo mode: confirma a identidade (MFA ou senha) e eleva a sessão por 15min.
+export async function sudoVerify(payload: { code?: string; password?: string }): Promise<void> {
+  await apiFetch('/auth/sudo/verify', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+// Envia um código pro email da CONTA logada (usado no sudo e na gestão do 2FA).
+export async function sendAccountEmailCode(): Promise<void> {
+  await apiFetch('/auth/mfa/email-code', { method: 'POST' })
 }
 
 export function getSafeRedirect(param: string | null | undefined): string {
