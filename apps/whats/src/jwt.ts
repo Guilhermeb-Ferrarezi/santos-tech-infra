@@ -1,14 +1,10 @@
 import jwt from "jsonwebtoken"
 import { config } from "./config"
 
-// Token de serviço HS256 (mesmo JWT_SECRET do ecossistema), assumindo a conta admin
-// do dono. O agent-go valida o sub e resolve o papel admin pela tabela users — as
-// claims são as mesmas do auth central: {sub, iat, exp}.
-export function serviceToken(): string {
+// Token de serviço HS256 (mesmo JWT_SECRET do ecossistema). Por padrão assume a
+// conta admin do dono (agent-go); a escalação usa a conta do Claude (sub próprio).
+// As claims são as mesmas do auth central: {sub, iat, exp}.
+export function serviceToken(sub: number = config.ownerUserID): string {
   const now = Math.floor(Date.now() / 1000)
-  return jwt.sign(
-    { sub: String(config.ownerUserID), iat: now, exp: now + 600 },
-    config.jwtSecret,
-    { algorithm: "HS256" },
-  )
+  return jwt.sign({ sub: String(sub), iat: now, exp: now + 600 }, config.jwtSecret, { algorithm: "HS256" })
 }

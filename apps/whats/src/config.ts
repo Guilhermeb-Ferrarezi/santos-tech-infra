@@ -22,7 +22,8 @@ export const config = {
   sessionDir: process.env.SESSION_DIR ?? "/data/baileys",
   debounceMs: Number(process.env.DEBOUNCE_MS ?? "8000"),
   // Escalação: email avisado quando o agente sinaliza [[escalar]]. Vazio = desligado.
+  // O envio sai da caixa da conta do Claude (claude@santos-tech.com).
   escalateEmail: process.env.ESCALATE_EMAIL ?? "",
   mailsAPI: (process.env.MAILS_API ?? "https://mails.santos-tech.com/api").replace(/\/$/, ""),
-  emailApiKey: process.env.EMAIL_API_KEY ?? "",
+  claudeUserID: Number(process.env.CLAUDE_USER_ID ?? "42"), // conta claude@santos-tech.com no auth central
 }

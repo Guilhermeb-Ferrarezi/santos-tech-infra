@@ -1,12 +1,16 @@
 import { config } from "./config"
+import { serviceToken } from "./jwt"
 
-// Cliente da API de emails do ecossistema (mails.santos-tech.com). O /send é
-// protegido por X-Api-Key (env do serviço) — padrão dos apps, ver CLAUDE.md.
+// Envia email PELA CAIXA DA CONTA DO CLAUDE (claude@santos-tech.com): o
+// /mailbox/me/send resolve o remetente pela sessão (JWT assinado com o sub da
+// conta do Claude) — o From é forçado pelo servidor, nunca pelo cliente.
 export async function sendEmail(to: string, subject: string, text: string): Promise<void> {
-  if (!config.emailApiKey) throw new Error("EMAIL_API_KEY ausente")
-  const res = await fetch(`${config.mailsAPI}/send`, {
+  const res = await fetch(`${config.mailsAPI}/mailbox/me/send`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Api-Key": config.emailApiKey },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${serviceToken(config.claudeUserID)}`,
+    },
     body: JSON.stringify({ to, subject, text }),
     signal: AbortSignal.timeout(20_000),
   })
