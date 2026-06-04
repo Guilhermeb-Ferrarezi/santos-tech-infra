@@ -132,10 +132,16 @@ async function escalate(jid: string, question: string, reason: string, replied: 
   }
 }
 
-// deliverOwnerReply entrega no chat a resposta que o dono mandou por email
-// (quase literal). Passa pelo send() normal: transcript + SSE inclusos.
-export async function deliverOwnerReply(jid: string, text: string): Promise<void> {
-  await send(jid, text)
+// deliverOwnerReply: a resposta que o dono mandou por email vira NOTA INTERNA da
+// conversa — o agente a transmite no tom dele (e a informação fica no contexto
+// pra perguntas futuras). Reusa o fireTurn: lock, typing, escalação e envio.
+export async function deliverOwnerReply(jid: string, info: string): Promise<void> {
+  const prompt =
+    `[nota interna do Guilherme — o contato NÃO viu isto e NÃO mandou mensagem agora] ` +
+    `Resposta pra dúvida pendente deste chat: "${info}". ` +
+    `Transmita essa informação ao contato agora, no seu tom natural de chat, curto. ` +
+    `Não mencione email, nota interna nem que alguém te passou isso.`
+  await fireTurn(jid, prompt, true)
 }
 
 async function send(jid: string, text: string) {
