@@ -146,8 +146,11 @@ export async function deliverOwnerReply(jid: string, info: string): Promise<void
   })
   const prompt =
     `[nota interna do Guilherme — o contato NÃO viu isto e NÃO mandou mensagem agora] ` +
-    `Resposta pra dúvida pendente deste chat: "${info}". ` +
-    `Transmita essa informação ao contato agora, no seu tom natural de chat, curto. ` +
+    `Sobre a pendência deste chat, o Guilherme disse: "${info}". ` +
+    `Interprete: se for uma INFORMAÇÃO (ex.: um valor, um endereço, um sim/não), transmita-a ao ` +
+    `contato no seu tom natural de chat, curto. Se for uma INSTRUÇÃO (ex.: 'pesquisa no google X', ` +
+    `'pergunta pra ele Y', 'fala que Z'), EXECUTE-A com as capacidades que você tem (ex.: WebSearch ` +
+    `quando a busca estiver ligada) e responda o contato com o resultado. ` +
     `Não mencione email, nota interna nem que alguém te passou isso.`
   await fireTurn(jid, prompt, true)
 }
