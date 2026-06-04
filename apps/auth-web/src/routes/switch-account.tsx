@@ -89,14 +89,17 @@ export default function SwitchAccountPage() {
                   </span>
                 )}
               </button>
-              <button
-                type="button"
-                aria-label={`Remover ${account.email}`}
-                onClick={() => remove.mutate(account.sessionId)}
-                className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
-              >
-                <X size={16} />
-              </button>
+              {/* A conta ATIVA não pode ser removida daqui — viraria um logout disfarçado */}
+              {!account.active && (
+                <button
+                  type="button"
+                  aria-label={`Remover ${account.email}`}
+                  onClick={() => remove.mutate(account.sessionId)}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <X size={16} />
+                </button>
+              )}
             </div>
           ))}
 
