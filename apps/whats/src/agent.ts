@@ -52,9 +52,11 @@ export async function runTurn(jid: string, text: string, toolsDisabled: boolean,
   let prompt = factsNote(facts) + text
   if (isFirst) {
     // Seed: persona + config real do agente (pra assinatura/citações não serem chute).
-    const { model, effort } = await getAgentConfig()
+    const { model, effort, webSearch } = await getAgentConfig()
     const m = model || "sonnet"
-    const cfgLine = `Config do agente: modelo=${m.replace("[1m]", "")}, effort=${effort || "padrão"}, contexto=${m.includes("[1m]") ? "1M" : "200k"}`
+    const cfgLine =
+      `Config do agente: modelo=${m.replace("[1m]", "")}, effort=${effort || "padrão"}, ` +
+      `contexto=${m.includes("[1m]") ? "1M" : "200k"}, busca na web=${webSearch ? "LIGADA (você TEM a ferramenta WebSearch — use-a)" : "desligada"}`
     prompt = `${await getPersona()}\n\n${cfgLine}\n\n---\n\n${factsNote(facts)}Mensagem recebida: ${text}`
   }
 
