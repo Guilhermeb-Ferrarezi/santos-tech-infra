@@ -69,7 +69,7 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "recoveryCodes": codes})
 }
 
-// POST /auth/mfa/disable {code} — desativa (aceita TOTP ou recovery code).
+// POST /auth/mfa/disable {code} — desativa (aceita TOTP, recovery ou código por email).
 func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFrom(r)
 	var body struct {
@@ -84,12 +84,21 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
 		return
 	}
-	if !u.MFAEnabled || u.TOTPSecret == nil {
+	if !u.MFAEnabled {
 		writeJSON(w, http.StatusOK, map[string]bool{"disabled": true})
 		return
 	}
+	// Aceita qualquer fator válido da conta: TOTP, código de recuperação ou o código
+	// enviado pro email (/auth/mfa/email-code) — necessário p/ contas só com email-2FA.
 	code := strings.TrimSpace(body.Code)
-	if !totp.Validate(code, *u.TOTPSecret) && !s.consumeRecoveryCode(r.Context(), uid, sha256Hex(strings.ToUpper(code))) {
+	valid := u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret)
+	if !valid {
+		valid = s.consumeRecoveryCode(r.Context(), uid, sha256Hex(strings.ToUpper(code)))
+	}
+	if !valid {
+		valid = s.consumeAcctEmailCode(r.Context(), uid, code)
+	}
+	if !valid {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
 		return
 	}
@@ -120,16 +129,7 @@ func (s *Server) handleMFAEmail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido"))
 		return
 	}
-	code := emailCode()
-	s.rdb.Set(r.Context(), "mfa_email:"+body.Challenge, code, 10*time.Minute)
-	html := fmt.Sprintf(`<p>Seu código de verificação Santos Tech:</p>
-<p style="font-size:28px;font-weight:bold;letter-spacing:4px">%s</p>
-<p>Expira em 10 minutos. Se não foi você, ignore.</p>`, code)
-	go func(to string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
-		_ = s.email.send(ctx, to, "Seu código de verificação — Santos Tech", html)
-	}(u.Email)
+	s.sendChallengeEmailCode(r.Context(), body.Challenge, u.Email)
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
 

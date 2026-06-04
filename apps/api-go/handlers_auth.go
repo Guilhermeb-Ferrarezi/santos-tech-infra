@@ -104,14 +104,22 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// MFA ativo: não emite tokens; devolve desafio pro 2º passo (/auth/mfa/verify)
+	// MFA ativo: não emite tokens; devolve desafio pro 2º passo (/auth/mfa/verify).
+	// Informa o método preferido (e os disponíveis) pra tela do código; quando o
+	// preferido é email, o código já sai enviado (estilo GitHub).
 	if u.MFAEnabled {
 		challenge := randomToken(24)
 		if err := s.rdb.Set(r.Context(), "mfa_challenge:"+challenge, u.ID, 10*time.Minute).Err(); err != nil {
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"mfaRequired": true, "challenge": challenge})
+		if u.MFAMethod == "email" {
+			s.sendChallengeEmailCode(r.Context(), challenge, u.Email)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"mfaRequired": true, "challenge": challenge,
+			"method": u.MFAMethod, "methods": mfaMethods(u),
+		})
 		return
 	}
 

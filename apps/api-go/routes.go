@@ -35,7 +35,8 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/admin/users", s.rateLimit(10, min, s.adminGuard(s.handleCreateAdminUser)))
 	mux.HandleFunc("PATCH /auth/admin/users/{id}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateAdminUser)))
 	mux.HandleFunc("POST /auth/admin/users/{id}/invite", s.rateLimit(5, min, s.adminGuard(s.handleInviteAdminUser)))
-	mux.HandleFunc("DELETE /auth/admin/users/{id}", s.adminGuard(s.handleDeleteAdminUser))
+	// Excluir usuário é destrutivo: exige sudo mode (confirmação recente de identidade).
+	mux.HandleFunc("DELETE /auth/admin/users/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteAdminUser)))
 
 	// Reset de senha (envia email — limite apertado)
 	mux.HandleFunc("POST /auth/forgot-password", s.rateLimit(3, 5*min, s.handleForgotPassword))
@@ -49,9 +50,16 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/mfa/setup", s.authGuard(s.handleMFASetup))
 	mux.HandleFunc("POST /auth/mfa/enable", s.authGuard(s.handleMFAEnable))
 	mux.HandleFunc("POST /auth/mfa/disable", s.authGuard(s.handleMFADisable))
+	// MFA por email — código pra conta logada (ativar/desativar/sudo) e ativação
+	mux.HandleFunc("POST /auth/mfa/email-code", s.rateLimit(3, 5*min, s.authGuard(s.handleMFAEmailCode)))
+	mux.HandleFunc("POST /auth/mfa/email-enable", s.rateLimit(10, min, s.authGuard(s.handleMFAEmailEnable)))
+	mux.HandleFunc("POST /auth/mfa/method", s.rateLimit(10, min, s.authGuard(s.handleMFAMethod)))
 	// MFA — 2º passo do login (público; envia email — limite apertado)
 	mux.HandleFunc("POST /auth/mfa/email", s.rateLimit(3, 5*min, s.handleMFAEmail))
 	mux.HandleFunc("POST /auth/mfa/verify", s.rateLimit(10, min, s.handleMFAVerify))
+
+	// Sudo mode — confirma a identidade pra ações sensíveis (eleva por 15min)
+	mux.HandleFunc("POST /auth/sudo/verify", s.rateLimit(10, min, s.authGuard(s.handleSudoVerify)))
 
 	// OAuth Google
 	mux.HandleFunc("GET /auth/google", s.handleGoogleStart)

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -90,7 +91,12 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 			fail("oauth_failed")
 			return
 		}
-		http.Redirect(w, r, origin+"/?mfa_challenge="+challenge, http.StatusFound)
+		if u.MFAMethod == "email" {
+			s.sendChallengeEmailCode(r.Context(), challenge, u.Email)
+		}
+		http.Redirect(w, r,
+			origin+"/?mfa_challenge="+challenge+"&mfa_method="+u.MFAMethod+"&mfa_methods="+strings.Join(mfaMethods(u), ","),
+			http.StatusFound)
 		return
 	}
 

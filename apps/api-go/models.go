@@ -28,6 +28,7 @@ type User struct {
 	CreatedAt       time.Time
 	Preferences     json.RawMessage // JSONB de preferências de UI (free-form)
 	EmailVerifiedAt *time.Time      // quando o usuário confirmou o próprio email (nil = nunca)
+	MFAMethod       string          // método 2FA preferido: 'totp' (app autenticador) ou 'email'
 	QuotaBytes      int64           // limite de armazenamento da caixa (mailbox), em bytes
 }
 
@@ -42,6 +43,9 @@ type UserProfile struct {
 	AvatarURL     *string             `json:"avatarUrl"`
 	MFAEnabled    bool                `json:"mfaEnabled"`
 	EmailVerified bool                `json:"emailVerified"`
+	MFAMethod     string              `json:"mfaMethod"`
+	MFATotp       bool                `json:"mfaTotp"`  // autenticador configurado (totp_secret presente)
+	MFAEmail      bool                `json:"mfaEmail"` // 2FA por email disponível (email verificado)
 	SuspendedAt   *string             `json:"suspendedAt"`
 	Permissions   map[string][]string `json:"permissions"`
 	CreatedAt     string              `json:"createdAt"`
