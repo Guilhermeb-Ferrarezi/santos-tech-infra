@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -50,13 +49,17 @@ func TestClaudeArgsToolsDisabledDropsToolAccess(t *testing.T) {
 	if slices.Contains(args, "--add-dir") {
 		t.Fatalf("tools_disabled não deveria passar --add-dir: %v", args)
 	}
-	if !slices.Contains(args, "--disallowed-tools") {
-		t.Fatalf("tools_disabled deveria passar --disallowed-tools: %v", args)
+	// Gate por allow-list vazia (não deny-list): --allowed-tools "" nega tudo por padrão.
+	if !slices.Contains(args, "--allowed-tools") {
+		t.Fatalf("tools_disabled deveria passar --allowed-tools: %v", args)
 	}
-	// a string de tools deve conter as embutidas
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "Bash") || !strings.Contains(joined, "Write") {
-		t.Fatalf("--disallowed-tools deveria cobrir Bash/Write: %v", args)
+	assertPairValue(t, args, "--allowed-tools", "")
+	if slices.Contains(args, "--disallowed-tools") {
+		t.Fatalf("tools_disabled não deveria mais usar deny-list (--disallowed-tools): %v", args)
+	}
+	// allow-list vazia só gateia se NÃO houver --dangerously-skip-permissions (que a ignora).
+	if slices.Contains(args, "--dangerously-skip-permissions") {
+		t.Fatalf("tools_disabled não deveria passar --dangerously-skip-permissions: %v", args)
 	}
 }
 

@@ -27,15 +27,6 @@ type turnEvent struct {
 
 var errBusy = appErr(http.StatusConflict, "BUSY", "Já há um turno em andamento nesta conversa")
 
-// builtinTools lista as ferramentas embutidas do Claude Code. Usada para
-// montar --disallowed-tools quando a conversa roda com ferramentas desligadas
-// (conversas de terceiros vindas do whats-agent). Verificar contra `claude --help`
-// ao bumpar a versão do CLI.
-var builtinTools = []string{
-	"Bash", "Edit", "Write", "Read", "Glob", "Grep",
-	"NotebookEdit", "WebFetch", "WebSearch", "Task", "TodoWrite",
-}
-
 // SessionManager orquestra os processos `claude` (um por turno).
 type SessionManager struct {
 	s    *Server
@@ -214,14 +205,22 @@ func (m *SessionManager) claudeArgs(conv *Conversation) []string {
 		"--output-format", "stream-json",
 		"--verbose",
 		"--include-partial-messages",
-		"--dangerously-skip-permissions",
 		"--model", conv.Model,
 	}
 	if conv.ToolsDisabled {
-		// Gate de processo: terceiros (whats-agent) não executam nenhuma ferramenta,
-		// mesmo que a mensagem tente induzir. Sem --add-dir e sem MCP.
-		args = append(args, "--disallowed-tools", strings.Join(builtinTools, ","))
+		// Gate de processo: terceiros (whats-agent) não executam NENHUMA ferramenta,
+		// mesmo que a mensagem tente induzir. Usamos uma allow-list VAZIA em vez de
+		// deny-list: deny-list é frágil (lista incompleta, e o subagent Task herda
+		// tudo) — allow-list vazia nega por padrão qualquer ferramenta, atual ou futura.
+		//
+		// IMPORTANTE: aqui NÃO passamos --dangerously-skip-permissions. Empiricamente,
+		// esse flag faz o CLI ignorar a allow-list e executar ferramentas mesmo assim;
+		// sem ele, em modo -p (não-interativo) toda ferramenta fora da allow-list é
+		// negada automaticamente (inclusive as chamadas por um subagent). Sem --add-dir
+		// e sem MCP.
+		args = append(args, "--allowed-tools", "")
 	} else {
+		args = append(args, "--dangerously-skip-permissions")
 		args = append(args, "--add-dir", conv.Workdir)
 		if mcp := m.s.mcpConfigPath(conv); fileExists(mcp) {
 			args = append(args, "--mcp-config", mcp, "--strict-mcp-config")

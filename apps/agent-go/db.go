@@ -41,7 +41,6 @@ CREATE TABLE IF NOT EXISTS claude_conversations (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_conv_user ON claude_conversations(user_id, updated_at DESC);
-ALTER TABLE claude_conversations ADD COLUMN IF NOT EXISTS tools_disabled BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS claude_messages (
   id              BIGSERIAL PRIMARY KEY,
