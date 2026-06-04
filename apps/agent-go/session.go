@@ -27,6 +27,15 @@ type turnEvent struct {
 
 var errBusy = appErr(http.StatusConflict, "BUSY", "Já há um turno em andamento nesta conversa")
 
+// builtinTools lista as ferramentas embutidas do Claude Code. Usada para
+// montar --disallowed-tools quando a conversa roda com ferramentas desligadas
+// (conversas de terceiros vindas do whats-agent). Verificar contra `claude --help`
+// ao bumpar a versão do CLI.
+var builtinTools = []string{
+	"Bash", "Edit", "Write", "Read", "Glob", "Grep",
+	"NotebookEdit", "WebFetch", "WebSearch", "Task", "TodoWrite",
+}
+
 // SessionManager orquestra os processos `claude` (um por turno).
 type SessionManager struct {
 	s    *Server
