@@ -1,0 +1,125 @@
+# Santos Tech — APIs do ecossistema (llms.txt)
+
+> Documentação de referência das APIs internas da Santos Tech, para consumo por
+> agentes (Claude) e desenvolvedores. Servida autenticada em
+> `https://api.santos-tech.com/llms.txt`. Mantenha este arquivo atualizado no
+> mesmo commit que alterar rotas (repo `santos-tech-infra/apps/api-go/llms.txt`).
+
+## Visão geral
+
+| API | Base | Repo |
+|-----|------|------|
+| Auth central | `https://api.santos-tech.com/auth` | santos-tech-infra/apps/api-go |
+| Claude Agent | `https://api.santos-tech.com/claude` | santos-tech-infra/apps/agent-go |
+| Email (envio/leads/campanhas) | `https://mails.santos-tech.com/api` | sg/email (api/) |
+| Tela de login/perfil (UI) | `https://auth.santos-tech.com` | santos-tech-infra/apps/auth-web |
+
+## Convenções
+
+- **Sessão**: JWT HS256 (secret compartilhado) no cookie `access_token`
+  (httpOnly, domínio `.santos-tech.com`) ou `Authorization: Bearer <jwt>`.
+  Access dura 2h; renove com `POST /auth/refresh` (cookie `refresh_token`, 7d).
+- **PAT**: tokens `st_...` (criados em `POST /auth/api-keys`) valem como Bearer
+  em qualquer rota com sessão do auth e no Claude Agent.
+- **Erros**: auth/claude devolvem `{ "code", "message" }`; a API de email
+  devolve `{ "error" }`. Sempre com o status HTTP correspondente.
+- **Papéis**: role 1=aluno, 2=professor, 3=admin, 4=personalizado (permissions).
+- **Sudo mode**: ações destrutivas exigem confirmação recente de identidade.
+  `POST /auth/sudo/verify {code|password}` eleva a sessão por 15min (claim
+  `sudo_exp` no access re-emitido). Sem elevação: `403 SUDO_REQUIRED` (auth) ou
+  `403 {"error":"sudo_required"}` (email). UI: `auth.santos-tech.com/confirm?redirect=`.
+- **MFA**: 2 métodos — app autenticador (TOTP) e código por email (exige email
+  verificado). `users.mfa_method` define o pedido primeiro no login. O 2º passo
+  aceita TOTP, código por email ou código de recuperação.
+
+## Auth central — `api.santos-tech.com/auth`
+
+### Sessão
+- `POST /auth/register {email,password,name}` — cria conta
+- `POST /auth/login {identifier,password}` — `{user}` OU, com MFA,
+  `{mfaRequired:true, challenge, method, methods}` (sem sessão; se method=email
+  o código já foi enviado)
+- `POST /auth/mfa/verify {challenge, code}` — 2º passo; emite a sessão
+- `POST /auth/mfa/email {challenge}` — (re)envia código do 2º passo por email
+- `POST /auth/refresh` — rotaciona a sessão (204)
+- `POST|GET /auth/logout?redirect=` — encerra e limpa cookies
+- `GET /auth/me` — `{user}`: id, email, username, name, role, customRoleId,
+  permissions, avatarUrl, mfaEnabled, mfaMethod, mfaTotp, mfaEmail,
+  emailVerified, suspendedAt, createdAt, preferences (JSONB livre de UI)
+- `PATCH /auth/me/preferences {…}` — merge no JSONB de preferências
+- `GET /auth/google` · `GET /auth/google/callback` — OAuth (respeita MFA)
+
+### Senha e verificação
+- `POST /auth/forgot-password {email}` — link de redefinição (resposta uniforme)
+- `POST /auth/reset-password {token,newPassword}`
+- `POST /auth/email-verify/send` — código pro email da conta (cooldown 60s)
+- `POST /auth/email-verify/confirm {code}` — marca email_verified_at
+
+### MFA (gestão; sessão)
+- `POST /auth/mfa/setup` — `{secret, otpauthUrl}` (QR TOTP pendente)
+- `POST /auth/mfa/enable {code}` — ativa TOTP; devolve `{recoveryCodes[]}`
+- `POST /auth/mfa/email-code` — código pro email da conta (enable/disable/sudo)
+- `POST /auth/mfa/email-enable {code}` — ativa 2FA por email (exige verificado)
+- `POST /auth/mfa/method {method}` — método preferido: `totp` | `email`
+- `POST /auth/mfa/disable {code}` — aceita TOTP, recovery ou código por email
+
+### Sudo
+- `POST /auth/sudo/verify {code?|password?}` — eleva por 15min (re-emite access)
+
+### PAT / uploads / admin
+- `POST /auth/api-keys {name}` — cria PAT `st_...` (**exige sudo**)
+- `GET /auth/api-keys` · `DELETE /auth/api-keys/{id}`
+- `POST /auth/avatar` (multipart) — avatar → R2; `POST /auth/upload` — imagem → R2
+- `GET /auth/admin/users` · `POST /auth/admin/users` ·
+  `PATCH /auth/admin/users/{id}` · `POST /auth/admin/users/{id}/invite` ·
+  `DELETE /auth/admin/users/{id}` (**exige sudo**) — gestão admin (role 3)
+
+## Claude Agent — `api.santos-tech.com/claude`
+
+Auth: sessão do auth central ou PAT (`st_...`).
+
+- `GET /claude/health`
+- `POST /claude/generate {…}` · `POST /claude/generate/stream` — geração one-shot
+  (usadas pela IA do painel de email via header `X-Agent-Token`)
+- `GET|POST /claude/conversations` · `GET|PATCH|DELETE /claude/conversations/{id}`
+- `GET /claude/conversations/{id}/ws` — WebSocket da conversa
+- `POST /claude/conversations/{id}/model|compact|clear` · `POST /claude/stop-all`
+- `POST /claude/auth/session` — sessão mobile; `POST /claude/push/register`
+
+## Email — `mails.santos-tech.com/api`
+
+Contrato completo: `docs/openapi.yaml` no repo sg/email. Auth: sessão admin do
+auth central (cookie/Bearer); `POST /send` usa `X-Api-Key` (chave própria).
+
+- `GET /health` · `GET /me`
+- `POST /send {to,subject,html|text}` — envio programático (X-Api-Key; rate limit)
+- Leads: `GET|POST /leads` · `POST /leads/import|import-csv` ·
+  `PATCH /leads/{id}` · `DELETE /leads/{id}` (**exige sudo**)
+- Templates: `GET|POST /templates` · `PATCH|DELETE /templates/{id}`
+- Segmentos: `GET|POST /segments` · `PATCH|DELETE /segments/{id}` ·
+  `GET /segments/{id}/recipients`
+- Remetentes: `GET|POST /senders` · `PATCH|DELETE /senders/{id}`
+- Campanhas: `POST /campaigns/send` (segmentId|all|leadIds; merge tags
+  `{{name}}/{{email}}`; tracking/unsubscribe automáticos) ·
+  `POST /campaigns/test {to}` · rascunhos `GET|POST|PATCH|DELETE /campaigns/drafts` ·
+  agendadas `GET|POST|DELETE /campaigns/scheduled`
+- Logs/métricas: `GET /logs` (paginado) · `GET /logs/{id}` · `GET /metrics` ·
+  `GET /domain/health` (SPF/DKIM/DMARC)
+- Caixa (IMAP, admin): `GET /mailbox/{email}/messages[/{uid}]|quota|export` ·
+  `DELETE /mailbox/{email}` (**exige sudo**)
+- IA (proxy pro Claude Agent): `POST /ai/generate|rewrite|subjects|spam-check|`
+  `insights|command|image` · `GET /ai/logs`
+- Público: `GET /unsubscribe` (HTML; token HMAC) · `GET /t/open` · `GET /t/click`
+
+## Como um agente acessa este arquivo
+
+```bash
+# 1. login (conta de serviço SEM MFA, credenciais no .env local)
+curl -s -c /tmp/st.cookies -X POST https://api.santos-tech.com/auth/login \
+  -H 'Content-Type: application/json' \
+  -d "{\"identifier\":\"$ST_LLMS_USER\",\"password\":\"$ST_LLMS_PASS\"}"
+# 2. ler a doc
+curl -s -b /tmp/st.cookies https://api.santos-tech.com/llms.txt
+# Alternativa sem login: PAT
+curl -s -H "Authorization: Bearer $ST_PAT" https://api.santos-tech.com/llms.txt
+```
