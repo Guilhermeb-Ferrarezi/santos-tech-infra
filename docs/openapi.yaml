@@ -1,0 +1,699 @@
+openapi: 3.1.0
+
+info:
+  title: Santos Tech — Auth API
+  version: "1.0.0"
+  description: |
+    API central de autenticação da **santos-tech.com** (`apps/api-go`, Go + net/http).
+
+    É o ponto único de login para todos os subdomínios (`*.santos-tech.com`). Emite
+    JWT (HS256) em cookies `httpOnly` compartilhados no domínio `.santos-tech.com`,
+    de modo que qualquer serviço do ecossistema (painel, portal, email-sender)
+    valide o **mesmo** token.
+
+    ## Autenticação
+    Há duas formas de enviar credenciais, equivalentes:
+    - **Cookie** `access_token` (preferencial; setado pelo próprio servidor no login).
+    - Header **`Authorization: Bearer <access_token>`** (para clientes não-browser).
+
+    O `refresh_token` (cookie `httpOnly`) é usado apenas em `POST /auth/refresh` e na
+    rotação de sessão; nunca é lido de header.
+
+    ## Formato de erro
+    Todas as respostas de erro seguem `{ "code": "STRING", "message": "texto" }`
+    com o status HTTP correspondente.
+
+    ## Rate limiting
+    - Limite **global**: 200 req/min por IP (todas as rotas).
+    - Limites **por rota** (mais apertados) nas rotas sensíveis — ver cada endpoint.
+    - Excedido o limite, responde **429** com `code: RATE_LIMITED`.
+    - O IP é resolvido por `CF-Connecting-IP` → `X-Forwarded-For` → `RemoteAddr`
+      (atrás de Cloudflare + Traefik). É *fail-open*: se o Redis cair, não bloqueia.
+
+servers:
+  - url: https://api.santos-tech.com
+    description: Produção
+  - url: http://localhost:3000
+    description: Local (docker compose / go run)
+
+tags:
+  - name: Auth
+    description: Login, registro, sessão e tokens
+  - name: Password
+    description: Recuperação e redefinição de senha
+  - name: MFA
+    description: Autenticação em dois fatores (TOTP, email OTP, recovery codes)
+  - name: OAuth
+    description: Login social via Google
+  - name: System
+    description: Saúde do serviço
+
+paths:
+  /health:
+    get:
+      tags: [System]
+      summary: Health check
+      description: Verificação de liveness. Não requer autenticação.
+      security: []
+      responses:
+        "200":
+          description: Serviço no ar
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                required: [ok]
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Cadastrar novo usuário
+      description: |
+        Cria um usuário com email, nome e senha (mín. 8 caracteres). O email é
+        normalizado (trim + lowercase). **Não** inicia sessão — o cliente deve
+        chamar `POST /auth/login` em seguida.
+
+        Rate limit: **5 req/min por IP**.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Usuário criado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/NewUser"
+                required: [user]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          description: Email já cadastrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: EMAIL_ALREADY_EXISTS, message: "Este email já está cadastrado" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login com email/username + senha
+      description: |
+        Autentica por `identifier` (email **ou** username) e senha.
+
+        - Sem MFA: emite a sessão (cookies `access_token` + `refresh_token`) e
+          devolve o perfil do usuário.
+        - Com MFA ativo: **não** emite tokens. Retorna `{ mfaRequired: true, challenge }`.
+          O cliente deve seguir para `POST /auth/mfa/verify` (ou pedir um código por
+          email com `POST /auth/mfa/email`). O `challenge` expira em 10 minutos.
+
+        Rate limit: **10 req/min por IP**.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: |
+            Login concluído (com cookies) **ou** desafio MFA pendente.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/AuthCookies"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SessionResponse"
+                  - $ref: "#/components/schemas/MfaChallengeResponse"
+              examples:
+                sucesso:
+                  summary: Login direto (sem MFA)
+                  value:
+                    user:
+                      id: 42
+                      email: aluno@santos-tech.com
+                      username: null
+                      name: Maria Aluna
+                      role: 1
+                      customRoleId: null
+                      avatarUrl: null
+                      mfaEnabled: false
+                      suspendedAt: null
+                      permissions: null
+                      createdAt: "2026-01-10T12:00:00Z"
+                mfa:
+                  summary: MFA exigido
+                  value:
+                    mfaRequired: true
+                    challenge: "f3a9c0b1d2e3f4a5b6c7d8e9f0a1b2c3"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          description: Credenciais inválidas
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: INVALID_CREDENTIALS, message: "Email ou senha inválidos" }
+        "403":
+          description: Conta suspensa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: ACCOUNT_SUSPENDED, message: "Conta suspensa" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout (XHR)
+      description: |
+        Encerra a sessão atual: apaga a sessão correspondente ao `refresh_token`
+        e limpa os cookies de auth. Pensado para chamadas via `fetch`/XHR.
+      responses:
+        "204":
+          description: Sessão encerrada
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/ClearAuthCookies"
+    get:
+      tags: [Auth]
+      summary: Logout (link/redirect)
+      description: |
+        Igual ao `POST`, mas redireciona (302) após deslogar — útil em links de
+        logout. Sem `redirect`, vai para `AUTH_WEB_ORIGIN`. O `redirect` só é aceito
+        se a **origem** (`scheme://host`) constar em `CORS_ORIGIN`/`AUTH_WEB_ORIGIN`
+        (proteção contra open-redirect).
+      security: []
+      parameters:
+        - name: redirect
+          in: query
+          required: false
+          schema: { type: string, format: uri }
+          description: URL de destino (origem precisa estar na allowlist).
+      responses:
+        "302":
+          description: Redireciona após encerrar a sessão
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+            Set-Cookie:
+              $ref: "#/components/headers/ClearAuthCookies"
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Perfil do usuário autenticado
+      description: |
+        Retorna o perfil do usuário do `access_token` (cookie ou Bearer). Inclui
+        `permissions` resolvidas quando o papel é Custom (`role = 4`).
+      responses:
+        "200":
+          description: Perfil atual
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Conta suspensa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: ACCOUNT_SUSPENDED, message: "Conta suspensa" }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Renovar a sessão
+      description: |
+        Lê o cookie `refresh_token`, valida a sessão no banco, **rotaciona**
+        (apaga a sessão antiga e cria nova) e seta novos cookies `access_token` +
+        `refresh_token`.
+
+        Rate limit: **20 req/min por IP**.
+      security:
+        - refreshCookie: []
+      responses:
+        "204":
+          description: Tokens renovados (novos cookies setados)
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/AuthCookies"
+        "401":
+          description: Refresh ausente, inválido ou sessão expirada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: UNAUTHORIZED, message: "Sessão expirada" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/forgot-password:
+    post:
+      tags: [Password]
+      summary: Solicitar recuperação de senha
+      description: |
+        Gera um token de reset (válido por 1h, guardado hasheado no Redis) e envia
+        o link por email. A resposta é **sempre** `{ message: "ok" }`, exista o
+        email ou não (não vaza se a conta existe).
+
+        Rate limit: **3 req/5min por IP**.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+              required: [email]
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/reset-password:
+    post:
+      tags: [Password]
+      summary: Redefinir senha com token
+      description: |
+        Troca a senha usando o token recebido por email. A nova senha precisa ter
+        ≥ 8 caracteres. Em caso de sucesso, **todas as sessões** do usuário são
+        revogadas e o token é consumido.
+
+        Rate limit: **10 req/min por IP**.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token: { type: string }
+                newPassword: { type: string, minLength: 8, format: password }
+              required: [token, newPassword]
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          description: Validação falhou ou token inválido/expirado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                validacao: { value: { code: VALIDATION_ERROR, message: "senha mínima de 8 caracteres" } }
+                token: { value: { code: INVALID_TOKEN, message: "Link de recuperação inválido ou expirado" } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/mfa/setup:
+    post:
+      tags: [MFA]
+      summary: Iniciar configuração de TOTP
+      description: |
+        Gera um secret TOTP **pendente** (válido por 10min no Redis) e a `otpauthUrl`
+        para montar o QR code. O MFA só é ativado em `POST /auth/mfa/enable`.
+      responses:
+        "200":
+          description: Secret e URL otpauth
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: { type: string, description: "Secret TOTP base32" }
+                  otpauthUrl:
+                    type: string
+                    example: "otpauth://totp/Santos%20Tech:aluno@santos-tech.com?secret=...&issuer=Santos%20Tech"
+                required: [secret, otpauthUrl]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/mfa/enable:
+    post:
+      tags: [MFA]
+      summary: Confirmar e ativar o MFA
+      description: |
+        Valida o código TOTP gerado a partir do secret pendente. Ativa o MFA e
+        devolve **10 recovery codes** (mostrados uma única vez).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code: { type: string, description: "Código TOTP de 6 dígitos" }
+              required: [code]
+      responses:
+        "200":
+          description: MFA ativado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean, const: true }
+                  recoveryCodes:
+                    type: array
+                    items: { type: string }
+                    description: "10 códigos de recuperação (8 chars A-Z2-7)"
+                required: [enabled, recoveryCodes]
+        "400":
+          description: Setup expirado ou código inválido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                expirado: { value: { code: MFA_SETUP_EXPIRED, message: "Setup expirado, gere novamente" } }
+                invalido: { value: { code: INVALID_CODE, message: "Código inválido" } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/mfa/disable:
+    post:
+      tags: [MFA]
+      summary: Desativar o MFA
+      description: |
+        Desativa o MFA. Aceita um código **TOTP** ou um **recovery code**. Se o MFA
+        já estiver inativo, responde `200` idempotente. Remove os recovery codes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code: { type: string, description: "TOTP ou recovery code" }
+              required: [code]
+      responses:
+        "200":
+          description: MFA desativado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  disabled: { type: boolean, const: true }
+                required: [disabled]
+        "400":
+          description: Código inválido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: INVALID_CODE, message: "Código inválido" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/mfa/email:
+    post:
+      tags: [MFA]
+      summary: Enviar código MFA por email
+      description: |
+        Segundo passo opcional do login: envia um OTP de 6 dígitos (válido 10min)
+        para o email do usuário associado ao `challenge` devolvido no login.
+
+        Rate limit: **3 req/5min por IP**.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                challenge: { type: string, description: "Challenge recebido no login com MFA" }
+              required: [challenge]
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          description: Challenge inválido ou expirado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: INVALID_CHALLENGE, message: "Desafio inválido ou expirado" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/mfa/verify:
+    post:
+      tags: [MFA]
+      summary: Concluir login com MFA
+      description: |
+        Valida o `code` contra (nesta ordem) TOTP, OTP por email e recovery codes.
+        Em sucesso, consome o `challenge`, emite a sessão (cookies) e devolve o perfil.
+
+        Rate limit: **10 req/min por IP**.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                challenge: { type: string }
+                code: { type: string, description: "TOTP, OTP de email ou recovery code" }
+              required: [challenge, code]
+      responses:
+        "200":
+          description: Login concluído (cookies setados)
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/AuthCookies"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "400":
+          description: Challenge ou código inválido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                challenge: { value: { code: INVALID_CHALLENGE, message: "Desafio inválido ou expirado" } }
+                codigo: { value: { code: INVALID_CODE, message: "Código inválido" } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/google:
+    get:
+      tags: [OAuth]
+      summary: Iniciar login com Google
+      description: |
+        Seta um cookie `oauth_state` (CSRF, 10min) e redireciona para o consentimento
+        do Google. Requer `GOOGLE_CLIENT_ID` configurado.
+      security: []
+      responses:
+        "302":
+          description: Redireciona para o Google
+          headers:
+            Location: { schema: { type: string, format: uri } }
+            Set-Cookie:
+              schema: { type: string }
+              description: "oauth_state=...; HttpOnly; SameSite=Lax; Max-Age=600"
+        "500":
+          description: OAuth não configurado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: OAUTH_DISABLED, message: "OAuth não configurado" }
+
+  /auth/google/callback:
+    get:
+      tags: [OAuth]
+      summary: Callback do Google OAuth
+      description: |
+        Endpoint de retorno do Google. Valida o `state` (CSRF), troca o `code`,
+        busca o perfil e — se houver usuário com aquele email — emite a sessão e
+        redireciona para `AUTH_WEB_ORIGIN`. **Não cria usuários**: emails sem conta
+        são redirecionados com `?error=account_not_found`.
+
+        Sempre responde **302**; o resultado é sinalizado via query `error` no destino:
+        `oauth_denied`, `oauth_failed`, `account_not_found`.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          schema: { type: string }
+        - name: state
+          in: query
+          schema: { type: string }
+        - name: error
+          in: query
+          schema: { type: string }
+      responses:
+        "302":
+          description: Redireciona ao frontend (sucesso ou erro via `?error=`)
+          headers:
+            Location: { schema: { type: string, format: uri } }
+            Set-Cookie:
+              $ref: "#/components/headers/AuthCookies"
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: JWT de acesso (HS256), setado como cookie httpOnly no login.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Mesmo JWT de acesso enviado como `Authorization: Bearer <token>`."
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: refresh_token
+      description: JWT de refresh (httpOnly), usado apenas em `/auth/refresh`.
+
+  headers:
+    AuthCookies:
+      description: |
+        Define os cookies de sessão `access_token` (2h) e `refresh_token` (7 dias),
+        ambos `HttpOnly`, `SameSite=Lax`, `Domain=COOKIE_DOMAIN` e `Secure` em produção.
+      schema: { type: string }
+    ClearAuthCookies:
+      description: Expira os cookies `access_token` e `refresh_token` (Max-Age=-1).
+      schema: { type: string }
+
+  responses:
+    Ok:
+      description: Sucesso genérico
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message: { type: string, const: ok }
+            required: [message]
+    ValidationError:
+      description: Corpo inválido / validação falhou
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { code: VALIDATION_ERROR, message: "corpo inválido" }
+    Unauthorized:
+      description: Não autenticado / token inválido ou expirado
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { code: UNAUTHORIZED, message: "Não autenticado" }
+    RateLimited:
+      description: Limite de requisições excedido
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { code: RATE_LIMITED, message: "Muitas tentativas. Tente novamente em instantes." }
+
+  schemas:
+    Error:
+      type: object
+      description: Formato padrão de erro.
+      properties:
+        code: { type: string, description: "Código estável legível por máquina" }
+        message: { type: string, description: "Mensagem em português para humanos" }
+      required: [code, message]
+
+    RegisterRequest:
+      type: object
+      properties:
+        email: { type: string, format: email }
+        name: { type: string }
+        password: { type: string, minLength: 8, format: password }
+      required: [email, name, password]
+
+    LoginRequest:
+      type: object
+      properties:
+        identifier:
+          type: string
+          description: Email ou username
+        password: { type: string, format: password }
+      required: [identifier, password]
+
+    NewUser:
+      type: object
+      description: Usuário recém-criado (subset enxuto retornado no registro).
+      properties:
+        id: { type: integer, format: int64 }
+        email: { type: string, format: email }
+        name: { type: string }
+        createdAt: { type: string, format: date-time }
+      required: [id, email, name, createdAt]
+
+    UserProfile:
+      type: object
+      description: Perfil seguro do usuário (sem dados sensíveis).
+      properties:
+        id: { type: integer, format: int64 }
+        email: { type: string, format: email }
+        username:
+          type: [string, "null"]
+        name: { type: string }
+        role:
+          type: integer
+          description: "1=Student, 2=Teacher, 3=Admin, 4=Custom"
+          enum: [1, 2, 3, 4]
+        customRoleId:
+          type: [string, "null"]
+          description: ID do custom_role quando role=4
+        avatarUrl:
+          type: [string, "null"]
+        mfaEnabled: { type: boolean }
+        suspendedAt:
+          type: [string, "null"]
+          format: date-time
+        permissions:
+          type: [object, "null"]
+          description: "Permissões resolvidas quando role=4 (mapa recurso → ações)."
+          additionalProperties:
+            type: array
+            items: { type: string }
+        createdAt: { type: string, format: date-time }
+      required: [id, email, name, role, mfaEnabled, createdAt]
+
+    SessionResponse:
+      type: object
+      properties:
+        user: { $ref: "#/components/schemas/UserProfile" }
+      required: [user]
+
+    MfaChallengeResponse:
+      type: object
+      description: Devolvido pelo login quando o usuário tem MFA ativo.
+      properties:
+        mfaRequired: { type: boolean, const: true }
+        challenge:
+          type: string
+          description: Token de uso único (10min) para o 2º passo do login.
+      required: [mfaRequired, challenge]
+
+# Por padrão, as rotas exigem o access_token (cookie ou Bearer).
+# Rotas públicas sobrescrevem com `security: []`.
+security:
+  - cookieAuth: []
+  - bearerAuth: []
