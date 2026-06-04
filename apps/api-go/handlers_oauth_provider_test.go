@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"golang.org/x/oauth2"
 )
 
 func TestOAuthAuthorizeMissingParams(t *testing.T) {
@@ -40,5 +42,35 @@ func TestOAuthConfirmMissingBody(t *testing.T) {
 	s.handleOAuthConfirm(w, r)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("body vazio deveria dar 400, veio %d", w.Code)
+	}
+}
+
+func TestGoogleStartStoresReturnTo(t *testing.T) {
+	s := testServer(Config{GoogleClientID: "x"})
+	s.google = &oauth2.Config{ClientID: "x"}
+	r := httptest.NewRequest("GET", "/auth/google?return_to=/oauth/choose%3Frequest_id%3Dabc", nil)
+	w := httptest.NewRecorder()
+	s.handleGoogleStart(w, r)
+	var stateCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "oauth_state" {
+			stateCookie = c
+		}
+	}
+	if stateCookie == nil || !strings.Contains(stateCookie.Value, "|/oauth/choose?request_id=abc") {
+		t.Fatalf("cookie oauth_state deveria carregar o return_to: %+v", stateCookie)
+	}
+}
+
+func TestGoogleStartRejectsExternalReturnTo(t *testing.T) {
+	s := testServer(Config{GoogleClientID: "x"})
+	s.google = &oauth2.Config{ClientID: "x"}
+	r := httptest.NewRequest("GET", "/auth/google?return_to=//evil.com/x", nil)
+	w := httptest.NewRecorder()
+	s.handleGoogleStart(w, r)
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "oauth_state" && strings.Contains(c.Value, "evil.com") {
+			t.Fatal("return_to externo não pode entrar no state")
+		}
 	}
 }
