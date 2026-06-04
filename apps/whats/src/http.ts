@@ -2,9 +2,10 @@ import { createServer, IncomingMessage, ServerResponse } from "http"
 import jwt from "jsonwebtoken"
 import QRCode from "qrcode"
 import { config } from "./config"
-import { listAllowlist, addAllow, removeAllow, listSeen, userRole, unlinkChat } from "./db"
+import { listAllowlist, addAllow, removeAllow, listSeen, listMessages, userRole, unlinkChat } from "./db"
 import { waStatus, logoutWhatsApp, injectSimMessage, simJID } from "./wa"
 import { autoReplyEnabled, setAutoReply, listSim, clearSim, simTyping } from "./redis"
+import { serveSSE, emitEvent } from "./events"
 
 const ROLE_ADMIN = 3
 
@@ -63,6 +64,14 @@ export function startHTTP() {
       const uid = await adminUserID(req)
       if (uid === null) return send(res, 401, { code: "UNAUTHORIZED", message: "sessão inválida" })
 
+      // Tempo real: o dashboard ouve este stream e invalida as queries por tipo.
+      if (req.method === "GET" && url === `${b}/events`) return serveSSE(res)
+      if (req.method === "GET" && url === `${b}/messages`) {
+        const jid = new URL(req.url ?? "", "http://x").searchParams.get("jid") ?? ""
+        if (!jid) return send(res, 400, { code: "BAD_REQUEST", message: "jid obrigatório" })
+        return send(res, 200, { items: await listMessages(jid) })
+      }
+
       if (req.method === "GET" && url === `${b}/status`) {
         const s = waStatus()
         return send(res, 200, { status: s.status, number: s.number, autoReply: await autoReplyEnabled() })
@@ -104,11 +113,13 @@ export function startHTTP() {
         const { jid, label } = await body(req)
         if (!jid || typeof jid !== "string") return send(res, 400, { code: "BAD_REQUEST", message: "jid obrigatório" })
         await addAllow(jid, typeof label === "string" ? label : "")
+        emitEvent("allowlist")
         return send(res, 201, { ok: true })
       }
       if (req.method === "DELETE" && url.startsWith(`${b}/allowlist/`)) {
         const jid = decodeURIComponent(url.slice(`${b}/allowlist/`.length))
         await removeAllow(jid)
+        emitEvent("allowlist")
         return send(res, 200, { ok: true })
       }
       return send(res, 404, { code: "NOT_FOUND", message: "rota inexistente" })

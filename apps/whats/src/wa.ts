@@ -2,9 +2,10 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason } from "baileys"
 import type { WASocket } from "baileys"
 import { config } from "./config"
 import { decideMessage } from "./router"
-import { allowlistSet, conversationFor, recordSeen } from "./db"
+import { allowlistSet, conversationFor, recordSeen, saveMessage } from "./db"
 import { autoReplyEnabled, pushSim, setSimTyping } from "./redis"
 import { runTurn } from "./agent"
+import { emitEvent } from "./events"
 
 // JID sintético do simulador do dashboard: 1 chat de teste por admin.
 const SIM_SUFFIX = "@simulator"
@@ -42,6 +43,7 @@ export async function startWhatsApp(): Promise<void> {
       // backoff de 3s evita martelar o servidor do WhatsApp em loop de reconexão
       if (code !== DisconnectReason.loggedOut) setTimeout(() => startWhatsApp().catch(() => {}), 3000)
     }
+    if (u.qr || u.connection) emitEvent("status")
   })
 
   sock.ev.on("messages.upsert", async ({ messages }) => {
@@ -52,9 +54,9 @@ export async function startWhatsApp(): Promise<void> {
       // Radar: registra todo chat que mandou mensagem (mesmo fora da allowlist) pra
       // UI listar e permitir com um clique. Ignora status e canais.
       if (!msg.key.fromMe && jid && !jid.endsWith("@broadcast") && !jid.endsWith("@newsletter")) {
-        recordSeen(jid, msg.pushName ?? "", text || (hasMedia ? "[mídia]" : "")).catch((e) =>
-          console.error("recordSeen falhou", jid, e),
-        )
+        recordSeen(jid, msg.pushName ?? "", text || (hasMedia ? "[mídia]" : ""))
+          .then(() => emitEvent("seen"))
+          .catch((e) => console.error("recordSeen falhou", jid, e))
       }
       const d = decideMessage({
         jid,
@@ -66,6 +68,10 @@ export async function startWhatsApp(): Promise<void> {
         autoReplyEnabled: await autoReplyEnabled(),
       })
       if (d.action === "ignore") continue
+      // Transcript do visor: a mensagem passou do filtro (chat permitido) — grava a entrada.
+      saveMessage(jid, "in", text || "[mídia]")
+        .then(() => emitEvent("message", { jid }))
+        .catch((e) => console.error("saveMessage falhou", jid, e))
       if (d.action === "reply_static") { await send(jid, d.text); continue }
       bufferTurn(jid, d.text, d.toolsDisabled)
     }
@@ -104,6 +110,10 @@ async function send(jid: string, text: string) {
     return
   }
   await sock?.sendMessage(jid, { text })
+  // Transcript do visor: resposta enviada num chat real.
+  saveMessage(jid, "out", text)
+    .then(() => emitEvent("message", { jid }))
+    .catch((e) => console.error("saveMessage falhou", jid, e))
 }
 
 async function presence(jid: string, on: boolean) {
