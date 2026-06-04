@@ -32,6 +32,12 @@
   verificado). `users.mfa_method` define o pedido primeiro no login. O 2º passo
   aceita TOTP, código por email ou código de recuperação.
 
+## Utilitários (autenticados; sessão ou PAT)
+
+- `GET https://api.santos-tech.com/llms.txt` — esta documentação
+- `GET https://api.santos-tech.com/status` — saúde agregada do ecossistema
+  (`{status: ok|degraded, services: {auth,db,redis,email,claude}}`)
+
 ## Auth central — `api.santos-tech.com/auth`
 
 ### Sessão

@@ -20,6 +20,7 @@ type Config struct {
 	GoogleCallbackURL  string
 	EmailAPIURL        string // ex: https://mails.santos-tech.com/api
 	EmailAPIKey        string
+	AgentURL           string // base do claude agent (health em /claude/health)
 	Production         bool
 
 	// Cloudflare R2 (S3-compatível) para uploads (ex: avatares). Vazio = desabilitado.
@@ -44,6 +45,7 @@ func LoadConfig() Config {
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
 		GoogleCallbackURL:  getEnv("GOOGLE_CALLBACK_URL", ""),
 		EmailAPIURL:        strings.TrimRight(getEnv("EMAIL_API_URL", "https://mails.santos-tech.com/api"), "/"),
+		AgentURL:           strings.TrimRight(getEnv("AGENT_URL", "https://api.santos-tech.com"), "/"),
 		EmailAPIKey:        mustEnv("EMAIL_API_KEY"),
 		Production:         getEnv("NODE_ENV", "development") == "production",
 		R2AccountID:        getEnv("CF_ACCOUNT_ID", ""),
