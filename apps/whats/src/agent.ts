@@ -45,7 +45,14 @@ export async function runTurn(jid: string, text: string, toolsDisabled: boolean,
   const wsURL = `${config.agentURL.replace(/^http/, "ws")}/conversations/${convID}/ws`
   const ws = new WebSocket(wsURL, { headers: { Authorization: `Bearer ${serviceToken()}` } })
   const events: TurnEvent[] = []
-  const prompt = isFirst ? `${await getPersona()}\n\n---\n\nMensagem recebida: ${text}` : text
+  let prompt = text
+  if (isFirst) {
+    // Seed: persona + config real do agente (pra assinatura/citações não serem chute).
+    const { model, effort } = await getAgentConfig()
+    const m = model || "sonnet"
+    const cfgLine = `Config do agente: modelo=${m.replace("[1m]", "")}, effort=${effort || "padrão"}, contexto=${m.includes("[1m]") ? "1M" : "200k"}`
+    prompt = `${await getPersona()}\n\n${cfgLine}\n\n---\n\nMensagem recebida: ${text}`
+  }
 
   return new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => { ws.close(); reject(new Error("turno expirou")) }, 120_000)
