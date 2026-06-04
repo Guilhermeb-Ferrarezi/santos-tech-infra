@@ -62,6 +62,11 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Sudo mode — confirma a identidade pra ações sensíveis (eleva por 15min)
 	mux.HandleFunc("POST /auth/sudo/verify", s.rateLimit(10, min, s.authGuard(s.handleSudoVerify)))
 
+	// Multi-conta no navegador (cookie assinado "accounts" — chooser estilo Google)
+	mux.HandleFunc("GET /auth/accounts", s.handleAccountsList)
+	mux.HandleFunc("DELETE /auth/accounts/{sessionId}", s.handleAccountDelete)
+	mux.HandleFunc("POST /auth/accounts/{sessionId}/activate", s.rateLimit(20, min, s.handleAccountActivate))
+
 	// Saúde agregada do ecossistema — autenticada (sessão ou PAT)
 	mux.HandleFunc("GET /status", s.rateLimit(30, min, s.authGuard(s.handleStatus)))
 
