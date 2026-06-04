@@ -19,7 +19,15 @@ CREATE TABLE IF NOT EXISTS whats_seen_chats (
   name    TEXT NOT NULL DEFAULT '',
   preview TEXT NOT NULL DEFAULT '',
   last_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);`
+);
+CREATE TABLE IF NOT EXISTS whats_messages (
+  id        BIGSERIAL PRIMARY KEY,
+  jid       TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('in','out')),
+  text      TEXT NOT NULL,
+  ts        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_whats_messages_jid ON whats_messages(jid, id);`
 
 export async function migrate(): Promise<void> {
   await pool.query(SCHEMA)
@@ -64,6 +72,22 @@ export async function listSeen(): Promise<{ jid: string; name: string; preview: 
      ORDER BY s.last_at DESC LIMIT 50`,
   )
   return r.rows.map((x) => ({ jid: x.jid, name: x.name, preview: x.preview, lastAt: x.last_at, allowed: x.allowed }))
+}
+
+// saveMessage grava uma mensagem do transcript real (visor de conversas): entrada de
+// chat permitido ou resposta enviada. O simulador não passa por aqui.
+export async function saveMessage(jid: string, direction: "in" | "out", text: string): Promise<void> {
+  await pool.query("INSERT INTO whats_messages (jid, direction, text) VALUES ($1,$2,$3)", [jid, direction, text])
+}
+
+export async function listMessages(
+  jid: string,
+): Promise<{ id: number; direction: "in" | "out"; text: string; ts: string }[]> {
+  const r = await pool.query(
+    "SELECT id, direction, text, ts FROM whats_messages WHERE jid=$1 ORDER BY id DESC LIMIT 200",
+    [jid],
+  )
+  return r.rows.reverse()
 }
 
 // userRole devolve o papel do usuário na tabela compartilhada do auth central
