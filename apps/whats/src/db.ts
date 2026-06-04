@@ -40,6 +40,13 @@ export async function allowlistSet(): Promise<Set<string>> {
   return new Set(r.rows.map((x) => x.jid as string))
 }
 
+// userRole devolve o papel do usuário na tabela compartilhada do auth central
+// (admin = 3). 0 quando o usuário não existe — fail-closed no guard.
+export async function userRole(userID: number): Promise<number> {
+  const r = await pool.query("SELECT role FROM users WHERE id=$1", [userID])
+  return Number(r.rows[0]?.role ?? 0)
+}
+
 export async function conversationFor(jid: string): Promise<string | null> {
   const r = await pool.query("SELECT conversation_id FROM whats_chats WHERE jid=$1", [jid])
   return r.rows[0]?.conversation_id ?? null

@@ -1,0 +1,101 @@
+import { createServer, IncomingMessage, ServerResponse } from "http"
+import jwt from "jsonwebtoken"
+import QRCode from "qrcode"
+import { config } from "./config"
+import { listAllowlist, addAllow, removeAllow, userRole } from "./db"
+import { waStatus, logoutWhatsApp } from "./wa"
+import { autoReplyEnabled, setAutoReply } from "./redis"
+
+const ROLE_ADMIN = 3
+
+function send(res: ServerResponse, status: number, body: unknown) {
+  res.writeHead(status, { "Content-Type": "application/json" })
+  res.end(JSON.stringify(body))
+}
+
+function cors(req: IncomingMessage, res: ServerResponse) {
+  const origin = req.headers.origin ?? ""
+  if (config.corsOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin)
+    res.setHeader("Access-Control-Allow-Credentials", "true")
+    res.setHeader("Vary", "Origin")
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+}
+
+// admin valida o JWT do auth central (cookie access_token ou Bearer) e exige o papel
+// admin consultando a tabela users — o JWT do ecossistema não carrega claim de role.
+async function admin(req: IncomingMessage): Promise<boolean> {
+  let token = ""
+  const cookie = req.headers.cookie ?? ""
+  const m = /(?:^|;\s*)access_token=([^;]+)/.exec(cookie)
+  if (m) token = decodeURIComponent(m[1]!)
+  else if (req.headers.authorization?.startsWith("Bearer ")) token = req.headers.authorization.slice(7)
+  if (!token) return false
+  try {
+    const claims = jwt.verify(token, config.jwtSecret, { algorithms: ["HS256"] }) as { sub?: string }
+    const uid = Number(claims.sub)
+    if (!Number.isInteger(uid) || uid <= 0) return false
+    return (await userRole(uid)) === ROLE_ADMIN
+  } catch {
+    return false
+  }
+}
+
+async function body(req: IncomingMessage): Promise<any> {
+  const chunks: Buffer[] = []
+  for await (const c of req) chunks.push(c as Buffer)
+  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {}
+}
+
+export function startHTTP() {
+  const b = config.basePath
+  const server = createServer(async (req, res) => {
+    try {
+      cors(req, res)
+      if (req.method === "OPTIONS") return send(res, 204, {})
+      const url = (req.url ?? "").split("?")[0] ?? ""
+
+      if (req.method === "GET" && url === `${b}/health`) return send(res, 200, { service: "whats", status: "ok" })
+
+      if (!(await admin(req))) return send(res, 401, { code: "UNAUTHORIZED", message: "sessão inválida" })
+
+      if (req.method === "GET" && url === `${b}/status`) {
+        const s = waStatus()
+        return send(res, 200, { status: s.status, number: s.number, autoReply: await autoReplyEnabled() })
+      }
+      if (req.method === "GET" && url === `${b}/qr`) {
+        const s = waStatus()
+        if (!s.qr) return send(res, 200, { qr: null })
+        return send(res, 200, { qr: await QRCode.toDataURL(s.qr) })
+      }
+      if (req.method === "POST" && url === `${b}/toggle`) {
+        const { enabled } = await body(req)
+        await setAutoReply(!!enabled)
+        return send(res, 200, { autoReply: !!enabled })
+      }
+      if (req.method === "POST" && url === `${b}/disconnect`) {
+        await logoutWhatsApp()
+        return send(res, 200, { ok: true })
+      }
+      if (req.method === "GET" && url === `${b}/allowlist`) return send(res, 200, { items: await listAllowlist() })
+      if (req.method === "POST" && url === `${b}/allowlist`) {
+        const { jid, label } = await body(req)
+        if (!jid || typeof jid !== "string") return send(res, 400, { code: "BAD_REQUEST", message: "jid obrigatório" })
+        await addAllow(jid, typeof label === "string" ? label : "")
+        return send(res, 201, { ok: true })
+      }
+      if (req.method === "DELETE" && url.startsWith(`${b}/allowlist/`)) {
+        const jid = decodeURIComponent(url.slice(`${b}/allowlist/`.length))
+        await removeAllow(jid)
+        return send(res, 200, { ok: true })
+      }
+      return send(res, 404, { code: "NOT_FOUND", message: "rota inexistente" })
+    } catch (e) {
+      console.error("erro na requisição", req.method, req.url, e)
+      return send(res, 500, { code: "INTERNAL", message: "erro interno" })
+    }
+  })
+  server.listen(config.port, () => console.log(`whats ouvindo :${config.port}${b}`))
+}
