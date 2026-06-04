@@ -184,7 +184,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_attempts:"+body.Challenge)
-	if err := s.issueSession(r.Context(), w, u); err != nil {
+	if err := s.issueSession(r.Context(), w, r, u); err != nil {
 		writeErr(w, err)
 		return
 	}

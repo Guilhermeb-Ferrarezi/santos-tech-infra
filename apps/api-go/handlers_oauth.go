@@ -100,7 +100,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.issueSession(r.Context(), w, u); err != nil {
+	if err := s.issueSession(r.Context(), w, r, u); err != nil {
 		fail("oauth_failed")
 		return
 	}
