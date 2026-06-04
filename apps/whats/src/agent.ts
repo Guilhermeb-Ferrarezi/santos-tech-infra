@@ -3,6 +3,7 @@ import { config } from "./config"
 import { serviceToken } from "./jwt"
 import { getPersona } from "./persona"
 import { conversationFor, linkChat } from "./db"
+import { getAgentConfig } from "./redis"
 
 interface TurnEvent {
   type: string
@@ -25,10 +26,11 @@ export function finalTextFromEvents(events: TurnEvent[]): string {
 async function ensureConversation(jid: string, toolsDisabled: boolean): Promise<string> {
   const existing = await conversationFor(jid)
   if (existing) return existing
+  const { model, effort } = await getAgentConfig()
   const res = await fetch(`${config.agentURL}/conversations`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceToken()}` },
-    body: JSON.stringify({ title: `WhatsApp ${jid}`, toolsDisabled }),
+    body: JSON.stringify({ title: `WhatsApp ${jid}`, toolsDisabled, model, effort }),
   })
   if (!res.ok) throw new Error(`criar conversa falhou: HTTP ${res.status}`)
   const conv = (await res.json()) as { id: string }

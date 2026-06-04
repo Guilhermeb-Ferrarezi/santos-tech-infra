@@ -4,11 +4,13 @@ import QRCode from "qrcode"
 import { config } from "./config"
 import { listAllowlist, addAllow, removeAllow, listSeen, listMessages, userRole, unlinkChat } from "./db"
 import { waStatus, logoutWhatsApp, injectSimMessage, simJID } from "./wa"
-import { autoReplyEnabled, setAutoReply, listSim, clearSim, simTyping } from "./redis"
+import { autoReplyEnabled, setAutoReply, listSim, clearSim, simTyping, getAgentConfig, setAgentConfig } from "./redis"
 import { serveSSE, emitEvent } from "./events"
 import { getPersona, setPersona, personaIsDefault, DEFAULT_PERSONA } from "./persona"
 
 const ROLE_ADMIN = 3
+const VALID_MODELS = new Set(["", "haiku", "sonnet", "opus"])
+const VALID_EFFORTS = new Set(["", "low", "medium", "high", "xhigh", "max"])
 
 function send(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { "Content-Type": "application/json" })
@@ -102,6 +104,28 @@ export function startHTTP() {
           return send(res, 400, { code: "BAD_REQUEST", message: "text deve ser string de até 4000 caracteres" })
         await setPersona(text)
         return send(res, 200, { text: await getPersona(), isDefault: await personaIsDefault() })
+      }
+
+      // Config do agente: modelo/effort das conversas novas (vazio = default).
+      if (req.method === "GET" && url === `${b}/agent-config`) {
+        return send(res, 200, await getAgentConfig())
+      }
+      if (req.method === "POST" && url === `${b}/agent-config`) {
+        const { model, effort } = await body(req)
+        if (typeof model !== "string" || !VALID_MODELS.has(model))
+          return send(res, 400, { code: "BAD_REQUEST", message: "model inválido (haiku|sonnet|opus ou vazio)" })
+        if (typeof effort !== "string" || !VALID_EFFORTS.has(effort))
+          return send(res, 400, { code: "BAD_REQUEST", message: "effort inválido (low|medium|high|xhigh|max ou vazio)" })
+        await setAgentConfig({ model, effort })
+        return send(res, 200, await getAgentConfig())
+      }
+      // Reinicia a conversa de um chat: desvincula; a próxima mensagem cria conversa
+      // nova já com persona/modelo/effort vigentes. A antiga fica no agent-go (auditoria).
+      if (req.method === "POST" && url === `${b}/chats/reset`) {
+        const { jid } = await body(req)
+        if (!jid || typeof jid !== "string") return send(res, 400, { code: "BAD_REQUEST", message: "jid obrigatório" })
+        await unlinkChat(jid)
+        return send(res, 200, { ok: true })
       }
 
       // Simulador: bancada do pipeline real (ver spec do dashboard)

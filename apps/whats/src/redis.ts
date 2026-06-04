@@ -18,6 +18,32 @@ export async function initAutoReply(): Promise<void> {
   if ((await redis.get(AUTO_KEY)) === null) await redis.set(AUTO_KEY, "0")
 }
 
+// ── Config do agente: modelo e effort das conversas NOVAS ───────────────────
+// Vazio = default do agent-go/CLI. Conversa existente mantém o que foi criada
+// (pra aplicar: Reiniciar conversa, que desvincula e cria outra).
+
+const MODEL_KEY = "whats:model"
+const EFFORT_KEY = "whats:effort"
+
+export interface AgentConfig {
+  model: string
+  effort: string
+}
+
+export async function getAgentConfig(): Promise<AgentConfig> {
+  const [model, effort] = await redis.mget(MODEL_KEY, EFFORT_KEY)
+  return { model: model ?? "", effort: effort ?? "" }
+}
+
+export async function setAgentConfig(cfg: AgentConfig): Promise<void> {
+  const m = redis.multi()
+  if (cfg.model.trim()) m.set(MODEL_KEY, cfg.model.trim())
+  else m.del(MODEL_KEY)
+  if (cfg.effort.trim()) m.set(EFFORT_KEY, cfg.effort.trim())
+  else m.del(EFFORT_KEY)
+  await m.exec()
+}
+
 // ── Simulador: transcript e typing por admin ─────────────────────────────────
 // O simulador é uma "bancada" do pipeline real: as respostas que iriam pro
 // WhatsApp caem aqui (ver deliver/presence no wa.ts).
