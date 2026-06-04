@@ -20,7 +20,9 @@ func validateOAuthClientInput(clientID string, uris []string) error {
 	}
 	for _, raw := range uris {
 		u, err := url.Parse(raw)
-		if err != nil || u.Scheme == "" || u.Host == "" {
+		// Só http(s): bloqueia javascript:, data: etc. — o redirect_uri flui
+		// pra window.location no front (stored XSS/open redirect se passar).
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 			return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "redirect_uri inválido: "+raw)
 		}
 	}
