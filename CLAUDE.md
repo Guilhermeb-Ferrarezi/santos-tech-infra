@@ -171,6 +171,28 @@ rota em `apps/api-go/routes.go` ou nos handlers, atualize o YAML no mesmo PR.
 `llms.txt` no mesmo conjunto de mudanças.** Para APIs deste repo (api-go, agent-go),
 no mesmo commit; para APIs de outros repos (ex.: email), commit aqui acompanhando.
 
+## Fallbacks — sem ferramenta ou credencial?
+
+Agentes (Claude) devem **degradar com graça: nunca travar, nunca inventar valores,
+nunca fingir que deu certo**. Cadeia padrão quando algo falta:
+
+1. **Credenciais do ecossistema** (`~/.config/santos-tech/claude.env` → `ST_PAT`,
+   conta de serviço): se o arquivo não existir nesta máquina, **pergunte ao usuário**
+   como autenticar — não chute tokens, não siga sem auth.
+2. **Doc das APIs** (`api.santos-tech.com/llms.txt`, autenticada): sem credencial ou
+   sem rede, caia para o `docs/openapi.yaml` local e o CLAUDE.md; se ainda faltar o
+   contrato, **pergunte ao usuário** em vez de adivinhar endpoint/payload.
+3. **`gh` CLI sem permissão/escopo** (secrets, org): mostre ao usuário o comando
+   exato para ele rodar (`!` no prompt ou terminal) em vez de tentar contornar.
+4. **Banco/Redis de produção**: sem acesso (túnel/chave SSH), use o caminho local
+   (`DEV_AUTH=1` + Postgres local) ou peça o acesso — não desligue checagens nem
+   aponte para hosts inventados.
+5. **Deploy/infra inacessível**: descreva o passo exato que o usuário precisa fazer
+   (ex.: botão Deploy no Easypanel) e o que verificar depois.
+
+Em todos os casos: **diga claramente o que falta, o que você tentou e o que precisa
+do usuário** — uma pergunta objetiva vale mais que uma suposição silenciosa.
+
 ## Identidade Visual
 
 **Paleta principal:**
