@@ -18,6 +18,9 @@ export default function LoginPage() {
   // Fluxo OAuth provider: chegamos aqui via "Usar outra conta" do chooser.
   // Após logar, voltamos ao chooser com o mesmo request_id.
   const requestId = new URLSearchParams(window.location.search).get('request_id')
+  // Adicionar conta (multi-conta): quem já está logado quer logar MAIS uma —
+  // não auto-redireciona; após o login, volta pro app via ?redirect=.
+  const addAccount = new URLSearchParams(window.location.search).get('add_account') === '1'
   // Login Google com MFA: o callback devolve return_to junto do desafio.
   const mfaReturnTo = new URLSearchParams(window.location.search).get('return_to')
   const [identifier, setIdentifier] = useState('')
@@ -45,7 +48,7 @@ export default function LoginPage() {
     queryKey: ['me'],
     queryFn: me,
     retry: false,
-    enabled: !requestId,
+    enabled: !requestId && !addAccount,
     select: (data) => {
       if (data?.user) window.location.href = getSafeRedirect(rawRedirect)
       return data
@@ -241,7 +244,7 @@ export default function LoginPage() {
       ) : (
       <>
       <h2 className="text-3xl font-bold text-[#0E2937] mb-1">Entrar</h2>
-      <p className="text-base text-[#496B84] mb-8">Acesse sua conta Santos Tech</p>
+      <p className="text-base text-[#496B84] mb-8">{addAccount ? 'Entre com mais uma conta Santos Tech' : 'Acesse sua conta Santos Tech'}</p>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-5">
         <div className="flex flex-col gap-2">
