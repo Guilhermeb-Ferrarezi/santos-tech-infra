@@ -9,7 +9,9 @@ import { serveSSE, emitEvent } from "./events"
 import { getPersona, setPersona, personaIsDefault, DEFAULT_PERSONA } from "./persona"
 
 const ROLE_ADMIN = 3
-const VALID_MODELS = new Set(["", "haiku", "sonnet", "opus"])
+// Sufixo [1m] = janela de contexto de 1M tokens (Claude Code). sonnet[1m] pode
+// exigir créditos de uso dependendo do plano da conta.
+const VALID_MODELS = new Set(["", "haiku", "sonnet", "sonnet[1m]", "opus", "opus[1m]"])
 const VALID_EFFORTS = new Set(["", "low", "medium", "high", "xhigh", "max"])
 
 function send(res: ServerResponse, status: number, body: unknown) {
