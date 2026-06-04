@@ -161,6 +161,16 @@ bun run build     # type-check (tsc --noEmit) + build de produção
 `docs/openapi.yaml` é a **fonte de verdade** dos endpoints. Ao adicionar/alterar uma
 rota em `apps/api-go/routes.go` ou nos handlers, atualize o YAML no mesmo PR.
 
+## Documentação central (llms.txt)
+
+`apps/api-go/llms.txt` é a documentação viva de **todas** as APIs do ecossistema
+(auth, claude agent, email, e o que vier), servida autenticada em
+`https://api.santos-tech.com/llms.txt` (sessão do auth ou PAT `st_...`).
+
+**Regra: terminou uma feature que muda rotas/contratos de QUALQUER API — atualize o
+`llms.txt` no mesmo conjunto de mudanças.** Para APIs deste repo (api-go, agent-go),
+no mesmo commit; para APIs de outros repos (ex.: email), commit aqui acompanhando.
+
 ## Identidade Visual
 
 **Paleta principal:**

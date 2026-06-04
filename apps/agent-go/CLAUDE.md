@@ -116,3 +116,9 @@ O fluxo OAuth via PTY (`handlers_auth.go`) depende do formato de saída do
 `claude setup-token` (URL e token impressos). As regex de extração (`urlRe`/`tokenRe`)
 podem precisar de ajuste — há fallback de `{token}` direto no `/auth/login`. Também
 confirmar `--session-id`/`--resume` e o schema exato dos eventos stream-json.
+
+## Documentação central (llms.txt)
+
+Alterou rotas `/claude/*`? Atualize a seção "Claude Agent" do
+`../api-go/llms.txt` no mesmo commit — é a doc viva (autenticada) que os agentes
+leem em `https://api.santos-tech.com/llms.txt`.
