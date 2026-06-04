@@ -10,13 +10,13 @@
     "test": "DATABASE_URL=postgres://test REDIS_URL=redis://test JWT_SECRET=test OWNER_JID=test@s.whatsapp.net OWNER_USER_ID=1 bun test"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.0",
-    "pg": "^8.13.0",
+    "baileys": "7.0.0-rc13",
     "ioredis": "^5.4.0",
-    "ws": "^8.18.0",
     "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.0",
+    "pino": "^9.5.0",
     "qrcode": "^1.5.4",
-    "pino": "^9.5.0"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",

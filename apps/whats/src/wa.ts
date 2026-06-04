@@ -1,10 +1,15 @@
-import { makeWASocket, useMultiFileAuthState, DisconnectReason } from "@whiskeysockets/baileys"
-import type { WASocket } from "@whiskeysockets/baileys"
+import { makeWASocket, useMultiFileAuthState, DisconnectReason } from "baileys"
+import type { WASocket } from "baileys"
 import { config } from "./config"
 import { decideMessage } from "./router"
-import { allowlistSet, conversationFor } from "./db"
-import { autoReplyEnabled } from "./redis"
+import { allowlistSet, conversationFor, recordSeen } from "./db"
+import { autoReplyEnabled, pushSim, setSimTyping } from "./redis"
 import { runTurn } from "./agent"
+
+// JID sintético do simulador do dashboard: 1 chat de teste por admin.
+const SIM_SUFFIX = "@simulator"
+export const simJID = (uid: number) => `sim-${uid}${SIM_SUFFIX}`
+const simUID = (jid: string) => Number(jid.slice(4, -SIM_SUFFIX.length))
 
 type Status = "disconnected" | "waiting_qr" | "connected"
 
@@ -34,7 +39,8 @@ export async function startWhatsApp(): Promise<void> {
     if (u.connection === "close") {
       status = "disconnected"
       const code = (u.lastDisconnect?.error as any)?.output?.statusCode
-      if (code !== DisconnectReason.loggedOut) startWhatsApp().catch(() => {})
+      // backoff de 3s evita martelar o servidor do WhatsApp em loop de reconexão
+      if (code !== DisconnectReason.loggedOut) setTimeout(() => startWhatsApp().catch(() => {}), 3000)
     }
   })
 
@@ -43,6 +49,13 @@ export async function startWhatsApp(): Promise<void> {
       const jid = msg.key.remoteJid ?? ""
       const text = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? ""
       const hasMedia = !!(msg.message?.imageMessage || msg.message?.audioMessage || msg.message?.videoMessage || msg.message?.documentMessage)
+      // Radar: registra todo chat que mandou mensagem (mesmo fora da allowlist) pra
+      // UI listar e permitir com um clique. Ignora status e canais.
+      if (!msg.key.fromMe && jid && !jid.endsWith("@broadcast") && !jid.endsWith("@newsletter")) {
+        recordSeen(jid, msg.pushName ?? "", text || (hasMedia ? "[mídia]" : "")).catch((e) =>
+          console.error("recordSeen falhou", jid, e),
+        )
+      }
       const d = decideMessage({
         jid,
         fromMe: !!msg.key.fromMe,
@@ -71,20 +84,42 @@ async function fireTurn(jid: string, text: string, toolsDisabled: boolean) {
   if (inFlight.has(jid)) return // rate limit: 1 turno por chat por vez
   inFlight.add(jid)
   try {
-    await sock?.sendPresenceUpdate("composing", jid)
+    await presence(jid, true)
     const isFirst = (await conversationFor(jid)) === null
     const reply = await runTurn(jid, text, toolsDisabled, isFirst)
     if (reply) await send(jid, reply)
   } catch (e) {
     console.error("turno falhou", jid, e) // silêncio: não responde quebrado
   } finally {
-    await sock?.sendPresenceUpdate("paused", jid).catch(() => {})
+    await presence(jid, false).catch(() => {})
     inFlight.delete(jid)
   }
 }
 
+// Saída plugável: chats do simulador escrevem no transcript Redis em vez do WhatsApp.
+// É o que permite a bancada do dashboard usar o MESMO bufferTurn/fireTurn dos reais.
 async function send(jid: string, text: string) {
+  if (jid.endsWith(SIM_SUFFIX)) {
+    await pushSim(simUID(jid), "bot", text)
+    return
+  }
   await sock?.sendMessage(jid, { text })
+}
+
+async function presence(jid: string, on: boolean) {
+  if (jid.endsWith(SIM_SUFFIX)) {
+    await setSimTyping(simUID(jid), on)
+    return
+  }
+  await sock?.sendPresenceUpdate(on ? "composing" : "paused", jid)
+}
+
+// injectSimMessage alimenta o pipeline com uma bolha do simulador: grava no
+// transcript e entra no mesmo debounce/agregação de um contato real, sempre como
+// terceiro (tools desligadas). Ignora allowlist e o toggle global — é bancada.
+export async function injectSimMessage(uid: number, text: string): Promise<void> {
+  await pushSim(uid, "user", text)
+  bufferTurn(simJID(uid), text, true)
 }
 
 export async function logoutWhatsApp(): Promise<void> {
