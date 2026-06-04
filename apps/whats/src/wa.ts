@@ -88,8 +88,10 @@ function bufferTurn(jid: string, text: string, toolsDisabled: boolean) {
   buffers.set(jid, { text: merged, timer })
 }
 
-async function fireTurn(jid: string, text: string, toolsDisabled: boolean) {
-  if (inFlight.has(jid)) return // rate limit: 1 turno por chat por vez
+// fireTurn roda o turno e envia a resposta; devolve o texto entregue (null se
+// nada foi enviado) — usado pela memória pra guardar a resposta final.
+async function fireTurn(jid: string, text: string, toolsDisabled: boolean): Promise<string | null> {
+  if (inFlight.has(jid)) return null // rate limit: 1 turno por chat por vez
   inFlight.add(jid)
   try {
     await presence(jid, true)
@@ -100,8 +102,10 @@ async function fireTurn(jid: string, text: string, toolsDisabled: boolean) {
     const { text: clean, reason } = extractEscalation(reply)
     if (reason !== null) void escalate(jid, text, reason, clean)
     if (clean) await send(jid, clean)
+    return clean || null
   } catch (e) {
     console.error("turno falhou", jid, e) // silêncio: não responde quebrado
+    return null
   } finally {
     await presence(jid, false).catch(() => {})
     inFlight.delete(jid)
@@ -139,11 +143,6 @@ async function escalate(jid: string, question: string, reason: string, replied: 
 // conversa — o agente a transmite no tom dele (e a informação fica no contexto
 // pra perguntas futuras). Reusa o fireTurn: lock, typing, escalação e envio.
 export async function deliverOwnerReply(jid: string, info: string): Promise<void> {
-  // Completa o par P→R na memória (se havia escalação pendente deste chat).
-  await answerLatestPending(jid, info).catch((e) => {
-    console.error("gravar resposta na memória falhou", jid, e)
-    return false
-  })
   const prompt =
     `[nota interna do Guilherme — o contato NÃO viu isto e NÃO mandou mensagem agora] ` +
     `Sobre a pendência deste chat, o Guilherme disse: "${info}". ` +
@@ -152,7 +151,14 @@ export async function deliverOwnerReply(jid: string, info: string): Promise<void
     `'pergunta pra ele Y', 'fala que Z'), EXECUTE-A com as capacidades que você tem (ex.: WebSearch ` +
     `quando a busca estiver ligada) e responda o contato com o resultado. ` +
     `Não mencione email, nota interna nem que alguém te passou isso.`
-  await fireTurn(jid, prompt, true)
+  const delivered = await fireTurn(jid, prompt, true)
+  // Memória: guarda a RESPOSTA FINAL entregue (sem a assinatura em itálico) —
+  // se o turno falhar, cai pro texto cru do dono pra não perder o aprendizado.
+  const answer = (delivered ?? "").replace(/\n*_[^_\n]+_\s*$/, "").trim() || info
+  await answerLatestPending(jid, answer).catch((e) => {
+    console.error("gravar resposta na memória falhou", jid, e)
+    return false
+  })
 }
 
 async function send(jid: string, text: string) {
