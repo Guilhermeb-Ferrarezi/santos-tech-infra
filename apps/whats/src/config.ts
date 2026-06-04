@@ -26,4 +26,6 @@ export const config = {
   escalateEmail: process.env.ESCALATE_EMAIL ?? "",
   mailsAPI: (process.env.MAILS_API ?? "https://mails.santos-tech.com/api").replace(/\/$/, ""),
   claudeUserID: Number(process.env.CLAUDE_USER_ID ?? "42"), // conta claude@santos-tech.com no auth central
+  // Remetentes adicionais autorizados a responder escalações por email (além do ESCALATE_EMAIL).
+  replySenders: (process.env.REPLY_SENDERS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
 }

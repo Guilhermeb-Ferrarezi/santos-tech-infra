@@ -124,10 +124,18 @@ async function escalate(jid: string, question: string, reason: string, replied: 
     `Mensagem recebida:\n${question}\n\n` +
     (replied ? `Resposta enviada ao contato:\n${replied}\n` : `Nenhuma resposta foi enviada ao contato.\n`)
   try {
-    await sendEmail(config.escalateEmail, `WhatsApp: agente pediu ajuda (${who})`, body)
+    // A referência [whats:<jid>] no assunto permite responder o email e o texto
+    // voltar pro chat certo (ver inboxWatcher.ts).
+    await sendEmail(config.escalateEmail, `WhatsApp: agente pediu ajuda (${who}) [whats:${jid}]`, body)
   } catch (e) {
     console.error("falha ao enviar email de escalação", jid, e)
   }
+}
+
+// deliverOwnerReply entrega no chat a resposta que o dono mandou por email
+// (quase literal). Passa pelo send() normal: transcript + SSE inclusos.
+export async function deliverOwnerReply(jid: string, text: string): Promise<void> {
+  await send(jid, text)
 }
 
 async function send(jid: string, text: string) {

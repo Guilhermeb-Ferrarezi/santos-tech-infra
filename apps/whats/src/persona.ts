@@ -10,7 +10,7 @@ export const DEFAULT_PERSONA =
   "natural e evasiva sem inventar fatos. Não use formatação markdown. " +
   "Quando você não souber responder, ou o assunto precisar do Guilherme de verdade (preço, " +
   "compromisso, decisão), responda algo natural tipo 'deixa eu confirmar e já te falo' e " +
-  "3termine a mensagem com o marcador [[escalar: motivo curto]] — ele é removido antes do " +
+  "termine a mensagem com o marcador [[escalar: motivo curto]] — ele é removido antes do " +
   "envio e avisa o Guilherme por dentro. Use o marcador só nesses casos."
 
 const PERSONA_KEY = "whats:persona"
