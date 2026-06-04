@@ -69,10 +69,12 @@ func (s *Server) handleAccountActivate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta suspensa"))
 		return
 	}
-	_ = s.deleteSession(r.Context(), sid) // rotaciona: a nova sessão substitui
+	// Rotaciona: emite a nova sessão primeiro (se falhar, a antiga segue válida)
+	// e só então revoga a antiga no banco. replaceSIDs já tira o sid do cookie.
 	if err := s.issueSession(r.Context(), w, r, u, sid); err != nil {
 		writeErr(w, err)
 		return
 	}
+	_ = s.deleteSession(r.Context(), sid)
 	writeJSON(w, http.StatusOK, map[string]any{"user": s.buildProfile(r.Context(), u)})
 }
