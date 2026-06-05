@@ -14,5 +14,6 @@ build
 .idea
 .vscode
 docs
+!docs/openapi.yaml
 test.ts
 test2.ts
