@@ -152,3 +152,36 @@ func TestBuildPromptWithImage(t *testing.T) {
 		t.Error("com imagem deveria instruir a usar o Read")
 	}
 }
+
+func TestBuildDiagramPrompt(t *testing.T) {
+	// geração nova: pedido entra, JSON com "mermaid" é exigido
+	novo := buildGeneratePrompt(generateRequest{Task: "diagram", Brief: "fluxo de matrícula do aluno"}, false)
+	if !strings.Contains(novo, "fluxo de matrícula do aluno") {
+		t.Error("prompt de diagram deveria conter o pedido")
+	}
+	if !strings.Contains(novo, `"mermaid"`) {
+		t.Error("prompt de diagram deveria pedir o JSON com mermaid")
+	}
+	if strings.Contains(novo, "redator de email") {
+		t.Error("prompt de diagram não deveria usar o cabeçalho de redação de email")
+	}
+
+	// iteração: a fonte atual entra como contexto
+	iter := buildGeneratePrompt(generateRequest{Task: "diagram", Brief: "adiciona etapa de pagamento", Context: "graph TD\n  A --> B"}, false)
+	if !strings.Contains(iter, "graph TD") || !strings.Contains(iter, "adiciona etapa de pagamento") {
+		t.Error("prompt de iteração deveria conter a fonte atual e a instrução")
+	}
+	if !strings.Contains(iter, "Altere o diagrama") {
+		t.Error("prompt de iteração deveria pedir alteração, não criação")
+	}
+}
+
+func TestParseGenerateResultMermaid(t *testing.T) {
+	res, err := parseGenerateResult(`{"mermaid":"graph TD\n  A --> B"}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !strings.Contains(res.Mermaid, "graph TD") {
+		t.Fatalf("mermaid não preservado: %q", res.Mermaid)
+	}
+}

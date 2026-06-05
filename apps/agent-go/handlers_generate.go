@@ -70,6 +70,9 @@ type generateResult struct {
 	Args    map[string]string `json:"args,omitempty"`
 	Actions []commandAction   `json:"actions,omitempty"`
 	Reply   string            `json:"reply,omitempty"`
+	// task "diagram": código Mermaid gerado (o quadro converte pra elementos
+	// Excalidraw no front).
+	Mermaid string `json:"mermaid,omitempty"`
 }
 
 type commandAction struct {
@@ -237,6 +240,27 @@ func buildGeneratePrompt(req generateRequest, hasImage bool) string {
 		return c.String()
 	}
 
+	// A task "diagram" gera código Mermaid pro editor de quadros (Excalidraw)
+	// do dashboard — também não é redação de email, então sai antes.
+	if req.Task == "diagram" {
+		var d strings.Builder
+		d.WriteString("Você gera diagramas em código Mermaid para um quadro branco (Excalidraw).\n")
+		d.WriteString(toolRule + " Sua única saída é um JSON.\n\n")
+		if ctx := strings.TrimSpace(req.Context); ctx != "" {
+			fmt.Fprintf(&d, "Diagrama Mermaid atual:\n%s\n\nAltere o diagrama acima conforme a instrução, preservando o que não foi pedido pra mudar.\nInstrução: %s\n\n", ctx, strings.TrimSpace(req.Brief))
+		} else {
+			fmt.Fprintf(&d, "Crie um diagrama para o pedido abaixo.\nPedido: %s\n\n", strings.TrimSpace(req.Brief))
+		}
+		d.WriteString("Regras do Mermaid:\n")
+		d.WriteString("- Use flowchart (graph TD/LR) por padrão; sequenceDiagram ou classDiagram só se o pedido indicar.\n")
+		d.WriteString("- Rótulos em português do Brasil, curtos e claros.\n")
+		d.WriteString("- Sem estilização (classDef, style, linkStyle) e sem comentários — só a estrutura.\n")
+		d.WriteString("- O código precisa ser Mermaid válido; rótulos com parênteses, vírgulas ou acentos vão entre aspas duplas.\n\n")
+		d.WriteString("Responda EXCLUSIVAMENTE com um JSON válido, sem cercas de código, no formato:\n")
+		d.WriteString("{\"mermaid\": \"graph TD\\n  A[\\\"Início\\\"] --> B[\\\"Fim\\\"]\"}\n")
+		return d.String()
+	}
+
 	var b strings.Builder
 	b.WriteString("Você é um redator de email marketing da Santos Tech.\n")
 	b.WriteString("Responda em português do Brasil. " + toolRule + "\n\n")
@@ -296,7 +320,7 @@ func parseGenerateResult(raw string) (*generateResult, error) {
 	}
 	if res.Subject == "" && res.HTML == "" && res.Text == "" && len(res.Subjects) == 0 &&
 		res.Score == nil && res.Summary == "" && len(res.Issues) == 0 &&
-		res.Action == "" && len(res.Actions) == 0 && res.Reply == "" {
+		res.Action == "" && len(res.Actions) == 0 && res.Reply == "" && res.Mermaid == "" {
 		return nil, fmt.Errorf("resposta vazia")
 	}
 	return &res, nil

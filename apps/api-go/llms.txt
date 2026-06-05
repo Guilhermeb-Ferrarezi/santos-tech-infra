@@ -133,7 +133,10 @@ Auth: sessão do auth central ou PAT (`st_...`).
 
 - `GET /claude/health`
 - `POST /claude/generate {…}` · `POST /claude/generate/stream` — geração one-shot
-  (usadas pela IA do painel de email via header `X-Agent-Token`)
+  (usadas pela IA do painel de email via header `X-Agent-Token`). Task
+  `diagram` `{task:"diagram", brief, context?}` → `{mermaid}` — gera/itera
+  código Mermaid pro editor de quadros do dashboard (`context` = fonte atual
+  na iteração)
 - `GET|POST /claude/conversations` · `GET|PATCH|DELETE /claude/conversations/{id}`
 - `GET /claude/conversations/{id}/ws` — WebSocket da conversa. Evento `prompt`
   aceita `attachments: [{mediaType, data}]` (base64; máx 4 × 5 MB; jpeg/png/
