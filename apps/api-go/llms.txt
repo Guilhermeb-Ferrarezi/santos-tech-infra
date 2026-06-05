@@ -11,6 +11,7 @@
 |-----|------|------|
 | Auth central | `https://api.santos-tech.com/auth` | santos-tech-infra/apps/api-go |
 | Claude Agent | `https://api.santos-tech.com/claude` | santos-tech-infra/apps/agent-go |
+| MCP (gateway p/ agentes) | `https://api.santos-tech.com/mcp` | santos-tech-infra/apps/mcp-go |
 | Email (envio/leads/campanhas) | `https://mails.santos-tech.com/api` | sg/email (api/) |
 | Tela de login/perfil (UI) | `https://auth.santos-tech.com` | santos-tech-infra/apps/auth-web |
 
@@ -151,6 +152,24 @@ Auth: sessão admin do auth central (cookie/Bearer). Repo santos-tech-infra/apps
 - Mídia recebida: imagem/PDF (≤5 MB) vai pro Claude como anexo do turno;
   áudio/vídeo só registram no visor (resposta estática ao contato).
 
+## Quadros (Excalidraw) — `api.santos-tech.com/boards`
+
+Auth: sessão do auth central; restrito a role admin (3) ou professor (2).
+Quadros privados por dono + compartilhamento por membro (viewer/editor). A
+cena Excalidraw viaja inteira como JSON (imagens base64 embutidas; máx 10 MB)
+com concorrência otimista via `sceneVersion`.
+
+- `GET /boards` — `{boards:[{id,title,ownerId,ownerName,role,shared,sceneVersion,createdAt,updatedAt}]}` (sem cena; `role` de quem pediu: owner|editor|viewer)
+- `POST /boards {title}` → 201 `{board}`
+- `GET /boards/{id}` — `{board}` com `scene`; sem acesso/inexistente → 404
+- `PUT /boards/{id} {scene, sceneVersion, title?}` → `{sceneVersion}` novo ·
+  versão divergente → 409 `VERSION_CONFLICT` · >10 MB → 413 · viewer → 403 ·
+  `title` só o dono
+- `DELETE /boards/{id}` — só o dono → 204
+- `GET|POST /boards/{id}/members` — só o dono; POST `{email, role}` resolve o
+  usuário por email (email inexistente OU sem papel de staff → mesmo 404)
+- `DELETE /boards/{id}/members/{userId}` → 204
+
 ## Email — `mails.santos-tech.com/api`
 
 Contrato completo: `docs/openapi.yaml` no repo sg/email. Auth: sessão admin do
@@ -185,6 +204,30 @@ auth central (cookie/Bearer); `POST /send` usa `X-Api-Key` (chave própria).
 - IA (proxy pro Claude Agent): `POST /ai/generate|rewrite|subjects|spam-check|`
   `insights|command|image` · `GET /ai/logs`
 - Público: `GET /unsubscribe` (HTML; token HMAC) · `GET /t/open` · `GET /t/click`
+
+## MCP — `api.santos-tech.com/mcp`
+
+Servidor MCP (Streamable HTTP, stateless) que expõe o ecossistema a qualquer
+cliente MCP (Claude Code, SDKs). Gateway fino: cada tool chama a API
+correspondente repassando o `Authorization` do cliente — permissões, sudo e
+rate limit continuam decididos pela API de destino. Sem `Authorization` → 401.
+
+```bash
+claude mcp add --transport http santos-tech https://api.santos-tech.com/mcp \
+  --header "Authorization: Bearer st_..."
+```
+
+- **Tools auth (admin, role 3):** `whoami`, `list_users {scope?}`,
+  `create_user {email|localPart,name,role}`, `update_user {id,…}`,
+  `resend_invite {id}`, `ecosystem_status`
+- **Tools email (caixa própria; From forçado ao dono do token):**
+  `mailbox_list {limit?}`, `mailbox_read {uid}`,
+  `mailbox_send {to,subject,html|text,inReplyTo?}`, `email_metrics`,
+  `email_logs {page?}`
+- **Tools claude:** `agent_generate {task?,brief,…}`, `agent_conversations`
+- **Resources:** `santos-tech://llms.txt` (este arquivo, sempre fresco) ·
+  `santos-tech://openapi/auth` (contrato OpenAPI da auth)
+- `GET /mcp/health` — liveness (sem auth)
 
 ## Como um agente acessa este arquivo
 

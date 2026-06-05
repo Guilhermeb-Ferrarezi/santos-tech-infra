@@ -59,6 +59,24 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
   is_active     BOOLEAN NOT NULL DEFAULT true,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS boards (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  scene         JSONB NOT NULL DEFAULT '{}',
+  scene_version INTEGER NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_boards_owner ON boards(owner_id);
+CREATE TABLE IF NOT EXISTS board_members (
+  board_id  UUID NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role      TEXT NOT NULL CHECK (role IN ('viewer','editor')),
+  added_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (board_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_board_members_user ON board_members(user_id);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

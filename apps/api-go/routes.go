@@ -79,6 +79,17 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Documentação das APIs pra agentes/devs — autenticada (sessão ou PAT)
 	mux.HandleFunc("GET /llms.txt", s.rateLimit(30, min, s.authGuard(s.handleLLMsTxt)))
 
+	// Quadros (Excalidraw) — admins e professores; cena salva com autosave
+	// (debounce no front), por isso o limite de PUT é mais folgado.
+	mux.HandleFunc("GET /boards", s.staffGuard(s.handleListBoards))
+	mux.HandleFunc("POST /boards", s.rateLimit(20, min, s.staffGuard(s.handleCreateBoard)))
+	mux.HandleFunc("GET /boards/{id}", s.staffGuard(s.handleGetBoard))
+	mux.HandleFunc("PUT /boards/{id}", s.rateLimit(60, min, s.staffGuard(s.handleUpdateBoard)))
+	mux.HandleFunc("DELETE /boards/{id}", s.staffGuard(s.handleDeleteBoard))
+	mux.HandleFunc("GET /boards/{id}/members", s.staffGuard(s.handleListBoardMembers))
+	mux.HandleFunc("POST /boards/{id}/members", s.rateLimit(20, min, s.staffGuard(s.handleAddBoardMember)))
+	mux.HandleFunc("DELETE /boards/{id}/members/{userId}", s.staffGuard(s.handleRemoveBoardMember))
+
 	// OAuth Google
 	mux.HandleFunc("GET /auth/google", s.handleGoogleStart)
 	mux.HandleFunc("GET /auth/google/callback", s.handleGoogleCallback)
