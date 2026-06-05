@@ -226,3 +226,17 @@ func TestBuildDiagramPromptOptions(t *testing.T) {
 		t.Error("kind=sequence deveria forçar sequenceDiagram")
 	}
 }
+
+func TestBuildDiagramPromptWithImage(t *testing.T) {
+	img := buildGeneratePrompt(generateRequest{Task: "diagram", Brief: "complete o rascunho"}, true)
+	if !strings.Contains(img, "estado ATUAL do quadro") {
+		t.Error("com imagem o prompt deveria explicar que é a captura do quadro")
+	}
+	if !strings.Contains(img, "Read") {
+		t.Error("com imagem o prompt deveria instruir o Read")
+	}
+	both := buildGeneratePrompt(generateRequest{Task: "diagram", Brief: "x", Web: true}, true)
+	if !strings.Contains(both, "Read") || !strings.Contains(both, "WebSearch") {
+		t.Error("imagem+web deveria liberar Read e WebSearch")
+	}
+}

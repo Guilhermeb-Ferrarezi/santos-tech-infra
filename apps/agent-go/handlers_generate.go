@@ -261,10 +261,16 @@ func buildGeneratePrompt(req generateRequest, hasImage bool) string {
 	if req.Task == "diagram" {
 		var d strings.Builder
 		d.WriteString("Você gera diagramas em código Mermaid para um quadro branco (Excalidraw).\n")
-		if req.Web {
+		switch {
+		case req.Web && hasImage:
+			d.WriteString("Use a ferramenta Read para abrir a imagem anexada ANTES de responder. Você também PODE usar WebSearch e WebFetch para pesquisar. Nenhuma outra ferramenta. Sua única saída é um JSON.\n\n")
+		case req.Web:
 			d.WriteString("Você PODE usar WebSearch e WebFetch para pesquisar antes de montar o diagrama — use quando o pedido depender de informação que você não tem certeza. Não use nenhuma outra ferramenta. Sua única saída é um JSON.\n\n")
-		} else {
+		default:
 			d.WriteString(toolRule + " Sua única saída é um JSON.\n\n")
+		}
+		if hasImage {
+			d.WriteString("A imagem anexada é uma captura do estado ATUAL do quadro — leve em conta o que já está desenhado (complete, conecte ou converta conforme o pedido).\n\n")
 		}
 		if ctx := strings.TrimSpace(req.Context); ctx != "" {
 			fmt.Fprintf(&d, "Diagrama Mermaid atual:\n%s\n\nAltere o diagrama acima conforme a instrução, preservando o que não foi pedido pra mudar.\nInstrução: %s\n\n", ctx, strings.TrimSpace(req.Brief))
