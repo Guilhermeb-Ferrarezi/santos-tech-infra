@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -124,7 +125,7 @@ func deriveTitle(prompt string) string {
 // RunTurn executa um turno completo, DESACOPLADO do WebSocket: roda em background
 // (sobrevive ao app fechar / WS cair), transmite via dispatch para os assinantes e
 // persiste as mensagens. Ao terminar, envia push se ninguém estiver conectado.
-func (m *SessionManager) RunTurn(conv *Conversation, prompt string) {
+func (m *SessionManager) RunTurn(conv *Conversation, prompt string, atts []Attachment) {
 	ctx := context.Background()
 	if ok, _ := m.s.acquireTurn(ctx, conv.ID); !ok {
 		m.dispatch(conv.ID, turnEvent{Type: "busy"})
@@ -134,11 +135,26 @@ func (m *SessionManager) RunTurn(conv *Conversation, prompt string) {
 
 	emit := func(ev turnEvent) { m.dispatch(conv.ID, ev) }
 
+	// Anexos de mídia: valida e grava em <workdir>/media ANTES de marcar o turno
+	// como running — anexo inválido falha o turno inteiro (fail-closed).
+	if err := validateAttachments(atts); err != nil {
+		emit(turnEvent{Type: "error", Code: "BAD_ATTACHMENT", Message: err.Error()})
+		emit(turnEvent{Type: "done"})
+		return
+	}
+	mediaPaths, err := saveAttachments(conv.Workdir, atts)
+	if err != nil {
+		emit(turnEvent{Type: "error", Code: "BAD_ATTACHMENT", Message: err.Error()})
+		emit(turnEvent{Type: "done"})
+		return
+	}
+
 	_ = m.s.setConversationStatus(ctx, conv.ID, StatusRunning)
 	m.s.setState(ctx, conv.ID, StatusRunning)
 	_ = m.s.insertMessage(ctx, &Message{
 		ConversationID: conv.ID, Role: "user", Kind: "text",
-		Content: map[string]any{"text": prompt},
+		// Marcadores no lugar do binário: o transcript nunca guarda base64.
+		Content: map[string]any{"text": prompt + mediaMarkers(atts)},
 	})
 
 	// Auto-título no 1º turno, se ainda não tiver.
@@ -151,12 +167,17 @@ func (m *SessionManager) RunTurn(conv *Conversation, prompt string) {
 	}
 
 	// Seed pendente (deixado por /compact): vira contexto da nova sessão.
-	effective := prompt
+	// A nota de mídia afirma ao modelo os paths dos anexos e a tool Read liberada.
+	effective := mediaPromptNote(mediaPaths) + prompt
 	if seed, _ := m.s.rdb.GetDel(ctx, "claude:seed:"+conv.ID).Result(); seed != "" {
-		effective = seed + "\n\n---\n\n" + prompt
+		effective = seed + "\n\n---\n\n" + effective
+	}
+	mediaGlob := ""
+	if len(mediaPaths) > 0 {
+		mediaGlob = filepath.Join(conv.Workdir, "media") + "/**"
 	}
 
-	err := m.exec(ctx, conv, effective, emit)
+	err = m.exec(ctx, conv, effective, mediaGlob, emit)
 
 	status := StatusIdle
 	if err != nil {
@@ -181,7 +202,7 @@ func (m *SessionManager) RunTurn(conv *Conversation, prompt string) {
 func (m *SessionManager) RunTurnCollect(conv *Conversation, prompt string) (string, error) {
 	events, unsub := m.Subscribe(conv.ID)
 	defer unsub()
-	go m.RunTurn(conv, prompt)
+	go m.RunTurn(conv, prompt, nil)
 	var b strings.Builder
 	for ev := range events {
 		switch ev.Type {
@@ -268,8 +289,8 @@ func (m *SessionManager) claudeEnv(ctx context.Context) []string {
 	return env
 }
 
-func (m *SessionManager) exec(ctx context.Context, conv *Conversation, prompt string, emit func(turnEvent)) error {
-	cmd := exec.CommandContext(ctx, m.s.cfg.ClaudeBin, m.claudeArgs(conv, "")...)
+func (m *SessionManager) exec(ctx context.Context, conv *Conversation, prompt, mediaGlob string, emit func(turnEvent)) error {
+	cmd := exec.CommandContext(ctx, m.s.cfg.ClaudeBin, m.claudeArgs(conv, mediaGlob)...)
 	cmd.Dir = conv.Workdir
 	cmd.Env = m.claudeEnv(ctx)
 	cmd.Stdin = strings.NewReader(prompt)

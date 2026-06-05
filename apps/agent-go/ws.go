@@ -10,8 +10,9 @@ import (
 
 // wsInbound é a mensagem que o cliente envia pelo WebSocket.
 type wsInbound struct {
-	Type string `json:"type"` // prompt|interrupt
-	Text string `json:"text"`
+	Type        string       `json:"type"` // prompt|interrupt
+	Text        string       `json:"text"`
+	Attachments []Attachment `json:"attachments,omitempty"` // imagens/PDFs (base64) do whats-agent
 }
 
 // handleConversationWS é o endpoint de chat em tempo real.
@@ -45,6 +46,9 @@ func (s *Server) handleConversationWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.CloseNow()
+	// Anexos de mídia chegam em base64 (até 4 × 5 MB ≈ 27 MB de JSON);
+	// o default do coder/websocket é 32 KB.
+	c.SetReadLimit(32 << 20)
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -76,7 +80,7 @@ func (s *Server) handleConversationWS(w http.ResponseWriter, r *http.Request) {
 				s.mgr.dispatch(conv.ID, turnEvent{Type: "error", Code: "NOT_FOUND", Message: "Conversa não encontrada"})
 				continue
 			}
-			go s.mgr.RunTurn(fresh, msg.Text)
+			go s.mgr.RunTurn(fresh, msg.Text, msg.Attachments)
 		case "interrupt":
 			s.mgr.Interrupt(id)
 		}
