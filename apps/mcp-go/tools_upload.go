@@ -29,7 +29,10 @@ func (s *Server) addUploadTools(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "upload_image",
 		Description: "Sobe uma imagem (png/jpeg/webp/gif, máx 5MB) para o armazenamento (R2) e devolve a URL pública (CDN). " +
-			"Informe imageUrl (preferido — o servidor baixa a imagem) OU imageBase64 (só para imagens minúsculas).",
+			"Informe imageUrl (preferido — o servidor baixa a imagem) OU imageBase64 (só para imagens minúsculas). " +
+			"ARQUIVO LOCAL (você tem acesso a shell/Bash)? NÃO use esta tool — suba direto: " +
+			"`curl -F file=@caminho.png -H 'Authorization: Bearer <token>' https://api.santos-tech.com/auth/upload` " +
+			"(avatar do usuário: mesma chamada em /auth/avatar).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in uploadImageInput) (*mcp.CallToolResult, any, error) {
 		var data []byte
 		switch {

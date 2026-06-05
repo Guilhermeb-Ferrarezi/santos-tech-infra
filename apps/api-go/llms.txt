@@ -244,7 +244,9 @@ claude mcp add --transport http santos-tech https://api.santos-tech.com/mcp \
   webp/gif (máx 5MB) pro R2 via `POST /auth/upload` e devolve `{url}`.
   **Prefira `imageUrl`** (o servidor baixa; anti-SSRF: só IPs públicos);
   `imageBase64` só para imagens minúsculas — gerar base64 grande no LLM é
-  inviável (token a token)
+  inviável (token a token). **Arquivo local** (agente com shell): não use a
+  tool — `curl -F file=@foto.png -H 'Authorization: Bearer st_...'
+  https://api.santos-tech.com/auth/upload` (avatar: idem em `/auth/avatar`)
 - **Resources:** `santos-tech://llms.txt` (este arquivo, sempre fresco) ·
   `santos-tech://openapi/auth` (contrato OpenAPI da auth)
 - `GET /mcp/health` — liveness (sem auth)
