@@ -134,9 +134,22 @@ Auth: sessão do auth central ou PAT (`st_...`).
 - `POST /claude/generate {…}` · `POST /claude/generate/stream` — geração one-shot
   (usadas pela IA do painel de email via header `X-Agent-Token`)
 - `GET|POST /claude/conversations` · `GET|PATCH|DELETE /claude/conversations/{id}`
-- `GET /claude/conversations/{id}/ws` — WebSocket da conversa
+- `GET /claude/conversations/{id}/ws` — WebSocket da conversa. Evento `prompt`
+  aceita `attachments: [{mediaType, data}]` (base64; máx 4 × 5 MB; jpeg/png/
+  webp/gif/pdf) — o agente grava em `<workdir>/media/` e o turno libera
+  `Read(<workdir>/media/**)` escopado (terceiros seguem sem outras tools)
 - `POST /claude/conversations/{id}/model|compact|clear` · `POST /claude/stop-all`
 - `POST /claude/auth/session` — sessão mobile; `POST /claude/push/register`
+
+## WhatsApp Agent — `api.santos-tech.com/whats`
+
+Auth: sessão admin do auth central (cookie/Bearer). Repo santos-tech-infra/apps/whats.
+
+- `GET /whats/media/{id}` — serve a mídia recebida num chat (id = UUID+ext do
+  transcript; imagens/PDF/áudio/vídeo). `GET /whats/messages?jid=` devolve
+  `mediaId`/`mediaKind` por mensagem.
+- Mídia recebida: imagem/PDF (≤5 MB) vai pro Claude como anexo do turno;
+  áudio/vídeo só registram no visor (resposta estática ao contato).
 
 ## Email — `mails.santos-tech.com/api`
 
