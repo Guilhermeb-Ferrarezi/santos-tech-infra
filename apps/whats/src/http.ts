@@ -1,4 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse } from "http"
+import { readFile } from "fs/promises"
+import path from "path"
 import jwt from "jsonwebtoken"
 import QRCode from "qrcode"
 import { config } from "./config"
@@ -75,6 +77,26 @@ export function startHTTP() {
         const jid = new URL(req.url ?? "", "http://x").searchParams.get("jid") ?? ""
         if (!jid) return send(res, 400, { code: "BAD_REQUEST", message: "jid obrigatório" })
         return send(res, 200, { items: await listMessages(jid) })
+      }
+
+      // Mídia do transcript: serve o arquivo salvo pelo wa.ts. O id é UUID gerado
+      // pelo servidor + extensão validada — o regex impede path traversal.
+      if (req.method === "GET" && url.startsWith(`${b}/media/`)) {
+        const id = url.slice(`${b}/media/`.length)
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp|gif|pdf|ogg|mp3|mp4)$/.test(id))
+          return send(res, 400, { code: "BAD_REQUEST", message: "id inválido" })
+        const MIME: Record<string, string> = {
+          jpg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif",
+          pdf: "application/pdf", ogg: "audio/ogg", mp3: "audio/mpeg", mp4: "video/mp4",
+        }
+        const ext = id.split(".")[1]!
+        try {
+          const buf = await readFile(path.join(config.mediaDir, id))
+          res.writeHead(200, { "Content-Type": MIME[ext]!, "Cache-Control": "private, max-age=86400" })
+          return res.end(buf)
+        } catch {
+          return send(res, 404, { code: "NOT_FOUND", message: "mídia não encontrada" })
+        }
       }
 
       if (req.method === "GET" && url === `${b}/status`) {
