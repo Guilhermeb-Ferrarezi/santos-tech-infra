@@ -41,7 +41,13 @@ async function ensureConversation(jid: string, toolsDisabled: boolean): Promise<
 
 // runTurn roda um turno e devolve o texto final. Abre o WS, manda o prompt (com seed
 // no 1º turno de conversa nova) e coleta eventos até "done".
-export async function runTurn(jid: string, text: string, toolsDisabled: boolean, isFirst: boolean): Promise<string> {
+export async function runTurn(
+  jid: string,
+  text: string,
+  toolsDisabled: boolean,
+  isFirst: boolean,
+  attachments: { mediaType: string; data: string }[] = [],
+): Promise<string> {
   const convID = await ensureConversation(jid, toolsDisabled)
   const wsURL = `${config.agentURL.replace(/^http/, "ws")}/conversations/${convID}/ws`
   const ws = new WebSocket(wsURL, { headers: { Authorization: `Bearer ${serviceToken()}` } })
@@ -62,7 +68,7 @@ export async function runTurn(jid: string, text: string, toolsDisabled: boolean,
 
   return new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => { ws.close(); reject(new Error("turno expirou")) }, 120_000)
-    ws.on("open", () => ws.send(JSON.stringify({ type: "prompt", text: prompt })))
+    ws.on("open", () => ws.send(JSON.stringify({ type: "prompt", text: prompt, attachments })))
     ws.on("message", (raw) => {
       const ev = JSON.parse(raw.toString()) as TurnEvent
       events.push(ev)

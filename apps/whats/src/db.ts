@@ -36,7 +36,9 @@ CREATE TABLE IF NOT EXISTS whats_messages (
   text      TEXT NOT NULL,
   ts        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_whats_messages_jid ON whats_messages(jid, id);`
+CREATE INDEX IF NOT EXISTS idx_whats_messages_jid ON whats_messages(jid, id);
+ALTER TABLE whats_messages ADD COLUMN IF NOT EXISTS media_id   TEXT;
+ALTER TABLE whats_messages ADD COLUMN IF NOT EXISTS media_kind TEXT;`
 
 export async function migrate(): Promise<void> {
   await pool.query(SCHEMA)
@@ -84,19 +86,37 @@ export async function listSeen(): Promise<{ jid: string; name: string; preview: 
 }
 
 // saveMessage grava uma mensagem do transcript real (visor de conversas): entrada de
-// chat permitido ou resposta enviada. O simulador não passa por aqui.
-export async function saveMessage(jid: string, direction: "in" | "out", text: string): Promise<void> {
-  await pool.query("INSERT INTO whats_messages (jid, direction, text) VALUES ($1,$2,$3)", [jid, direction, text])
+// chat permitido ou resposta enviada. O simulador não passa por aqui. media aponta
+// pro arquivo servido em GET /media/:id.
+export async function saveMessage(
+  jid: string,
+  direction: "in" | "out",
+  text: string,
+  media?: { id: string; kind: string },
+): Promise<void> {
+  await pool.query(
+    "INSERT INTO whats_messages (jid, direction, text, media_id, media_kind) VALUES ($1,$2,$3,$4,$5)",
+    [jid, direction, text, media?.id ?? null, media?.kind ?? null],
+  )
 }
 
 export async function listMessages(
   jid: string,
-): Promise<{ id: number; direction: "in" | "out"; text: string; ts: string }[]> {
+): Promise<
+  { id: number; direction: "in" | "out"; text: string; ts: string; mediaId: string | null; mediaKind: string | null }[]
+> {
   const r = await pool.query(
-    "SELECT id, direction, text, ts FROM whats_messages WHERE jid=$1 ORDER BY id DESC LIMIT 200",
+    "SELECT id, direction, text, ts, media_id, media_kind FROM whats_messages WHERE jid=$1 ORDER BY id DESC LIMIT 200",
     [jid],
   )
-  return r.rows.reverse()
+  return r.rows.reverse().map((x) => ({
+    id: x.id,
+    direction: x.direction,
+    text: x.text,
+    ts: x.ts,
+    mediaId: x.media_id,
+    mediaKind: x.media_kind,
+  }))
 }
 
 // ── Memória auto-aprendida (escalações → FAQ) ────────────────────────────────
