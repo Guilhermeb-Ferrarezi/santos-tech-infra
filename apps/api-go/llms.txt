@@ -158,13 +158,16 @@ auth central (cookie/Bearer); `POST /send` usa `X-Api-Key` (chave própria).
 - Logs/métricas: `GET /logs` (paginado) · `GET /logs/{id}` · `GET /metrics` ·
   `GET /domain/health` (SPF/DKIM/DMARC)
 - Caixa própria (qualquer role; conta @santos-tech.com): `GET /mailbox/me/messages[/{uid}]|quota` ·
-  `POST /mailbox/me/messages/{uid}/seen {seen}` · `POST /mailbox/me/send {to,subject,html|text,inReplyTo?}`
+  `POST /mailbox/me/messages/{uid}/seen {seen}` · `POST /mailbox/me/send {to,subject,html|text,inReplyTo?}` ·
+  `DELETE /mailbox/me/messages/{uid}` (move para Trash; idempotente; 403 no_mailbox · 502 mailbox_error · 503 mailbox_disabled)
   (From forçado = email da sessão; sem caixa → 403 no_mailbox)
-- Caixa institucional compartilhada (admin; env SHARED_MAILBOX): `GET /mailbox/shared/messages[/{uid}]` ·
-  `POST /mailbox/shared/messages/{uid}/seen` · `POST /mailbox/shared/send`
+- Caixa institucional compartilhada (admin strict; env SHARED_MAILBOX): `GET /mailbox/shared/messages[/{uid}]` ·
+  `POST /mailbox/shared/messages/{uid}/seen` · `POST /mailbox/shared/send` ·
+  `DELETE /mailbox/shared/messages/{uid}` (move para Trash; 503 shared_mailbox_disabled quando desligada)
 - Comunicados (admin): `POST /broadcast {audience: "all"|{role:1|2}|{userIds:[...]}, subject, html|text}`
   → `{total,sent,failed[]}`; audience resolvida em GET /auth/admin/users; suspensos não recebem; teto 500
 - Caixa (IMAP, admin): `GET /mailbox/{email}/messages[/{uid}]|quota|export` ·
+  `DELETE /mailbox/{email}/messages/{uid}` (move para Trash; 400 invalid_email|invalid_uid) ·
   `DELETE /mailbox/{email}` (**exige sudo**)
 - IA (proxy pro Claude Agent): `POST /ai/generate|rewrite|subjects|spam-check|`
   `insights|command|image` · `GET /ai/logs`
