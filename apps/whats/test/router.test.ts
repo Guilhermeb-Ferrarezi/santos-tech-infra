@@ -6,7 +6,7 @@ const base = {
   fromMe: false,
   ownerJID: "5513@s.whatsapp.net",
   text: "oi",
-  hasMedia: false,
+  media: null,
   allowlist: new Set(["5511@s.whatsapp.net"]),
   autoReplyEnabled: true,
 }
@@ -24,10 +24,35 @@ test("ignora mensagem própria que não é o chat do dono", () => {
   expect(decideMessage({ ...base, fromMe: true }).action).toBe("ignore")
 })
 
-test("responde com mídia avisando incapacidade", () => {
-  const d = decideMessage({ ...base, hasMedia: true, text: "" })
+test("vídeo mantém resposta estática", () => {
+  const d = decideMessage({ ...base, text: "", media: { kind: "video", claudeReadable: false, oversize: false } })
   expect(d.action).toBe("reply_static")
   if (d.action === "reply_static") expect(d.text.length).toBeGreaterThan(0)
+})
+
+test("áudio mantém resposta estática", () => {
+  const d = decideMessage({ ...base, text: "", media: { kind: "audio", claudeReadable: false, oversize: false } })
+  expect(d.action).toBe("reply_static")
+})
+
+test("imagem em chat permitido vira turno com anexo", () => {
+  const d = decideMessage({ ...base, text: "olha isso", media: { kind: "image", claudeReadable: true, oversize: false } })
+  expect(d.action).toBe("run_turn")
+  if (d.action === "run_turn") {
+    expect(d.attach).toBe(true)
+    expect(d.toolsDisabled).toBe(true)
+  }
+})
+
+test("pdf em chat permitido vira turno com anexo", () => {
+  const d = decideMessage({ ...base, text: "", media: { kind: "pdf", claudeReadable: true, oversize: false } })
+  expect(d.action).toBe("run_turn")
+  if (d.action === "run_turn") expect(d.attach).toBe(true)
+})
+
+test("imagem grande demais responde estático", () => {
+  const d = decideMessage({ ...base, text: "", media: { kind: "image", claudeReadable: true, oversize: true } })
+  expect(d.action).toBe("reply_static")
 })
 
 test("chat permitido com texto vira turno sem ferramentas", () => {
@@ -36,6 +61,7 @@ test("chat permitido com texto vira turno sem ferramentas", () => {
   if (d.action === "run_turn") {
     expect(d.toolsDisabled).toBe(true)
     expect(d.text).toBe("oi")
+    expect(d.attach).toBe(false)
   }
 })
 
