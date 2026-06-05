@@ -144,6 +144,10 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	if u == nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "usuário não encontrado"))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": adminUserJSON(u)})
 }
 

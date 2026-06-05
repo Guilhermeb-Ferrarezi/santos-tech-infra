@@ -1093,7 +1093,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { code: SUDO_REQUIRED, message: "Confirme sua identidade para continuar" }
+              example: { code: SUDO_REQUIRED, message: "Confirme sua identidade para esta ação" }
 
   /auth/admin/users/{id}/invite:
     post:
@@ -1268,7 +1268,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { code: SUDO_REQUIRED, message: "Confirme sua identidade para continuar" }
+              example: { code: SUDO_REQUIRED, message: "Confirme sua identidade para esta ação" }
         "404":
           description: Aplicação não encontrada
           content:
