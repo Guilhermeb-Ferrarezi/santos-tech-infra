@@ -240,8 +240,11 @@ claude mcp add --transport http santos-tech https://api.santos-tech.com/mcp \
   `mailbox_send {to,subject,html|text,inReplyTo?}`, `email_metrics`,
   `email_logs {page?}`
 - **Tools claude:** `agent_generate {task?,brief,…}`, `agent_conversations`
-- **Tools upload:** `upload_image {imageBase64}` — sobe png/jpeg/webp/gif
-  (máx 5MB; aceita data URI) pro R2 via `POST /auth/upload` e devolve `{url}`
+- **Tools upload:** `upload_image {imageUrl | imageBase64}` — sobe png/jpeg/
+  webp/gif (máx 5MB) pro R2 via `POST /auth/upload` e devolve `{url}`.
+  **Prefira `imageUrl`** (o servidor baixa; anti-SSRF: só IPs públicos);
+  `imageBase64` só para imagens minúsculas — gerar base64 grande no LLM é
+  inviável (token a token)
 - **Resources:** `santos-tech://llms.txt` (este arquivo, sempre fresco) ·
   `santos-tech://openapi/auth` (contrato OpenAPI da auth)
 - `GET /mcp/health` — liveness (sem auth)

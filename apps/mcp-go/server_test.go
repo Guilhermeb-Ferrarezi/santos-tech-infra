@@ -27,7 +27,14 @@ func (a *authRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
 // via Streamable HTTP. Devolve a sessão pronta para CallTool/ReadResource.
 func newTestSession(t *testing.T, cfg Config, openapi []byte, token string) *mcp.ClientSession {
 	t.Helper()
-	srv := httptest.NewServer(NewServer(cfg, openapi).Handler())
+	return newTestSessionFor(t, NewServer(cfg, openapi), token)
+}
+
+// newTestSessionFor permite ajustar o *Server antes (ex.: trocar o fetch
+// anti-SSRF, que bloquearia o 127.0.0.1 do httptest).
+func newTestSessionFor(t *testing.T, s *Server, token string) *mcp.ClientSession {
+	t.Helper()
+	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 
 	transport := &mcp.StreamableClientTransport{

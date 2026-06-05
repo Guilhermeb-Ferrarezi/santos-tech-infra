@@ -87,19 +87,77 @@ func TestUploadImageAceitaDataURI(t *testing.T) {
 
 func TestUploadImageBase64Invalido(t *testing.T) {
 	session := newTestSession(t, Config{}, nil, "Bearer st_up")
-	for name, arg := range map[string]string{
-		"base64 inválido": "isto não é base64!!!",
-		"vazio":           "",
+	for name, args := range map[string]map[string]any{
+		"base64 inválido": {"imageBase64": "isto não é base64!!!"},
+		"sem nada":        {},
+		"os dois":         {"imageBase64": "aGk=", "imageUrl": "https://x.com/a.png"},
 	} {
 		res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 			Name:      "upload_image",
-			Arguments: map[string]any{"imageBase64": arg},
+			Arguments: args,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !res.IsError {
 			t.Errorf("%s: esperava isError", name)
+		}
+	}
+}
+
+func TestUploadImagePorURL(t *testing.T) {
+	// Servidor que faz os dois papéis: serve a imagem e recebe o upload.
+	var gotFile []byte
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/imagem.png":
+			w.Header().Set("Content-Type", "image/png")
+			w.Write(tinyPNG)
+		case "/auth/upload":
+			f, _, err := r.FormFile("file")
+			if err != nil {
+				w.WriteHeader(400)
+				return
+			}
+			defer f.Close()
+			gotFile, _ = io.ReadAll(f)
+			w.Write([]byte(`{"url":"https://cdn.santos-tech.com/uploads/1/viaurl.png"}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer fake.Close()
+
+	s := NewServer(Config{AuthBaseURL: fake.URL}, nil)
+	s.fetch = http.DefaultClient // httptest é 127.0.0.1 — o guard anti-SSRF bloquearia
+	session := newTestSessionFor(t, s, "Bearer st_up")
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "upload_image",
+		Arguments: map[string]any{"imageUrl": fake.URL + "/imagem.png"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("tool falhou: %s", toolText(t, res))
+	}
+	if string(gotFile) != string(tinyPNG) {
+		t.Fatalf("conteúdo baixado difere (%d bytes vs %d)", len(gotFile), len(tinyPNG))
+	}
+	if !strings.Contains(toolText(t, res), "viaurl.png") {
+		t.Fatalf("URL não devolvida: %s", toolText(t, res))
+	}
+}
+
+func TestFetchClientBloqueiaIPPrivado(t *testing.T) {
+	// O guard anti-SSRF deve recusar loopback/privados — o MCP roda dentro da
+	// rede da infra e não pode virar proxy para serviços internos.
+	s := NewServer(Config{}, nil)
+	for _, target := range []string{"http://127.0.0.1:5432/x", "http://10.0.0.1/x", "http://localhost/x"} {
+		_, errMsg := s.fetchImage(context.Background(), target)
+		if errMsg == "" {
+			t.Errorf("%s: deveria ser bloqueado", target)
 		}
 	}
 }

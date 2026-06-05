@@ -16,11 +16,12 @@ const version = "0.1.0"
 type Server struct {
 	cfg     Config
 	client  *apiClient
-	openapi []byte // docs/openapi.yaml carregado no boot (vazio = resource indisponível)
+	fetch   *http.Client // busca imagens de URLs do usuário (anti-SSRF; trocável em teste)
+	openapi []byte       // docs/openapi.yaml carregado no boot (vazio = resource indisponível)
 }
 
 func NewServer(cfg Config, openapi []byte) *Server {
-	return &Server{cfg: cfg, client: newAPIClient(), openapi: openapi}
+	return &Server{cfg: cfg, client: newAPIClient(), fetch: newFetchClient(), openapi: openapi}
 }
 
 // MCP monta o servidor MCP com todas as tools e resources.
