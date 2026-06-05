@@ -185,3 +185,14 @@ func TestParseGenerateResultMermaid(t *testing.T) {
 		t.Fatalf("mermaid não preservado: %q", res.Mermaid)
 	}
 }
+
+func TestNormalizeGenerateDiagram(t *testing.T) {
+	req := generateRequest{Task: "diagram", Brief: "fluxo de matrícula"}
+	if err := normalizeGenerate(&req); err != nil {
+		t.Fatalf("diagram com brief deveria passar: %v", err)
+	}
+	vazio := generateRequest{Task: "diagram"}
+	if err := normalizeGenerate(&vazio); err == nil {
+		t.Fatal("diagram sem brief deveria falhar")
+	}
+}
