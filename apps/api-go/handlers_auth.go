@@ -192,9 +192,11 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
 		return
 	}
-	uid, err := verifyToken(token, s.cfg.JWTSecret)
+	// resolveToken aceita JWT de sessão E PAT (st_...) — /auth/me precisa dos
+	// dois, como toda rota atrás do authGuard.
+	uid, err := s.resolveToken(r.Context(), token)
 	if err != nil {
-		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado"))
+		writeErr(w, err)
 		return
 	}
 	u, err := s.userByID(r.Context(), uid)
