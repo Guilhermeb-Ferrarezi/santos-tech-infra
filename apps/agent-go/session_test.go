@@ -14,7 +14,7 @@ func testManager() *SessionManager {
 func TestClaudeArgsFirstTurnUsesSessionID(t *testing.T) {
 	m := testManager()
 	conv := &Conversation{ID: "c1", SessionID: "sess-1", Model: "opus", Workdir: "/tmp/agent-test/c1", SessionStarted: false}
-	args := m.claudeArgs(conv)
+	args := m.claudeArgs(conv, "")
 
 	if !slices.Contains(args, "--session-id") {
 		t.Fatalf("primeiro turno deveria usar --session-id: %v", args)
@@ -30,7 +30,7 @@ func TestClaudeArgsFirstTurnUsesSessionID(t *testing.T) {
 func TestClaudeArgsResumesStartedSession(t *testing.T) {
 	m := testManager()
 	conv := &Conversation{ID: "c1", SessionID: "sess-1", Model: "sonnet", Workdir: "/tmp/agent-test/c1", SessionStarted: true}
-	args := m.claudeArgs(conv)
+	args := m.claudeArgs(conv, "")
 
 	if !slices.Contains(args, "--resume") {
 		t.Fatalf("turno seguinte deveria usar --resume: %v", args)
@@ -44,7 +44,7 @@ func TestClaudeArgsResumesStartedSession(t *testing.T) {
 func TestClaudeArgsToolsDisabledDropsToolAccess(t *testing.T) {
 	m := testManager()
 	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1", ToolsDisabled: true}
-	args := m.claudeArgs(conv)
+	args := m.claudeArgs(conv, "")
 
 	if slices.Contains(args, "--add-dir") {
 		t.Fatalf("tools_disabled não deveria passar --add-dir: %v", args)
@@ -66,13 +66,31 @@ func TestClaudeArgsToolsDisabledDropsToolAccess(t *testing.T) {
 func TestClaudeArgsToolsEnabledKeepsAddDir(t *testing.T) {
 	m := testManager()
 	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1", ToolsDisabled: false}
-	args := m.claudeArgs(conv)
+	args := m.claudeArgs(conv, "")
 	if !slices.Contains(args, "--add-dir") {
 		t.Fatalf("tools habilitadas deveria manter --add-dir: %v", args)
 	}
 	if slices.Contains(args, "--disallowed-tools") {
 		t.Fatalf("tools habilitadas não deveria passar --disallowed-tools: %v", args)
 	}
+}
+
+func TestClaudeArgsMediaScopedRead(t *testing.T) {
+	m := testManager()
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/ws/abc", ToolsDisabled: true}
+
+	// Sem anexos: allow-list vazia (caminho atual intocado).
+	args := m.claudeArgs(conv, "")
+	assertPairValue(t, args, "--allowed-tools", "")
+
+	// Com anexos: Read escopado APENAS ao dir de mídia da conversa.
+	args = m.claudeArgs(conv, "/ws/abc/media/**")
+	assertPairValue(t, args, "--allowed-tools", "Read(/ws/abc/media/**)")
+
+	// WebSearch ligado compõe com o Read.
+	conv.WebSearch = true
+	args = m.claudeArgs(conv, "/ws/abc/media/**")
+	assertPairValue(t, args, "--allowed-tools", "WebSearch,Read(/ws/abc/media/**)")
 }
 
 func TestDeltaTextExtractsTextDelta(t *testing.T) {
@@ -135,14 +153,14 @@ func valueAt(args []string, i int) string {
 func TestClaudeArgsEffortPassesFlag(t *testing.T) {
 	m := testManager()
 	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1", Effort: "high"}
-	args := m.claudeArgs(conv)
+	args := m.claudeArgs(conv, "")
 	assertPairValue(t, args, "--effort", "high")
 }
 
 func TestClaudeArgsEffortVazioOmiteFlag(t *testing.T) {
 	m := testManager()
 	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1"}
-	if slices.Contains(m.claudeArgs(conv), "--effort") {
+	if slices.Contains(m.claudeArgs(conv, ""), "--effort") {
 		t.Fatalf("sem effort não deveria passar --effort")
 	}
 }
@@ -150,7 +168,7 @@ func TestClaudeArgsEffortVazioOmiteFlag(t *testing.T) {
 func TestClaudeArgsToolsDisabledComWebSearchLiberaSoBusca(t *testing.T) {
 	m := testManager()
 	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1", ToolsDisabled: true, WebSearch: true}
-	args := m.claudeArgs(conv)
+	args := m.claudeArgs(conv, "")
 	assertPairValue(t, args, "--allowed-tools", "WebSearch")
 	if slices.Contains(args, "--add-dir") || slices.Contains(args, "--dangerously-skip-permissions") {
 		t.Fatalf("web search não deveria reabrir add-dir/skip-permissions: %v", args)
@@ -160,5 +178,5 @@ func TestClaudeArgsToolsDisabledComWebSearchLiberaSoBusca(t *testing.T) {
 func TestClaudeArgsToolsDisabledSemWebSearchSegueVazio(t *testing.T) {
 	m := testManager()
 	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1", ToolsDisabled: true}
-	assertPairValue(t, m.claudeArgs(conv), "--allowed-tools", "")
+	assertPairValue(t, m.claudeArgs(conv, ""), "--allowed-tools", "")
 }

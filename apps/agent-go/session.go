@@ -198,8 +198,9 @@ func (m *SessionManager) RunTurnCollect(conv *Conversation, prompt string) (stri
 	return b.String(), nil
 }
 
-// claudeArgs monta os argumentos do CLI para um turno.
-func (m *SessionManager) claudeArgs(conv *Conversation) []string {
+// claudeArgs monta os argumentos do CLI para um turno. mediaGlob ("" = sem anexos)
+// libera Read escopado ao dir de mídia da conversa quando o turno tem anexos.
+func (m *SessionManager) claudeArgs(conv *Conversation, mediaGlob string) []string {
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
@@ -223,11 +224,17 @@ func (m *SessionManager) claudeArgs(conv *Conversation) []string {
 		// e sem MCP.
 		// Exceção cirúrgica: WebSearch pode ser liberado sozinho (busca pública, sem
 		// URL arbitrária — diferente do WebFetch, que seria canal de exfiltração).
+		// Anexos de mídia: Read escopado APENAS ao dir de mídia da conversa —
+		// validado que fora do glob o modo -p nega (fail-closed); ver spec
+		// 2026-06-05-whats-imagens-design.md no repo do dashboard.
+		allowed := []string{}
 		if conv.WebSearch {
-			args = append(args, "--allowed-tools", "WebSearch")
-		} else {
-			args = append(args, "--allowed-tools", "")
+			allowed = append(allowed, "WebSearch")
 		}
+		if mediaGlob != "" {
+			allowed = append(allowed, "Read("+mediaGlob+")")
+		}
+		args = append(args, "--allowed-tools", strings.Join(allowed, ","))
 	} else {
 		args = append(args, "--dangerously-skip-permissions")
 		args = append(args, "--add-dir", conv.Workdir)
@@ -262,7 +269,7 @@ func (m *SessionManager) claudeEnv(ctx context.Context) []string {
 }
 
 func (m *SessionManager) exec(ctx context.Context, conv *Conversation, prompt string, emit func(turnEvent)) error {
-	cmd := exec.CommandContext(ctx, m.s.cfg.ClaudeBin, m.claudeArgs(conv)...)
+	cmd := exec.CommandContext(ctx, m.s.cfg.ClaudeBin, m.claudeArgs(conv, "")...)
 	cmd.Dir = conv.Workdir
 	cmd.Env = m.claudeEnv(ctx)
 	cmd.Stdin = strings.NewReader(prompt)
