@@ -44,6 +44,10 @@ type generateRequest struct {
 	// aqui; gravamos num dir temporário e o Claude a lê via Read (escopado).
 	ImageBase64 string `json:"imageBase64"`
 	ImageMime   string `json:"imageMime"`
+	// Opções por geração (barra do assistente dos quadros, task "diagram").
+	Web   bool   `json:"web"`   // libera WebSearch/WebFetch nesta geração
+	Model string `json:"model"` // override do modelo: "sonnet" | "opus" | "haiku" ("" = default)
+	Kind  string `json:"kind"`  // tipo do diagrama: "" auto | "flowchart" | "sequence" | "class"
 }
 
 // spamIssue é um problema de entregabilidade apontado pela análise de spam.
@@ -93,7 +97,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := s.generateOnce(r.Context(), buildGeneratePrompt(req, strings.TrimSpace(req.ImageBase64) != ""), req.ImageBase64, req.ImageMime)
+	raw, err := s.generateOnce(r.Context(), buildGeneratePrompt(req, strings.TrimSpace(req.ImageBase64) != ""), req.ImageBase64, req.ImageMime, req.Model, req.Web)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -108,8 +112,9 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 
 // generateOnce roda `claude -p --output-format json` num turno isolado e devolve o
 // texto final (campo .result). Sem MCP, sem --add-dir, sem skip-permissions e sem
-// tokens de infra no ambiente — é redação de texto, não automação.
-func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime string) (string, error) {
+// tokens de infra no ambiente — é redação de texto, não automação. `model` vazio
+// usa o default; `web` libera SÓ WebSearch/WebFetch (com timeout maior).
+func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime, model string, web bool) (string, error) {
 	dir, err := os.MkdirTemp(s.cfg.WorkspaceRoot, "gen-*")
 	if err != nil {
 		if dir, err = os.MkdirTemp("", "gen-*"); err != nil {
@@ -118,10 +123,21 @@ func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime s
 	}
 	defer os.RemoveAll(dir)
 
-	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	// Busca na web demora mais (vários turnos de pesquisa) — timeout maior.
+	timeout := 90 * time.Second
+	if web {
+		timeout = 180 * time.Second
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	args := []string{"-p", "--output-format", "json", "--model", s.cfg.DefaultModel}
+	if model == "" {
+		model = s.cfg.DefaultModel
+	}
+	args := []string{"-p", "--output-format", "json", "--model", model}
+	if web {
+		args = append(args, "--allowedTools", "WebSearch,WebFetch")
+	}
 
 	// Imagem anexada (multimodal): grava no dir temporário e habilita SÓ o Read,
 	// escopado nesse dir (que só contém a imagem; o env já é mínimo). O Claude lê a
@@ -245,14 +261,27 @@ func buildGeneratePrompt(req generateRequest, hasImage bool) string {
 	if req.Task == "diagram" {
 		var d strings.Builder
 		d.WriteString("Você gera diagramas em código Mermaid para um quadro branco (Excalidraw).\n")
-		d.WriteString(toolRule + " Sua única saída é um JSON.\n\n")
+		if req.Web {
+			d.WriteString("Você PODE usar WebSearch e WebFetch para pesquisar antes de montar o diagrama — use quando o pedido depender de informação que você não tem certeza. Não use nenhuma outra ferramenta. Sua única saída é um JSON.\n\n")
+		} else {
+			d.WriteString(toolRule + " Sua única saída é um JSON.\n\n")
+		}
 		if ctx := strings.TrimSpace(req.Context); ctx != "" {
 			fmt.Fprintf(&d, "Diagrama Mermaid atual:\n%s\n\nAltere o diagrama acima conforme a instrução, preservando o que não foi pedido pra mudar.\nInstrução: %s\n\n", ctx, strings.TrimSpace(req.Brief))
 		} else {
 			fmt.Fprintf(&d, "Crie um diagrama para o pedido abaixo.\nPedido: %s\n\n", strings.TrimSpace(req.Brief))
 		}
 		d.WriteString("Regras do Mermaid:\n")
-		d.WriteString("- Use flowchart (graph TD/LR) por padrão; sequenceDiagram ou classDiagram só se o pedido indicar.\n")
+		switch req.Kind {
+		case "flowchart":
+			d.WriteString("- Use OBRIGATORIAMENTE flowchart (graph TD ou LR).\n")
+		case "sequence":
+			d.WriteString("- Use OBRIGATORIAMENTE sequenceDiagram.\n")
+		case "class":
+			d.WriteString("- Use OBRIGATORIAMENTE classDiagram.\n")
+		default:
+			d.WriteString("- Use flowchart (graph TD/LR) por padrão; sequenceDiagram ou classDiagram só se o pedido indicar.\n")
+		}
 		d.WriteString("- Rótulos em português do Brasil, curtos e claros.\n")
 		d.WriteString("- Cores: quando o pedido mencionar cores OU quando colorir ajudar a distinguir grupos/estados, use classDef com fill e stroke (só em flowchart). Paleta preferida: azul #187ABF, verde #0DB88F, azul-escuro #04325A, apoio #0067BE; vermelho/âmbar só para erro/aviso. Com fundo escuro (#04325A), use color:#ffffff. Sem pedido e sem ganho claro, não estilize.\n")
 		d.WriteString("- Sem linkStyle e sem comentários.\n")

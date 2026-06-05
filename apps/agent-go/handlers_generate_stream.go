@@ -138,6 +138,16 @@ func normalizeGenerate(req *generateRequest) error {
 	default:
 		return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "task inválida (use email, rewrite, subjects, spamcheck, insights, command ou diagram)")
 	}
+	switch req.Model {
+	case "", "sonnet", "opus", "haiku":
+	default:
+		return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "model inválido (use sonnet, opus ou haiku)")
+	}
+	switch req.Kind {
+	case "", "flowchart", "sequence", "class":
+	default:
+		return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "kind inválido (use flowchart, sequence ou class)")
+	}
 	return nil
 }
 

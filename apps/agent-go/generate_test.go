@@ -196,3 +196,33 @@ func TestNormalizeGenerateDiagram(t *testing.T) {
 		t.Fatal("diagram sem brief deveria falhar")
 	}
 }
+
+func TestNormalizeGenerateDiagramOptions(t *testing.T) {
+	ok := generateRequest{Task: "diagram", Brief: "x", Model: "opus", Kind: "sequence", Web: true}
+	if err := normalizeGenerate(&ok); err != nil {
+		t.Fatalf("opções válidas deveriam passar: %v", err)
+	}
+	badModel := generateRequest{Task: "diagram", Brief: "x", Model: "gpt"}
+	if err := normalizeGenerate(&badModel); err == nil {
+		t.Fatal("model inválido deveria falhar")
+	}
+	badKind := generateRequest{Task: "diagram", Brief: "x", Kind: "pizza"}
+	if err := normalizeGenerate(&badKind); err == nil {
+		t.Fatal("kind inválido deveria falhar")
+	}
+}
+
+func TestBuildDiagramPromptOptions(t *testing.T) {
+	web := buildGeneratePrompt(generateRequest{Task: "diagram", Brief: "x", Web: true}, false)
+	if !strings.Contains(web, "WebSearch") {
+		t.Error("com web=true o prompt deveria liberar WebSearch")
+	}
+	sem := buildGeneratePrompt(generateRequest{Task: "diagram", Brief: "x"}, false)
+	if strings.Contains(sem, "WebSearch e WebFetch para pesquisar") {
+		t.Error("sem web o prompt não deveria liberar busca")
+	}
+	seq := buildGeneratePrompt(generateRequest{Task: "diagram", Brief: "x", Kind: "sequence"}, false)
+	if !strings.Contains(seq, "OBRIGATORIAMENTE sequenceDiagram") {
+		t.Error("kind=sequence deveria forçar sequenceDiagram")
+	}
+}
