@@ -13,6 +13,7 @@ type Config struct {
 	JWTSecret          string
 	JWTRefreshSecret   string
 	CookieDomain       string
+	PublicOrigin       string // origem pública desta API (issuer OAuth, metadata)
 	CORSOrigins        []string
 	AuthWebOrigin      string
 	GoogleClientID     string
@@ -39,6 +40,7 @@ func LoadConfig() Config {
 		JWTSecret:          mustEnv("JWT_SECRET"),
 		JWTRefreshSecret:   mustEnv("JWT_REFRESH_SECRET"),
 		CookieDomain:       getEnv("COOKIE_DOMAIN", ""),
+		PublicOrigin:       strings.TrimRight(getEnv("PUBLIC_ORIGIN", "https://api.santos-tech.com"), "/"),
 		CORSOrigins:        splitCSV(getEnv("CORS_ORIGIN", "")),
 		AuthWebOrigin:      getEnv("AUTH_WEB_ORIGIN", ""),
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),

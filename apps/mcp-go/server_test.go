@@ -58,7 +58,7 @@ func toolText(t *testing.T, res *mcp.CallToolResult) string {
 }
 
 func TestRequireAuth(t *testing.T) {
-	srv := httptest.NewServer(NewServer(Config{}, nil).Handler())
+	srv := httptest.NewServer(NewServer(Config{PublicURL: "https://api.example.com/mcp"}, nil).Handler())
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL, "application/json",
@@ -69,6 +69,34 @@ func TestRequireAuth(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("esperava 401 sem Authorization, veio %d", resp.StatusCode)
+	}
+	// O 401 deve apontar o resource_metadata (RFC 9728) para clientes OAuth.
+	want := `resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp"`
+	if got := resp.Header.Get("WWW-Authenticate"); !strings.Contains(got, want) {
+		t.Fatalf("WWW-Authenticate sem resource_metadata: %q", got)
+	}
+}
+
+func TestProtectedResourceMetadataEndpoint(t *testing.T) {
+	srv := httptest.NewServer(NewServer(Config{PublicURL: "https://api.example.com/mcp"}, nil).Handler())
+	defer srv.Close()
+
+	for _, path := range []string{"/.well-known/oauth-protected-resource", "/mcp/.well-known/oauth-protected-resource"} {
+		resp, err := http.Get(srv.URL + path) // sem Authorization: é público
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := make([]byte, 512)
+		n, _ := resp.Body.Read(body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: esperava 200, veio %d", path, resp.StatusCode)
+		}
+		got := string(body[:n])
+		if !strings.Contains(got, `"resource":"https://api.example.com/mcp"`) ||
+			!strings.Contains(got, `"authorization_servers":["https://api.example.com"]`) {
+			t.Fatalf("%s: metadata inesperado: %s", path, got)
+		}
 	}
 }
 

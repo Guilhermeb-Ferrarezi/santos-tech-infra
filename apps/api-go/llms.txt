@@ -208,14 +208,26 @@ auth central (cookie/Bearer); `POST /send` usa `X-Api-Key` (chave própria).
 ## MCP — `api.santos-tech.com/mcp`
 
 Servidor MCP (Streamable HTTP, stateless) que expõe o ecossistema a qualquer
-cliente MCP (Claude Code, SDKs). Gateway fino: cada tool chama a API
+cliente MCP (Claude Code, SDKs, claude.ai). Gateway fino: cada tool chama a API
 correspondente repassando o `Authorization` do cliente — permissões, sudo e
-rate limit continuam decididos pela API de destino. Sem `Authorization` → 401.
+rate limit continuam decididos pela API de destino. Sem `Authorization` → 401
+com `WWW-Authenticate: ... resource_metadata=` (RFC 9728) para clientes OAuth.
 
 ```bash
+# Claude Code / SDKs: Bearer (PAT ou JWT)
 claude mcp add --transport http santos-tech https://api.santos-tech.com/mcp \
   --header "Authorization: Bearer st_..."
+# claude.ai web: Settings → Connectors → Add custom connector →
+#   URL https://api.santos-tech.com/mcp (OAuth automático: DCR + PKCE no auth central)
 ```
+
+**Descoberta OAuth (para clientes MCP):**
+- `GET /.well-known/oauth-authorization-server` (RFC 8414) — endpoints + PKCE S256
+- `GET /.well-known/oauth-protected-resource[/mcp]` (RFC 9728) — resource → auth server
+- `POST /oauth/register` (RFC 7591, DCR) — registra client público `dcr_...`
+  `{redirect_uris (1-5, http/https), client_name?}` → 201; erros formato RFC
+  (`{error, error_description}`); rate 10/min. O token emitido pelo fluxo é o
+  JWT padrão do ecossistema — vale em todas as APIs.
 
 - **Tools auth (admin, role 3):** `whoami`, `list_users {scope?}`,
   `create_user {email|localPart,name,role}`, `update_user {id,…}`,

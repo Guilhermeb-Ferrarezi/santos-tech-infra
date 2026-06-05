@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -52,18 +53,47 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /mcp/health", health) // Traefik roteia /mcp sem strip
-	mux.Handle("/", requireAuth(streamable))
+
+	// Metadata RFC 9728 — clientes OAuth (claude.ai) descobrem por aqui qual
+	// authorization server protege este resource. Público e cross-origin.
+	prm := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		fmt.Fprintf(w, `{"resource":%q,"authorization_servers":[%q],"bearer_methods_supported":["header"]}`,
+			s.cfg.PublicURL, originOf(s.cfg.PublicURL))
+	}
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource", prm)
+	mux.HandleFunc("GET /mcp/.well-known/oauth-protected-resource", prm)
+
+	mux.Handle("/", s.requireAuth(streamable))
 	return mux
+}
+
+// originOf extrai scheme://host de uma URL (fallback: a própria string).
+func originOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return rawURL
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // requireAuth barra requests sem credencial antes de tocarem o MCP. O token em
 // si não é validado aqui — a primeira chamada à API de destino valida (e é ela
-// quem conhece PAT, JWT, papéis e sudo).
-func requireAuth(next http.Handler) http.Handler {
+// quem conhece PAT, JWT, papéis e sudo). O 401 aponta o resource_metadata
+// (RFC 9728) para clientes OAuth iniciarem o fluxo de autorização.
+func (s *Server) requireAuth(next http.Handler) http.Handler {
+	// URL path-inserted da RFC 9728: origem + /.well-known/... + path do resource.
+	resourceURL, _ := url.Parse(s.cfg.PublicURL)
+	metadataURL := s.cfg.PublicURL
+	if resourceURL != nil && resourceURL.Host != "" {
+		metadataURL = originOf(s.cfg.PublicURL) + "/.well-known/oauth-protected-resource" + resourceURL.Path
+	}
+	challenge := fmt.Sprintf(`Bearer realm="santos-tech", resource_metadata=%q`, metadataURL)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 8<<20) // 8MB de teto no request
 		if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="santos-tech"`)
+			w.Header().Set("WWW-Authenticate", challenge)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			fmt.Fprint(w, `{"code":"UNAUTHORIZED","message":"Envie Authorization: Bearer <PAT st_... ou JWT do auth central>."}`)

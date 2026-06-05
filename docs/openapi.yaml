@@ -912,6 +912,101 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /oauth/register:
+    post:
+      tags: [OAuthProvider]
+      summary: Dynamic Client Registration (RFC 7591)
+      description: |
+        Registra dinamicamente um app cliente OAuth **público** (PKCE, sem secret).
+        Usado por clientes MCP (ex.: claude.ai) para se registrarem antes do fluxo
+        de autorização. Registrar um client não concede acesso a nada — o usuário
+        ainda precisa autorizar no chooser de contas.
+
+        Erros seguem o formato da RFC 7591 (`error`/`error_description`), não o
+        padrão `{code,message}` da API. Rate limit: **10 req/min por IP**.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                redirect_uris:
+                  type: array
+                  items: { type: string, format: uri }
+                  minItems: 1
+                  maxItems: 5
+                  description: URIs de callback (apenas http/https).
+                client_name:
+                  type: string
+                  maxLength: 100
+              required: [redirect_uris]
+      responses:
+        "201":
+          description: Client registrado
+          content:
+            application/json:
+              example:
+                client_id: "dcr_h1X9..."
+                client_id_issued_at: 1765000000
+                client_name: "Claude"
+                redirect_uris: ["https://claude.ai/api/mcp/auth_callback"]
+                token_endpoint_auth_method: "none"
+                grant_types: [authorization_code, refresh_token]
+                response_types: [code]
+        "400":
+          description: Metadata inválido (formato RFC 7591)
+          content:
+            application/json:
+              example: { error: invalid_redirect_uri, error_description: "informe de 1 a 5 redirect_uris" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /.well-known/oauth-authorization-server:
+    get:
+      tags: [OAuthProvider]
+      summary: Metadata do authorization server (RFC 8414)
+      description: |
+        Documento de descoberta OAuth: endpoints de authorize/token/register,
+        PKCE S256 obrigatório, clients públicos (`token_endpoint_auth_methods_supported: ["none"]`).
+        Público, com `Access-Control-Allow-Origin: *`.
+      security: []
+      responses:
+        "200":
+          description: Metadata
+          content:
+            application/json:
+              example:
+                issuer: "https://api.santos-tech.com"
+                authorization_endpoint: "https://api.santos-tech.com/oauth/authorize"
+                token_endpoint: "https://api.santos-tech.com/oauth/token"
+                registration_endpoint: "https://api.santos-tech.com/oauth/register"
+                response_types_supported: [code]
+                grant_types_supported: [authorization_code, refresh_token]
+                code_challenge_methods_supported: [S256]
+                token_endpoint_auth_methods_supported: [none]
+
+  /.well-known/oauth-protected-resource/mcp:
+    get:
+      tags: [OAuthProvider]
+      summary: Metadata do protected resource MCP (RFC 9728)
+      description: |
+        Declara o servidor MCP (`/mcp`) como resource protegido por este
+        authorization server. Clientes MCP chegam aqui a partir do
+        `WWW-Authenticate: ... resource_metadata=` devolvido pelo gateway no 401.
+        Também servido em `/.well-known/oauth-protected-resource` (sem sufixo).
+      security: []
+      responses:
+        "200":
+          description: Metadata
+          content:
+            application/json:
+              example:
+                resource: "https://api.santos-tech.com/mcp"
+                authorization_servers: ["https://api.santos-tech.com"]
+                bearer_methods_supported: [header]
+
   # ── Admin: gestão de usuários ────────────────────────────────────────────────
 
   /auth/admin/users:

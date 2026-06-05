@@ -98,4 +98,10 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /oauth/authorize", s.rateLimit(30, min, s.handleOAuthAuthorize))
 	mux.HandleFunc("POST /oauth/authorize/confirm", s.rateLimit(20, min, s.handleOAuthConfirm))
 	mux.HandleFunc("POST /oauth/token", s.rateLimit(20, min, s.handleOAuthToken))
+
+	// Descoberta OAuth + DCR (clientes MCP, ex.: claude.ai) — públicos
+	mux.HandleFunc("GET /.well-known/oauth-authorization-server", s.handleOAuthASMetadata)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource", s.handleProtectedResourceMCP)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", s.handleProtectedResourceMCP)
+	mux.HandleFunc("POST /oauth/register", s.rateLimit(10, min, s.handleOAuthRegister))
 }

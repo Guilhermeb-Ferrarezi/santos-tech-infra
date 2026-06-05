@@ -11,6 +11,7 @@ type Config struct {
 	ClaudeBaseURL string // raiz do claude agent (rotas /claude/*)
 	EmailAPIURL   string // ex: https://mails.santos-tech.com/api
 	OpenAPIPath   string // caminho do docs/openapi.yaml (resource santos-tech://openapi/auth)
+	PublicURL     string // URL pública deste MCP (resource OAuth, ex: https://api.santos-tech.com/mcp)
 	Production    bool
 }
 
@@ -21,6 +22,7 @@ func LoadConfig() Config {
 		ClaudeBaseURL: strings.TrimRight(getEnv("CLAUDE_API_URL", "https://api.santos-tech.com"), "/"),
 		EmailAPIURL:   strings.TrimRight(getEnv("EMAIL_API_URL", "https://mails.santos-tech.com/api"), "/"),
 		OpenAPIPath:   getEnv("OPENAPI_PATH", "../../docs/openapi.yaml"),
+		PublicURL:     strings.TrimRight(getEnv("MCP_PUBLIC_URL", "https://api.santos-tech.com/mcp"), "/"),
 		Production:    getEnv("NODE_ENV", "development") == "production",
 	}
 }
