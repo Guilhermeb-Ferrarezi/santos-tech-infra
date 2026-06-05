@@ -912,6 +912,218 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  # ── Admin: gestão de usuários ────────────────────────────────────────────────
+
+  /auth/admin/users:
+    get:
+      tags: [Admin]
+      summary: Listar usuários
+      description: |
+        Por padrão lista apenas contas `@santos-tech.com`. Com `?scope=all`, retorna
+        todos os usuários de qualquer domínio. Requer role Admin.
+      parameters:
+        - name: scope
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [all]
+          description: "Passar `all` para listar usuários de todos os domínios."
+      responses:
+        "200":
+          description: Lista de usuários
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminUser" }
+                required: [users]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Admin]
+      summary: Criar usuário (sem senha + convite)
+      description: |
+        Cria uma conta sem senha e envia um email de convite com link para o
+        usuário definir sua própria senha (TTL 72h).
+
+        Aceita `email` completo (qualquer domínio) **ou** `localPart` (que vira
+        `@santos-tech.com`). Quando os dois são enviados, `email` tem precedência.
+
+        Rate limit: **10 req/min por IP**.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: Email completo (qualquer domínio). Tem precedência sobre `localPart`.
+                localPart:
+                  type: string
+                  pattern: '^[a-z0-9._%+-]+$'
+                  description: Parte local do email (sem @). Vira `localPart@santos-tech.com`.
+                name:
+                  type: string
+                  description: Nome completo do usuário (obrigatório).
+                role:
+                  type: integer
+                  description: "1=Aluno (padrão), 2=Professor, 3=Admin."
+                  enum: [1, 2, 3]
+                  default: 1
+              required: [name]
+      responses:
+        "201":
+          description: Usuário criado e convite enviado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/AdminUser" }
+                required: [user]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Email já cadastrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: EMAIL_ALREADY_EXISTS, message: "Este email já está cadastrado" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/admin/users/{id}:
+    patch:
+      tags: [Admin]
+      summary: Atualizar usuário
+      description: |
+        Atualiza campos do usuário (todos opcionais — só os enviados são alterados).
+        Um admin não pode suspender a própria conta (`SELF_ACTION`).
+
+        Rate limit: **20 req/min por IP**.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+          description: ID interno do usuário.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: Novo nome do usuário.
+                role:
+                  type: integer
+                  description: "1=Aluno, 2=Professor, 3=Admin."
+                  enum: [1, 2, 3]
+                suspended:
+                  type: boolean
+                  description: Suspender (`true`) ou reativar (`false`) a conta.
+                quotaBytes:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                  description: Cota de armazenamento em bytes (0 = sem limite).
+      responses:
+        "200":
+          description: Usuário atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/AdminUser" }
+                required: [user]
+        "400":
+          description: Validação falhou ou auto-suspensão bloqueada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SELF_ACTION, message: "você não pode suspender a própria conta" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Usuário não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "usuário não encontrado" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [Admin]
+      summary: Excluir usuário
+      description: |
+        Remove permanentemente o usuário. Exige **sudo mode** (confirmação recente
+        de identidade via `POST /auth/sudo/verify`). Um admin não pode excluir a
+        própria conta (`SELF_ACTION`).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+          description: ID interno do usuário.
+      responses:
+        "204":
+          description: Usuário excluído
+        "400":
+          description: Auto-exclusão bloqueada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SELF_ACTION, message: "você não pode excluir a própria conta" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sudo mode não ativo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SUDO_REQUIRED, message: "Confirme sua identidade para continuar" }
+
+  /auth/admin/users/{id}/invite:
+    post:
+      tags: [Admin]
+      summary: Reenviar convite
+      description: |
+        Reenvia o email de convite para um usuário existente (útil quando o link
+        original expirou). O novo link tem TTL de 72h.
+
+        Rate limit: **5 req/min por IP**.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+          description: ID interno do usuário.
+      responses:
+        "204":
+          description: Convite reenviado
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Usuário não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "usuário não encontrado" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   # ── Admin: gestão de aplicações OAuth ────────────────────────────────────────
 
   /auth/admin/oauth-clients:
@@ -1225,6 +1437,42 @@ components:
           type: boolean
           description: Verdadeiro se esta sessão corresponde ao `refresh_token` atual.
       required: [sessionId, name, email, avatarUrl, active]
+
+    AdminUser:
+      type: object
+      description: Usuário retornado nas rotas de gestão admin.
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: ID interno do usuário.
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          type: integer
+          description: "1=Aluno, 2=Professor, 3=Admin."
+          enum: [1, 2, 3]
+        suspendedAt:
+          type: [string, "null"]
+          format: date-time
+          description: Data de suspensão (null se ativa).
+        createdAt:
+          type: string
+          format: date-time
+        mfaEnabled:
+          type: boolean
+          description: Se o usuário tem MFA configurado.
+        quotaBytes:
+          type: integer
+          format: int64
+          description: Cota de armazenamento em bytes (0 = sem limite definido).
+        pending:
+          type: boolean
+          description: Convite ainda não aceito (usuário não definiu senha).
+      required: [id, email, name, role, suspendedAt, createdAt, mfaEnabled, quotaBytes, pending]
 
     OAuthClient:
       type: object

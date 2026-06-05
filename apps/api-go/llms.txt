@@ -111,8 +111,13 @@ tokens retornam no **corpo** (sem cookies).
 - `POST /auth/api-keys {name}` — cria PAT `st_...` (**exige sudo**)
 - `GET /auth/api-keys` · `DELETE /auth/api-keys/{id}`
 - `POST /auth/avatar` (multipart) — avatar → R2; `POST /auth/upload` — imagem → R2
-- `GET /auth/admin/users` · `POST /auth/admin/users` ·
-  `PATCH /auth/admin/users/{id}` · `POST /auth/admin/users/{id}/invite` ·
+- `GET /auth/admin/users[?scope=all]` — lista contas @santos-tech.com; com
+  `scope=all`, todos os usuários (qualquer domínio)
+- `POST /auth/admin/users {email|localPart,name,role}` — cria sem senha + convite
+  por email; `email` completo (qualquer domínio) tem precedência sobre `localPart`
+  (que vira @santos-tech.com) · 400 | 409 `EMAIL_ALREADY_EXISTS` (rate 10/min)
+- `PATCH /auth/admin/users/{id} {name?,role?,suspended?,quotaBytes?}` ·
+  `POST /auth/admin/users/{id}/invite` (reenvia convite) ·
   `DELETE /auth/admin/users/{id}` (**exige sudo**) — gestão admin (role 3)
 - `GET /auth/admin/oauth-clients` → `{clients:[{id,clientId,name,redirectUris,isActive,createdAt}]}`
 - `POST /auth/admin/oauth-clients {clientId,name,redirectUris}` → 201 |
