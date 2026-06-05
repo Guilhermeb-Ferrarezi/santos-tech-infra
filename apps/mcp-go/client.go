@@ -21,23 +21,31 @@ func newAPIClient() *apiClient {
 	return &apiClient{http: &http.Client{Timeout: 120 * time.Second}}
 }
 
-// do executa a chamada e devolve (status, corpo). Erro só quando a requisição
-// nem completou (rede, timeout); status >= 400 é decisão de quem chamou.
+// do executa a chamada com corpo JSON e devolve (status, corpo). Erro só quando
+// a requisição nem completou (rede, timeout); status >= 400 é decisão de quem chamou.
 func (c *apiClient) do(ctx context.Context, method, url, authorization string, body any) (int, []byte, error) {
 	var reader io.Reader
+	contentType := ""
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return 0, nil, fmt.Errorf("serializando corpo: %w", err)
 		}
 		reader = bytes.NewReader(b)
+		contentType = "application/json"
 	}
-	req, err := http.NewRequestWithContext(ctx, method, url, reader)
+	return c.doRaw(ctx, method, url, authorization, contentType, reader)
+}
+
+// doRaw é a variante de baixo nível: corpo e Content-Type arbitrários
+// (ex.: multipart para uploads).
+func (c *apiClient) doRaw(ctx context.Context, method, url, authorization, contentType string, body io.Reader) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return 0, nil, err
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	if authorization != "" {
 		req.Header.Set("Authorization", authorization)

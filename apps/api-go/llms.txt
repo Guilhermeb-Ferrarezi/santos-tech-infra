@@ -240,6 +240,8 @@ claude mcp add --transport http santos-tech https://api.santos-tech.com/mcp \
   `mailbox_send {to,subject,html|text,inReplyTo?}`, `email_metrics`,
   `email_logs {page?}`
 - **Tools claude:** `agent_generate {task?,brief,…}`, `agent_conversations`
+- **Tools upload:** `upload_image {imageBase64}` — sobe png/jpeg/webp/gif
+  (máx 5MB; aceita data URI) pro R2 via `POST /auth/upload` e devolve `{url}`
 - **Resources:** `santos-tech://llms.txt` (este arquivo, sempre fresco) ·
   `santos-tech://openapi/auth` (contrato OpenAPI da auth)
 - `GET /mcp/health` — liveness (sem auth)

@@ -33,6 +33,7 @@ func (s *Server) MCP() *mcp.Server {
 	s.addAuthTools(srv)
 	s.addEmailTools(srv)
 	s.addClaudeTools(srv)
+	s.addUploadTools(srv)
 	s.addResources(srv)
 	return srv
 }
@@ -130,6 +131,11 @@ func (s *Server) proxyTimeout(ctx context.Context, req *mcp.CallToolRequest, met
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	status, raw, err := s.client.do(ctx, method, url, authorization(req.Extra), body)
+	return resultFrom(method, url, status, raw, err)
+}
+
+// resultFrom converte a resposta de uma API downstream em resultado de tool.
+func resultFrom(method, url string, status int, raw []byte, err error) (*mcp.CallToolResult, any, error) {
 	if err != nil {
 		return errResult(fmt.Sprintf("API indisponível (%s %s): %v", method, url, err)), nil, nil
 	}
