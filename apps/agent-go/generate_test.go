@@ -240,3 +240,18 @@ func TestBuildDiagramPromptWithImage(t *testing.T) {
 		t.Error("imagem+web deveria liberar Read e WebSearch")
 	}
 }
+
+func TestDiagramTools(t *testing.T) {
+	ok := generateRequest{Task: "diagram", Brief: "x", Tools: []string{"santos", "notion"}}
+	if err := normalizeGenerate(&ok); err != nil {
+		t.Fatalf("tools válidas deveriam passar: %v", err)
+	}
+	bad := generateRequest{Task: "diagram", Brief: "x", Tools: []string{"github"}}
+	if err := normalizeGenerate(&bad); err == nil {
+		t.Fatal("tool fora da allowlist deveria falhar")
+	}
+	p := buildGeneratePrompt(ok, false)
+	if !strings.Contains(p, "MCP Santos Tech") || !strings.Contains(p, "MCP Notion") {
+		t.Error("prompt deveria citar os conectores liberados")
+	}
+}

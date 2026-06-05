@@ -45,9 +45,18 @@ type generateRequest struct {
 	ImageBase64 string `json:"imageBase64"`
 	ImageMime   string `json:"imageMime"`
 	// Opções por geração (barra do assistente dos quadros, task "diagram").
-	Web   bool   `json:"web"`   // libera WebSearch/WebFetch nesta geração
-	Model string `json:"model"` // override do modelo: "sonnet" | "opus" | "haiku" ("" = default)
-	Kind  string `json:"kind"`  // tipo do diagrama: "" auto | "flowchart" | "sequence" | "class"
+	Web   bool     `json:"web"`   // libera WebSearch/WebFetch nesta geração
+	Model string   `json:"model"` // override do modelo: "sonnet" | "opus" | "haiku" ("" = default)
+	Kind  string   `json:"kind"`  // tipo do diagrama: "" auto | "flowchart" | "sequence" | "class"
+	Tools []string `json:"tools"` // conectores MCP liberados: "santos" | "notion" | "miro"
+}
+
+// diagramTools mapeia a opção da barra pro prefixo --allowedTools do conector
+// claude.ai correspondente (conta conectada no container do agent).
+var diagramTools = map[string]string{
+	"santos": "mcp__claude_ai_Santos_Tech",
+	"notion": "mcp__claude_ai_Notion",
+	"miro":   "mcp__claude_ai_Miro",
 }
 
 // spamIssue é um problema de entregabilidade apontado pela análise de spam.
@@ -97,7 +106,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := s.generateOnce(r.Context(), buildGeneratePrompt(req, strings.TrimSpace(req.ImageBase64) != ""), req.ImageBase64, req.ImageMime, req.Model, req.Web)
+	raw, err := s.generateOnce(r.Context(), buildGeneratePrompt(req, strings.TrimSpace(req.ImageBase64) != ""), req.ImageBase64, req.ImageMime, req.Model, req.Web, req.Tools)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -111,10 +120,11 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 }
 
 // generateOnce roda `claude -p --output-format json` num turno isolado e devolve o
-// texto final (campo .result). Sem MCP, sem --add-dir, sem skip-permissions e sem
-// tokens de infra no ambiente — é redação de texto, não automação. `model` vazio
-// usa o default; `web` libera SÓ WebSearch/WebFetch (com timeout maior).
-func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime, model string, web bool) (string, error) {
+// texto final (campo .result). Sem --add-dir, sem skip-permissions e sem tokens
+// de infra no ambiente — é redação de texto, não automação. `model` vazio usa o
+// default; `web` libera SÓ WebSearch/WebFetch; `tools` libera os conectores MCP
+// da conta (diagramTools) — ambos com timeout maior.
+func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime, model string, web bool, tools []string) (string, error) {
 	dir, err := os.MkdirTemp(s.cfg.WorkspaceRoot, "gen-*")
 	if err != nil {
 		if dir, err = os.MkdirTemp("", "gen-*"); err != nil {
@@ -123,10 +133,10 @@ func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime, 
 	}
 	defer os.RemoveAll(dir)
 
-	// Busca na web demora mais (vários turnos de pesquisa) — timeout maior.
+	// Busca na web e conectores MCP demoram mais (vários turnos) — timeout maior.
 	timeout := 90 * time.Second
-	if web {
-		timeout = 180 * time.Second
+	if web || len(tools) > 0 {
+		timeout = 240 * time.Second
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -135,8 +145,17 @@ func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime, 
 		model = s.cfg.DefaultModel
 	}
 	args := []string{"-p", "--output-format", "json", "--model", model}
+	var allowed []string
 	if web {
-		args = append(args, "--allowedTools", "WebSearch,WebFetch")
+		allowed = append(allowed, "WebSearch", "WebFetch")
+	}
+	for _, t := range tools {
+		if prefix, ok := diagramTools[t]; ok {
+			allowed = append(allowed, prefix)
+		}
+	}
+	if len(allowed) > 0 {
+		args = append(args, "--allowedTools", strings.Join(allowed, ","))
 	}
 
 	// Imagem anexada (multimodal): grava no dir temporário e habilita SÓ o Read,
@@ -261,12 +280,27 @@ func buildGeneratePrompt(req generateRequest, hasImage bool) string {
 	if req.Task == "diagram" {
 		var d strings.Builder
 		d.WriteString("Você gera diagramas em código Mermaid para um quadro branco (Excalidraw).\n")
-		switch {
-		case req.Web && hasImage:
-			d.WriteString("Use a ferramenta Read para abrir a imagem anexada ANTES de responder. Você também PODE usar WebSearch e WebFetch para pesquisar. Nenhuma outra ferramenta. Sua única saída é um JSON.\n\n")
-		case req.Web:
-			d.WriteString("Você PODE usar WebSearch e WebFetch para pesquisar antes de montar o diagrama — use quando o pedido depender de informação que você não tem certeza. Não use nenhuma outra ferramenta. Sua única saída é um JSON.\n\n")
-		default:
+		// Monta a regra de ferramentas conforme as opções liberadas.
+		var can []string
+		if hasImage {
+			can = append(can, "Read (para abrir a imagem anexada ANTES de responder)")
+		}
+		if req.Web {
+			can = append(can, "WebSearch e WebFetch (para pesquisar quando o pedido depender de informação que você não tem certeza)")
+		}
+		for _, t := range req.Tools {
+			switch t {
+			case "santos":
+				can = append(can, "as ferramentas do MCP Santos Tech (dados internos do ecossistema: usuários, emails, métricas)")
+			case "notion":
+				can = append(can, "as ferramentas do MCP Notion (páginas e bancos do workspace)")
+			case "miro":
+				can = append(can, "as ferramentas do MCP Miro (boards do Miro)")
+			}
+		}
+		if len(can) > 0 {
+			d.WriteString("Você PODE usar: " + strings.Join(can, "; ") + ". Nenhuma outra ferramenta. Consulte os dados de que precisar ANTES de montar o diagrama — não invente o que dá pra consultar. Sua única saída é um JSON.\n\n")
+		} else {
 			d.WriteString(toolRule + " Sua única saída é um JSON.\n\n")
 		}
 		if hasImage {

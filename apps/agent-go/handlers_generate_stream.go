@@ -148,6 +148,11 @@ func normalizeGenerate(req *generateRequest) error {
 	default:
 		return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "kind inválido (use flowchart, sequence ou class)")
 	}
+	for _, t := range req.Tools {
+		if _, ok := diagramTools[t]; !ok {
+			return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "tool inválida (use santos, notion ou miro)")
+		}
+	}
 	return nil
 }
 
