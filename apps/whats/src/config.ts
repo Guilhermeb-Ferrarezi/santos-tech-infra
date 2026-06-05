@@ -20,6 +20,7 @@ export const config = {
   authURL: (process.env.AUTH_URL ?? "https://api.santos-tech.com").replace(/\/$/, ""),
   corsOrigins: (process.env.ALLOWED_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
   sessionDir: process.env.SESSION_DIR ?? "/data/baileys",
+  mediaDir: process.env.MEDIA_DIR ?? "/data/media",
   debounceMs: Number(process.env.DEBOUNCE_MS ?? "8000"),
   // Escalação: email avisado quando o agente sinaliza [[escalar]]. Vazio = desligado.
   // O envio sai da caixa da conta do Claude (claude@santos-tech.com).
