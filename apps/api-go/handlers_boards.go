@@ -121,7 +121,10 @@ func (s *Server) handleUpdateBoard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
 		return
 	}
-	if len(in.Scene) == 0 || in.SceneVersion == nil || *in.SceneVersion < 0 {
+	// Dois modos: salvar a cena (scene+sceneVersion, com título opcional) ou
+	// só renomear (title sem scene — usado pela lista, sem carregar a cena).
+	titleOnly := len(in.Scene) == 0 && in.Title != nil
+	if !titleOnly && (len(in.Scene) == 0 || in.SceneVersion == nil || *in.SceneVersion < 0) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "scene e sceneVersion são obrigatórios"))
 		return
 	}
@@ -149,6 +152,16 @@ func (s *Server) handleUpdateBoard(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Title != nil && role != "owner" {
 		writeErr(w, appErr(http.StatusForbidden, "FORBIDDEN", "Só o dono pode renomear o quadro"))
+		return
+	}
+
+	if titleOnly {
+		v, err := s.updateBoardTitle(r.Context(), id, *in.Title)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sceneVersion": v})
 		return
 	}
 

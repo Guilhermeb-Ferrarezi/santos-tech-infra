@@ -164,7 +164,7 @@ com concorrência otimista via `sceneVersion`.
 - `GET /boards/{id}` — `{board}` com `scene`; sem acesso/inexistente → 404
 - `PUT /boards/{id} {scene, sceneVersion, title?}` → `{sceneVersion}` novo ·
   versão divergente → 409 `VERSION_CONFLICT` · >10 MB → 413 · viewer → 403 ·
-  `title` só o dono
+  `title` só o dono · `{title}` sozinho renomeia sem tocar na cena/versão
 - `DELETE /boards/{id}` — só o dono → 204
 - `GET|POST /boards/{id}/members` — só o dono; POST `{email, role}` resolve o
   usuário por email (email inexistente OU sem papel de staff → mesmo 404)

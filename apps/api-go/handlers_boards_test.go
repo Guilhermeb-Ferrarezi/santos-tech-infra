@@ -84,11 +84,25 @@ func TestHandleUpdateBoardValidation(t *testing.T) {
 		t.Fatalf("corpo inválido: code=%d", w.Code)
 	}
 
-	// sem scene/sceneVersion → 400
+	// scene sem sceneVersion → 400 (sem cair no modo título-só)
 	w2 := httptest.NewRecorder()
-	s.handleUpdateBoard(w2, boardReq("PUT", validUUID, `{"title":"x"}`, 1))
+	s.handleUpdateBoard(w2, boardReq("PUT", validUUID, `{"scene":{"elements":[]}}`, 1))
 	if w2.Code != http.StatusBadRequest {
-		t.Fatalf("sem scene: code=%d", w2.Code)
+		t.Fatalf("sem sceneVersion: code=%d", w2.Code)
+	}
+
+	// nem scene nem title → 400
+	w2b := httptest.NewRecorder()
+	s.handleUpdateBoard(w2b, boardReq("PUT", validUUID, `{}`, 1))
+	if w2b.Code != http.StatusBadRequest {
+		t.Fatalf("corpo vazio: code=%d", w2b.Code)
+	}
+
+	// título inválido (vazio) no modo título-só → 400
+	w2c := httptest.NewRecorder()
+	s.handleUpdateBoard(w2c, boardReq("PUT", validUUID, `{"title":"  "}`, 1))
+	if w2c.Code != http.StatusBadRequest {
+		t.Fatalf("título vazio: code=%d", w2c.Code)
 	}
 
 	// cena acima de 10MB → 413

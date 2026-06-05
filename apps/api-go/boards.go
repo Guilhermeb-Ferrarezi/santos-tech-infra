@@ -138,6 +138,17 @@ func (s *Server) updateBoardScene(ctx context.Context, boardID string, scene []b
 	return v, err
 }
 
+// updateBoardTitle renomeia sem tocar na cena (não passa pelo controle de
+// versão — renomear não conflita com autosave). Devolve a versão atual.
+func (s *Server) updateBoardTitle(ctx context.Context, boardID, title string) (int, error) {
+	var v int
+	err := s.db.QueryRow(ctx, `
+		UPDATE boards SET title = $2, updated_at = now()
+		WHERE id = $1::uuid RETURNING scene_version`,
+		boardID, title).Scan(&v)
+	return v, err
+}
+
 func (s *Server) deleteBoard(ctx context.Context, boardID string) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM boards WHERE id = $1::uuid`, boardID)
 	return err
