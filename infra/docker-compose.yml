@@ -32,6 +32,23 @@ services:
       - claude_workspaces:/data/workspaces # checkouts dos repositórios
     restart: unless-stopped
 
+  mcp-go:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.mcp-go
+    ports:
+      - "3335:3335"
+    env_file:
+      - ../.env
+    environment:
+      # No stack local fala com os serviços vizinhos, não com produção.
+      AUTH_API_URL: http://api:3000
+      CLAUDE_API_URL: http://agent-go:3334
+    depends_on:
+      - api
+      - agent-go
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:

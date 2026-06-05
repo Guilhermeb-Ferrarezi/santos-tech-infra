@@ -16,16 +16,18 @@ email, etc.) valida o **mesmo** token.
 apps/
   api-go/      ← API de auth em Go (serviço principal — deploy api.santos-tech.com)
   agent-go/    ← orquestra o Claude Code em container (api.santos-tech.com/claude) — ver apps/agent-go/CLAUDE.md
+  mcp-go/      ← servidor MCP (Streamable HTTP) — gateway das APIs p/ clientes MCP (api.santos-tech.com/mcp)
   auth-web/    ← Frontend de login (React 19 + Vite + TanStack Router/Query + Tailwind 4)
   api/         ← legado, esvaziado (auth migrado 100% pro Go)
 packages/
   env/         ← validação de env (Zod) — legado TS
   contracts/   ← tipos compartilhados — legado TS
 infra/
-  docker-compose.yml      ← Postgres 16 + Redis 7 + API + agent-go
+  docker-compose.yml      ← Postgres 16 + Redis 7 + API + agent-go + mcp-go
   Dockerfile.api-go
   Dockerfile.agent-go
   Dockerfile.auth-web
+  Dockerfile.mcp-go
 docs/
   openapi.yaml            ← contrato OpenAPI 3.1 da Auth API (fonte de verdade dos endpoints)
 ```

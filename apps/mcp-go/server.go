@@ -1,0 +1,133 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+const version = "0.1.0"
+
+type Server struct {
+	cfg     Config
+	client  *apiClient
+	openapi []byte // docs/openapi.yaml carregado no boot (vazio = resource indisponível)
+}
+
+func NewServer(cfg Config, openapi []byte) *Server {
+	return &Server{cfg: cfg, client: newAPIClient(), openapi: openapi}
+}
+
+// MCP monta o servidor MCP com todas as tools e resources.
+func (s *Server) MCP() *mcp.Server {
+	srv := mcp.NewServer(&mcp.Implementation{
+		Name:    "santos-tech",
+		Title:   "Santos Tech — ecossistema",
+		Version: version,
+	}, nil)
+	s.addAuthTools(srv)
+	s.addEmailTools(srv)
+	s.addClaudeTools(srv)
+	s.addResources(srv)
+	return srv
+}
+
+// Handler expõe GET /health (sem auth) e o endpoint MCP (Streamable HTTP) na
+// raiz, exigindo Authorization. Stateless: cada chamada é independente — não
+// guardamos sessão MCP, então qualquer réplica atende qualquer request.
+func (s *Server) Handler() http.Handler {
+	srv := s.MCP()
+	streamable := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return srv },
+		&mcp.StreamableHTTPOptions{Stateless: true},
+	)
+	mux := http.NewServeMux()
+	health := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"status":"ok","version":%q}`, version)
+	}
+	mux.HandleFunc("GET /health", health)
+	mux.HandleFunc("GET /mcp/health", health) // Traefik roteia /mcp sem strip
+	mux.Handle("/", requireAuth(streamable))
+	return mux
+}
+
+// requireAuth barra requests sem credencial antes de tocarem o MCP. O token em
+// si não é validado aqui — a primeira chamada à API de destino valida (e é ela
+// quem conhece PAT, JWT, papéis e sudo).
+func requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 8<<20) // 8MB de teto no request
+		if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="santos-tech"`)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"code":"UNAUTHORIZED","message":"Envie Authorization: Bearer <PAT st_... ou JWT do auth central>."}`)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// authorization extrai o header Authorization do request MCP (o SDK propaga os
+// headers HTTP em Extra.Header).
+func authorization(extra *mcp.RequestExtra) string {
+	if extra != nil && extra.Header != nil {
+		return extra.Header.Get("Authorization")
+	}
+	return ""
+}
+
+// Prazos por chamada: o padrão cobre as APIs CRUD; geração via Claude Agent
+// pode levar até 90s no destino, então ganha folga.
+const (
+	defaultCallTimeout  = 30 * time.Second
+	generateCallTimeout = 110 * time.Second
+)
+
+// proxy chama a API de destino repassando o Authorization do request MCP e
+// converte a resposta em resultado de tool: 2xx vira texto (JSON cru da API),
+// 4xx/5xx vira isError com o corpo original ({code,message} ou {error}).
+func (s *Server) proxy(ctx context.Context, req *mcp.CallToolRequest, method, url string, body any) (*mcp.CallToolResult, any, error) {
+	return s.proxyTimeout(ctx, req, method, url, body, defaultCallTimeout)
+}
+
+func (s *Server) proxyTimeout(ctx context.Context, req *mcp.CallToolRequest, method, url string, body any, timeout time.Duration) (*mcp.CallToolResult, any, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	status, raw, err := s.client.do(ctx, method, url, authorization(req.Extra), body)
+	if err != nil {
+		return errResult(fmt.Sprintf("API indisponível (%s %s): %v", method, url, err)), nil, nil
+	}
+	if status >= 400 {
+		errBody := strings.TrimSpace(string(raw))
+		if len(errBody) > 2000 {
+			errBody = errBody[:2000] + "…"
+		}
+		msg := fmt.Sprintf("HTTP %d: %s", status, errBody)
+		if strings.Contains(errBody, `"SUDO_REQUIRED"`) || strings.Contains(errBody, `"sudo_required"`) {
+			msg += " — a ação exige modo sudo (confirmação recente de identidade em auth.santos-tech.com/confirm)."
+		}
+		return errResult(msg), nil, nil
+	}
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		text = `{"ok":true}` // 204 e afins
+	}
+	return textResult(text), nil, nil
+}
+
+func textResult(text string) *mcp.CallToolResult {
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}
+}
+
+func errResult(msg string) *mcp.CallToolResult {
+	return &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
+	}
+}
