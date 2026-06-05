@@ -114,15 +114,8 @@ func (s *Server) insertUserWithRole(ctx context.Context, email, name string, rol
 		email, name, role))
 }
 
-// listUsersByDomain devolve os usuários cujo email termina em @<domain>, do mais
-// recente para o mais antigo.
-func (s *Server) listUsersByDomain(ctx context.Context, domain string) ([]User, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT `+userCols+` FROM users WHERE email LIKE '%@' || $1 ORDER BY created_at DESC`,
-		domain)
-	if err != nil {
-		return nil, err
-	}
+// collectUsers escaneia todas as linhas de uma query de usuários.
+func collectUsers(rows pgx.Rows) ([]User, error) {
 	defer rows.Close()
 	users := []User{}
 	for rows.Next() {
@@ -133,6 +126,28 @@ func (s *Server) listUsersByDomain(ctx context.Context, domain string) ([]User, 
 		users = append(users, *u)
 	}
 	return users, rows.Err()
+}
+
+// listUsersByDomain devolve os usuários cujo email termina em @<domain>, do mais
+// recente para o mais antigo.
+func (s *Server) listUsersByDomain(ctx context.Context, domain string) ([]User, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT `+userCols+` FROM users WHERE email LIKE '%@' || $1 ORDER BY created_at DESC`,
+		domain)
+	if err != nil {
+		return nil, err
+	}
+	return collectUsers(rows)
+}
+
+// listAllUsers devolve todos os usuários (qualquer domínio), do mais recente
+// para o mais antigo.
+func (s *Server) listAllUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+userCols+` FROM users ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	return collectUsers(rows)
 }
 
 // updateUserAdmin atualiza nome e/ou role (campos nil são ignorados via COALESCE).

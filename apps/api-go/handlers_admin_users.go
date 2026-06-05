@@ -80,9 +80,18 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"user": adminUserJSON(u)})
 }
 
-// handleListAdminUsers lista os usuários @santos-tech.com.
+// handleListAdminUsers lista usuários: por padrão só @santos-tech.com (compat
+// com o painel do auth); com ?scope=all, todos os cadastrados.
 func (s *Server) handleListAdminUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := s.listUsersByDomain(r.Context(), staffDomain)
+	var (
+		users []User
+		err   error
+	)
+	if r.URL.Query().Get("scope") == "all" {
+		users, err = s.listAllUsers(r.Context())
+	} else {
+		users, err = s.listUsersByDomain(r.Context(), staffDomain)
+	}
 	if err != nil {
 		writeErr(w, err)
 		return
