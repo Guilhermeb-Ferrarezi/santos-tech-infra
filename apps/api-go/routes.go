@@ -45,6 +45,13 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /auth/admin/oauth-clients/{id}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateOAuthClient)))
 	mux.HandleFunc("DELETE /auth/admin/oauth-clients/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteOAuthClient)))
 
+	// Gestão admin de cargos personalizados
+	mux.HandleFunc("GET /auth/admin/custom-roles", s.adminGuard(s.handleListCustomRoles))
+	mux.HandleFunc("POST /auth/admin/custom-roles", s.rateLimit(10, min, s.adminGuard(s.handleCreateCustomRole)))
+	mux.HandleFunc("GET /auth/admin/custom-roles/{id}", s.adminGuard(s.handleGetCustomRole))
+	mux.HandleFunc("PATCH /auth/admin/custom-roles/{id}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateCustomRole)))
+	mux.HandleFunc("DELETE /auth/admin/custom-roles/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteCustomRole)))
+
 	// Reset de senha (envia email — limite apertado)
 	mux.HandleFunc("POST /auth/forgot-password", s.rateLimit(3, 5*min, s.handleForgotPassword))
 	mux.HandleFunc("POST /auth/reset-password", s.rateLimit(10, min, s.handleResetPassword))
