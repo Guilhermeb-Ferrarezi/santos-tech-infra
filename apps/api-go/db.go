@@ -498,6 +498,7 @@ func (s *Server) listCustomRoles(ctx context.Context) ([]CustomRole, error) {
 		if err := rows.Scan(&cr.ID, &cr.Name, &cr.Description, &raw, &cr.CreatedAt, &cr.UpdatedAt); err != nil {
 			return nil, err
 		}
+		cr.Permissions = map[string][]string{}
 		_ = json.Unmarshal(raw, &cr.Permissions)
 		out = append(out, cr)
 	}
@@ -516,6 +517,7 @@ func (s *Server) createCustomRole(ctx context.Context, name string, description 
 	if err != nil {
 		return nil, err
 	}
+	cr.Permissions = map[string][]string{}
 	_ = json.Unmarshal(rawOut, &cr.Permissions)
 	return &cr, nil
 }
@@ -533,6 +535,7 @@ func (s *Server) getCustomRole(ctx context.Context, id string) (*CustomRole, err
 	if err != nil {
 		return nil, err
 	}
+	cr.Permissions = map[string][]string{}
 	_ = json.Unmarshal(raw, &cr.Permissions)
 	return &cr, nil
 }
@@ -552,6 +555,7 @@ func (s *Server) updateCustomRole(ctx context.Context, id, name string, descript
 	if err != nil {
 		return nil, err
 	}
+	cr.Permissions = map[string][]string{}
 	_ = json.Unmarshal(rawOut, &cr.Permissions)
 	return &cr, nil
 }
@@ -560,7 +564,9 @@ func (s *Server) updateCustomRole(ctx context.Context, id, name string, descript
 // e (false, err) com code CARGO_IN_USE se há usuários vinculados.
 func (s *Server) deleteCustomRole(ctx context.Context, id string) (bool, error) {
 	var count int
-	_ = s.db.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE custom_role_id=$1::uuid`, id).Scan(&count)
+	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE custom_role_id=$1::uuid`, id).Scan(&count); err != nil {
+		return false, err
+	}
 	if count > 0 {
 		return false, appErr(http.StatusConflict, "CARGO_IN_USE", "cargo está atribuído a um ou mais usuários")
 	}
