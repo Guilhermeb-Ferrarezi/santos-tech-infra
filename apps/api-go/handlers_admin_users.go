@@ -111,17 +111,22 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name       *string `json:"name"`
-		Role       *int16  `json:"role"`
-		Suspended  *bool   `json:"suspended"`
-		QuotaBytes *int64  `json:"quotaBytes"`
+		Name         *string `json:"name"`
+		Role         *int16  `json:"role"`
+		Suspended    *bool   `json:"suspended"`
+		QuotaBytes   *int64  `json:"quotaBytes"`
+		CustomRoleID *string `json:"customRoleId"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
-	if body.Role != nil && (*body.Role < RoleStudent || *body.Role > RoleAdmin) {
+	if body.Role != nil && (*body.Role < RoleStudent || *body.Role > RoleCustom) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "role inválido"))
+		return
+	}
+	if body.Role != nil && *body.Role == RoleCustom && (body.CustomRoleID == nil || !isValidUUID(*body.CustomRoleID)) {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "customRoleId obrigatório e deve ser UUID válido para role=4"))
 		return
 	}
 	if body.QuotaBytes != nil && *body.QuotaBytes < 0 {
@@ -139,7 +144,7 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	u, err := s.updateUserAdmin(r.Context(), id, body.Name, body.Role, body.QuotaBytes)
+	u, err := s.updateUserAdmin(r.Context(), id, body.Name, body.Role, body.QuotaBytes, body.CustomRoleID)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -217,14 +222,15 @@ func (s *Server) sendInviteEmail(to, name, url string) {
 // adminUserJSON é a forma pública de um usuário nas rotas admin.
 func adminUserJSON(u *User) map[string]any {
 	return map[string]any{
-		"id":          u.ID,
-		"email":       u.Email,
-		"name":        u.Name,
-		"role":        u.Role,
-		"suspendedAt": u.SuspendedAt,
-		"createdAt":   u.CreatedAt.UTC().Format(time.RFC3339),
-		"mfaEnabled":  u.MFAEnabled,
-		"quotaBytes":  u.QuotaBytes,
-		"pending":     u.PasswordHash == nil, // convite não aceito (sem senha definida)
+		"id":           u.ID,
+		"email":        u.Email,
+		"name":         u.Name,
+		"role":         u.Role,
+		"customRoleId": u.CustomRoleID,
+		"suspendedAt":  u.SuspendedAt,
+		"createdAt":    u.CreatedAt.UTC().Format(time.RFC3339),
+		"mfaEnabled":   u.MFAEnabled,
+		"quotaBytes":   u.QuotaBytes,
+		"pending":      u.PasswordHash == nil, // convite não aceito (sem senha definida)
 	}
 }

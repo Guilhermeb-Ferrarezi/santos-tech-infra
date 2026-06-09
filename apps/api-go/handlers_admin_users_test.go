@@ -78,6 +78,32 @@ func TestDeleteAdminUserBadID(t *testing.T) {
 	}
 }
 
+// role=4 sem customRoleId → 400
+func TestUpdateAdminUserRole4NoCustomRoleID(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("PATCH", "/auth/admin/users/1",
+		strings.NewReader(`{"role":4}`))
+	r.SetPathValue("id", "1")
+	s.handleUpdateAdminUser(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}
+
+// role=9 ainda é inválido
+func TestUpdateAdminUserBadRoleNew(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("PATCH", "/auth/admin/users/1",
+		strings.NewReader(`{"role":9}`))
+	r.SetPathValue("id", "1")
+	s.handleUpdateAdminUser(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}
+
 // email completo inválido (ou sem email e sem localPart) → 400 antes do banco.
 func TestCreateAdminUserBadEmail(t *testing.T) {
 	s := testServer(Config{})

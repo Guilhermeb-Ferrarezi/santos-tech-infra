@@ -174,12 +174,21 @@ func (s *Server) listAllUsers(ctx context.Context) ([]User, error) {
 	return collectUsers(rows)
 }
 
-// updateUserAdmin atualiza nome e/ou role (campos nil são ignorados via COALESCE).
-func (s *Server) updateUserAdmin(ctx context.Context, id int64, name *string, role *int16, quotaBytes *int64) (*User, error) {
+// updateUserAdmin atualiza nome, role e/ou quota. customRoleID só é aplicado quando role=4;
+// quando role volta para 1/2/3, customRoleID é limpo automaticamente.
+func (s *Server) updateUserAdmin(ctx context.Context, id int64, name *string, role *int16, quotaBytes *int64, customRoleID *string) (*User, error) {
 	return scanUser(s.db.QueryRow(ctx,
-		`UPDATE users SET name = COALESCE($2, name), role = COALESCE($3, role), quota_bytes = COALESCE($4, quota_bytes)
+		`UPDATE users SET
+		   name             = COALESCE($2, name),
+		   role             = COALESCE($3, role),
+		   quota_bytes      = COALESCE($4, quota_bytes),
+		   custom_role_id   = CASE
+		                        WHEN $3 = 4 THEN $5::uuid
+		                        WHEN $3 IS NOT NULL AND $3 != 4 THEN NULL
+		                        ELSE custom_role_id
+		                      END
 		 WHERE id = $1 RETURNING `+userCols,
-		id, name, role, quotaBytes))
+		id, name, role, quotaBytes, customRoleID))
 }
 
 // setUserSuspended seta (now()) ou limpa (NULL) o suspended_at.
