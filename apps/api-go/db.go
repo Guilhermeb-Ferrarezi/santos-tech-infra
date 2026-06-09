@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -77,6 +78,11 @@ CREATE TABLE IF NOT EXISTS board_members (
   PRIMARY KEY (board_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_board_members_user ON board_members(user_id);
+ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS name        TEXT NOT NULL DEFAULT '';
+ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS created_at  TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS updated_at  TIMESTAMPTZ NOT NULL DEFAULT now();
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
@@ -460,6 +466,105 @@ func (s *Server) updateOAuthClient(ctx context.Context, id string, name *string,
 
 func (s *Server) deleteOAuthClient(ctx context.Context, id string) (bool, error) {
 	tag, err := s.db.Exec(ctx, `DELETE FROM oauth_clients WHERE id=$1::uuid`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ── Custom Roles ─────────────────────────────────────────────────────────────
+
+type CustomRole struct {
+	ID          string
+	Name        string
+	Description *string
+	Permissions map[string][]string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (s *Server) listCustomRoles(ctx context.Context) ([]CustomRole, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT id::text, name, description, permissions, created_at, updated_at
+		 FROM custom_roles ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CustomRole
+	for rows.Next() {
+		var cr CustomRole
+		var raw []byte
+		if err := rows.Scan(&cr.ID, &cr.Name, &cr.Description, &raw, &cr.CreatedAt, &cr.UpdatedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(raw, &cr.Permissions)
+		out = append(out, cr)
+	}
+	return out, rows.Err()
+}
+
+func (s *Server) createCustomRole(ctx context.Context, name string, description *string, perms map[string][]string) (*CustomRole, error) {
+	raw, _ := json.Marshal(perms)
+	var cr CustomRole
+	var rawOut []byte
+	err := s.db.QueryRow(ctx,
+		`INSERT INTO custom_roles (name, description, permissions)
+		 VALUES ($1, $2, $3::jsonb) RETURNING id::text, name, description, permissions, created_at, updated_at`,
+		name, description, string(raw)).
+		Scan(&cr.ID, &cr.Name, &cr.Description, &rawOut, &cr.CreatedAt, &cr.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(rawOut, &cr.Permissions)
+	return &cr, nil
+}
+
+func (s *Server) getCustomRole(ctx context.Context, id string) (*CustomRole, error) {
+	var cr CustomRole
+	var raw []byte
+	err := s.db.QueryRow(ctx,
+		`SELECT id::text, name, description, permissions, created_at, updated_at
+		 FROM custom_roles WHERE id=$1::uuid`, id).
+		Scan(&cr.ID, &cr.Name, &cr.Description, &raw, &cr.CreatedAt, &cr.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(raw, &cr.Permissions)
+	return &cr, nil
+}
+
+func (s *Server) updateCustomRole(ctx context.Context, id, name string, description *string, perms map[string][]string) (*CustomRole, error) {
+	raw, _ := json.Marshal(perms)
+	var cr CustomRole
+	var rawOut []byte
+	err := s.db.QueryRow(ctx,
+		`UPDATE custom_roles SET name=$2, description=$3, permissions=$4::jsonb, updated_at=now()
+		 WHERE id=$1::uuid RETURNING id::text, name, description, permissions, created_at, updated_at`,
+		id, name, description, string(raw)).
+		Scan(&cr.ID, &cr.Name, &cr.Description, &rawOut, &cr.CreatedAt, &cr.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(rawOut, &cr.Permissions)
+	return &cr, nil
+}
+
+// deleteCustomRole remove o cargo. Retorna (true, nil) se deletou, (false, nil) se não existe,
+// e (false, err) com code CARGO_IN_USE se há usuários vinculados.
+func (s *Server) deleteCustomRole(ctx context.Context, id string) (bool, error) {
+	var count int
+	_ = s.db.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE custom_role_id=$1::uuid`, id).Scan(&count)
+	if count > 0 {
+		return false, appErr(http.StatusConflict, "CARGO_IN_USE", "cargo está atribuído a um ou mais usuários")
+	}
+	tag, err := s.db.Exec(ctx, `DELETE FROM custom_roles WHERE id=$1::uuid`, id)
 	if err != nil {
 		return false, err
 	}
