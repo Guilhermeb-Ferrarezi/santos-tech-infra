@@ -61,6 +61,9 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 func (s *Server) registerPortalRewardsRoutes(mux *http.ServeMux) {
 	const min = time.Minute
 
+	// Busca de usuários do portal (seletor de alunos)
+	mux.HandleFunc("GET /portal/users", s.staffGuard(s.handlePortalSearchUsers))
+
 	// Badges
 	mux.HandleFunc("GET /portal/badges", s.staffGuard(s.handlePortalListBadges))
 	mux.HandleFunc("POST /portal/badges", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateBadge)))

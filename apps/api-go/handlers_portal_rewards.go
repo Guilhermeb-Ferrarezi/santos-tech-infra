@@ -22,6 +22,21 @@ func portalOptionalID(r *http.Request, name string) (*int64, error) {
 	return &id, nil
 }
 
+// handlePortalSearchUsers — GET /portal/users?q=&limit= : seletor de alunos.
+func (s *Server) handlePortalSearchUsers(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	limit := atoiMin(r.URL.Query().Get("limit"), 20, 1)
+	if limit > 50 {
+		limit = 50
+	}
+	items, err := s.portalSearchUsers(r.Context(), q, limit)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 // ── Badges ───────────────────────────────────────────────────────────────────
 
 func (s *Server) handlePortalListBadges(w http.ResponseWriter, r *http.Request) {

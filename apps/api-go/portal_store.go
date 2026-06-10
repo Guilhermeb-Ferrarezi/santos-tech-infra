@@ -51,6 +51,28 @@ func (s *Server) portalOverview(ctx context.Context) (portalOverview, error) {
 	return out, err
 }
 
+// portalSearchUsers busca usuários do portal (tabela "user") por nome/email,
+// para os seletores de aluno (atribuir medalha/meta, matricular em turma).
+func (s *Server) portalSearchUsers(ctx context.Context, q string, limit int) ([]portalStudentDTO, error) {
+	rows, err := s.portalDB.Query(ctx, `SELECT id::text, COALESCE(email,''), COALESCE(name,''), COALESCE(role,1)
+		FROM "user"
+		WHERE ($1 = '' OR name ILIKE $2 OR email ILIKE $2)
+		ORDER BY name ASC LIMIT $3`, q, "%"+q+"%", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []portalStudentDTO{}
+	for rows.Next() {
+		var u portalStudentDTO
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Role); err != nil {
+			return nil, err
+		}
+		items = append(items, u)
+	}
+	return items, rows.Err()
+}
+
 // ── Catálogo: leituras ───────────────────────────────────────────────────────
 
 func (s *Server) portalListCourses(ctx context.Context, p portalPagination) ([]portalCourseDTO, int64, error) {

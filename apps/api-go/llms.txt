@@ -363,6 +363,9 @@ medalha/meta usa sudo por cascatear vínculos). Ícone/imagem chegam como URL j�
 hospedada (upload prévio via /auth/upload), não base64. IDs string na saída,
 número na entrada. Pontos/progresso saem como número (lidos via ::text).
 
+Seletor de usuários do portal (para atribuir medalha/meta, matricular):
+GET    /portal/users?q=&limit=             → {items:[{id,email,name,role}]}  (busca por nome/email na tabela "user")
+
 Badges (medalhas) e holders (atribuições):
 GET    /portal/badges?page=&limit=&q=          → {items:[{id,name,description,iconUrl,createdAt,holdersCount}],total,pagination}
 POST   /portal/badges                          body {name,description,iconUrl}
