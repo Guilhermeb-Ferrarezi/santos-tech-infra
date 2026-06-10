@@ -42,7 +42,7 @@ type portalOverview struct {
 
 func (s *Server) portalOverview(ctx context.Context) (portalOverview, error) {
 	var out portalOverview
-	err := s.db.QueryRow(ctx, `SELECT
+	err := s.portalDB.QueryRow(ctx, `SELECT
 		(SELECT COUNT(*) FROM course),
 		(SELECT COUNT(*) FROM module),
 		(SELECT COUNT(*) FROM phase),
@@ -61,13 +61,13 @@ func (s *Server) portalListCourses(ctx context.Context, p portalPagination) ([]p
 		where = "WHERE COALESCE(name, '') ILIKE $1 OR COALESCE(description, '') ILIKE $1"
 	}
 	var total int64
-	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM course `+where, args...).Scan(&total); err != nil {
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM course `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, p.Limit, p.Offset)
 	limitPos := len(args) - 1
 	offsetPos := len(args)
-	rows, err := s.db.Query(ctx, fmt.Sprintf(`SELECT id, COALESCE(name, ''), description, is_paid, duration_hours, level, focus, price::text
+	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT id, COALESCE(name, ''), description, is_paid, duration_hours, level_difficulty, paid_focus, price::text
 		FROM course %s ORDER BY id ASC LIMIT $%d OFFSET $%d`, where, limitPos, offsetPos), args...)
 	if err != nil {
 		return nil, 0, err
@@ -91,7 +91,7 @@ func (s *Server) portalListCourses(ctx context.Context, p portalPagination) ([]p
 
 func (s *Server) portalGetCourse(ctx context.Context, id int64) (*portalCourseDTO, error) {
 	var dto portalCourseDTO
-	err := s.db.QueryRow(ctx, `SELECT id::text, COALESCE(name, ''), description, is_paid, duration_hours, level, focus, price::text
+	err := s.portalDB.QueryRow(ctx, `SELECT id::text, COALESCE(name, ''), description, is_paid, duration_hours, level_difficulty, paid_focus, price::text
 		FROM course WHERE id=$1`, id).Scan(&dto.ID, &dto.Name, &dto.Description, &dto.IsPaid, &dto.DurationHours, &dto.Level, &dto.Focus, &dto.Price)
 	if err != nil {
 		return nil, err
@@ -110,11 +110,11 @@ func (s *Server) portalListModules(ctx context.Context, courseID int64, p portal
 		where += fmt.Sprintf(" AND (COALESCE(name, '') ILIKE $%d OR COALESCE(description, '') ILIKE $%d)", len(args), len(args))
 	}
 	var total int64
-	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM module `+where, args...).Scan(&total); err != nil {
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM module `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, p.Limit, p.Offset)
-	rows, err := s.db.Query(ctx, fmt.Sprintf(`SELECT id::text, course_id::text, COALESCE(name, ''), description, index_order
+	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT id::text, course_id::text, COALESCE(name, ''), description, index_order
 		FROM module %s ORDER BY index_order ASC, id ASC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
@@ -142,11 +142,11 @@ func (s *Server) portalListPhases(ctx context.Context, moduleID int64, p portalP
 		where += fmt.Sprintf(" AND COALESCE(name, '') ILIKE $%d", len(args))
 	}
 	var total int64
-	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM phase `+where, args...).Scan(&total); err != nil {
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM phase `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, p.Limit, p.Offset)
-	rows, err := s.db.Query(ctx, fmt.Sprintf(`SELECT id::text, module_id::text, COALESCE(name, ''), week_number, index_order, admin_authorize, created_at, updated_at
+	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT id::text, module_id::text, COALESCE(name, ''), week_number, index_order, admin_authorize, created_at, updated_at
 		FROM phase %s ORDER BY index_order ASC, id ASC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
@@ -176,7 +176,7 @@ func (s *Server) portalCreateCourse(ctx context.Context, in portalCourseInput) (
 		isPaid = *in.IsPaid
 	}
 	var id int64
-	err := s.db.QueryRow(ctx, `INSERT INTO course (name, description, is_paid, duration_hours, level, focus, price, created_at, updated_at)
+	err := s.portalDB.QueryRow(ctx, `INSERT INTO course (name, description, is_paid, duration_hours, level_difficulty, paid_focus, price, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7::numeric,NOW(),NOW()) RETURNING id`,
 		in.Name, in.Description, isPaid, in.DurationHours, in.Level, in.Focus, in.Price).Scan(&id)
 	if err != nil {
@@ -186,13 +186,13 @@ func (s *Server) portalCreateCourse(ctx context.Context, in portalCourseInput) (
 }
 
 func (s *Server) portalUpdateCourse(ctx context.Context, id int64, in portalCourseInput) (*portalCourseDTO, error) {
-	tag, err := s.db.Exec(ctx, `UPDATE course SET
+	tag, err := s.portalDB.Exec(ctx, `UPDATE course SET
 		name = COALESCE(NULLIF($2,''), name),
 		description = COALESCE($3, description),
 		is_paid = COALESCE($4, is_paid),
 		duration_hours = COALESCE($5, duration_hours),
-		level = COALESCE($6, level),
-		focus = COALESCE($7, focus),
+		level_difficulty = COALESCE($6, level_difficulty),
+		paid_focus = COALESCE($7, paid_focus),
 		price = COALESCE(NULLIF($8, '')::numeric, price),
 		updated_at = NOW()
 		WHERE id=$1`, id, in.Name, in.Description, in.IsPaid, in.DurationHours, in.Level, in.Focus, in.Price)
@@ -211,7 +211,7 @@ func (s *Server) portalDeleteByID(ctx context.Context, table string, id int64) e
 	if table != "course" && table != "module" && table != "phase" {
 		return validationErr("tabela inválida")
 	}
-	tag, err := s.db.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE id=$1`, table), id)
+	tag, err := s.portalDB.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE id=$1`, table), id)
 	if err != nil {
 		return err
 	}
@@ -225,13 +225,13 @@ func (s *Server) portalCreateModule(ctx context.Context, courseID int64, in port
 	indexOrder := in.IndexOrder
 	if indexOrder == nil {
 		var next int
-		if err := s.db.QueryRow(ctx, `SELECT COALESCE(MAX(index_order), 0) + 1 FROM module WHERE course_id=$1`, courseID).Scan(&next); err != nil {
+		if err := s.portalDB.QueryRow(ctx, `SELECT COALESCE(MAX(index_order), 0) + 1 FROM module WHERE course_id=$1`, courseID).Scan(&next); err != nil {
 			return nil, err
 		}
 		indexOrder = &next
 	}
 	var dto portalModuleDTO
-	err := s.db.QueryRow(ctx, `INSERT INTO module (course_id, name, description, index_order, created_at, updated_at)
+	err := s.portalDB.QueryRow(ctx, `INSERT INTO module (course_id, name, description, index_order, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,NOW(),NOW())
 		RETURNING id::text, course_id::text, COALESCE(name,''), description, index_order`,
 		courseID, in.Name, in.Description, *indexOrder).Scan(&dto.ID, &dto.CourseID, &dto.Name, &dto.Description, &dto.IndexOrder)
@@ -246,7 +246,7 @@ func (s *Server) portalCreateModule(ctx context.Context, courseID int64, in port
 
 func (s *Server) portalUpdateModule(ctx context.Context, moduleID int64, in portalModuleInput) (*portalModuleDTO, error) {
 	var dto portalModuleDTO
-	err := s.db.QueryRow(ctx, `UPDATE module SET
+	err := s.portalDB.QueryRow(ctx, `UPDATE module SET
 		name=COALESCE(NULLIF($2,''), name),
 		description=COALESCE($3, description),
 		index_order=COALESCE($4, index_order),
@@ -270,7 +270,7 @@ func (s *Server) portalCreatePhase(ctx context.Context, moduleID int64, in porta
 	indexOrder := in.IndexOrder
 	if indexOrder == nil {
 		var next int
-		if err := s.db.QueryRow(ctx, `SELECT COALESCE(MAX(index_order), 0) + 1 FROM phase WHERE module_id=$1`, moduleID).Scan(&next); err != nil {
+		if err := s.portalDB.QueryRow(ctx, `SELECT COALESCE(MAX(index_order), 0) + 1 FROM phase WHERE module_id=$1`, moduleID).Scan(&next); err != nil {
 			return nil, err
 		}
 		indexOrder = &next
@@ -284,7 +284,7 @@ func (s *Server) portalCreatePhase(ctx context.Context, moduleID int64, in porta
 		adminAuthorize = *in.AdminAuthorize
 	}
 	var dto portalPhaseDTO
-	err := s.db.QueryRow(ctx, `INSERT INTO phase (module_id, name, week_number, index_order, admin_authorize, created_at, updated_at)
+	err := s.portalDB.QueryRow(ctx, `INSERT INTO phase (module_id, name, week_number, index_order, admin_authorize, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,NOW(),NOW())
 		RETURNING id::text, module_id::text, COALESCE(name,''), week_number, index_order, admin_authorize, created_at, updated_at`,
 		moduleID, in.Name, *weekNumber, *indexOrder, adminAuthorize).Scan(&dto.ID, &dto.ModuleID, &dto.Name, &dto.WeekNumber, &dto.IndexOrder, &dto.AdminAuthorize, &dto.CreatedAt, &dto.UpdatedAt)
@@ -299,7 +299,7 @@ func (s *Server) portalCreatePhase(ctx context.Context, moduleID int64, in porta
 
 func (s *Server) portalUpdatePhase(ctx context.Context, phaseID int64, in portalPhaseInput) (*portalPhaseDTO, error) {
 	var dto portalPhaseDTO
-	err := s.db.QueryRow(ctx, `UPDATE phase SET
+	err := s.portalDB.QueryRow(ctx, `UPDATE phase SET
 		name=COALESCE(NULLIF($2,''), name),
 		week_number=COALESCE($3, week_number),
 		index_order=COALESCE($4, index_order),
@@ -330,11 +330,11 @@ func (s *Server) portalListClasses(ctx context.Context, p portalPagination) ([]p
 		where = "WHERE COALESCE(name, '') ILIKE $1"
 	}
 	var total int64
-	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM class `+where, args...).Scan(&total); err != nil {
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM class `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, p.Limit, p.Offset)
-	rows, err := s.db.Query(ctx, fmt.Sprintf(`SELECT id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at
+	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at
 		FROM class %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
@@ -360,7 +360,7 @@ func portalClassEndDate(start time.Time, weeks int) time.Time {
 
 func (s *Server) portalGetClass(ctx context.Context, id int64) (*portalClassDTO, error) {
 	var dto portalClassDTO
-	err := s.db.QueryRow(ctx, `SELECT id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at
+	err := s.portalDB.QueryRow(ctx, `SELECT id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at
 		FROM class WHERE id=$1`, id).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -378,7 +378,7 @@ func (s *Server) portalCreateClass(ctx context.Context, in portalClassInput) (*p
 	}
 	end := portalClassEndDate(start, in.DurationWeeks)
 	var dto portalClassDTO
-	err = s.db.QueryRow(ctx, `INSERT INTO class (name, course_id, current_module_id, start_date, end_date, created_at, updated_at)
+	err = s.portalDB.QueryRow(ctx, `INSERT INTO class (name, course_id, current_module_id, start_date, end_date, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,NOW(),NOW())
 		RETURNING id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at`,
 		in.Name, in.CourseID, in.CurrentModuleID, start, end).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt)
@@ -404,7 +404,7 @@ func (s *Server) portalUpdateClass(ctx context.Context, id int64, in portalClass
 	// (a partir do start novo ou atual); startDate sozinho preserva a duração atual
 	// deslocando o fim; nenhum dos dois → end_date intacto.
 	var dto portalClassDTO
-	err := s.db.QueryRow(ctx, `UPDATE class SET
+	err := s.portalDB.QueryRow(ctx, `UPDATE class SET
 		name=COALESCE(NULLIF($2,''), name),
 		course_id=COALESCE(NULLIF($3,0), course_id),
 		current_module_id=COALESCE(NULLIF($4,0), current_module_id),
@@ -433,7 +433,7 @@ func (s *Server) portalUpdateClass(ctx context.Context, id int64, in portalClass
 // portalDeleteClass remove a turma e suas matrículas numa transação (a tabela
 // enrollment referencia class).
 func (s *Server) portalDeleteClass(ctx context.Context, id int64) error {
-	tx, err := s.db.Begin(ctx)
+	tx, err := s.portalDB.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -452,7 +452,7 @@ func (s *Server) portalDeleteClass(ctx context.Context, id int64) error {
 }
 
 func (s *Server) portalListClassStudents(ctx context.Context, classID int64) ([]portalStudentDTO, error) {
-	rows, err := s.db.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role
 		FROM enrollment e JOIN "user" u ON u.id = e.user_id
 		WHERE e.class_id=$1 ORDER BY COALESCE(u.name,'') ASC, u.id ASC`, classID)
 	if err != nil {
@@ -473,7 +473,7 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64) ([]
 // portalAddClassStudents matricula os usuários na turma, ignorando duplicatas.
 // Devolve quantos foram efetivamente inseridos.
 func (s *Server) portalAddClassStudents(ctx context.Context, classID int64, ids []int64) (int, error) {
-	tx, err := s.db.Begin(ctx)
+	tx, err := s.portalDB.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -497,7 +497,7 @@ func (s *Server) portalAddClassStudents(ctx context.Context, classID int64, ids 
 }
 
 func (s *Server) portalRemoveClassStudent(ctx context.Context, classID, studentID int64) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM enrollment WHERE class_id=$1 AND user_id=$2`, classID, studentID)
+	tag, err := s.portalDB.Exec(ctx, `DELETE FROM enrollment WHERE class_id=$1 AND user_id=$2`, classID, studentID)
 	if err != nil {
 		return err
 	}
@@ -512,7 +512,7 @@ func (s *Server) portalRemoveClassStudent(ctx context.Context, classID, studentI
 const portalRoomCols = `id::text, class_id::text, COALESCE(name,''), created_at, is_authorized, target_limited`
 
 func (s *Server) portalListClassRooms(ctx context.Context, classID int64) ([]portalRoomDTO, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+portalRoomCols+`
+	rows, err := s.portalDB.Query(ctx, `SELECT `+portalRoomCols+`
 		FROM class_rooms WHERE class_id=$1 ORDER BY created_at DESC`, classID)
 	if err != nil {
 		return nil, err
@@ -563,7 +563,7 @@ func (s *Server) portalCreateClassRoom(ctx context.Context, classID int64, in po
 		return nil, err
 	}
 	var dto portalRoomDTO
-	err = s.db.QueryRow(ctx, `INSERT INTO class_rooms (class_id, name, is_authorized, target_limited, created_at)
+	err = s.portalDB.QueryRow(ctx, `INSERT INTO class_rooms (class_id, name, is_authorized, target_limited, created_at)
 		VALUES ($1,$2,$3,$4,NOW())
 		RETURNING `+portalRoomCols,
 		classID, in.Name, isAuth, target).Scan(&dto.ID, &dto.ClassID, &dto.Name, &dto.CreatedAt, &dto.IsAuthorized, &dto.TargetLimited)
@@ -583,7 +583,7 @@ func (s *Server) portalUpdateClassRoom(ctx context.Context, roomID int64, in por
 		return nil, err
 	}
 	var dto portalRoomDTO
-	err = s.db.QueryRow(ctx, `UPDATE class_rooms SET
+	err = s.portalDB.QueryRow(ctx, `UPDATE class_rooms SET
 		name = COALESCE(NULLIF($2,''), name),
 		is_authorized = COALESCE($3, is_authorized),
 		target_limited = CASE WHEN $4 THEN $5::timestamptz ELSE target_limited END
@@ -602,7 +602,7 @@ func (s *Server) portalUpdateClassRoom(ctx context.Context, roomID int64, in por
 
 func (s *Server) portalUpdateClassRoomStatus(ctx context.Context, roomID int64, open bool) (*portalRoomDTO, error) {
 	var dto portalRoomDTO
-	err := s.db.QueryRow(ctx, `UPDATE class_rooms SET is_authorized=$2 WHERE id=$1
+	err := s.portalDB.QueryRow(ctx, `UPDATE class_rooms SET is_authorized=$2 WHERE id=$1
 		RETURNING `+portalRoomCols, roomID, open).Scan(&dto.ID, &dto.ClassID, &dto.Name, &dto.CreatedAt, &dto.IsAuthorized, &dto.TargetLimited)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, notFoundErr("Sala")
@@ -615,7 +615,7 @@ func (s *Server) portalUpdateClassRoomStatus(ctx context.Context, roomID int64, 
 }
 
 func (s *Server) portalDeleteClassRoom(ctx context.Context, roomID int64) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM class_rooms WHERE id=$1`, roomID)
+	tag, err := s.portalDB.Exec(ctx, `DELETE FROM class_rooms WHERE id=$1`, roomID)
 	if err != nil {
 		return err
 	}
@@ -634,7 +634,7 @@ func (s *Server) portalReorder(ctx context.Context, table, scopeCol, entity stri
 	if table != "module" && table != "phase" && table != "exercise" {
 		return validationErr("tabela inválida")
 	}
-	tx, err := s.db.Begin(ctx)
+	tx, err := s.portalDB.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -681,7 +681,7 @@ func (s *Server) portalClassCronograma(ctx context.Context, classID int64) (*por
 		return nil, nil, err
 	}
 	moduleID, _ := strconv.ParseInt(class.CurrentModuleID, 10, 64)
-	rows, err := s.db.Query(ctx, `SELECT p.id::text, COALESCE(p.name,''), COALESCE(m.name,''), p.week_number
+	rows, err := s.portalDB.Query(ctx, `SELECT p.id::text, COALESCE(p.name,''), COALESCE(m.name,''), p.week_number
 		FROM phase p JOIN module m ON m.id = p.module_id
 		WHERE p.module_id=$1
 		ORDER BY p.week_number ASC, p.index_order ASC, p.id ASC`, moduleID)
@@ -711,7 +711,7 @@ func (s *Server) portalClassCronograma(ctx context.Context, classID int64) (*por
 // a API antiga introspeccionava esse schema; aqui assumimos as colunas padrão.
 func (s *Server) portalIniciarFases(ctx context.Context, classID int64, studentIDs []int64) (*portalPhaseDTO, int, error) {
 	var moduleID int64
-	err := s.db.QueryRow(ctx, `SELECT COALESCE(current_module_id, 0) FROM class WHERE id=$1`, classID).Scan(&moduleID)
+	err := s.portalDB.QueryRow(ctx, `SELECT COALESCE(current_module_id, 0) FROM class WHERE id=$1`, classID).Scan(&moduleID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, 0, notFoundErr("Turma")
 	}
@@ -722,7 +722,7 @@ func (s *Server) portalIniciarFases(ctx context.Context, classID int64, studentI
 		return nil, 0, validationErr("a turma não tem módulo atual definido")
 	}
 
-	tx, err := s.db.Begin(ctx)
+	tx, err := s.portalDB.Begin(ctx)
 	if err != nil {
 		return nil, 0, err
 	}

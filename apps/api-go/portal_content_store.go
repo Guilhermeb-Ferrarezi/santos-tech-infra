@@ -72,11 +72,11 @@ func (s *Server) portalListExercises(ctx context.Context, phaseID int64, p porta
 		where += fmt.Sprintf(" AND (COALESCE(title,'') ILIKE $%d OR COALESCE(description,'') ILIKE $%d)", len(args), len(args))
 	}
 	var total int64
-	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM exercise `+where, args...).Scan(&total); err != nil {
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM exercise `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, p.Limit, p.Offset)
-	rows, err := s.db.Query(ctx, fmt.Sprintf(`SELECT %s FROM exercise %s
+	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT %s FROM exercise %s
 		ORDER BY index_order ASC, id ASC LIMIT $%d OFFSET $%d`, portalExerciseCols, where, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
@@ -94,7 +94,7 @@ func (s *Server) portalListExercises(ctx context.Context, phaseID int64, p porta
 }
 
 func (s *Server) portalExerciseQuestions(ctx context.Context, exerciseID int64) ([]portalQuestionDTO, error) {
-	rows, err := s.db.Query(ctx, `SELECT q.id::text, COALESCE(q.statement,''), o.id::text, COALESCE(o.option_text,''), COALESCE(o.is_correct,false)
+	rows, err := s.portalDB.Query(ctx, `SELECT q.id::text, COALESCE(q.statement,''), o.id::text, COALESCE(o.option_text,''), COALESCE(o.is_correct,false)
 		FROM question q
 		LEFT JOIN question_option o ON o.question_id = q.id
 		WHERE q.exercise_id = $1
@@ -133,7 +133,7 @@ func (s *Server) portalExerciseQuestions(ctx context.Context, exerciseID int64) 
 }
 
 func (s *Server) portalGetExercise(ctx context.Context, id int64) (*portalExerciseDTO, error) {
-	dto, err := scanExercise(s.db.QueryRow(ctx, `SELECT `+portalExerciseCols+` FROM exercise WHERE id=$1`, id))
+	dto, err := scanExercise(s.portalDB.QueryRow(ctx, `SELECT `+portalExerciseCols+` FROM exercise WHERE id=$1`, id))
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +206,7 @@ func (s *Server) portalCreateExercise(ctx context.Context, phaseID int64, in por
 		return nil, err
 	}
 
-	tx, err := s.db.Begin(ctx)
+	tx, err := s.portalDB.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +246,7 @@ func (s *Server) portalUpdateExercise(ctx context.Context, id int64, in portalEx
 		return nil, err
 	}
 
-	tx, err := s.db.Begin(ctx)
+	tx, err := s.portalDB.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +294,7 @@ func (s *Server) portalUpdateExercise(ctx context.Context, id int64, in portalEx
 }
 
 func (s *Server) portalDeleteExercise(ctx context.Context, id int64) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM exercise WHERE id=$1`, id)
+	tag, err := s.portalDB.Exec(ctx, `DELETE FROM exercise WHERE id=$1`, id)
 	if err != nil {
 		return portalDBErr(err)
 	}
@@ -307,7 +307,7 @@ func (s *Server) portalDeleteExercise(ctx context.Context, id int64) error {
 // ── Containers ───────────────────────────────────────────────────────────────
 
 func (s *Server) portalListContainers(ctx context.Context, phaseID int64) ([]portalContainerGroupDTO, error) {
-	rows, err := s.db.Query(ctx, `SELECT ct.id::text, ct.exercise_id::text, COALESCE(ct.name,''),
+	rows, err := s.portalDB.Query(ctx, `SELECT ct.id::text, ct.exercise_id::text, COALESCE(ct.name,''),
 		COALESCE(ct.is_daily_task,false), ct.container_date_target_int,
 		COALESCE(e.title,''), COALESCE(e.description,''), COALESCE(e.index_order,1)
 		FROM container_tasks ct JOIN exercise e ON e.id = ct.exercise_id
@@ -356,7 +356,7 @@ func portalContainerKey(name string, isDaily bool, dateTarget *int) string {
 func (s *Server) portalExerciseContainer(ctx context.Context, exerciseID int64) (*portalContainerGroupRef, error) {
 	var ref portalContainerGroupRef
 	var name string
-	err := s.db.QueryRow(ctx, `SELECT COALESCE(name,''), phase_id, COALESCE(is_daily_task,false), container_date_target_int
+	err := s.portalDB.QueryRow(ctx, `SELECT COALESCE(name,''), phase_id, COALESCE(is_daily_task,false), container_date_target_int
 		FROM container_tasks WHERE exercise_id=$1 LIMIT 1`, exerciseID).Scan(&name, &ref.PhaseID, &ref.IsDailyTask, &ref.ContainerDateTargetInt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -373,7 +373,7 @@ func (s *Server) portalCreateContainer(ctx context.Context, in portalContainerIn
 	if in.IsDailyTask != nil {
 		isDaily = *in.IsDailyTask
 	}
-	tx, err := s.db.Begin(ctx)
+	tx, err := s.portalDB.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -402,7 +402,7 @@ func (s *Server) portalCreateContainer(ctx context.Context, in portalContainerIn
 }
 
 func (s *Server) portalAddContainerExercises(ctx context.Context, ref portalContainerGroupRef, exerciseIDs []int64) (int, error) {
-	tx, err := s.db.Begin(ctx)
+	tx, err := s.portalDB.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -449,7 +449,7 @@ func (s *Server) portalAddContainerExercises(ctx context.Context, ref portalCont
 }
 
 func (s *Server) portalDeleteContainerGroup(ctx context.Context, ref portalContainerGroupRef) (int64, error) {
-	tag, err := s.db.Exec(ctx, `DELETE FROM container_tasks
+	tag, err := s.portalDB.Exec(ctx, `DELETE FROM container_tasks
 		WHERE name=$1 AND phase_id=$2 AND COALESCE(is_daily_task,false)=$3
 		AND (container_date_target_int=$4 OR ($4 IS NULL AND container_date_target_int IS NULL))`,
 		ref.Name, ref.PhaseID, ref.IsDailyTask, ref.ContainerDateTargetInt)
@@ -463,7 +463,7 @@ func (s *Server) portalDeleteContainerGroup(ctx context.Context, ref portalConta
 }
 
 func (s *Server) portalDeleteContainerTask(ctx context.Context, id int64) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM container_tasks WHERE id=$1`, id)
+	tag, err := s.portalDB.Exec(ctx, `DELETE FROM container_tasks WHERE id=$1`, id)
 	if err != nil {
 		return portalDBErr(err)
 	}
@@ -491,11 +491,11 @@ func (s *Server) portalListMaterials(ctx context.Context, courseID int64, p port
 		where += fmt.Sprintf(" AND (COALESCE(title,'') ILIKE $%d OR COALESCE(description,'') ILIKE $%d)", len(args), len(args))
 	}
 	var total int64
-	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM material `+where, args...).Scan(&total); err != nil {
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM material `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, p.Limit, p.Offset)
-	rows, err := s.db.Query(ctx, fmt.Sprintf(`SELECT id::text, course_id::text, COALESCE(title,''), COALESCE(description,''), file_url, file_type, uploaded_at
+	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT id::text, course_id::text, COALESCE(title,''), COALESCE(description,''), file_url, file_type, uploaded_at
 		FROM material %s ORDER BY uploaded_at DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
@@ -518,7 +518,7 @@ func (s *Server) portalGetMaterial(ctx context.Context, id int64) (*portalMateri
 	var mid, courseIDStr, title, desc string
 	var fileURL, fileType *string
 	var createdAt time.Time
-	err := s.db.QueryRow(ctx, `SELECT id::text, course_id::text, COALESCE(title,''), COALESCE(description,''), file_url, file_type, uploaded_at
+	err := s.portalDB.QueryRow(ctx, `SELECT id::text, course_id::text, COALESCE(title,''), COALESCE(description,''), file_url, file_type, uploaded_at
 		FROM material WHERE id=$1`, id).Scan(&mid, &courseIDStr, &title, &desc, &fileURL, &fileType, &createdAt)
 	if err != nil {
 		return nil, err
@@ -530,7 +530,7 @@ func (s *Server) portalGetMaterial(ctx context.Context, id int64) (*portalMateri
 func (s *Server) portalCreateMaterial(ctx context.Context, courseID int64, in portalMaterialInput) (*portalMaterialDTO, error) {
 	desc := composeModuleMeta(strings.TrimSpace(in.Description), in.ModuleID, in.Module)
 	var id int64
-	err := s.db.QueryRow(ctx, `INSERT INTO material (course_id, title, description, file_url, file_type, visibility, uploaded_at)
+	err := s.portalDB.QueryRow(ctx, `INSERT INTO material (course_id, title, description, file_url, file_type, visibility, uploaded_at)
 		VALUES ($1,$2,$3,$4,$5,1,NOW()) RETURNING id`,
 		courseID, in.Title, desc, in.FileURL, in.FileType).Scan(&id)
 	if err != nil {
@@ -549,7 +549,7 @@ func (s *Server) portalUpdateMaterial(ctx context.Context, id int64, in portalMa
 	}
 	desc := portalMergeModuleDesc(existing.Description, existing.ModuleID, existing.Module,
 		portalMaterialModule{desc: in.Description, moduleID: in.ModuleID, moduleName: in.Module})
-	_, err = s.db.Exec(ctx, `UPDATE material SET
+	_, err = s.portalDB.Exec(ctx, `UPDATE material SET
 		title = COALESCE(NULLIF($2,''), title),
 		description = $3,
 		file_url = COALESCE($4, file_url),
@@ -562,7 +562,7 @@ func (s *Server) portalUpdateMaterial(ctx context.Context, id int64, in portalMa
 }
 
 func (s *Server) portalDeleteMaterial(ctx context.Context, id int64) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM material WHERE id=$1`, id)
+	tag, err := s.portalDB.Exec(ctx, `DELETE FROM material WHERE id=$1`, id)
 	if err != nil {
 		return portalDBErr(err)
 	}
@@ -590,11 +590,11 @@ func (s *Server) portalListVideos(ctx context.Context, p portalPagination) ([]po
 		where = "WHERE COALESCE(title,'') ILIKE $1 OR COALESCE(description,'') ILIKE $1"
 	}
 	var total int64
-	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM video `+where, args...).Scan(&total); err != nil {
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM video `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, p.Limit, p.Offset)
-	rows, err := s.db.Query(ctx, fmt.Sprintf(`SELECT id::text, COALESCE(title,''), COALESCE(description,''), COALESCE(url,''), thumbnail_url, duration_seconds, created_at
+	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT id::text, COALESCE(title,''), COALESCE(description,''), COALESCE(url,''), thumbnail_url, duration_seconds, created_at
 		FROM video %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
@@ -619,7 +619,7 @@ func (s *Server) portalGetVideo(ctx context.Context, id int64) (*portalVideoDTO,
 	var thumb *string
 	var duration *int
 	var createdAt time.Time
-	err := s.db.QueryRow(ctx, `SELECT id::text, COALESCE(title,''), COALESCE(description,''), COALESCE(url,''), thumbnail_url, duration_seconds, created_at
+	err := s.portalDB.QueryRow(ctx, `SELECT id::text, COALESCE(title,''), COALESCE(description,''), COALESCE(url,''), thumbnail_url, duration_seconds, created_at
 		FROM video WHERE id=$1`, id).Scan(&vid, &title, &desc, &url, &thumb, &duration, &createdAt)
 	if err != nil {
 		return nil, err
@@ -631,7 +631,7 @@ func (s *Server) portalGetVideo(ctx context.Context, id int64) (*portalVideoDTO,
 func (s *Server) portalCreateVideo(ctx context.Context, in portalVideoInput) (*portalVideoDTO, error) {
 	desc := composeModuleMeta(strings.TrimSpace(in.Description), in.ModuleID, in.Module)
 	var id int64
-	err := s.db.QueryRow(ctx, `INSERT INTO video (title, description, url, thumbnail_url, duration_seconds, visibility, created_at)
+	err := s.portalDB.QueryRow(ctx, `INSERT INTO video (title, description, url, thumbnail_url, duration_seconds, visibility, created_at)
 		VALUES ($1,$2,$3,$4,$5,1,NOW()) RETURNING id`,
 		in.Title, desc, in.URL, in.ThumbnailURL, in.DurationSeconds).Scan(&id)
 	if err != nil {
@@ -650,7 +650,7 @@ func (s *Server) portalUpdateVideo(ctx context.Context, id int64, in portalVideo
 	}
 	desc := portalMergeModuleDesc(existing.Description, existing.ModuleID, existing.Module,
 		portalMaterialModule{desc: in.Description, moduleID: in.ModuleID, moduleName: in.Module})
-	_, err = s.db.Exec(ctx, `UPDATE video SET
+	_, err = s.portalDB.Exec(ctx, `UPDATE video SET
 		title = COALESCE(NULLIF($2,''), title),
 		description = $3,
 		url = COALESCE(NULLIF($4,''), url),
@@ -664,7 +664,7 @@ func (s *Server) portalUpdateVideo(ctx context.Context, id int64, in portalVideo
 }
 
 func (s *Server) portalDeleteVideo(ctx context.Context, id int64) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM video WHERE id=$1`, id)
+	tag, err := s.portalDB.Exec(ctx, `DELETE FROM video WHERE id=$1`, id)
 	if err != nil {
 		return portalDBErr(err)
 	}
