@@ -95,7 +95,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if u == nil || u.PasswordHash == nil || !verifyPassword(body.Password, *u.PasswordHash) {
+	if u == nil || u.LoginDisabled || u.PasswordHash == nil || !verifyPassword(body.Password, *u.PasswordHash) {
 		if cnt, _ := s.rdb.Incr(r.Context(), lockKey).Result(); cnt == 1 {
 			s.rdb.Expire(r.Context(), lockKey, loginFailWindow)
 		}

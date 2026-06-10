@@ -1048,6 +1048,12 @@ paths:
         Aceita `email` completo (qualquer domínio) **ou** `localPart` (que vira
         `@santos-tech.com`). Quando os dois são enviados, `email` tem precedência.
 
+        Com `shared: true`, cria uma **caixa institucional compartilhada**
+        `@santos-tech.com` sem login — exige `localPart`; `name` vira opcional
+        (default = `localPart`); nenhum convite é enviado; a conta não autentica
+        por senha, OAuth, convite nem "esqueci a senha". A resposta inclui
+        `loginDisabled: true` para essas contas.
+
         Rate limit: **10 req/min por IP**.
       requestBody:
         required: true
@@ -1066,13 +1072,20 @@ paths:
                   description: Parte local do email (sem @). Vira `localPart@santos-tech.com`.
                 name:
                   type: string
-                  description: Nome completo do usuário (obrigatório).
+                  description: Nome completo do usuário (obrigatório para contas normais; opcional para `shared`).
                 role:
                   type: integer
-                  description: "1=Aluno (padrão), 2=Professor, 3=Admin."
+                  description: "1=Aluno (padrão), 2=Professor, 3=Admin. Ignorado quando `shared=true`."
                   enum: [1, 2, 3]
                   default: 1
-              required: [name]
+                shared:
+                  type: boolean
+                  default: false
+                  description: |
+                    Cria uma caixa institucional compartilhada `@santos-tech.com` sem login.
+                    Exige `localPart`. `name` vira opcional. Nenhum convite é enviado.
+                    A conta não autentica por nenhum caminho (senha, OAuth, "esqueci a senha").
+              required: []
       responses:
         "201":
           description: Usuário criado e convite enviado
@@ -1567,7 +1580,13 @@ components:
         pending:
           type: boolean
           description: Convite ainda não aceito (usuário não definiu senha).
-      required: [id, email, name, role, suspendedAt, createdAt, mfaEnabled, quotaBytes, pending]
+        loginDisabled:
+          type: boolean
+          description: |
+            true = caixa institucional compartilhada sem login. A conta não
+            autentica por nenhum caminho (senha, OAuth, "esqueci a senha") e
+            não recebe convite.
+      required: [id, email, name, role, suspendedAt, createdAt, mfaEnabled, quotaBytes, pending, loginDisabled]
 
     OAuthClient:
       type: object

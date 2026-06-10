@@ -104,6 +104,28 @@ func TestUpdateAdminUserBadRoleNew(t *testing.T) {
 	}
 }
 
+// shared=true sem localPart → 400 (antes do banco).
+func TestCreateSharedMailboxRequiresLocalPart(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	s.handleCreateAdminUser(w, httptest.NewRequest("POST", "/auth/admin/users",
+		strings.NewReader(`{"shared":true,"name":"Contato"}`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}
+
+// shared=true com localPart inválido → 400 (antes do banco).
+func TestCreateSharedMailboxBadLocalPart(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	s.handleCreateAdminUser(w, httptest.NewRequest("POST", "/auth/admin/users",
+		strings.NewReader(`{"shared":true,"localPart":"con@x"}`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}
+
 // email completo inválido (ou sem email e sem localPart) → 400 antes do banco.
 func TestCreateAdminUserBadEmail(t *testing.T) {
 	s := testServer(Config{})
