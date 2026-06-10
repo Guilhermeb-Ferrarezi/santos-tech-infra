@@ -20,9 +20,12 @@ func (s *Server) handlePortalExerciseAnswers(w http.ResponseWriter, r *http.Requ
 	q := p.Query
 	f := portalAnswerFilter{Status: r.URL.Query().Get("status")}
 	if v := r.URL.Query().Get("studentId"); v != "" {
-		if id, e := strconv.ParseInt(v, 10, 64); e == nil {
-			f.StudentID = id
+		id, e := strconv.ParseInt(v, 10, 64)
+		if e != nil || id <= 0 {
+			writeErr(w, validationErr("studentId inválido"))
+			return
 		}
+		f.StudentID = id
 	}
 	items, stats, total, err := s.portalExerciseAnswers(r.Context(), exerciseID, f, q, r.URL.Query().Get("sort"), p)
 	if err != nil {

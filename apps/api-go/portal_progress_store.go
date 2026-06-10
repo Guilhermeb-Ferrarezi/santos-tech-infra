@@ -48,21 +48,25 @@ func portalAnswerOrder(sort string) string {
 func (s *Server) portalExerciseAnswers(ctx context.Context, exerciseID int64, f portalAnswerFilter, q, sort string, p portalPagination) ([]portalAnswerDTO, portalAnswerStats, int64, error) {
 	var stats portalAnswerStats
 	args := []any{exerciseID}
-	where := "WHERE a.exercise_id = $1"
-	switch f.Status {
-	case "corrigida":
-		where += " AND a.is_correct IS NOT NULL"
-	case "pendente":
-		where += " AND a.is_correct IS NULL"
-	}
+	// base = exercício + filtros de aluno/busca (NÃO inclui status, para as stats
+	// refletirem o quadro completo do exercício, não só o subconjunto filtrado).
+	base := "WHERE a.exercise_id = $1"
 	if f.StudentID > 0 {
 		args = append(args, f.StudentID)
-		where += fmt.Sprintf(" AND a.user_id = $%d", len(args))
+		base += fmt.Sprintf(" AND a.user_id = $%d", len(args))
 	}
 	if q != "" {
 		args = append(args, "%"+q+"%")
 		n := len(args)
-		where += fmt.Sprintf(" AND (COALESCE(u.name,'') ILIKE $%d OR COALESCE(u.email,'') ILIKE $%d OR COALESCE(q.statement,'') ILIKE $%d OR COALESCE(a.answer_text,'') ILIKE $%d)", n, n, n, n)
+		base += fmt.Sprintf(" AND (COALESCE(u.name,'') ILIKE $%d OR COALESCE(u.email,'') ILIKE $%d OR COALESCE(q.statement,'') ILIKE $%d OR COALESCE(a.answer_text,'') ILIKE $%d)", n, n, n, n)
+	}
+	// predicado de status (sem placeholder) só na listagem.
+	statusPred := ""
+	switch f.Status {
+	case "corrigida":
+		statusPred = " AND a.is_correct IS NOT NULL"
+	case "pendente":
+		statusPred = " AND a.is_correct IS NULL"
 	}
 
 	statsSQL := `SELECT COUNT(*),
@@ -70,14 +74,22 @@ func (s *Server) portalExerciseAnswers(ctx context.Context, exerciseID int64, f 
 		COUNT(*) FILTER (WHERE a.is_correct IS NULL),
 		COUNT(*) FILTER (WHERE a.is_correct IS TRUE),
 		COUNT(*) FILTER (WHERE a.is_correct IS FALSE),
-		COUNT(DISTINCT a.user_id)` + portalAnswerFrom + where
+		COUNT(DISTINCT a.user_id)` + portalAnswerFrom + base
 	if err := s.db.QueryRow(ctx, statsSQL, args...).Scan(&stats.Total, &stats.Corrigidas, &stats.Pendentes, &stats.Corretas, &stats.Incorretas, &stats.TotalAlunos); err != nil {
 		return nil, stats, 0, err
 	}
+	// total da paginação reflete o filtro de status (derivado das stats, sem query extra).
+	listTotal := stats.Total
+	switch f.Status {
+	case "corrigida":
+		listTotal = stats.Corrigidas
+	case "pendente":
+		listTotal = stats.Pendentes
+	}
 
 	args = append(args, p.Limit, p.Offset)
-	listSQL := fmt.Sprintf(`SELECT %s%s%s ORDER BY %s LIMIT $%d OFFSET $%d`,
-		portalAnswerSelect, portalAnswerFrom, where, portalAnswerOrder(sort), len(args)-1, len(args))
+	listSQL := fmt.Sprintf(`SELECT %s%s%s%s ORDER BY %s LIMIT $%d OFFSET $%d`,
+		portalAnswerSelect, portalAnswerFrom, base, statusPred, portalAnswerOrder(sort), len(args)-1, len(args))
 	rows, err := s.db.Query(ctx, listSQL, args...)
 	if err != nil {
 		return nil, stats, 0, err
@@ -91,7 +103,7 @@ func (s *Server) portalExerciseAnswers(ctx context.Context, exerciseID int64, f 
 		}
 		items = append(items, *dto)
 	}
-	return items, stats, stats.Total, rows.Err()
+	return items, stats, listTotal, rows.Err()
 }
 
 func (s *Server) portalGetAnswer(ctx context.Context, id int64) (*portalAnswerDTO, error) {
@@ -270,7 +282,7 @@ func (s *Server) portalClassProgress(ctx context.Context, classID int64) ([]port
 	rows, err := s.db.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''),
 		p.id::text, COALESCE(p.name,''), psp.status, COALESCE(psp.progress, 0), psp.unlocked_at, psp.completed_at
 		FROM class c
-		JOIN enrollment en ON en.class_id = c.id
+		JOIN (SELECT DISTINCT user_id FROM enrollment WHERE class_id = $1) en ON true
 		JOIN "user" u ON u.id = en.user_id
 		JOIN phase p ON p.module_id = c.current_module_id
 		LEFT JOIN progress_student_phase psp ON psp.user_id = u.id AND psp.phase_id = p.id
