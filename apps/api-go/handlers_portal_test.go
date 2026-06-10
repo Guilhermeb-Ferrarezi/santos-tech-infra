@@ -126,3 +126,23 @@ func TestPortalClassValidationBeforeDB(t *testing.T) {
 		t.Fatalf("bad student id code=%d", w3.Code)
 	}
 }
+
+func TestPortalRoomValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+
+	r := httptest.NewRequest("POST", "/portal/classes/1/rooms", strings.NewReader(`{"name":"S"}`))
+	r.SetPathValue("classId", "1")
+	w := httptest.NewRecorder()
+	s.handlePortalCreateClassRoom(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("short room name code=%d", w.Code)
+	}
+
+	r2 := httptest.NewRequest("PATCH", "/portal/rooms/x/status", strings.NewReader(`{"isAuthorized":true}`))
+	r2.SetPathValue("roomId", "x")
+	w2 := httptest.NewRecorder()
+	s.handlePortalUpdateClassRoomStatus(w2, reqAs(r2, 1))
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("bad room id code=%d", w2.Code)
+	}
+}

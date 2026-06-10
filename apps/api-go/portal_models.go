@@ -238,6 +238,36 @@ func portalParseDate(raw string) (time.Time, error) {
 	return t, nil
 }
 
+// ── Salas (class_rooms) ──────────────────────────────────────────────────────
+
+type portalRoomDTO struct {
+	ID            string     `json:"id"`
+	ClassID       string     `json:"classId"`
+	Name          string     `json:"name"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	IsAuthorized  bool       `json:"isAuthorized"`
+	TargetLimited *time.Time `json:"targetLimited"`
+	Status        string     `json:"status"`
+}
+
+type portalRoomInput struct {
+	Name          string  `json:"name"`
+	IsAuthorized  *bool   `json:"isAuthorized"`
+	TargetLimited *string `json:"targetLimited"`
+}
+
+func (in *portalRoomInput) validateCreate() error {
+	in.Name = strings.TrimSpace(in.Name)
+	if len(in.Name) < 2 {
+		return validationErr("nome obrigatório")
+	}
+	return nil
+}
+
+type portalRoomStatusInput struct {
+	IsAuthorized *bool `json:"isAuthorized"`
+}
+
 // ── Helpers de erro ──────────────────────────────────────────────────────────
 
 func validationErr(msg string) error {

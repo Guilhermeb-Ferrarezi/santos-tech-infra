@@ -475,3 +475,121 @@ func (s *Server) portalRemoveClassStudent(ctx context.Context, classID, studentI
 	_, err := s.db.Exec(ctx, `DELETE FROM enrollment WHERE class_id=$1 AND user_id=$2`, classID, studentID)
 	return err
 }
+
+// ── Salas (class_rooms) ──────────────────────────────────────────────────────
+
+const portalRoomCols = `id::text, class_id::text, COALESCE(name,''), created_at, is_authorized, target_limited`
+
+func (s *Server) portalListClassRooms(ctx context.Context, classID int64) ([]portalRoomDTO, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+portalRoomCols+`
+		FROM class_rooms WHERE class_id=$1 ORDER BY created_at DESC`, classID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []portalRoomDTO{}
+	for rows.Next() {
+		var dto portalRoomDTO
+		if err := rows.Scan(&dto.ID, &dto.ClassID, &dto.Name, &dto.CreatedAt, &dto.IsAuthorized, &dto.TargetLimited); err != nil {
+			return nil, err
+		}
+		dto.Status = portalRoomStatus(dto.IsAuthorized, dto.TargetLimited)
+		items = append(items, dto)
+	}
+	return items, rows.Err()
+}
+
+// portalRoomStatus deriva o estado da sala: fechada se a data-limite passou,
+// aberta se autorizada, senão rascunho.
+func portalRoomStatus(open bool, target *time.Time) string {
+	if target != nil && target.Before(portalNowUTC()) {
+		return "closed"
+	}
+	if open {
+		return "open"
+	}
+	return "draft"
+}
+
+func portalRoomTarget(raw *string) (*time.Time, error) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil, nil
+	}
+	t, err := portalParseDate(*raw)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (s *Server) portalCreateClassRoom(ctx context.Context, classID int64, in portalRoomInput) (*portalRoomDTO, error) {
+	isAuth := false
+	if in.IsAuthorized != nil {
+		isAuth = *in.IsAuthorized
+	}
+	target, err := portalRoomTarget(in.TargetLimited)
+	if err != nil {
+		return nil, err
+	}
+	var dto portalRoomDTO
+	err = s.db.QueryRow(ctx, `INSERT INTO class_rooms (class_id, name, is_authorized, target_limited, created_at)
+		VALUES ($1,$2,$3,$4,NOW())
+		RETURNING `+portalRoomCols,
+		classID, in.Name, isAuth, target).Scan(&dto.ID, &dto.ClassID, &dto.Name, &dto.CreatedAt, &dto.IsAuthorized, &dto.TargetLimited)
+	if err != nil {
+		return nil, err
+	}
+	dto.Status = portalRoomStatus(dto.IsAuthorized, dto.TargetLimited)
+	return &dto, nil
+}
+
+func (s *Server) portalUpdateClassRoom(ctx context.Context, roomID int64, in portalRoomInput) (*portalRoomDTO, error) {
+	// target_limited só é tocado quanto o campo veio no corpo (setTarget); string
+	// vazia limpa (NULL), data válida define.
+	setTarget := in.TargetLimited != nil
+	target, err := portalRoomTarget(in.TargetLimited)
+	if err != nil {
+		return nil, err
+	}
+	var dto portalRoomDTO
+	err = s.db.QueryRow(ctx, `UPDATE class_rooms SET
+		name = COALESCE(NULLIF($2,''), name),
+		is_authorized = COALESCE($3, is_authorized),
+		target_limited = CASE WHEN $4 THEN $5 ELSE target_limited END
+		WHERE id=$1
+		RETURNING `+portalRoomCols,
+		roomID, in.Name, in.IsAuthorized, setTarget, target).Scan(&dto.ID, &dto.ClassID, &dto.Name, &dto.CreatedAt, &dto.IsAuthorized, &dto.TargetLimited)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, notFoundErr("Sala")
+	}
+	if err != nil {
+		return nil, err
+	}
+	dto.Status = portalRoomStatus(dto.IsAuthorized, dto.TargetLimited)
+	return &dto, nil
+}
+
+func (s *Server) portalUpdateClassRoomStatus(ctx context.Context, roomID int64, open bool) (*portalRoomDTO, error) {
+	var dto portalRoomDTO
+	err := s.db.QueryRow(ctx, `UPDATE class_rooms SET is_authorized=$2 WHERE id=$1
+		RETURNING `+portalRoomCols, roomID, open).Scan(&dto.ID, &dto.ClassID, &dto.Name, &dto.CreatedAt, &dto.IsAuthorized, &dto.TargetLimited)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, notFoundErr("Sala")
+	}
+	if err != nil {
+		return nil, err
+	}
+	dto.Status = portalRoomStatus(dto.IsAuthorized, dto.TargetLimited)
+	return &dto, nil
+}
+
+func (s *Server) portalDeleteClassRoom(ctx context.Context, roomID int64) error {
+	tag, err := s.db.Exec(ctx, `DELETE FROM class_rooms WHERE id=$1`, roomID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return notFoundErr("Sala")
+	}
+	return nil
+}
