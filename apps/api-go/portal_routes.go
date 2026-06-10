@@ -69,8 +69,8 @@ func (s *Server) registerPortalContentRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /portal/phases/{phaseId}/containers", s.staffGuard(s.handlePortalListContainers))
 	mux.HandleFunc("POST /portal/containers", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateContainer)))
 	mux.HandleFunc("POST /portal/containers/add-exercises", s.rateLimit(20, min, s.adminGuard(s.handlePortalAddContainerExercises)))
-	mux.HandleFunc("DELETE /portal/containers/group", s.adminGuard(s.handlePortalDeleteContainerGroup))
-	mux.HandleFunc("DELETE /portal/containers/{containerTaskId}", s.adminGuard(s.handlePortalDeleteContainerTask))
+	mux.HandleFunc("DELETE /portal/containers/group", s.adminGuard(s.sudoGuard(s.handlePortalDeleteContainerGroup)))
+	mux.HandleFunc("DELETE /portal/containers/{containerTaskId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteContainerTask)))
 
 	// Materiais (por curso; módulo embutido na description)
 	mux.HandleFunc("GET /portal/courses/{courseId}/materials", s.staffGuard(s.handlePortalListMaterials))

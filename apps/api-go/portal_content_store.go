@@ -4,11 +4,41 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 )
+
+// portalMergeModuleDesc recompõe a description com o metadado de módulo,
+// preservando o módulo/description atuais quando o PATCH não os reenvia. Evita
+// que um update parcial (ex.: só a description) apague o vínculo de módulo.
+func portalMergeModuleDesc(curDesc string, curModuleID, curModuleName *string, in portalMaterialModule) string {
+	desc := curDesc
+	if strings.TrimSpace(in.desc) != "" {
+		desc = strings.TrimSpace(in.desc)
+	}
+	moduleID := in.moduleID
+	if moduleID == nil && curModuleID != nil {
+		if v, err := strconv.ParseInt(*curModuleID, 10, 64); err == nil {
+			moduleID = &v
+		}
+	}
+	moduleName := in.moduleName
+	if moduleName == nil {
+		moduleName = curModuleName
+	}
+	return composeModuleMeta(desc, moduleID, moduleName)
+}
+
+// portalMaterialModule são os campos de módulo/description de entrada (material
+// ou vídeo) usados no merge.
+type portalMaterialModule struct {
+	desc       string
+	moduleID   *int64
+	moduleName *string
+}
 
 // ── Exercícios ───────────────────────────────────────────────────────────────
 
@@ -243,8 +273,9 @@ func (s *Server) portalUpdateExercise(ctx context.Context, id int64, in portalEx
 		return nil, notFoundErr("Exercício")
 	}
 
-	// só mexe nas questões se o corpo as enviou; bloqueia se já há respostas.
-	if in.Questions != nil {
+	// só mexe nas questões se o corpo enviou questões; bloqueia se já há respostas.
+	// (lista vazia = "não mexer", não "apagar tudo")
+	if len(in.Questions) > 0 {
 		var n int64
 		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM answer WHERE exercise_id=$1`, id).Scan(&n); err != nil {
 			return nil, err
@@ -423,7 +454,7 @@ func (s *Server) portalDeleteContainerGroup(ctx context.Context, ref portalConta
 		AND (container_date_target_int=$4 OR ($4 IS NULL AND container_date_target_int IS NULL))`,
 		ref.Name, ref.PhaseID, ref.IsDailyTask, ref.ContainerDateTargetInt)
 	if err != nil {
-		return 0, err
+		return 0, portalDBErr(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return 0, notFoundErr("Container")
@@ -434,7 +465,7 @@ func (s *Server) portalDeleteContainerGroup(ctx context.Context, ref portalConta
 func (s *Server) portalDeleteContainerTask(ctx context.Context, id int64) error {
 	tag, err := s.db.Exec(ctx, `DELETE FROM container_tasks WHERE id=$1`, id)
 	if err != nil {
-		return err
+		return portalDBErr(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return notFoundErr("Container")
@@ -509,18 +540,23 @@ func (s *Server) portalCreateMaterial(ctx context.Context, courseID int64, in po
 }
 
 func (s *Server) portalUpdateMaterial(ctx context.Context, id int64, in portalMaterialInput) (*portalMaterialDTO, error) {
-	desc := composeModuleMeta(strings.TrimSpace(in.Description), in.ModuleID, in.Module)
-	tag, err := s.db.Exec(ctx, `UPDATE material SET
+	existing, err := s.portalGetMaterial(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, notFoundErr("Material")
+	}
+	if err != nil {
+		return nil, err
+	}
+	desc := portalMergeModuleDesc(existing.Description, existing.ModuleID, existing.Module,
+		portalMaterialModule{desc: in.Description, moduleID: in.ModuleID, moduleName: in.Module})
+	_, err = s.db.Exec(ctx, `UPDATE material SET
 		title = COALESCE(NULLIF($2,''), title),
-		description = COALESCE(NULLIF($3,''), description),
+		description = $3,
 		file_url = COALESCE($4, file_url),
 		file_type = COALESCE($5, file_type)
 		WHERE id=$1`, id, in.Title, desc, in.FileURL, in.FileType)
 	if err != nil {
 		return nil, portalDBErr(err)
-	}
-	if tag.RowsAffected() == 0 {
-		return nil, notFoundErr("Material")
 	}
 	return s.portalGetMaterial(ctx, id)
 }
@@ -528,7 +564,7 @@ func (s *Server) portalUpdateMaterial(ctx context.Context, id int64, in portalMa
 func (s *Server) portalDeleteMaterial(ctx context.Context, id int64) error {
 	tag, err := s.db.Exec(ctx, `DELETE FROM material WHERE id=$1`, id)
 	if err != nil {
-		return err
+		return portalDBErr(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return notFoundErr("Material")
@@ -605,10 +641,18 @@ func (s *Server) portalCreateVideo(ctx context.Context, in portalVideoInput) (*p
 }
 
 func (s *Server) portalUpdateVideo(ctx context.Context, id int64, in portalVideoInput) (*portalVideoDTO, error) {
-	desc := composeModuleMeta(strings.TrimSpace(in.Description), in.ModuleID, in.Module)
-	tag, err := s.db.Exec(ctx, `UPDATE video SET
+	existing, err := s.portalGetVideo(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, notFoundErr("Vídeo")
+	}
+	if err != nil {
+		return nil, err
+	}
+	desc := portalMergeModuleDesc(existing.Description, existing.ModuleID, existing.Module,
+		portalMaterialModule{desc: in.Description, moduleID: in.ModuleID, moduleName: in.Module})
+	_, err = s.db.Exec(ctx, `UPDATE video SET
 		title = COALESCE(NULLIF($2,''), title),
-		description = COALESCE(NULLIF($3,''), description),
+		description = $3,
 		url = COALESCE(NULLIF($4,''), url),
 		thumbnail_url = COALESCE($5, thumbnail_url),
 		duration_seconds = COALESCE($6, duration_seconds)
@@ -616,16 +660,13 @@ func (s *Server) portalUpdateVideo(ctx context.Context, id int64, in portalVideo
 	if err != nil {
 		return nil, portalDBErr(err)
 	}
-	if tag.RowsAffected() == 0 {
-		return nil, notFoundErr("Vídeo")
-	}
 	return s.portalGetVideo(ctx, id)
 }
 
 func (s *Server) portalDeleteVideo(ctx context.Context, id int64) error {
 	tag, err := s.db.Exec(ctx, `DELETE FROM video WHERE id=$1`, id)
 	if err != nil {
-		return err
+		return portalDBErr(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return notFoundErr("Vídeo")

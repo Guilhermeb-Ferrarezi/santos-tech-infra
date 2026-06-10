@@ -162,3 +162,36 @@ func TestPortalContentValidationBeforeDB(t *testing.T) {
 		t.Fatalf("vídeo sem url code=%d", w4.Code)
 	}
 }
+
+func TestPortalMergeModuleDesc(t *testing.T) {
+	curID, curName := "7", "Mod A"
+
+	// PATCH troca só a description, sem moduleId → módulo é preservado
+	got := portalMergeModuleDesc("desc antiga", &curID, &curName, portalMaterialModule{desc: "desc nova"})
+	if got != "[[module:7|Mod A]]\ndesc nova" {
+		t.Fatalf("preservar módulo: got=%q", got)
+	}
+
+	// troca o módulo explicitamente
+	newID, newName := int64(9), "Mod B"
+	got2 := portalMergeModuleDesc("d", &curID, &curName, portalMaterialModule{moduleID: &newID, moduleName: &newName})
+	if got2 != "[[module:9|Mod B]]\nd" {
+		t.Fatalf("trocar módulo: got=%q", got2)
+	}
+
+	// sem módulo atual nem novo → description pura
+	if got3 := portalMergeModuleDesc("d", nil, nil, portalMaterialModule{desc: "nova"}); got3 != "nova" {
+		t.Fatalf("sem módulo: got=%q", got3)
+	}
+}
+
+func TestPortalExerciseUpdateMultiplaNeedsQuestions(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("PATCH", "/portal/exercises/1", strings.NewReader(`{"type":1}`))
+	r.SetPathValue("exerciseId", "1")
+	w := httptest.NewRecorder()
+	s.handlePortalUpdateExercise(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("type=1 sem questões no update code=%d", w.Code)
+	}
+}

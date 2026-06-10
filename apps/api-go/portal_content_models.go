@@ -130,6 +130,11 @@ func (in *portalExerciseInput) validateUpdate() error {
 	if in.Type != nil && (*in.Type < 0 || *in.Type > 2) {
 		return validationErr("type deve ser 0 (código), 1 (múltipla) ou 2 (texto)")
 	}
+	// converter para múltipla escolha exige enviar as questões no mesmo PATCH,
+	// senão o exercício ficaria type=1 sem nenhuma questão.
+	if in.Type != nil && *in.Type == 1 && len(in.Questions) == 0 {
+		return validationErr("múltipla escolha exige ao menos uma questão")
+	}
 	if in.Difficulty != nil && *in.Difficulty < 1 {
 		return validationErr("difficulty deve ser >= 1")
 	}
@@ -299,7 +304,9 @@ func (in *portalVideoInput) validateCreate() error {
 // `[[module:<id>|<nome>]]`. Reproduzimos o encode/decode para não perder o
 // vínculo de módulo nos dados existentes (material/video não têm FK de módulo).
 
-var moduleMetaRegex = regexp.MustCompile(`^\[\[module:(\d+)\|([^\]]*)\]\]\s*`)
+// Consome o separador (uma quebra de linha opcional) após `]]`, preservando
+// qualquer espaço em branco que faça parte do corpo da description.
+var moduleMetaRegex = regexp.MustCompile(`^\[\[module:(\d+)\|([^\]]*)\]\]\n?`)
 
 // parseModuleMeta separa o metadado de módulo do corpo da description.
 func parseModuleMeta(raw string) (desc string, moduleID *string, moduleName *string) {
