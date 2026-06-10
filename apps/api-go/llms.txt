@@ -266,3 +266,40 @@ curl -s -b /tmp/st.cookies https://api.santos-tech.com/llms.txt
 # Alternativa sem login: PAT
 curl -s -H "Authorization: Bearer $ST_PAT" https://api.santos-tech.com/llms.txt
 ```
+
+## API do portal admin/professor (`/portal/*`)
+
+Auth: cookie `access_token` ou `Authorization: Bearer` (sessão ou PAT).
+Leitura: admin e professor (staffGuard). Escrita: admin (adminGuard);
+DELETE exige sudo. Paginação: `?page=1&limit=20&q=` (limit máx 100). IDs no
+JSON são string. Erro no formato `{code, message}` + status.
+
+```
+GET    /portal/overview
+GET    /portal/courses?page=1&limit=20&q=
+POST   /portal/courses
+GET    /portal/courses/{courseId}
+PATCH  /portal/courses/{courseId}
+DELETE /portal/courses/{courseId}
+GET    /portal/courses/{courseId}/modules
+POST   /portal/courses/{courseId}/modules
+PATCH  /portal/modules/{moduleId}
+DELETE /portal/modules/{moduleId}
+GET    /portal/modules/{moduleId}/phases
+POST   /portal/modules/{moduleId}/phases
+PATCH  /portal/phases/{phaseId}
+DELETE /portal/phases/{phaseId}
+GET    /portal/classes?page=1&limit=20&q=
+POST   /portal/classes
+GET    /portal/classes/{classId}
+PATCH  /portal/classes/{classId}
+DELETE /portal/classes/{classId}
+GET    /portal/classes/{classId}/students
+POST   /portal/classes/{classId}/students
+DELETE /portal/classes/{classId}/students/{studentId}
+GET    /portal/classes/{classId}/rooms
+POST   /portal/classes/{classId}/rooms
+PATCH  /portal/rooms/{roomId}
+PATCH  /portal/rooms/{roomId}/status
+DELETE /portal/rooms/{roomId}
+```

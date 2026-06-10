@@ -36,3 +36,10 @@ Reimplementação da `apps/api` (Fastify/TS) em Go + integração no serviço de
 - Endpoints atuais: register, login (email|username), logout, me, refresh, forgot/reset-password, GET /auth/google + callback.
 - Erro: `{code, message}` + status. Cookies: access_token/refresh_token, httpOnly, sameSite lax, domain COOKIE_DOMAIN.
 - Roles: 1=Student 2=Teacher 3=Admin 4=Custom (custom_roles.permissions jsonb).
+
+## 2026-06-09 — Portal admin/professor API Phase 1 (`/portal/*`)
+Primeira fatia da migração do portal pra API Go central: overview, catálogo
+(cursos/módulos/fases), turmas, matrículas e salas. Mantém o schema Postgres
+atual sem alteração, leitura por staffGuard e escrita por adminGuard (DELETE com
+sudo). Content/submissions/badges/goals e a desativação da API TS antiga ficam
+para planos seguintes.
