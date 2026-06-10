@@ -124,6 +124,14 @@ func (s *Server) portalDeleteBadge(ctx context.Context, id int64) error {
 	if !exists {
 		return notFoundErr("Medalha")
 	}
+	// recompensas de meta referenciam badge_id (FK). Limpa-as (e suas
+	// atribuições a alunos) antes de remover a medalha, senão o DELETE viola a FK.
+	if _, err := tx.Exec(ctx, `DELETE FROM goals_students WHERE goal_reward_id IN (SELECT id FROM goals_rewards WHERE badge_id=$1)`, id); err != nil {
+		return portalDBErr(err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM goals_rewards WHERE badge_id=$1`, id); err != nil {
+		return portalDBErr(err)
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM badge_student WHERE badge_id=$1`, id); err != nil {
 		return portalDBErr(err)
 	}

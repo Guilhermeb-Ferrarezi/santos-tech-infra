@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -196,7 +197,7 @@ func (s *Server) handlePortalListDispatches(w http.ResponseWriter, r *http.Reque
 	p := portalPaginationFrom(r)
 	path := fmt.Sprintf("/api/Notification/Admin/Dispatches?limit=%d&offset=%d", p.Limit, p.Offset)
 	if p.Query != "" {
-		path += "&q=" + p.Query
+		path += "&q=" + url.QueryEscape(p.Query)
 	}
 	resp, err := s.callGateway(r.Context(), http.MethodGet, path, nil)
 	if err != nil {

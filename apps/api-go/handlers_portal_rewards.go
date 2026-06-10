@@ -435,8 +435,14 @@ func (s *Server) handlePortalClaimGoalReward(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	// staff resgata em nome de qualquer aluno; aluno só o próprio registro.
+	// Fail-closed: sem usuário resolvido, nega (não cai no caminho "staff").
+	u, err := s.userByID(r.Context(), userIDFrom(r))
+	if err != nil || u == nil {
+		writeErr(w, appErr(http.StatusForbidden, "FORBIDDEN", "usuário não encontrado"))
+		return
+	}
 	var scope *int64
-	if u, err := s.userByID(r.Context(), userIDFrom(r)); err == nil && u != nil && u.Role == RoleStudent {
+	if u.Role == RoleStudent {
 		uid := u.ID
 		scope = &uid
 	}
