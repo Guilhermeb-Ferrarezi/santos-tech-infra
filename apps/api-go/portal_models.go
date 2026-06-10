@@ -137,6 +137,44 @@ func (in *portalCourseInput) validateCreate() error {
 	return nil
 }
 
+type portalModuleInput struct {
+	Name        string  `json:"name"`
+	Description *string `json:"description"`
+	IndexOrder  *int    `json:"indexOrder"`
+}
+
+func (in *portalModuleInput) validateCreate() error {
+	in.Name = strings.TrimSpace(in.Name)
+	if len(in.Name) < 2 {
+		return validationErr("nome obrigatório")
+	}
+	if in.IndexOrder != nil && *in.IndexOrder < 1 {
+		return validationErr("indexOrder deve ser positivo")
+	}
+	return nil
+}
+
+type portalPhaseInput struct {
+	Name           string `json:"name"`
+	WeekNumber     *int   `json:"weekNumber"`
+	IndexOrder     *int   `json:"indexOrder"`
+	AdminAuthorize *bool  `json:"adminAuthorize"`
+}
+
+func (in *portalPhaseInput) validateCreate() error {
+	in.Name = strings.TrimSpace(in.Name)
+	if len(in.Name) < 2 {
+		return validationErr("nome obrigatório")
+	}
+	if in.WeekNumber != nil && *in.WeekNumber < 1 {
+		return validationErr("weekNumber deve ser positivo")
+	}
+	if in.IndexOrder != nil && *in.IndexOrder < 1 {
+		return validationErr("indexOrder deve ser positivo")
+	}
+	return nil
+}
+
 // ── Helpers de erro ──────────────────────────────────────────────────────────
 
 func validationErr(msg string) error {

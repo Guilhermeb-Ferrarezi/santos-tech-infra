@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -62,5 +63,39 @@ func TestPortalCatalogBadIDsBeforeDB(t *testing.T) {
 				t.Fatalf("code=%d want %d", w.Code, http.StatusBadRequest)
 			}
 		})
+	}
+}
+
+func TestPortalCatalogMutationValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+
+	w := httptest.NewRecorder()
+	s.handlePortalCreateCourse(w, reqAs(httptest.NewRequest("POST", "/portal/courses", strings.NewReader(`{"name":"A"}`)), 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("short course name code=%d", w.Code)
+	}
+
+	r := httptest.NewRequest("PATCH", "/portal/courses/x", strings.NewReader(`{"name":"Curso"}`))
+	r.SetPathValue("courseId", "x")
+	w2 := httptest.NewRecorder()
+	s.handlePortalUpdateCourse(w2, reqAs(r, 1))
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("bad course id code=%d", w2.Code)
+	}
+
+	r3 := httptest.NewRequest("POST", "/portal/courses/1/modules", strings.NewReader(`{"name":"M"}`))
+	r3.SetPathValue("courseId", "1")
+	w3 := httptest.NewRecorder()
+	s.handlePortalCreateModule(w3, reqAs(r3, 1))
+	if w3.Code != http.StatusBadRequest {
+		t.Fatalf("short module name code=%d", w3.Code)
+	}
+
+	r4 := httptest.NewRequest("POST", "/portal/modules/1/phases", strings.NewReader(`{"name":"F"}`))
+	r4.SetPathValue("moduleId", "1")
+	w4 := httptest.NewRecorder()
+	s.handlePortalCreatePhase(w4, reqAs(r4, 1))
+	if w4.Code != http.StatusBadRequest {
+		t.Fatalf("short phase name code=%d", w4.Code)
 	}
 }

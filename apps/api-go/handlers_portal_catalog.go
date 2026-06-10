@@ -45,13 +45,53 @@ func (s *Server) handlePortalGetCourse(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePortalCreateCourse(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var in portalCourseInput
+	if err := decodePortalJSON(r.Body, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	if err := in.validateCreate(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	course, err := s.portalCreateCourse(r.Context(), in)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"course": course})
 }
+
 func (s *Server) handlePortalUpdateCourse(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	id, err := portalPathID(r, "courseId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in portalCourseInput
+	if err := decodePortalJSON(r.Body, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	course, err := s.portalUpdateCourse(r.Context(), id, in)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"course": course})
 }
+
 func (s *Server) handlePortalDeleteCourse(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	id, err := portalPathID(r, "courseId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalDeleteByID(r.Context(), "course", id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 func (s *Server) handlePortalListModules(w http.ResponseWriter, r *http.Request) {
 	courseID, err := portalPathID(r, "courseId")
@@ -68,13 +108,58 @@ func (s *Server) handlePortalListModules(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, newPortalPage(items, total, p))
 }
 func (s *Server) handlePortalCreateModule(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	courseID, err := portalPathID(r, "courseId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in portalModuleInput
+	if err := decodePortalJSON(r.Body, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	if err := in.validateCreate(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	module, err := s.portalCreateModule(r.Context(), courseID, in)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"module": module})
 }
+
 func (s *Server) handlePortalUpdateModule(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	moduleID, err := portalPathID(r, "moduleId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in portalModuleInput
+	if err := decodePortalJSON(r.Body, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	module, err := s.portalUpdateModule(r.Context(), moduleID, in)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"module": module})
 }
+
 func (s *Server) handlePortalDeleteModule(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	moduleID, err := portalPathID(r, "moduleId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalDeleteByID(r.Context(), "module", moduleID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 func (s *Server) handlePortalListPhases(w http.ResponseWriter, r *http.Request) {
 	moduleID, err := portalPathID(r, "moduleId")
@@ -91,11 +176,56 @@ func (s *Server) handlePortalListPhases(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, newPortalPage(items, total, p))
 }
 func (s *Server) handlePortalCreatePhase(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	moduleID, err := portalPathID(r, "moduleId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in portalPhaseInput
+	if err := decodePortalJSON(r.Body, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	if err := in.validateCreate(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	phase, err := s.portalCreatePhase(r.Context(), moduleID, in)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"phase": phase})
 }
+
 func (s *Server) handlePortalUpdatePhase(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	phaseID, err := portalPathID(r, "phaseId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in portalPhaseInput
+	if err := decodePortalJSON(r.Body, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	phase, err := s.portalUpdatePhase(r.Context(), phaseID, in)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"phase": phase})
 }
+
 func (s *Server) handlePortalDeletePhase(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	phaseID, err := portalPathID(r, "phaseId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalDeleteByID(r.Context(), "phase", phaseID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
