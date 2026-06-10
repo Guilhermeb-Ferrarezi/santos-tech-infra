@@ -201,3 +201,14 @@ func TestPortalIniciarFasesValidationBeforeDB(t *testing.T) {
 		t.Fatalf("empty studentIds code=%d", w2.Code)
 	}
 }
+
+func TestPortalUpdateClassDurationCapBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("PATCH", "/portal/classes/1", strings.NewReader(`{"durationWeeks":9999}`))
+	r.SetPathValue("classId", "1")
+	w := httptest.NewRecorder()
+	s.handlePortalUpdateClass(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("durationWeeks fora do range code=%d", w.Code)
+	}
+}

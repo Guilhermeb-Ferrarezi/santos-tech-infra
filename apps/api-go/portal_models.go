@@ -295,3 +295,7 @@ func validationErr(msg string) error {
 func notFoundErr(entity string) error {
 	return appErr(http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("%s não encontrado", entity))
 }
+
+func conflictErr(msg string) error {
+	return appErr(http.StatusConflict, "CONFLICT", msg)
+}

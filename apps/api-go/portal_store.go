@@ -9,7 +9,26 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// portalDBErr converte erros de integridade do Postgres num 409/400 legível;
+// qualquer outro erro passa intacto (writeErr → 500). Isso evita que IDs de FK
+// inexistentes (curso/módulo/turma/aluno) virem um 500 genérico.
+func portalDBErr(err error) error {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) {
+		switch pg.Code {
+		case "23503": // foreign_key_violation
+			return conflictErr("referência inválida (curso, módulo, turma ou aluno inexistente)")
+		case "23505": // unique_violation
+			return conflictErr("registro duplicado")
+		case "23514": // check_violation
+			return validationErr("valor viola uma restrição do banco")
+		}
+	}
+	return err
+}
 
 // ── Overview ─────────────────────────────────────────────────────────────────
 
@@ -48,7 +67,7 @@ func (s *Server) portalListCourses(ctx context.Context, p portalPagination) ([]p
 	args = append(args, p.Limit, p.Offset)
 	limitPos := len(args) - 1
 	offsetPos := len(args)
-	rows, err := s.db.Query(ctx, fmt.Sprintf(`SELECT id, name, description, is_paid, duration_hours, level, focus, price::text
+	rows, err := s.db.Query(ctx, fmt.Sprintf(`SELECT id, COALESCE(name, ''), description, is_paid, duration_hours, level, focus, price::text
 		FROM course %s ORDER BY id ASC LIMIT $%d OFFSET $%d`, where, limitPos, offsetPos), args...)
 	if err != nil {
 		return nil, 0, err
@@ -174,7 +193,7 @@ func (s *Server) portalUpdateCourse(ctx context.Context, id int64, in portalCour
 		duration_hours = COALESCE($5, duration_hours),
 		level = COALESCE($6, level),
 		focus = COALESCE($7, focus),
-		price = COALESCE($8::numeric, price),
+		price = COALESCE(NULLIF($8, '')::numeric, price),
 		updated_at = NOW()
 		WHERE id=$1`, id, in.Name, in.Description, in.IsPaid, in.DurationHours, in.Level, in.Focus, in.Price)
 	if err != nil {
@@ -217,7 +236,7 @@ func (s *Server) portalCreateModule(ctx context.Context, courseID int64, in port
 		RETURNING id::text, course_id::text, COALESCE(name,''), description, index_order`,
 		courseID, in.Name, in.Description, *indexOrder).Scan(&dto.ID, &dto.CourseID, &dto.Name, &dto.Description, &dto.IndexOrder)
 	if err != nil {
-		return nil, err
+		return nil, portalDBErr(err)
 	}
 	if dto.Name == "" {
 		dto.Name = "Módulo " + dto.ID
@@ -270,7 +289,7 @@ func (s *Server) portalCreatePhase(ctx context.Context, moduleID int64, in porta
 		RETURNING id::text, module_id::text, COALESCE(name,''), week_number, index_order, admin_authorize, created_at, updated_at`,
 		moduleID, in.Name, *weekNumber, *indexOrder, adminAuthorize).Scan(&dto.ID, &dto.ModuleID, &dto.Name, &dto.WeekNumber, &dto.IndexOrder, &dto.AdminAuthorize, &dto.CreatedAt, &dto.UpdatedAt)
 	if err != nil {
-		return nil, err
+		return nil, portalDBErr(err)
 	}
 	if dto.Name == "" {
 		dto.Name = "Fase " + dto.ID
@@ -364,41 +383,46 @@ func (s *Server) portalCreateClass(ctx context.Context, in portalClassInput) (*p
 		RETURNING id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at`,
 		in.Name, in.CourseID, in.CurrentModuleID, start, end).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt)
 	if err != nil {
-		return nil, err
+		return nil, portalDBErr(err)
 	}
 	return &dto, nil
 }
 
 func (s *Server) portalUpdateClass(ctx context.Context, id int64, in portalClassInput) (*portalClassDTO, error) {
-	var startPtr, endPtr *time.Time
+	if in.DurationWeeks != 0 && (in.DurationWeeks < 1 || in.DurationWeeks > 104) {
+		return nil, validationErr("durationWeeks deve ficar entre 1 e 104")
+	}
+	var startPtr *time.Time
 	if strings.TrimSpace(in.StartDate) != "" {
 		start, err := portalParseDate(in.StartDate)
 		if err != nil {
 			return nil, err
 		}
-		weeks := in.DurationWeeks
-		if weeks < 1 {
-			weeks = 12
-		}
-		end := portalClassEndDate(start, weeks)
-		startPtr, endPtr = &start, &end
+		startPtr = &start
 	}
+	// end_date recalculado só a partir do que veio: durationWeeks define a duração
+	// (a partir do start novo ou atual); startDate sozinho preserva a duração atual
+	// deslocando o fim; nenhum dos dois → end_date intacto.
 	var dto portalClassDTO
 	err := s.db.QueryRow(ctx, `UPDATE class SET
 		name=COALESCE(NULLIF($2,''), name),
 		course_id=COALESCE(NULLIF($3,0), course_id),
 		current_module_id=COALESCE(NULLIF($4,0), current_module_id),
 		start_date=COALESCE($5, start_date),
-		end_date=COALESCE($6, end_date),
+		end_date=CASE
+			WHEN $6 > 0 THEN COALESCE($5, start_date) + make_interval(days => $6 * 7)
+			WHEN $5 IS NOT NULL THEN end_date + ($5 - start_date)
+			ELSE end_date
+		END,
 		updated_at=NOW()
 		WHERE id=$1
 		RETURNING id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at`,
-		id, in.Name, in.CourseID, in.CurrentModuleID, startPtr, endPtr).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt)
+		id, in.Name, in.CourseID, in.CurrentModuleID, startPtr, in.DurationWeeks).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, notFoundErr("Turma")
 	}
 	if err != nil {
-		return nil, err
+		return nil, portalDBErr(err)
 	}
 	if dto.Name == "" {
 		dto.Name = "Turma " + dto.ID
@@ -462,7 +486,7 @@ func (s *Server) portalAddClassStudents(ctx context.Context, classID int64, ids 
 			  SELECT 1 FROM enrollment WHERE user_id=$1 AND class_id=$2
 			)`, uid, classID)
 		if err != nil {
-			return 0, err
+			return 0, portalDBErr(err)
 		}
 		added += int(tag.RowsAffected())
 	}
@@ -473,8 +497,14 @@ func (s *Server) portalAddClassStudents(ctx context.Context, classID int64, ids 
 }
 
 func (s *Server) portalRemoveClassStudent(ctx context.Context, classID, studentID int64) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM enrollment WHERE class_id=$1 AND user_id=$2`, classID, studentID)
-	return err
+	tag, err := s.db.Exec(ctx, `DELETE FROM enrollment WHERE class_id=$1 AND user_id=$2`, classID, studentID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return notFoundErr("Matrícula")
+	}
+	return nil
 }
 
 // ── Salas (class_rooms) ──────────────────────────────────────────────────────
@@ -538,7 +568,7 @@ func (s *Server) portalCreateClassRoom(ctx context.Context, classID int64, in po
 		RETURNING `+portalRoomCols,
 		classID, in.Name, isAuth, target).Scan(&dto.ID, &dto.ClassID, &dto.Name, &dto.CreatedAt, &dto.IsAuthorized, &dto.TargetLimited)
 	if err != nil {
-		return nil, err
+		return nil, portalDBErr(err)
 	}
 	dto.Status = portalRoomStatus(dto.IsAuthorized, dto.TargetLimited)
 	return &dto, nil
@@ -556,7 +586,7 @@ func (s *Server) portalUpdateClassRoom(ctx context.Context, roomID int64, in por
 	err = s.db.QueryRow(ctx, `UPDATE class_rooms SET
 		name = COALESCE(NULLIF($2,''), name),
 		is_authorized = COALESCE($3, is_authorized),
-		target_limited = CASE WHEN $4 THEN $5 ELSE target_limited END
+		target_limited = CASE WHEN $4 THEN $5::timestamptz ELSE target_limited END
 		WHERE id=$1
 		RETURNING `+portalRoomCols,
 		roomID, in.Name, in.IsAuthorized, setTarget, target).Scan(&dto.ID, &dto.ClassID, &dto.Name, &dto.CreatedAt, &dto.IsAuthorized, &dto.TargetLimited)
@@ -681,12 +711,15 @@ func (s *Server) portalClassCronograma(ctx context.Context, classID int64) (*por
 // a API antiga introspeccionava esse schema; aqui assumimos as colunas padrão.
 func (s *Server) portalIniciarFases(ctx context.Context, classID int64, studentIDs []int64) (*portalPhaseDTO, int, error) {
 	var moduleID int64
-	err := s.db.QueryRow(ctx, `SELECT current_module_id FROM class WHERE id=$1`, classID).Scan(&moduleID)
+	err := s.db.QueryRow(ctx, `SELECT COALESCE(current_module_id, 0) FROM class WHERE id=$1`, classID).Scan(&moduleID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, 0, notFoundErr("Turma")
 	}
 	if err != nil {
 		return nil, 0, err
+	}
+	if moduleID == 0 {
+		return nil, 0, validationErr("a turma não tem módulo atual definido")
 	}
 
 	tx, err := s.db.Begin(ctx)
