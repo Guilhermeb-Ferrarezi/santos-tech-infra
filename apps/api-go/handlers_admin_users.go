@@ -17,13 +17,15 @@ var emailRe = regexp.MustCompile(`^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$`)
 
 // handleCreateAdminUser cria um usuário sem senha e dispara o convite. Aceita
 // `email` completo (qualquer domínio) ou `localPart` (vira @santos-tech.com);
-// `email` tem precedência se os dois vierem.
+// `email` tem precedência se os dois vierem. Com `shared=true`, cria uma caixa
+// institucional @santos-tech.com sem login e sem convite.
 func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email     string `json:"email"`
 		LocalPart string `json:"localPart"`
 		Name      string `json:"name"`
 		Role      int16  `json:"role"`
+		Shared    bool   `json:"shared"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
@@ -32,6 +34,41 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
 	body.LocalPart = strings.TrimSpace(strings.ToLower(body.LocalPart))
 	body.Name = strings.TrimSpace(body.Name)
+
+	// Conta institucional (caixa compartilhada, sem login): exige localPart
+	// (@santos-tech.com), nome opcional (default = localPart) e NÃO recebe convite.
+	if body.Shared {
+		if body.LocalPart == "" {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "conta institucional exige usuário (localPart)"))
+			return
+		}
+		if !localPartRe.MatchString(body.LocalPart) {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "localPart inválido (sem @ ou espaços)"))
+			return
+		}
+		email := body.LocalPart + "@" + staffDomain
+		name := body.Name
+		if name == "" {
+			name = body.LocalPart
+		}
+		existing, err := s.userByEmail(r.Context(), email)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if existing != nil {
+			writeErr(w, appErr(http.StatusConflict, "EMAIL_ALREADY_EXISTS", "Este email já está cadastrado"))
+			return
+		}
+		u, err := s.insertSharedMailbox(r.Context(), email, name)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"user": adminUserJSON(u)})
+		return
+	}
+
 	if body.Name == "" {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome é obrigatório"))
 		return
