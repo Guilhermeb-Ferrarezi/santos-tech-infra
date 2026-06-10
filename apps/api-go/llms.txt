@@ -307,3 +307,34 @@ PATCH  /portal/rooms/{roomId}
 PATCH  /portal/rooms/{roomId}/status
 DELETE /portal/rooms/{roomId}
 ```
+
+## Portal — conteúdo (Fase 2): exercícios, containers, materiais, vídeos
+
+Mesmas regras de auth/guard das rotas /portal/* da Fase 1 (staff lê, admin
+escreve, DELETE com sudo). Questões/opções vêm embutidas no corpo do exercício
+(múltipla escolha, type=1). Materiais/vídeos recebem URL já enviada (suba pelo
+POST /auth/upload). Módulo de material/vídeo vai embutido na description como
+[[module:id|nome]].
+
+GET    /portal/phases/{phaseId}/exercises?page=1&limit=20&q=&dailyTask=true
+POST   /portal/phases/{phaseId}/exercises    body {title,description,type,difficulty,indexOrder,isDailyTask,isFinalExercise,pointsRedeem,videoUrl,termAt,questions:[{statement,options:[{text,isCorrect}]}]}
+GET    /portal/exercises/{exerciseId}
+PATCH  /portal/exercises/{exerciseId}
+PATCH  /portal/exercises/{exerciseId}/reorder   body {direction:"up"|"down"}
+DELETE /portal/exercises/{exerciseId}
+GET    /portal/exercises/{exerciseId}/container
+GET    /portal/phases/{phaseId}/containers
+POST   /portal/containers                    body {name,phaseId,exerciseIds:[...],isDailyTask?,containerDateTargetInt?}
+POST   /portal/containers/add-exercises      body {name,phaseId,isDailyTask,containerDateTargetInt?,exerciseIds:[...]}
+DELETE /portal/containers/group              body {name,phaseId,isDailyTask,containerDateTargetInt?}
+DELETE /portal/containers/{containerTaskId}
+GET    /portal/courses/{courseId}/materials?page=1&limit=20&q=
+POST   /portal/courses/{courseId}/materials  body {title,description,moduleId?,module?,fileUrl?,fileType?}
+GET    /portal/materials/{materialId}
+PATCH  /portal/materials/{materialId}
+DELETE /portal/materials/{materialId}
+GET    /portal/videos?page=1&limit=20&q=
+POST   /portal/videos                        body {title,description,moduleId?,module?,url,thumbnailUrl?,durationSeconds?}
+GET    /portal/videos/{videoId}
+PATCH  /portal/videos/{videoId}
+DELETE /portal/videos/{videoId}
