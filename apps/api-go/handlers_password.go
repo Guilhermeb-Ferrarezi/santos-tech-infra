@@ -24,7 +24,7 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if u != nil {
+	if u != nil && !u.LoginDisabled {
 		token := randomToken(32)
 		hash := sha256Hex(token)
 		if err := s.rdb.Set(r.Context(), "pwd_reset:"+hash, u.ID, time.Hour).Err(); err != nil {
@@ -75,6 +75,10 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	u, err := s.userByID(r.Context(), uid)
 	if err != nil {
 		writeErr(w, err)
+		return
+	}
+	if u != nil && u.LoginDisabled {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_TOKEN", "Link de recuperação inválido ou expirado"))
 		return
 	}
 	firstPassword := u != nil && u.PasswordHash == nil

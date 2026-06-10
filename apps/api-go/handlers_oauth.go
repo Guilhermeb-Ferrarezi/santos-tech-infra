@@ -96,6 +96,11 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.linkOAuth(r.Context(), u.ID, "google", profile.ID)
 
+	if u.LoginDisabled {
+		fail("account_not_found")
+		return
+	}
+
 	// MFA ativo: OAuth não pode contornar o 2º fator. Não emite sessão — cria o
 	// mesmo desafio do login por senha e manda o auth-web pro passo do código.
 	if u.MFAEnabled {

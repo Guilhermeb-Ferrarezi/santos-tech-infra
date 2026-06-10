@@ -209,6 +209,10 @@ func (s *Server) handleInviteAdminUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "usuário não encontrado"))
 		return
 	}
+	if u.LoginDisabled {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "conta institucional não tem login — não há convite"))
+		return
+	}
 	s.sendInvite(r.Context(), u)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -259,15 +263,16 @@ func (s *Server) sendInviteEmail(to, name, url string) {
 // adminUserJSON é a forma pública de um usuário nas rotas admin.
 func adminUserJSON(u *User) map[string]any {
 	return map[string]any{
-		"id":           u.ID,
-		"email":        u.Email,
-		"name":         u.Name,
-		"role":         u.Role,
-		"customRoleId": u.CustomRoleID,
-		"suspendedAt":  u.SuspendedAt,
-		"createdAt":    u.CreatedAt.UTC().Format(time.RFC3339),
-		"mfaEnabled":   u.MFAEnabled,
-		"quotaBytes":   u.QuotaBytes,
-		"pending":      u.PasswordHash == nil, // convite não aceito (sem senha definida)
+		"id":            u.ID,
+		"email":         u.Email,
+		"name":          u.Name,
+		"role":          u.Role,
+		"customRoleId":  u.CustomRoleID,
+		"suspendedAt":   u.SuspendedAt,
+		"createdAt":     u.CreatedAt.UTC().Format(time.RFC3339),
+		"mfaEnabled":    u.MFAEnabled,
+		"quotaBytes":    u.QuotaBytes,
+		"pending":       u.PasswordHash == nil, // convite não aceito (sem senha definida)
+		"loginDisabled": u.LoginDisabled,
 	}
 }
