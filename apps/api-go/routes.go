@@ -97,6 +97,9 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /boards/{id}/members", s.rateLimit(20, min, s.staffGuard(s.handleAddBoardMember)))
 	mux.HandleFunc("DELETE /boards/{id}/members/{userId}", s.staffGuard(s.handleRemoveBoardMember))
 
+	// Portal admin/professor — overview, catálogo, turmas, matrículas e salas
+	s.registerPortalRoutes(mux)
+
 	// OAuth Google
 	mux.HandleFunc("GET /auth/google", s.handleGoogleStart)
 	mux.HandleFunc("GET /auth/google/callback", s.handleGoogleCallback)
