@@ -36,3 +36,31 @@ func TestPortalRoutesRequireAuthBeforeDB(t *testing.T) {
 		})
 	}
 }
+
+func TestPortalCatalogBadIDsBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+
+	cases := []struct {
+		name string
+		fn   http.HandlerFunc
+		key  string
+		val  string
+		path string
+	}{
+		{"course", s.handlePortalGetCourse, "courseId", "x", "/portal/courses/x"},
+		{"modules", s.handlePortalListModules, "courseId", "0", "/portal/courses/0/modules"},
+		{"phases", s.handlePortalListPhases, "moduleId", "-1", "/portal/modules/-1/phases"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", tc.path, nil)
+			r.SetPathValue(tc.key, tc.val)
+			w := httptest.NewRecorder()
+			tc.fn(w, reqAs(r, 1))
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("code=%d want %d", w.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
