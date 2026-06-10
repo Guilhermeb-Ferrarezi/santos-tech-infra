@@ -22,11 +22,13 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /portal/courses/{courseId}/modules", s.staffGuard(s.handlePortalListModules))
 	mux.HandleFunc("POST /portal/courses/{courseId}/modules", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateModule)))
 	mux.HandleFunc("PATCH /portal/modules/{moduleId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateModule)))
+	mux.HandleFunc("PATCH /portal/modules/{moduleId}/reorder", s.rateLimit(30, min, s.adminGuard(s.handlePortalReorderModule)))
 	mux.HandleFunc("DELETE /portal/modules/{moduleId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteModule)))
 
 	mux.HandleFunc("GET /portal/modules/{moduleId}/phases", s.staffGuard(s.handlePortalListPhases))
 	mux.HandleFunc("POST /portal/modules/{moduleId}/phases", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreatePhase)))
 	mux.HandleFunc("PATCH /portal/phases/{phaseId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdatePhase)))
+	mux.HandleFunc("PATCH /portal/phases/{phaseId}/reorder", s.rateLimit(30, min, s.adminGuard(s.handlePortalReorderPhase)))
 	mux.HandleFunc("DELETE /portal/phases/{phaseId}", s.adminGuard(s.sudoGuard(s.handlePortalDeletePhase)))
 
 	mux.HandleFunc("GET /portal/classes", s.staffGuard(s.handlePortalListClasses))
@@ -37,6 +39,8 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /portal/classes/{classId}/students", s.staffGuard(s.handlePortalListClassStudents))
 	mux.HandleFunc("POST /portal/classes/{classId}/students", s.rateLimit(20, min, s.adminGuard(s.handlePortalAddClassStudents)))
 	mux.HandleFunc("DELETE /portal/classes/{classId}/students/{studentId}", s.adminGuard(s.handlePortalRemoveClassStudent))
+	mux.HandleFunc("GET /portal/classes/{classId}/cronograma", s.staffGuard(s.handlePortalClassCronograma))
+	mux.HandleFunc("POST /portal/classes/{classId}/iniciar-fases", s.rateLimit(20, min, s.adminGuard(s.handlePortalIniciarFases)))
 
 	mux.HandleFunc("GET /portal/classes/{classId}/rooms", s.staffGuard(s.handlePortalListClassRooms))
 	mux.HandleFunc("POST /portal/classes/{classId}/rooms", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateClassRoom)))

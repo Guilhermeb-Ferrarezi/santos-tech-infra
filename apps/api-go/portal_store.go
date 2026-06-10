@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -592,4 +593,165 @@ func (s *Server) portalDeleteClassRoom(ctx context.Context, roomID int64) error 
 		return notFoundErr("Sala")
 	}
 	return nil
+}
+
+// ── Reorder, cronograma e iniciar-fases ──────────────────────────────────────
+
+// portalReorder troca o index_order de uma linha com seu vizinho imediato dentro
+// do mesmo escopo (module→course_id, phase→module_id). table/scopeCol vêm de uma
+// allowlist (não de input), então a interpolação é segura.
+func (s *Server) portalReorder(ctx context.Context, table, scopeCol, entity string, id int64, direction string) error {
+	if table != "module" && table != "phase" {
+		return validationErr("tabela inválida")
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var scope int64
+	var order int
+	err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT %s, index_order FROM %s WHERE id=$1`, scopeCol, table), id).Scan(&scope, &order)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return notFoundErr(entity)
+	}
+	if err != nil {
+		return err
+	}
+
+	cmp, ord := "<", "DESC"
+	if direction == "down" {
+		cmp, ord = ">", "ASC"
+	}
+	var nid int64
+	var norder int
+	err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT id, index_order FROM %s WHERE %s=$1 AND index_order %s $2 ORDER BY index_order %s LIMIT 1`, table, scopeCol, cmp, ord), scope, order).Scan(&nid, &norder)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return validationErr("já está no limite da ordem")
+	}
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s SET index_order=$1, updated_at=NOW() WHERE id=$2`, table), norder, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s SET index_order=$1, updated_at=NOW() WHERE id=$2`, table), order, nid); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// portalClassCronograma deriva o cronograma da turma a partir das fases do módulo
+// atual, agrupadas por week_number. Não existe tabela de cronograma no schema.
+func (s *Server) portalClassCronograma(ctx context.Context, classID int64) (*portalClassDTO, map[string][]portalCronogramaPhase, error) {
+	class, err := s.portalGetClass(ctx, classID)
+	if err != nil {
+		return nil, nil, err
+	}
+	moduleID, _ := strconv.ParseInt(class.CurrentModuleID, 10, 64)
+	rows, err := s.db.Query(ctx, `SELECT p.id::text, COALESCE(p.name,''), COALESCE(m.name,''), p.week_number
+		FROM phase p JOIN module m ON m.id = p.module_id
+		WHERE p.module_id=$1
+		ORDER BY p.week_number ASC, p.index_order ASC, p.id ASC`, moduleID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	grouped := map[string][]portalCronogramaPhase{}
+	for rows.Next() {
+		var ph portalCronogramaPhase
+		var week int
+		if err := rows.Scan(&ph.ID, &ph.Name, &ph.Module, &week); err != nil {
+			return nil, nil, err
+		}
+		if ph.Name == "" {
+			ph.Name = "Fase " + ph.ID
+		}
+		key := strconv.Itoa(week)
+		grouped[key] = append(grouped[key], ph)
+	}
+	return class, grouped, rows.Err()
+}
+
+// portalIniciarFases inicializa o progresso dos alunos nas fases do módulo atual
+// da turma e desbloqueia a primeira fase. Assume a tabela progress_student_phase
+// com colunas (user_id, phase_id, progress, status, unlocked_at, created_at) —
+// a API antiga introspeccionava esse schema; aqui assumimos as colunas padrão.
+func (s *Server) portalIniciarFases(ctx context.Context, classID int64, studentIDs []int64) (*portalPhaseDTO, int, error) {
+	var moduleID int64
+	err := s.db.QueryRow(ctx, `SELECT current_module_id FROM class WHERE id=$1`, classID).Scan(&moduleID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, notFoundErr("Turma")
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	var phase portalPhaseDTO
+	err = tx.QueryRow(ctx, `SELECT id::text, module_id::text, COALESCE(name,''), week_number, index_order, admin_authorize, created_at, updated_at
+		FROM phase WHERE module_id=$1 ORDER BY index_order ASC, id ASC LIMIT 1`, moduleID).Scan(
+		&phase.ID, &phase.ModuleID, &phase.Name, &phase.WeekNumber, &phase.IndexOrder, &phase.AdminAuthorize, &phase.CreatedAt, &phase.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, validationErr("o módulo atual da turma não possui fases")
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	if phase.Name == "" {
+		phase.Name = "Fase " + phase.ID
+	}
+
+	// só alunos efetivamente matriculados na turma
+	erows, err := tx.Query(ctx, `SELECT DISTINCT user_id FROM enrollment WHERE class_id=$1 AND user_id = ANY($2)`, classID, studentIDs)
+	if err != nil {
+		return nil, 0, err
+	}
+	valid := []int64{}
+	for erows.Next() {
+		var uid int64
+		if err := erows.Scan(&uid); err != nil {
+			erows.Close()
+			return nil, 0, err
+		}
+		valid = append(valid, uid)
+	}
+	erows.Close()
+	if err := erows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(valid) == 0 {
+		return nil, 0, validationErr("nenhum aluno inscrito na turma")
+	}
+
+	// cria progresso (0/0) para todas as fases do módulo, sem duplicar
+	for _, uid := range valid {
+		if _, err := tx.Exec(ctx, `INSERT INTO progress_student_phase (user_id, phase_id, progress, status, created_at)
+			SELECT $1, p.id, 0, 0, NOW() FROM phase p
+			WHERE p.module_id=$2
+			AND NOT EXISTS (SELECT 1 FROM progress_student_phase psp WHERE psp.user_id=$1 AND psp.phase_id=p.id)`, uid, moduleID); err != nil {
+			return nil, 0, err
+		}
+	}
+
+	// desbloqueia a primeira fase (status 1 = em progresso; mantém 2 = concluído)
+	firstPhaseID, _ := strconv.ParseInt(phase.ID, 10, 64)
+	if _, err := tx.Exec(ctx, `UPDATE progress_student_phase
+		SET status = CASE WHEN COALESCE(status,0) = 2 THEN 2 ELSE 1 END,
+		    unlocked_at = COALESCE(unlocked_at, NOW())
+		WHERE user_id = ANY($1) AND phase_id=$2`, valid, firstPhaseID); err != nil {
+		return nil, 0, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, 0, err
+	}
+	return &phase, len(valid), nil
 }

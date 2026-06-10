@@ -284,10 +284,12 @@ DELETE /portal/courses/{courseId}
 GET    /portal/courses/{courseId}/modules
 POST   /portal/courses/{courseId}/modules
 PATCH  /portal/modules/{moduleId}
+PATCH  /portal/modules/{moduleId}/reorder        body {direction:"up"|"down"}
 DELETE /portal/modules/{moduleId}
 GET    /portal/modules/{moduleId}/phases
 POST   /portal/modules/{moduleId}/phases
 PATCH  /portal/phases/{phaseId}
+PATCH  /portal/phases/{phaseId}/reorder          body {direction:"up"|"down"}
 DELETE /portal/phases/{phaseId}
 GET    /portal/classes?page=1&limit=20&q=
 POST   /portal/classes
@@ -297,6 +299,8 @@ DELETE /portal/classes/{classId}
 GET    /portal/classes/{classId}/students
 POST   /portal/classes/{classId}/students
 DELETE /portal/classes/{classId}/students/{studentId}
+GET    /portal/classes/{classId}/cronograma      fases do módulo atual por semana
+POST   /portal/classes/{classId}/iniciar-fases   body {studentIds:[...]}
 GET    /portal/classes/{classId}/rooms
 POST   /portal/classes/{classId}/rooms
 PATCH  /portal/rooms/{roomId}

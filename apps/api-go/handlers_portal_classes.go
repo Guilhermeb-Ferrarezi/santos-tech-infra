@@ -144,3 +144,44 @@ func (s *Server) handlePortalRemoveClassStudent(w http.ResponseWriter, r *http.R
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (s *Server) handlePortalClassCronograma(w http.ResponseWriter, r *http.Request) {
+	id, err := portalPathID(r, "classId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	class, cronograma, err := s.portalClassCronograma(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeErr(w, notFoundErr("Turma"))
+		return
+	}
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"class": class, "cronograma": cronograma})
+}
+
+func (s *Server) handlePortalIniciarFases(w http.ResponseWriter, r *http.Request) {
+	id, err := portalPathID(r, "classId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in portalAddStudentsInput
+	if err := decodePortalJSON(r.Body, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	if len(in.StudentIDs) == 0 {
+		writeErr(w, validationErr("studentIds obrigatório"))
+		return
+	}
+	phase, count, err := s.portalIniciarFases(r.Context(), id, in.StudentIDs)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"phase": phase, "students": count})
+}

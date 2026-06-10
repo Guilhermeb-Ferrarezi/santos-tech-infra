@@ -229,3 +229,47 @@ func (s *Server) handlePortalDeletePhase(w http.ResponseWriter, r *http.Request)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (s *Server) handlePortalReorderModule(w http.ResponseWriter, r *http.Request) {
+	id, err := portalPathID(r, "moduleId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in portalReorderInput
+	if err := decodePortalJSON(r.Body, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	if err := in.validate(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalReorder(r.Context(), "module", "course_id", "Módulo", id, in.Direction); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handlePortalReorderPhase(w http.ResponseWriter, r *http.Request) {
+	id, err := portalPathID(r, "phaseId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in portalReorderInput
+	if err := decodePortalJSON(r.Body, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	if err := in.validate(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalReorder(r.Context(), "phase", "module_id", "Fase", id, in.Direction); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}

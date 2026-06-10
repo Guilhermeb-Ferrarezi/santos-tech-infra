@@ -146,3 +146,58 @@ func TestPortalRoomValidationBeforeDB(t *testing.T) {
 		t.Fatalf("bad room id code=%d", w2.Code)
 	}
 }
+
+func TestPortalReorderValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+
+	// direction inválida → 400 (antes do DB)
+	r := httptest.NewRequest("PATCH", "/portal/modules/1/reorder", strings.NewReader(`{"direction":"sideways"}`))
+	r.SetPathValue("moduleId", "1")
+	w := httptest.NewRecorder()
+	s.handlePortalReorderModule(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("bad direction code=%d", w.Code)
+	}
+
+	// id inválido → 400
+	r2 := httptest.NewRequest("PATCH", "/portal/phases/x/reorder", strings.NewReader(`{"direction":"up"}`))
+	r2.SetPathValue("phaseId", "x")
+	w2 := httptest.NewRecorder()
+	s.handlePortalReorderPhase(w2, reqAs(r2, 1))
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("bad phase id code=%d", w2.Code)
+	}
+}
+
+func TestPortalCronogramaBadIDBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("GET", "/portal/classes/0/cronograma", nil)
+	r.SetPathValue("classId", "0")
+	w := httptest.NewRecorder()
+	s.handlePortalClassCronograma(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("bad class id code=%d", w.Code)
+	}
+}
+
+func TestPortalIniciarFasesValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+
+	// id inválido → 400
+	r := httptest.NewRequest("POST", "/portal/classes/x/iniciar-fases", strings.NewReader(`{"studentIds":[1]}`))
+	r.SetPathValue("classId", "x")
+	w := httptest.NewRecorder()
+	s.handlePortalIniciarFases(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("bad class id code=%d", w.Code)
+	}
+
+	// studentIds vazio → 400 (antes do DB)
+	r2 := httptest.NewRequest("POST", "/portal/classes/1/iniciar-fases", strings.NewReader(`{"studentIds":[]}`))
+	r2.SetPathValue("classId", "1")
+	w2 := httptest.NewRecorder()
+	s.handlePortalIniciarFases(w2, reqAs(r2, 1))
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("empty studentIds code=%d", w2.Code)
+	}
+}

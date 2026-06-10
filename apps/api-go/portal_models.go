@@ -238,6 +238,24 @@ func portalParseDate(raw string) (time.Time, error) {
 	return t, nil
 }
 
+type portalReorderInput struct {
+	Direction string `json:"direction"`
+}
+
+func (in *portalReorderInput) validate() error {
+	if in.Direction != "up" && in.Direction != "down" {
+		return validationErr(`direction deve ser "up" ou "down"`)
+	}
+	return nil
+}
+
+// portalCronogramaPhase é a fase como aparece no cronograma (agrupada por semana).
+type portalCronogramaPhase struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Module string `json:"module"`
+}
+
 // ── Salas (class_rooms) ──────────────────────────────────────────────────────
 
 type portalRoomDTO struct {
