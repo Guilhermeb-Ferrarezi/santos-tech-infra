@@ -99,3 +99,30 @@ func TestPortalCatalogMutationValidationBeforeDB(t *testing.T) {
 		t.Fatalf("short phase name code=%d", w4.Code)
 	}
 }
+
+func TestPortalClassValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+
+	w := httptest.NewRecorder()
+	s.handlePortalCreateClass(w, reqAs(httptest.NewRequest("POST", "/portal/classes", strings.NewReader(`{"name":"T","courseId":"1","currentModuleId":"1"}`)), 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("short class name code=%d", w.Code)
+	}
+
+	r := httptest.NewRequest("POST", "/portal/classes/x/students", strings.NewReader(`{"studentIds":["1"]}`))
+	r.SetPathValue("classId", "x")
+	w2 := httptest.NewRecorder()
+	s.handlePortalAddClassStudents(w2, reqAs(r, 1))
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("bad class id code=%d", w2.Code)
+	}
+
+	r3 := httptest.NewRequest("DELETE", "/portal/classes/1/students/x", nil)
+	r3.SetPathValue("classId", "1")
+	r3.SetPathValue("studentId", "x")
+	w3 := httptest.NewRecorder()
+	s.handlePortalRemoveClassStudent(w3, reqAs(r3, 1))
+	if w3.Code != http.StatusBadRequest {
+		t.Fatalf("bad student id code=%d", w3.Code)
+	}
+}

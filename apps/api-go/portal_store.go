@@ -299,3 +299,179 @@ func (s *Server) portalUpdatePhase(ctx context.Context, phaseID int64, in portal
 	}
 	return &dto, nil
 }
+
+// ── Turmas e matrículas ──────────────────────────────────────────────────────
+
+func (s *Server) portalListClasses(ctx context.Context, p portalPagination) ([]portalClassDTO, int64, error) {
+	args := []any{}
+	where := ""
+	if p.Query != "" {
+		args = append(args, "%"+p.Query+"%")
+		where = "WHERE COALESCE(name, '') ILIKE $1"
+	}
+	var total int64
+	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM class `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	args = append(args, p.Limit, p.Offset)
+	rows, err := s.db.Query(ctx, fmt.Sprintf(`SELECT id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at
+		FROM class %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	items := []portalClassDTO{}
+	for rows.Next() {
+		var dto portalClassDTO
+		if err := rows.Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt); err != nil {
+			return nil, 0, err
+		}
+		if dto.Name == "" {
+			dto.Name = "Turma " + dto.ID
+		}
+		items = append(items, dto)
+	}
+	return items, total, rows.Err()
+}
+
+func portalClassEndDate(start time.Time, weeks int) time.Time {
+	return start.AddDate(0, 0, weeks*7)
+}
+
+func (s *Server) portalGetClass(ctx context.Context, id int64) (*portalClassDTO, error) {
+	var dto portalClassDTO
+	err := s.db.QueryRow(ctx, `SELECT id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at
+		FROM class WHERE id=$1`, id).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	if dto.Name == "" {
+		dto.Name = "Turma " + dto.ID
+	}
+	return &dto, nil
+}
+
+func (s *Server) portalCreateClass(ctx context.Context, in portalClassInput) (*portalClassDTO, error) {
+	start, err := portalParseDate(in.StartDate)
+	if err != nil {
+		return nil, err
+	}
+	end := portalClassEndDate(start, in.DurationWeeks)
+	var dto portalClassDTO
+	err = s.db.QueryRow(ctx, `INSERT INTO class (name, course_id, current_module_id, start_date, end_date, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,NOW(),NOW())
+		RETURNING id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at`,
+		in.Name, in.CourseID, in.CurrentModuleID, start, end).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &dto, nil
+}
+
+func (s *Server) portalUpdateClass(ctx context.Context, id int64, in portalClassInput) (*portalClassDTO, error) {
+	var startPtr, endPtr *time.Time
+	if strings.TrimSpace(in.StartDate) != "" {
+		start, err := portalParseDate(in.StartDate)
+		if err != nil {
+			return nil, err
+		}
+		weeks := in.DurationWeeks
+		if weeks < 1 {
+			weeks = 12
+		}
+		end := portalClassEndDate(start, weeks)
+		startPtr, endPtr = &start, &end
+	}
+	var dto portalClassDTO
+	err := s.db.QueryRow(ctx, `UPDATE class SET
+		name=COALESCE(NULLIF($2,''), name),
+		course_id=COALESCE(NULLIF($3,0), course_id),
+		current_module_id=COALESCE(NULLIF($4,0), current_module_id),
+		start_date=COALESCE($5, start_date),
+		end_date=COALESCE($6, end_date),
+		updated_at=NOW()
+		WHERE id=$1
+		RETURNING id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at`,
+		id, in.Name, in.CourseID, in.CurrentModuleID, startPtr, endPtr).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, notFoundErr("Turma")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if dto.Name == "" {
+		dto.Name = "Turma " + dto.ID
+	}
+	return &dto, nil
+}
+
+// portalDeleteClass remove a turma e suas matrículas numa transação (a tabela
+// enrollment referencia class).
+func (s *Server) portalDeleteClass(ctx context.Context, id int64) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM enrollment WHERE class_id=$1`, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM class WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return notFoundErr("Turma")
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Server) portalListClassStudents(ctx context.Context, classID int64) ([]portalStudentDTO, error) {
+	rows, err := s.db.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role
+		FROM enrollment e JOIN "user" u ON u.id = e.user_id
+		WHERE e.class_id=$1 ORDER BY COALESCE(u.name,'') ASC, u.id ASC`, classID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []portalStudentDTO{}
+	for rows.Next() {
+		var dto portalStudentDTO
+		if err := rows.Scan(&dto.ID, &dto.Email, &dto.Name, &dto.Role); err != nil {
+			return nil, err
+		}
+		items = append(items, dto)
+	}
+	return items, rows.Err()
+}
+
+// portalAddClassStudents matricula os usuários na turma, ignorando duplicatas.
+// Devolve quantos foram efetivamente inseridos.
+func (s *Server) portalAddClassStudents(ctx context.Context, classID int64, ids []int64) (int, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	added := 0
+	for _, uid := range ids {
+		tag, err := tx.Exec(ctx, `INSERT INTO enrollment (user_id, class_id, created_at)
+			SELECT $1, $2, NOW()
+			WHERE NOT EXISTS (
+			  SELECT 1 FROM enrollment WHERE user_id=$1 AND class_id=$2
+			)`, uid, classID)
+		if err != nil {
+			return 0, err
+		}
+		added += int(tag.RowsAffected())
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return added, nil
+}
+
+func (s *Server) portalRemoveClassStudent(ctx context.Context, classID, studentID int64) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM enrollment WHERE class_id=$1 AND user_id=$2`, classID, studentID)
+	return err
+}

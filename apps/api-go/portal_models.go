@@ -175,6 +175,69 @@ func (in *portalPhaseInput) validateCreate() error {
 	return nil
 }
 
+// ── Turmas e matrículas ──────────────────────────────────────────────────────
+
+type portalClassDTO struct {
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	CourseID        string    `json:"courseId"`
+	CurrentModuleID string    `json:"currentModuleId"`
+	StartDate       time.Time `json:"startDate"`
+	EndDate         time.Time `json:"endDate"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+}
+
+type portalStudentDTO struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+	Role  int16  `json:"role"`
+}
+
+type portalClassInput struct {
+	Name            string `json:"name"`
+	CourseID        int64  `json:"courseId"`
+	CurrentModuleID int64  `json:"currentModuleId"`
+	StartDate       string `json:"startDate"`
+	DurationWeeks   int    `json:"durationWeeks"`
+}
+
+func (in *portalClassInput) validateCreate() error {
+	in.Name = strings.TrimSpace(in.Name)
+	if len(in.Name) < 2 {
+		return validationErr("nome obrigatório")
+	}
+	if in.CourseID <= 0 || in.CurrentModuleID <= 0 {
+		return validationErr("courseId e currentModuleId são obrigatórios")
+	}
+	if in.DurationWeeks == 0 {
+		in.DurationWeeks = 12
+	}
+	if in.DurationWeeks < 1 || in.DurationWeeks > 104 {
+		return validationErr("durationWeeks deve ficar entre 1 e 104")
+	}
+	return nil
+}
+
+type portalAddStudentsInput struct {
+	StudentIDs []int64 `json:"studentIds"`
+}
+
+// portalParseDate aceita "YYYY-MM-DD"; vazio → hoje (UTC, à meia-noite).
+func portalParseDate(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		now := portalNowUTC()
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC), nil
+	}
+	t, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return time.Time{}, validationErr("startDate inválido (use YYYY-MM-DD)")
+	}
+	return t, nil
+}
+
 // ── Helpers de erro ──────────────────────────────────────────────────────────
 
 func validationErr(msg string) error {
