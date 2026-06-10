@@ -77,7 +77,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if u != nil && u.LoginDisabled {
+	if u == nil || u.LoginDisabled {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_TOKEN", "Link de recuperação inválido ou expirado"))
 		return
 	}
