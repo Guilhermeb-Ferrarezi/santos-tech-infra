@@ -30,6 +30,7 @@ type User struct {
 	EmailVerifiedAt *time.Time      // quando o usuário confirmou o próprio email (nil = nunca)
 	MFAMethod       string          // método 2FA preferido: 'totp' (app autenticador) ou 'email'
 	QuotaBytes      int64           // limite de armazenamento da caixa (mailbox), em bytes
+	LoginDisabled   bool            // true = caixa compartilhada institucional, sem login por nenhum caminho
 }
 
 // UserProfile é o que vai pro cliente (sem dados sensíveis).

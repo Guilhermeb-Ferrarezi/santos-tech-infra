@@ -33,6 +33,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB NOT NULL DEFAULT '{
 ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_bytes BIGINT NOT NULL DEFAULT 524288000;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_method TEXT NOT NULL DEFAULT 'totp';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS login_disabled BOOLEAN NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS recovery_codes (
   id         BIGSERIAL PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -91,7 +92,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 // uuid colunas vêm com ::text pra escanear direto em string.
-const userCols = `id, email, username, name, password_hash, avatar_url, role, custom_role_id::text, mfa_enabled, totp_secret, suspended_at, created_at, preferences, quota_bytes, email_verified_at, mfa_method`
+const userCols = `id, email, username, name, password_hash, avatar_url, role, custom_role_id::text, mfa_enabled, totp_secret, suspended_at, created_at, preferences, quota_bytes, email_verified_at, mfa_method, login_disabled`
 
 // userCols com prefixo "u." pra queries com JOIN em sessions.
 var userCols2 = "u." + strings.ReplaceAll(userCols, ", ", ", u.")
@@ -99,7 +100,7 @@ var userCols2 = "u." + strings.ReplaceAll(userCols, ", ", ", u.")
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Name, &u.PasswordHash, &u.AvatarURL,
-		&u.Role, &u.CustomRoleID, &u.MFAEnabled, &u.TOTPSecret, &u.SuspendedAt, &u.CreatedAt, &u.Preferences, &u.QuotaBytes, &u.EmailVerifiedAt, &u.MFAMethod)
+		&u.Role, &u.CustomRoleID, &u.MFAEnabled, &u.TOTPSecret, &u.SuspendedAt, &u.CreatedAt, &u.Preferences, &u.QuotaBytes, &u.EmailVerifiedAt, &u.MFAMethod, &u.LoginDisabled)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -136,6 +137,14 @@ func (s *Server) insertUserWithRole(ctx context.Context, email, name string, rol
 	return scanUser(s.db.QueryRow(ctx,
 		`INSERT INTO users (email, name, role) VALUES ($1,$2,$3) RETURNING `+userCols,
 		email, name, role))
+}
+
+// insertSharedMailbox cria uma caixa institucional @santos-tech.com SEM senha e com
+// login_disabled=true: recebe/envia email, mas não autentica por nenhum caminho.
+func (s *Server) insertSharedMailbox(ctx context.Context, email, name string) (*User, error) {
+	return scanUser(s.db.QueryRow(ctx,
+		`INSERT INTO users (email, name, role, login_disabled) VALUES ($1,$2,$3,true) RETURNING `+userCols,
+		email, name, RoleStudent))
 }
 
 // collectUsers escaneia todas as linhas de uma query de usuários.
