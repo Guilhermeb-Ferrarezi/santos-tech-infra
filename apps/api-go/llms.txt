@@ -114,11 +114,16 @@ tokens retornam no **corpo** (sem cookies).
 - `POST /auth/avatar` (multipart) — avatar → R2; `POST /auth/upload` — imagem → R2
 - `GET /auth/admin/users[?scope=all]` — lista contas @santos-tech.com; com
   `scope=all`, todos os usuários (qualquer domínio)
-- `POST /auth/admin/users {email|localPart,name,role}` — cria sem senha + convite
-  por email; `email` completo (qualquer domínio) tem precedência sobre `localPart`
-  (que vira @santos-tech.com) · 400 | 409 `EMAIL_ALREADY_EXISTS` (rate 10/min)
+- `POST /auth/admin/users {email|localPart,name,role,shared?}` — cria sem senha +
+  convite por email; `email` completo (qualquer domínio) tem precedência sobre
+  `localPart` (que vira @santos-tech.com) · 400 | 409 `EMAIL_ALREADY_EXISTS`
+  (rate 10/min). Campo opcional `shared` (bool): cria uma **caixa institucional
+  compartilhada** `@santos-tech.com` sem login — exige `localPart`; `name` vira
+  opcional (default = `localPart`); nenhum convite é enviado; a conta não autentica
+  por senha, OAuth, convite nem "esqueci a senha". A resposta inclui
+  `loginDisabled: true` para essas contas.
 - `PATCH /auth/admin/users/{id} {name?,role?,suspended?,quotaBytes?}` ·
-  `POST /auth/admin/users/{id}/invite` (reenvia convite) ·
+  `POST /auth/admin/users/{id}/invite` (reenvia convite; 400 se `loginDisabled`) ·
   `DELETE /auth/admin/users/{id}` (**exige sudo**) — gestão admin (role 3)
 - `GET /auth/admin/oauth-clients` → `{clients:[{id,clientId,name,redirectUris,isActive,createdAt}]}`
 - `POST /auth/admin/oauth-clients {clientId,name,redirectUris}` → 201 |
