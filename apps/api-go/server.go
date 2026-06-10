@@ -18,16 +18,24 @@ type ctxKey string
 const userIDKey ctxKey = "userID"
 
 type Server struct {
-	cfg    Config
-	db     *pgxpool.Pool
-	rdb    *redis.Client
-	email  *emailClient
-	google *oauth2.Config
-	r2     *R2 // uploads (Cloudflare R2); nil = desabilitado
+	cfg Config
+	db  *pgxpool.Pool
+	// portalDB: pool do banco do domínio do portal (/portal/*). Hoje aponta pra
+	// um banco separado do auth; os handlers de portal usam ESTE pool, enquanto
+	// auth/guards/users seguem no `db`. Se não houver banco separado, é o mesmo
+	// pool de `db` (ver wiring no main).
+	portalDB *pgxpool.Pool
+	rdb      *redis.Client
+	email    *emailClient
+	google   *oauth2.Config
+	r2       *R2 // uploads (Cloudflare R2); nil = desabilitado
 }
 
-func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: db, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg)}
+func NewServer(cfg Config, db, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
+	s := &Server{cfg: cfg, db: db, portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg)}
+	if s.portalDB == nil {
+		s.portalDB = db
+	}
 	if cfg.GoogleClientID != "" {
 		s.google = &oauth2.Config{
 			ClientID:     cfg.GoogleClientID,

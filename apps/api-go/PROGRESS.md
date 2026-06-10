@@ -36,3 +36,24 @@ Reimplementação da `apps/api` (Fastify/TS) em Go + integração no serviço de
 - Endpoints atuais: register, login (email|username), logout, me, refresh, forgot/reset-password, GET /auth/google + callback.
 - Erro: `{code, message}` + status. Cookies: access_token/refresh_token, httpOnly, sameSite lax, domain COOKIE_DOMAIN.
 - Roles: 1=Student 2=Teacher 3=Admin 4=Custom (custom_roles.permissions jsonb).
+
+## 2026-06-09 — Portal admin/professor API Phase 1 (`/portal/*`)
+Primeira fatia da migração do portal pra API Go central: overview, catálogo
+(cursos/módulos/fases), turmas, matrículas e salas. Mantém o schema Postgres
+atual sem alteração, leitura por staffGuard e escrita por adminGuard (DELETE com
+sudo). Content/submissions/badges/goals e a desativação da API TS antiga ficam
+para planos seguintes.
+
+## 2026-06-10 — Portal API Go Fase 2 (conteúdo)
+Exercícios (CRUD + reorder + by-phase + daily-tasks + múltipla escolha via
+question/question_option, 409 se já há respostas), containers (container_tasks),
+materiais e vídeos (CRUD JSON; módulo embutido na description como [[module:id|nome]];
+URL pré-enviada via /auth/upload). Schema preservado. Falta: submissões/progresso,
+badges, goals, notificações (fases 3-5) e desativar a API TS antiga.
+
+## 2026-06-10 — Portal API Go Fase 3 (acompanhamento)
+Respostas (tabela answer): listagem rica por exercício (filtros status/q/aluno/sort,
+stats, opções por questão), visões "quem respondeu", correção única e em lote
+(staff — professor avalia). Progresso (progress_student_phase): por fase e por turma
+(aluno×fase do módulo atual). Legado submissoes/PUT corrigir NÃO migrado (usa
+users/exercicios). Falta: badges, goals, notificações, logs (fases 4-5) e desligar a API TS.
