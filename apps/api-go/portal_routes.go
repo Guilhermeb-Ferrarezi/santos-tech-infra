@@ -50,6 +50,73 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 
 	s.registerPortalContentRoutes(mux)
 	s.registerPortalProgressRoutes(mux)
+	s.registerPortalRewardsRoutes(mux)
+	s.registerPortalNotificationRoutes(mux)
+}
+
+// registerPortalRewardsRoutes — Fase 4: badges (+holders) e goals (recompensas,
+// progresso, resgate). Escrita = adminGuard; exclusão de medalha/meta (cascata)
+// = sudoGuard. Resgate (claim) usa staffGuard pois o aluno pode resgatar o
+// próprio registro (o store restringe ao próprio user quando role=aluno).
+func (s *Server) registerPortalRewardsRoutes(mux *http.ServeMux) {
+	const min = time.Minute
+
+	// Badges
+	mux.HandleFunc("GET /portal/badges", s.staffGuard(s.handlePortalListBadges))
+	mux.HandleFunc("POST /portal/badges", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateBadge)))
+	mux.HandleFunc("PATCH /portal/badges/{badgeId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateBadge)))
+	mux.HandleFunc("DELETE /portal/badges/{badgeId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteBadge)))
+
+	// Holders (atribuições de medalha)
+	mux.HandleFunc("GET /portal/badges/holders", s.staffGuard(s.handlePortalListHolders))
+	mux.HandleFunc("POST /portal/badges/holders", s.rateLimit(30, min, s.adminGuard(s.handlePortalAssignBadge)))
+	mux.HandleFunc("PATCH /portal/badges/holders/{holderId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateHolder)))
+	mux.HandleFunc("DELETE /portal/badges/holders/{holderId}", s.adminGuard(s.handlePortalDeleteHolder))
+
+	// Goals
+	mux.HandleFunc("GET /portal/goals", s.staffGuard(s.handlePortalListGoals))
+	mux.HandleFunc("POST /portal/goals", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateGoal)))
+	mux.HandleFunc("GET /portal/goals/{goalId}", s.staffGuard(s.handlePortalGetGoal))
+	mux.HandleFunc("PATCH /portal/goals/{goalId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateGoal)))
+	mux.HandleFunc("DELETE /portal/goals/{goalId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteGoal)))
+
+	// Recompensas
+	mux.HandleFunc("GET /portal/goals/rewards", s.staffGuard(s.handlePortalListGoalRewards))
+	mux.HandleFunc("POST /portal/goals/rewards", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateGoalReward)))
+	mux.HandleFunc("PATCH /portal/goals/rewards/{rewardId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateGoalReward)))
+	mux.HandleFunc("DELETE /portal/goals/rewards/{rewardId}", s.adminGuard(s.handlePortalDeleteGoalReward))
+
+	// Progresso de alunos / resgate
+	mux.HandleFunc("GET /portal/goals/students", s.staffGuard(s.handlePortalListGoalStudents))
+	mux.HandleFunc("POST /portal/goals/students", s.rateLimit(30, min, s.adminGuard(s.handlePortalCreateGoalStudent)))
+	mux.HandleFunc("PATCH /portal/goals/students/{goalStudentId}", s.rateLimit(60, min, s.adminGuard(s.handlePortalUpdateGoalStudent)))
+	mux.HandleFunc("DELETE /portal/goals/students/{goalStudentId}", s.adminGuard(s.handlePortalDeleteGoalStudent))
+	mux.HandleFunc("POST /portal/goals/students/{goalStudentId}/claim", s.rateLimit(30, min, s.staffGuard(s.handlePortalClaimGoalReward)))
+}
+
+// registerPortalNotificationRoutes — Fase 4: notificações por-usuário (Postgres
+// central), templates/dispatches (proxy ao gateway externo) e activity logs.
+func (s *Server) registerPortalNotificationRoutes(mux *http.ServeMux) {
+	const min = time.Minute
+
+	// Autosserviço (qualquer sessão lê/escreve as PRÓPRIAS notificações)
+	mux.HandleFunc("GET /portal/notifications/me", s.authGuard(s.handlePortalMyNotifications))
+	mux.HandleFunc("PATCH /portal/notifications/read-all", s.rateLimit(30, min, s.authGuard(s.handlePortalMarkAllRead)))
+	mux.HandleFunc("PATCH /portal/notifications/{notificationId}/read", s.rateLimit(60, min, s.authGuard(s.handlePortalMarkNotificationRead)))
+
+	// Templates (proxy)
+	mux.HandleFunc("GET /portal/notifications/templates", s.staffGuard(s.handlePortalListTemplates))
+	mux.HandleFunc("POST /portal/notifications/templates", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateTemplate)))
+	mux.HandleFunc("PUT /portal/notifications/templates/{templateId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateTemplate)))
+	mux.HandleFunc("DELETE /portal/notifications/templates/{templateId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteTemplate)))
+	mux.HandleFunc("POST /portal/notifications/templates/{templateId}/dispatch", s.rateLimit(10, min, s.adminGuard(s.handlePortalDispatchTemplate)))
+
+	// Dispatches (proxy)
+	mux.HandleFunc("GET /portal/notifications/dispatches", s.staffGuard(s.handlePortalListDispatches))
+	mux.HandleFunc("DELETE /portal/notifications/dispatches/{dispatchId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteDispatch)))
+
+	// Activity logs (auditoria)
+	mux.HandleFunc("GET /portal/activity-logs", s.staffGuard(s.handlePortalActivityLogs))
 }
 
 // registerPortalProgressRoutes — Fase 3: respostas, correção e progresso.

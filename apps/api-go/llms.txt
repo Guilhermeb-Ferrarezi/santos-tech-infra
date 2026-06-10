@@ -355,3 +355,65 @@ PATCH /portal/answers/{answerId}      body {answerText?,selectedOption?,isCorrec
 PATCH /portal/answers/batch           body {answerIds:[...],patch:{...}} → {updatedCount,updatedIds,notFoundCount,notFoundIds}
 GET   /portal/phases/{phaseId}/progress    → progresso dos alunos na fase
 GET   /portal/classes/{classId}/progress   → progresso aluno×fase do módulo atual da turma
+
+## Portal — reconhecimento (Fase 4): badges, goals/recompensas
+
+Mesmas regras de auth/guard das Fases 1-3 (staff lê, admin escreve; DELETE de
+medalha/meta usa sudo por cascatear vínculos). Ícone/imagem chegam como URL já
+hospedada (upload prévio via /auth/upload), não base64. IDs string na saída,
+número na entrada. Pontos/progresso saem como número (lidos via ::text).
+
+Badges (medalhas) e holders (atribuições):
+GET    /portal/badges?page=&limit=&q=          → {items:[{id,name,description,iconUrl,createdAt,holdersCount}],total,pagination}
+POST   /portal/badges                          body {name,description,iconUrl}
+PATCH  /portal/badges/{badgeId}                body {name?,description?,iconUrl?}
+DELETE /portal/badges/{badgeId}                (sudo; cascateia badge_student)
+GET    /portal/badges/holders?badgeId=&page=&limit=  → {items:[{holderId,badgeId,badgeName,user:{id,nome,email},awardedAt}],total,...}
+POST   /portal/badges/holders                  body {userId,badgeId}  (409 se já possui)
+PATCH  /portal/badges/holders/{holderId}       body {badgeId}  (troca a medalha; awardedAt=now)
+DELETE /portal/badges/holders/{holderId}
+
+Goals (metas), rewards (recompensa = badge+curso) e students (progresso):
+GET    /portal/goals?page=&limit=&q=           → {items:[{id,name,description,type,imageUrl,rewardsCount}],total,...}
+POST   /portal/goals                           body {name,description?,type?(1-5),imageUrl?}
+GET    /portal/goals/{goalId}                  → {goal, rewards:[...]}
+PATCH  /portal/goals/{goalId}                  body {name?,description?,type?,imageUrl?}
+DELETE /portal/goals/{goalId}                  (sudo; cascateia students→rewards→goal)
+GET    /portal/goals/rewards?goalId=&courseId=&page=&limit=  → {items:[{id,goalId,badgeId,courseId,points,rewardType,pointsTarget,startDateTarget,endDateTarget,goalName,badgeName,badgeIconUrl,courseName}],total,...}
+POST   /portal/goals/rewards                   body {goalId,badgeId,courseId,rewardType?,points?,pointsTarget?,startDateTarget?,endDateTarget?}
+PATCH  /portal/goals/rewards/{rewardId}        body {qualquer campo acima}
+DELETE /portal/goals/rewards/{rewardId}        (cascateia goals_students)
+GET    /portal/goals/students?courseId=&goalRewardId=&page=&limit=  → {items:[{id,userId,goalRewardId,courseId,progress,isCompleted,completedAt,rewardClaimed,rewardClaimedAt,user,goal,reward}],total,...}
+POST   /portal/goals/students                  body {userId,goalRewardId,courseId}  (409 se já atribuído)
+PATCH  /portal/goals/students/{goalStudentId}  body {progress?,isCompleted?,goalRewardId?,courseId?}  (isCompleted=true seta completedAt)
+DELETE /portal/goals/students/{goalStudentId}
+POST   /portal/goals/students/{goalStudentId}/claim  resgata recompensa (só se concluído e não resgatado; aluno só o próprio)
+
+## Portal — notificações (Fase 4) e activity logs
+
+Notificações por-usuário ficam no Postgres central (tabela `notification`);
+templates/dispatches são proxy para o gateway externo do portal do aluno
+(envs NOTIFICATIONS_PORTAL_API_URL + NOTIFICATIONS_SHARED_SECRET; sem config →
+502). Activity logs: toda mutação da Fase 4 grava em `logs` (JSON com
+actor/entityId/method/endpoint/metadata; sem corpo de request).
+
+Autosserviço (qualquer sessão; só as PRÓPRIAS notificações):
+GET    /portal/notifications/me?status=all|read|unread&page=&limit=  → {items,unreadCount,total,pagination}
+PATCH  /portal/notifications/read-all          → {updatedCount}
+PATCH  /portal/notifications/{notificationId}/read  → {notification}
+
+Templates (staff lê, admin escreve; proxy):
+GET    /portal/notifications/templates         → {items:[{id,nome,tituloTemplate,mensagemTemplate,ativo,createdAt,updatedAt}]}
+POST   /portal/notifications/templates         body {nome,tituloTemplate,mensagemTemplate,ativo}
+PUT    /portal/notifications/templates/{templateId}   body idem
+DELETE /portal/notifications/templates/{templateId}   (sudo)
+POST   /portal/notifications/templates/{templateId}/dispatch  body {cursoIds:[],turmaIds:[],alunoIds:[]}
+         → resolve/filtra destinatários se o template usa {{curso}}/{{turma}}, depois dispara no gateway
+
+Dispatches (histórico; proxy):
+GET    /portal/notifications/dispatches?page=&limit=&q=  → {items:[{id,templateId,templateName,cursoIds,turmaIds,alunoIds,totalRecipients,failedRecipients,createdAt}],total}
+DELETE /portal/notifications/dispatches/{dispatchId}     (sudo)
+
+Activity logs (auditoria; staff):
+GET    /portal/activity-logs?action=&entityType=&actorId=&actorGroup=user|staff&q=&from=&to=&limit=&offset=
+         → {items:[{id,actor:{id,name,email,role},action,entityType,entityId,method,endpoint,metadata,createdAt}],total}
