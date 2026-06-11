@@ -49,6 +49,24 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /portal/rooms/{roomId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteClassRoom)))
 
 	s.registerPortalContentRoutes(mux)
+	s.registerPortalProgressRoutes(mux)
+}
+
+// registerPortalProgressRoutes — Fase 3: respostas, correção e progresso.
+// Correção (PATCH /answers) usa staffGuard porque avaliar é trabalho do
+// professor (alinhado à API antiga), diferente do "admin escreve" das demais.
+func (s *Server) registerPortalProgressRoutes(mux *http.ServeMux) {
+	const min = time.Minute
+
+	mux.HandleFunc("GET /portal/exercises/{exerciseId}/answers", s.staffGuard(s.handlePortalExerciseAnswers))
+	mux.HandleFunc("GET /portal/exercises/{exerciseId}/answer-students", s.staffGuard(s.handlePortalExerciseAnswerStudents))
+	mux.HandleFunc("GET /portal/answers/students", s.staffGuard(s.handlePortalAnswerStudents))
+	mux.HandleFunc("GET /portal/students/{studentId}/answered-exercises", s.staffGuard(s.handlePortalStudentAnsweredExercises))
+	mux.HandleFunc("PATCH /portal/answers/batch", s.rateLimit(30, min, s.staffGuard(s.handlePortalBatchUpdateAnswers)))
+	mux.HandleFunc("PATCH /portal/answers/{answerId}", s.rateLimit(60, min, s.staffGuard(s.handlePortalUpdateAnswer)))
+
+	mux.HandleFunc("GET /portal/phases/{phaseId}/progress", s.staffGuard(s.handlePortalPhaseProgress))
+	mux.HandleFunc("GET /portal/classes/{classId}/progress", s.staffGuard(s.handlePortalClassProgress))
 }
 
 // registerPortalContentRoutes — Fase 2: exercícios, questões, containers,

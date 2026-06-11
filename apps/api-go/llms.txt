@@ -338,3 +338,20 @@ POST   /portal/videos                        body {title,description,moduleId?,m
 GET    /portal/videos/{videoId}
 PATCH  /portal/videos/{videoId}
 DELETE /portal/videos/{videoId}
+
+## Portal — acompanhamento (Fase 3): respostas, correção, progresso
+
+Schema novo: respostas granulares por questão (tabela `answer`, is_correct
+NULL=pendente). A API só lê e corrige (o app do aluno cria). Correção é staff
+(admin+professor). Progresso: progress_student_phase status 0=não iniciado,
+1=em progresso, 2=concluído.
+
+GET   /portal/exercises/{exerciseId}/answers?page=&limit=&q=&status=todos|corrigida|pendente&studentId=&sort=recent|oldest|student
+        → {items, total, pagination, stats:{total,corrigidas,pendentes,corretas,incorretas,totalAlunos}}
+GET   /portal/exercises/{exerciseId}/answer-students   → {items:[{studentId,name,email,totalAnswers,lastAnsweredAt}]}
+GET   /portal/answers/students?page=&limit=&q=          → alunos que responderam (paginado)
+GET   /portal/students/{studentId}/answered-exercises?page=&limit=&q=
+PATCH /portal/answers/{answerId}      body {answerText?,selectedOption?,isCorrect?,feedback?} (corrige; staff)
+PATCH /portal/answers/batch           body {answerIds:[...],patch:{...}} → {updatedCount,updatedIds,notFoundCount,notFoundIds}
+GET   /portal/phases/{phaseId}/progress    → progresso dos alunos na fase
+GET   /portal/classes/{classId}/progress   → progresso aluno×fase do módulo atual da turma
