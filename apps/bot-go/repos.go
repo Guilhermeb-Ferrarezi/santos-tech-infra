@@ -203,19 +203,19 @@ func scanConversation(row pgx.Row) (*Conversation, error) {
 	return &c, nil
 }
 
-// Create cria uma nova conversa com state=NEW e bot_enabled=true.
-func (r *ConversationRepo) Create(ctx context.Context, tx pgx.Tx, tenantID TenantID, contactID ContactID, channelIdentityID ChannelIdentityID, channel string) (*Conversation, error) {
+// Create cria uma nova conversa com state=NEW e bot_enabled conforme o parâmetro.
+func (r *ConversationRepo) Create(ctx context.Context, tx pgx.Tx, tenantID TenantID, contactID ContactID, channelIdentityID ChannelIdentityID, channel string, botEnabled bool) (*Conversation, error) {
 	var c Conversation
 	var modality *string
 	var state, channelOut string
 
 	err := tx.QueryRow(ctx, `
 		INSERT INTO conversation (tenant_id, channel_identity_id, channel, state, bot_enabled)
-		VALUES ($1, $2, $3::channel, 'NEW', true)
+		VALUES ($1, $2, $3::channel, 'NEW', $4)
 		RETURNING id, tenant_id, channel_identity_id, channel::text, state::text, bot_enabled,
 		          last_inbound_at, last_outbound_at, last_inbound_modality,
 		          created_at, updated_at
-	`, tenantID, channelIdentityID, channel).Scan(
+	`, tenantID, channelIdentityID, channel, botEnabled).Scan(
 		&c.ID, &c.TenantID, &c.ChannelIdentityID, &channelOut,
 		&state, &c.BotEnabled,
 		&c.LastInboundAt, &c.LastOutboundAt, &modality,
@@ -677,7 +677,9 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		       tc.kb_content::text,
 		       t.timezone,
 		       tc.quiet_hours->>'start' AS quiet_hours_start,
-		       tc.quiet_hours->>'end'   AS quiet_hours_end
+		       tc.quiet_hours->>'end'   AS quiet_hours_end,
+		       tc.bot_enabled_by_default,
+		       tc.bot_allowed_numbers
 		FROM tenant_config tc
 		JOIN tenants t ON t.id = tc.tenant_id
 		WHERE tc.tenant_id = $1
@@ -688,6 +690,7 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 
 	var kbJSON *string
 	var quietStart, quietEnd *string
+	var allowedRaw []byte
 
 	err := row.Scan(
 		&cfg.BotName, &cfg.BotGender,
@@ -695,6 +698,8 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		&kbJSON,
 		&cfg.Timezone,
 		&quietStart, &quietEnd,
+		&cfg.BotEnabledByDefault,
+		&allowedRaw,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("TenantConfigRepo.Get: tenant %s não encontrado", tenantID)
@@ -706,6 +711,9 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 	cfg.KBContent = kbJSON
 	cfg.QuietHoursStart = quietStart
 	cfg.QuietHoursEnd = quietEnd
+	if len(allowedRaw) > 0 {
+		_ = json.Unmarshal(allowedRaw, &cfg.BotAllowedNumbers)
+	}
 
 	return &cfg, nil
 }

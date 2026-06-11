@@ -99,14 +99,16 @@ type Lead struct {
 
 // TenantConfig — configurações do tenant (KB, persona, quiet hours, etc.).
 type TenantConfig struct {
-	TenantID         TenantID
-	BotName          string
-	BotGender        string
-	RevealAIIfAsked  bool
-	KBContent        *string
-	Timezone         string
-	QuietHoursStart  *string
-	QuietHoursEnd    *string
+	TenantID             TenantID
+	BotName              string
+	BotGender            string
+	RevealAIIfAsked      bool
+	KBContent            *string
+	Timezone             string
+	QuietHoursStart      *string
+	QuietHoursEnd        *string
+	BotEnabledByDefault  bool
+	BotAllowedNumbers    []string
 }
 
 // KnowledgeBaseEntry — entrada da base de conhecimento para o prompt.

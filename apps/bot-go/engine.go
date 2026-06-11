@@ -109,7 +109,14 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	)
 
 	err := e.withTenant(ctx, func(tx pgx.Tx) error {
-		// a) Resolve contact + channel identity
+		// a) Configuração do tenant (necessária antes de criar a conversa)
+		tenantCfg, err := e.deps.Config.Get(ctx, tx, inbound.TenantID)
+		if err != nil {
+			return fmt.Errorf("TenantConfig.Get: %w", err)
+		}
+		cfg = *tenantCfg
+
+		// b) Resolve contact + channel identity
 		contact, chIdentity, err := e.deps.Contacts.FindByChannelIdentity(ctx, tx, inbound.Channel, inbound.ExternalID)
 		if err != nil {
 			return fmt.Errorf("FindByChannelIdentity: %w", err)
@@ -121,20 +128,20 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 		}
 
-		// b) Resolve conversa
+		// c) Resolve conversa
 		convPtr, err := e.deps.Convs.FindByChannelIdentity(ctx, tx, chIdentity.ID)
 		if err != nil {
 			return fmt.Errorf("FindByChannelIdentity (conv): %w", err)
 		}
 		if convPtr == nil {
-			convPtr, err = e.deps.Convs.Create(ctx, tx, inbound.TenantID, contact.ID, chIdentity.ID, inbound.Channel)
+			convPtr, err = e.deps.Convs.Create(ctx, tx, inbound.TenantID, contact.ID, chIdentity.ID, inbound.Channel, isBotEnabledFor(cfg, inbound.ExternalID))
 			if err != nil {
 				return fmt.Errorf("Create conversation: %w", err)
 			}
 		}
 		conv = *convPtr
 
-		// c) Humano no controle → ignora
+		// d) Humano no controle → ignora
 		if !conv.BotEnabled {
 			log.Info("bot desabilitado para esta conversa, ignorando mensagem")
 			return nil
@@ -193,14 +200,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			return fmt.Errorf("GetRecentTurns: %w", err)
 		}
 
-		// i) Configuração do tenant
-		tenantCfg, err := e.deps.Config.Get(ctx, tx, inbound.TenantID)
-		if err != nil {
-			return fmt.Errorf("TenantConfig.Get: %w", err)
-		}
-		cfg = *tenantCfg
-
-		// j) Monta ConversationContext
+		// i) Monta ConversationContext
 		summary := ""
 		if conv.Summary != nil {
 			summary = *conv.Summary
@@ -398,6 +398,21 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 // ---------------------------------------------------------------------------
 // applyTransition — FSM de estado da conversa
 // ---------------------------------------------------------------------------
+
+// isBotEnabledFor decide se o bot deve estar ativo para um número recém-chegado,
+// de acordo com a config do tenant. Se BotEnabledByDefault=false, o bot só é
+// ativado para números presentes em BotAllowedNumbers.
+func isBotEnabledFor(cfg TenantConfig, externalID string) bool {
+	if cfg.BotEnabledByDefault {
+		return true
+	}
+	for _, n := range cfg.BotAllowedNumbers {
+		if n == externalID {
+			return true
+		}
+	}
+	return false
+}
 
 // applyTransition calcula o próximo estado da conversa dado o estado atual
 // e a saída do Responder.
