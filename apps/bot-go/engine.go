@@ -1,0 +1,434 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// ---------------------------------------------------------------------------
+// Interfaces
+// ---------------------------------------------------------------------------
+
+// Responder invoca o LLM para produzir balões de resposta.
+type Responder interface {
+	Respond(ctx context.Context, conv Conversation, convCtx ConversationContext, cfg TenantConfig, inboundText string) (ResponderOutput, error)
+}
+
+// ChatSender envia mensagens de saída pelo canal (WhatsApp, etc.).
+type ChatSender interface {
+	SendMessage(ctx context.Context, msg OutboundMessage) (providerMessageID string, err error)
+	SendText(ctx context.Context, to, text string) error
+}
+
+// EventEmitter grava domain events no outbox (dentro da transação corrente).
+type EventEmitter interface {
+	Emit(ctx context.Context, tx pgx.Tx, event DomainEvent) error
+}
+
+// ---------------------------------------------------------------------------
+// EngineDeps
+// ---------------------------------------------------------------------------
+
+// EngineDeps agrupa todas as dependências injetadas no ConversationEngine.
+type EngineDeps struct {
+	TenantID  TenantID
+	DB        *pgxpool.Pool
+	Contacts  *ContactRepo
+	Convs     *ConversationRepo
+	Messages  *MessageRepo
+	Leads     *LeadRepo
+	Config    *TenantConfigRepo
+	Responder Responder
+	Sender    ChatSender
+	Emitter   EventEmitter
+	Logger    *slog.Logger
+	// Sleep é injetável para testes (padrão: time.Sleep).
+	Sleep func(time.Duration)
+}
+
+// ---------------------------------------------------------------------------
+// ConversationEngine
+// ---------------------------------------------------------------------------
+
+// ConversationEngine processa mensagens inbound e orquestra o FSM de conversa.
+type ConversationEngine struct {
+	deps       EngineDeps
+	withTenant func(ctx context.Context, fn func(pgx.Tx) error) error
+}
+
+// NewConversationEngine cria um engine com as dependências fornecidas.
+func NewConversationEngine(deps EngineDeps) *ConversationEngine {
+	sleep := deps.Sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	deps.Sleep = sleep
+
+	return &ConversationEngine{
+		deps:       deps,
+		withTenant: withTenant(deps.DB, deps.TenantID),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Handle — ponto de entrada principal
+// ---------------------------------------------------------------------------
+
+// Handle processa uma mensagem inbound de ponta a ponta.
+// O fluxo completo ocorre dentro de uma única transação por conta do withTenant,
+// exceto pelos Sleeps de humanização que acontecem FORA da transação
+// (o commit de cada balão anterior já foi realizado antes do Sleep seguinte).
+//
+// Nota de implementação: os balões são enviados e persistidos sequencialmente,
+// cada um dentro de um withTenant separado para que o Sleep ocorra entre eles
+// sem manter a transação aberta. O grosso do fluxo (resolução de contato,
+// conversa, deduplificação, resposta do LLM) acontece em uma única transação
+// inicial; os balões são gravados em transações individuais posteriores.
+func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage) error {
+	log := e.deps.Logger.With(
+		"tenant_id", inbound.TenantID,
+		"wamid", inbound.ProviderMessageID,
+		"from", inbound.ExternalID,
+	)
+
+	// -----------------------------------------------------------------------
+	// Fase 1: dentro de uma única transação — resolução, dedup, LLM
+	// -----------------------------------------------------------------------
+
+	var (
+		conv          Conversation
+		cfg           TenantConfig
+		output        ResponderOutput
+		inboundText   string
+		mediaFallback bool
+	)
+
+	err := e.withTenant(ctx, func(tx pgx.Tx) error {
+		// a) Resolve contact + channel identity
+		contact, chIdentity, err := e.deps.Contacts.FindByChannelIdentity(ctx, tx, inbound.Channel, inbound.ExternalID)
+		if err != nil {
+			return fmt.Errorf("FindByChannelIdentity: %w", err)
+		}
+		if contact == nil {
+			contact, chIdentity, err = e.deps.Contacts.CreateWithChannelIdentity(ctx, tx, inbound.TenantID, inbound.Channel, inbound.ExternalID, inbound.DisplayHandle)
+			if err != nil {
+				return fmt.Errorf("CreateWithChannelIdentity: %w", err)
+			}
+		}
+
+		// b) Resolve conversa
+		convPtr, err := e.deps.Convs.FindByChannelIdentity(ctx, tx, chIdentity.ID)
+		if err != nil {
+			return fmt.Errorf("FindByChannelIdentity (conv): %w", err)
+		}
+		if convPtr == nil {
+			convPtr, err = e.deps.Convs.Create(ctx, tx, inbound.TenantID, contact.ID, chIdentity.ID, inbound.Channel)
+			if err != nil {
+				return fmt.Errorf("Create conversation: %w", err)
+			}
+		}
+		conv = *convPtr
+
+		// c) Humano no controle → ignora
+		if !conv.BotEnabled {
+			log.Info("bot desabilitado para esta conversa, ignorando mensagem")
+			return nil
+		}
+
+		// d) Deduplicação da mensagem inbound
+		firstTime, err := e.deps.Messages.RecordInbound(ctx, tx, inbound.ProviderMessageID, inbound.TenantID, conv.ID, inbound.Content)
+		if err != nil {
+			return fmt.Errorf("RecordInbound: %w", err)
+		}
+		if !firstTime {
+			log.Info("mensagem duplicada, ignorando", "wamid", inbound.ProviderMessageID)
+			return nil
+		}
+
+		// e) Resolve inboundText (texto ou transcrição de áudio)
+		switch inbound.Content.Type {
+		case "text":
+			inboundText = inbound.Content.Text
+		case "audio":
+			if inbound.Content.Transcript != nil {
+				inboundText = *inbound.Content.Transcript
+			}
+		default:
+			if inbound.Content.Caption != nil {
+				inboundText = *inbound.Content.Caption
+			}
+		}
+
+		// f) Mídia sem transcrição → resposta de fallback
+		if inboundText == "" {
+			mediaFallback = true
+			return nil
+		}
+
+		// g) Emite domain_event "message.received"
+		msgReceivedEvent := DomainEvent{
+			TenantID:    inbound.TenantID,
+			AggregateID: conv.ID,
+			Type:        "message.received",
+			Payload: map[string]any{
+				"conversation_id": conv.ID,
+				"contact_id":      contact.ID,
+				"wamid":           inbound.ProviderMessageID,
+				"modality":        inbound.Content.Type,
+			},
+			OccurredAt: inbound.ReceivedAt,
+		}
+		if err := e.deps.Emitter.Emit(ctx, tx, msgReceivedEvent); err != nil {
+			return fmt.Errorf("Emit message.received: %w", err)
+		}
+
+		// h) Busca turnos recentes
+		recentTurns, err := e.deps.Messages.GetRecentTurns(ctx, tx, conv.ID)
+		if err != nil {
+			return fmt.Errorf("GetRecentTurns: %w", err)
+		}
+
+		// i) Configuração do tenant
+		tenantCfg, err := e.deps.Config.Get(ctx, tx, inbound.TenantID)
+		if err != nil {
+			return fmt.Errorf("TenantConfig.Get: %w", err)
+		}
+		cfg = *tenantCfg
+
+		// j) Monta ConversationContext
+		summary := ""
+		if conv.Summary != nil {
+			summary = *conv.Summary
+		}
+		convCtx := ConversationContext{
+			RecentTurns:     recentTurns,
+			Summary:         summary,
+			StructuredFacts: conv.StructuredFacts,
+		}
+
+		// k) Quiet hours — verifica se deve suspender o processamento
+		if cfg.QuietHoursStart != nil && cfg.QuietHoursEnd != nil {
+			hold := QuietHoursHoldMs(inbound.ReceivedAt, cfg.Timezone, *cfg.QuietHoursStart, *cfg.QuietHoursEnd)
+			if hold > 0 {
+				log.Info("mensagem recebida em quiet hours, agendando retry", "hold", hold)
+				nextRetry := inbound.ReceivedAt.Add(hold)
+				if err := e.deps.Messages.SetNextRetryAt(ctx, tx, inbound.ProviderMessageID, nextRetry); err != nil {
+					return fmt.Errorf("SetNextRetryAt: %w", err)
+				}
+				return nil
+			}
+		}
+
+		// l) Chama o Responder (LLM)
+		respOut, err := e.deps.Responder.Respond(ctx, conv, convCtx, cfg, inboundText)
+		if err != nil {
+			return fmt.Errorf("Responder.Respond: %w", err)
+		}
+		output = respOut
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("engine.Handle (fase 1): %w", err)
+	}
+
+	// Se não há output (bot desabilitado, dedup, quiet hours, mídia sem texto),
+	// trata o caso de fallback de mídia fora da transação e encerra.
+	if mediaFallback {
+		if err := e.deps.Sender.SendText(ctx, inbound.ExternalID, "recebi sua mídia, em breve respondo"); err != nil {
+			log.Error("erro ao enviar fallback de mídia", "err", err)
+		}
+		return nil
+	}
+
+	if len(output.Bubbles) == 0 {
+		return nil
+	}
+
+	// -----------------------------------------------------------------------
+	// Fase 2: envio dos balões (Sleep FORA da transação)
+	// -----------------------------------------------------------------------
+
+	wamid := inbound.ProviderMessageID
+	prevText := ""
+
+	for i, bubble := range output.Bubbles {
+		// Calcula delay de humanização
+		var delay time.Duration
+		if i == 0 {
+			delay = FirstBubbleDelayMs(bubble)
+		} else {
+			delay = BetweenBubblesDelayMs(prevText)
+		}
+
+		// Sleep acontece fora de qualquer transação
+		e.deps.Sleep(delay)
+
+		idempotencyKey := fmt.Sprintf("%s:bubble:%d", wamid, i)
+
+		outboundMsg := OutboundMessage{
+			TenantID:       inbound.TenantID,
+			ConversationID: conv.ID,
+			Channel:        inbound.Channel,
+			To:             inbound.ExternalID,
+			Intent:         IntentFreeForm,
+			Content:        MessageContent{Type: "text", Text: bubble},
+			IdempotencyKey: idempotencyKey,
+		}
+
+		// Envia e persiste dentro de uma transação individual por balão
+		txErr := e.withTenant(ctx, func(tx pgx.Tx) error {
+			providerMsgID, err := e.deps.Sender.SendMessage(ctx, outboundMsg)
+			if err != nil {
+				return fmt.Errorf("SendMessage bubble %d: %w", i, err)
+			}
+
+			// Persiste com ON CONFLICT DO NOTHING para exactly-once
+			if err := e.deps.Messages.RecordOutbound(ctx, tx, idempotencyKey, inbound.TenantID, conv.ID, providerMsgID, bubble); err != nil {
+				return fmt.Errorf("RecordOutbound bubble %d: %w", i, err)
+			}
+
+			return nil
+		})
+		if txErr != nil {
+			log.Error("erro ao enviar balão", "index", i, "err", txErr)
+			return fmt.Errorf("engine.Handle (balão %d): %w", i, txErr)
+		}
+
+		prevText = bubble
+	}
+
+	// -----------------------------------------------------------------------
+	// Fase 3: atualiza estado do FSM e emite eventos pós-envio
+	// -----------------------------------------------------------------------
+
+	return e.withTenant(ctx, func(tx pgx.Tx) error {
+		// Recarrega conversa para ter estado atual
+		convPtr, err := e.deps.Convs.FindByChannelIdentity(ctx, tx, conv.ChannelIdentityID)
+		if err != nil {
+			return fmt.Errorf("reload conversation: %w", err)
+		}
+		if convPtr != nil {
+			conv = *convPtr
+		}
+
+		prevState := conv.State
+
+		// n) Aplica transição do FSM
+		newState := applyTransition(conv.State, output)
+
+		// o) Handoff
+		if output.Handoff {
+			newState = StateHandoff
+			handoffEvent := DomainEvent{
+				TenantID:    inbound.TenantID,
+				AggregateID: conv.ID,
+				Type:        "notification.requested",
+				Payload: map[string]any{
+					"type":            "HANDOFF",
+					"conversation_id": conv.ID,
+					"contact_id":      conv.ContactID,
+				},
+				OccurredAt: time.Now(),
+			}
+			if err := e.deps.Emitter.Emit(ctx, tx, handoffEvent); err != nil {
+				return fmt.Errorf("Emit notification.requested (handoff): %w", err)
+			}
+		}
+
+		// p) Reativação agendada
+		if output.ScheduledContact != nil {
+			if err := e.deps.Convs.SaveReactivation(ctx, tx, conv.ID, inbound.TenantID, conv.ContactID, output.ScheduledContact); err != nil {
+				return fmt.Errorf("SaveReactivation: %w", err)
+			}
+		}
+
+		// q) Gap na KB detectado
+		if !output.AnsweredFromKb && output.Answered {
+			kbGapEvent := DomainEvent{
+				TenantID:    inbound.TenantID,
+				AggregateID: conv.ID,
+				Type:        "kb.gap_detected",
+				Payload: map[string]any{
+					"conversation_id": conv.ID,
+					"inbound_text":    inboundText,
+				},
+				OccurredAt: time.Now(),
+			}
+			if err := e.deps.Emitter.Emit(ctx, tx, kbGapEvent); err != nil {
+				return fmt.Errorf("Emit kb.gap_detected: %w", err)
+			}
+		}
+
+		// r) Emite mudança de estado se necessário
+		conv.State = newState
+		if newState != prevState {
+			stateEvent := DomainEvent{
+				TenantID:    inbound.TenantID,
+				AggregateID: conv.ID,
+				Type:        "conversation.state_changed",
+				Payload: map[string]any{
+					"conversation_id": conv.ID,
+					"from":            string(prevState),
+					"to":              string(newState),
+				},
+				OccurredAt: time.Now(),
+			}
+			if err := e.deps.Emitter.Emit(ctx, tx, stateEvent); err != nil {
+				return fmt.Errorf("Emit conversation.state_changed: %w", err)
+			}
+		}
+
+		// s) Persiste conversa
+		now := time.Now()
+		conv.LastOutboundAt = &now
+		if err := e.deps.Convs.Save(ctx, tx, conv); err != nil {
+			return fmt.Errorf("Convs.Save: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// ---------------------------------------------------------------------------
+// applyTransition — FSM de estado da conversa
+// ---------------------------------------------------------------------------
+
+// applyTransition calcula o próximo estado da conversa dado o estado atual
+// e a saída do Responder.
+func applyTransition(current ConversationState, output ResponderOutput) ConversationState {
+	switch current {
+	case StateNew:
+		// Primeira resposta: sempre avança para ENGAGED
+		return StateEngaged
+
+	case StateEngaged:
+		if output.Handoff {
+			return StateHandoff
+		}
+		if output.Answered && output.AnsweredFromKb {
+			return StateConcludedPositive
+		}
+		if output.Answered && !output.AnsweredFromKb {
+			// Respondeu, mas sem KB → aguarda complemento humano
+			return StateAwaitingReply
+		}
+		return StateEngaged
+
+	case StateAwaitingReply:
+		// Nova mensagem chegou → volta para engajado (resetado pelo Handle)
+		return StateEngaged
+
+	case StateHandoff:
+		// Só humano pode mudar este estado
+		return StateHandoff
+
+	default:
+		return current
+	}
+}

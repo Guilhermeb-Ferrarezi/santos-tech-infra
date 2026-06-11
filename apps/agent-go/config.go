@@ -34,6 +34,10 @@ type Config struct {
 	CloudflareToken string
 	GithubToken     string // usado pelo MCP do GitHub
 
+	// Secret de serviço: permite que serviços internos (ex: bot-atendimento) chamem
+	// /claude/generate sem JWT de usuário. Ausente = desabilitado.
+	InternalSecret string
+
 	Production bool
 }
 
@@ -55,6 +59,8 @@ func LoadConfig() Config {
 		EasypanelToken:  getEnv("EASYPANEL_TOKEN", ""),
 		CloudflareToken: getEnv("CLOUDFLARE_API_TOKEN", ""),
 		GithubToken:     getEnv("GITHUB_TOKEN", ""),
+
+		InternalSecret: getEnv("INTERNAL_SECRET", ""),
 
 		Production: getEnv("NODE_ENV", "development") == "production",
 	}

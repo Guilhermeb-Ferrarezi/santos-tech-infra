@@ -100,6 +100,11 @@ func (s *Server) authGuardUser(next http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
 			return
 		}
+		// Serviços internos (ex: bot-atendimento) usam INTERNAL_SECRET como Bearer.
+		if s.cfg.InternalSecret != "" && token == s.cfg.InternalSecret {
+			next(w, r.WithContext(context.WithValue(r.Context(), userIDKey, int64(0))))
+			return
+		}
 		uid, err := s.resolveToken(r.Context(), token)
 		if err != nil {
 			writeErr(w, err)

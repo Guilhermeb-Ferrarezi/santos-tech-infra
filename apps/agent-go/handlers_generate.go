@@ -106,6 +106,22 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// task "raw": passa o brief diretamente ao Claude sem nenhum sistema de prompt.
+	// Usado por serviços internos (ex: bot-atendimento) que montam o próprio prompt.
+	if req.Task == "raw" {
+		if strings.TrimSpace(req.Brief) == "" {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "brief obrigatório para task raw"))
+			return
+		}
+		raw, err := s.generateOnce(r.Context(), req.Brief, "", "", req.Model, false, nil)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, &generateResult{Text: raw})
+		return
+	}
+
 	raw, err := s.generateOnce(r.Context(), buildGeneratePrompt(req, strings.TrimSpace(req.ImageBase64) != ""), req.ImageBase64, req.ImageMime, req.Model, req.Web, req.Tools)
 	if err != nil {
 		writeErr(w, err)

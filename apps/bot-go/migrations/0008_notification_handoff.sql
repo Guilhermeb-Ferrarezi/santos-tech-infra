@@ -1,0 +1,15 @@
+-- migrate:no-transaction
+-- ============================================================================
+-- Migration #8 — Novo NotificationType 'HANDOFF' (Task: dispatcher de admin)
+-- ----------------------------------------------------------------------------
+-- O ConversationEngine passa a emitir `notification.requested` com
+-- notificationType 'HANDOFF' (cliente pediu atendimento humano → bot pausado).
+-- O enum Postgres `notification_type` (0001) precisa do valor para que o
+-- dispatcher consiga gravar em `notifications` e filtrar `notification_settings`.
+--
+-- `ALTER TYPE ... ADD VALUE` não pode rodar dentro do wrapper transacional do
+-- runner (ver runner.ts) → diretiva `migrate:no-transaction` na 1ª linha.
+-- IF NOT EXISTS torna a reexecução idempotente (exigência das migrações
+-- sem transação: falhou antes de registrar → basta rodar de novo).
+-- ============================================================================
+ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'HANDOFF';
