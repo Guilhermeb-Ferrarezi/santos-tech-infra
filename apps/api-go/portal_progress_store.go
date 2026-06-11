@@ -75,7 +75,7 @@ func (s *Server) portalExerciseAnswers(ctx context.Context, exerciseID int64, f 
 		COUNT(*) FILTER (WHERE a.is_correct IS TRUE),
 		COUNT(*) FILTER (WHERE a.is_correct IS FALSE),
 		COUNT(DISTINCT a.user_id)` + portalAnswerFrom + base
-	if err := s.db.QueryRow(ctx, statsSQL, args...).Scan(&stats.Total, &stats.Corrigidas, &stats.Pendentes, &stats.Corretas, &stats.Incorretas, &stats.TotalAlunos); err != nil {
+	if err := s.portalDB.QueryRow(ctx, statsSQL, args...).Scan(&stats.Total, &stats.Corrigidas, &stats.Pendentes, &stats.Corretas, &stats.Incorretas, &stats.TotalAlunos); err != nil {
 		return nil, stats, 0, err
 	}
 	// total da paginação reflete o filtro de status (derivado das stats, sem query extra).
@@ -90,7 +90,7 @@ func (s *Server) portalExerciseAnswers(ctx context.Context, exerciseID int64, f 
 	args = append(args, p.Limit, p.Offset)
 	listSQL := fmt.Sprintf(`SELECT %s%s%s%s ORDER BY %s LIMIT $%d OFFSET $%d`,
 		portalAnswerSelect, portalAnswerFrom, base, statusPred, portalAnswerOrder(sort), len(args)-1, len(args))
-	rows, err := s.db.Query(ctx, listSQL, args...)
+	rows, err := s.portalDB.Query(ctx, listSQL, args...)
 	if err != nil {
 		return nil, stats, 0, err
 	}
@@ -107,11 +107,11 @@ func (s *Server) portalExerciseAnswers(ctx context.Context, exerciseID int64, f 
 }
 
 func (s *Server) portalGetAnswer(ctx context.Context, id int64) (*portalAnswerDTO, error) {
-	return scanAnswer(s.db.QueryRow(ctx, `SELECT `+portalAnswerSelect+portalAnswerFrom+` WHERE a.id = $1`, id))
+	return scanAnswer(s.portalDB.QueryRow(ctx, `SELECT `+portalAnswerSelect+portalAnswerFrom+` WHERE a.id = $1`, id))
 }
 
 func (s *Server) portalUpdateAnswer(ctx context.Context, id int64, patch portalAnswerPatch) (*portalAnswerDTO, error) {
-	tag, err := s.db.Exec(ctx, `UPDATE answer SET
+	tag, err := s.portalDB.Exec(ctx, `UPDATE answer SET
 		answer_text = COALESCE($2, answer_text),
 		selected_option = COALESCE($3, selected_option),
 		is_correct = COALESCE($4, is_correct),
@@ -129,7 +129,7 @@ func (s *Server) portalUpdateAnswer(ctx context.Context, id int64, patch portalA
 // portalBatchUpdateAnswers aplica o mesmo patch a várias respostas numa
 // transação; devolve os ids atualizados e os não encontrados.
 func (s *Server) portalBatchUpdateAnswers(ctx context.Context, ids []int64, patch portalAnswerPatch) (updated, notFound []string, err error) {
-	tx, err := s.db.Begin(ctx)
+	tx, err := s.portalDB.Begin(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -161,7 +161,7 @@ func (s *Server) portalBatchUpdateAnswers(ctx context.Context, ids []int64, patc
 // ── Visões "quem respondeu" ──────────────────────────────────────────────────
 
 func (s *Server) portalExerciseAnswerStudents(ctx context.Context, exerciseID int64) ([]portalAnswerStudentSummaryDTO, error) {
-	rows, err := s.db.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''), COUNT(*), MAX(a.answered_at)
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''), COUNT(*), MAX(a.answered_at)
 		FROM answer a JOIN "user" u ON u.id = a.user_id
 		WHERE a.exercise_id = $1
 		GROUP BY u.id, u.name, u.email
@@ -181,12 +181,12 @@ func (s *Server) portalAnswerStudents(ctx context.Context, q string, p portalPag
 		where = "WHERE COALESCE(u.name,'') ILIKE $1 OR COALESCE(u.email,'') ILIKE $1"
 	}
 	var total int64
-	if err := s.db.QueryRow(ctx, `SELECT COUNT(DISTINCT a.user_id)
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(DISTINCT a.user_id)
 		FROM answer a JOIN "user" u ON u.id = a.user_id `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, p.Limit, p.Offset)
-	rows, err := s.db.Query(ctx, fmt.Sprintf(`SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''), COUNT(*), MAX(a.answered_at)
+	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''), COUNT(*), MAX(a.answered_at)
 		FROM answer a JOIN "user" u ON u.id = a.user_id %s
 		GROUP BY u.id, u.name, u.email
 		ORDER BY MAX(a.answered_at) DESC NULLS LAST
@@ -224,11 +224,11 @@ func (s *Server) portalStudentAnsweredExercises(ctx context.Context, studentID i
 		LEFT JOIN phase ph ON ph.id = e.phase_id
 		LEFT JOIN module m ON m.id = ph.module_id `
 	var total int64
-	if err := s.db.QueryRow(ctx, `SELECT COUNT(DISTINCT a.exercise_id)`+from+where, args...).Scan(&total); err != nil {
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(DISTINCT a.exercise_id)`+from+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, p.Limit, p.Offset)
-	rows, err := s.db.Query(ctx, fmt.Sprintf(`SELECT a.exercise_id::text, COALESCE(MAX(e.title),''), MAX(m.name), MAX(ph.name), COUNT(*), MAX(a.answered_at)
+	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT a.exercise_id::text, COALESCE(MAX(e.title),''), MAX(m.name), MAX(ph.name), COUNT(*), MAX(a.answered_at)
 		%s%s
 		GROUP BY a.exercise_id
 		ORDER BY MAX(a.answered_at) DESC NULLS LAST
@@ -251,7 +251,7 @@ func (s *Server) portalStudentAnsweredExercises(ctx context.Context, studentID i
 // ── Progresso ────────────────────────────────────────────────────────────────
 
 func (s *Server) portalPhaseProgress(ctx context.Context, phaseID int64) ([]portalProgressDTO, error) {
-	rows, err := s.db.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''),
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''),
 		psp.status, COALESCE(psp.progress, 0), psp.unlocked_at, psp.completed_at
 		FROM progress_student_phase psp JOIN "user" u ON u.id = psp.user_id
 		WHERE psp.phase_id = $1
@@ -279,7 +279,7 @@ func (s *Server) portalPhaseProgress(ctx context.Context, phaseID int64) ([]port
 // do módulo atual da turma (linhas aluno×fase; sem registro de progresso conta
 // como não iniciado).
 func (s *Server) portalClassProgress(ctx context.Context, classID int64) ([]portalProgressDTO, error) {
-	rows, err := s.db.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''),
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''),
 		p.id::text, COALESCE(p.name,''), psp.status, COALESCE(psp.progress, 0), psp.unlocked_at, psp.completed_at
 		FROM class c
 		JOIN (SELECT DISTINCT user_id FROM enrollment WHERE class_id = $1) en ON true
