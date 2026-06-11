@@ -114,6 +114,40 @@ func TestCORS(t *testing.T) {
 	}
 }
 
+func TestCORSFailClosed(t *testing.T) {
+	s := testServer(Config{}) // sem CORSOrigins nem AuthWebOrigin
+	h := s.cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+
+	// allowlist vazia → nenhuma origem refletida (fail-closed)
+	r := httptest.NewRequest("GET", "/x", nil)
+	r.Header.Set("Origin", "https://evil.com")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Error("allowlist vazia não devia refletir nenhuma origem")
+	}
+	if w.Header().Get("Access-Control-Allow-Credentials") != "" {
+		t.Error("allowlist vazia não devia setar Allow-Credentials")
+	}
+}
+
+func TestCORSAuthWebOrigin(t *testing.T) {
+	s := testServer(Config{
+		CORSOrigins:   []string{"https://mails.santos-tech.com"},
+		AuthWebOrigin: "https://auth.santos-tech.com",
+	})
+	h := s.cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+
+	// AuthWebOrigin deve ser permitida mesmo não estando em CORSOrigins
+	r := httptest.NewRequest("GET", "/x", nil)
+	r.Header.Set("Origin", "https://auth.santos-tech.com")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Header().Get("Access-Control-Allow-Origin") != "https://auth.santos-tech.com" {
+		t.Error("AuthWebOrigin deveria ser refletida")
+	}
+}
+
 func TestAllowedRedirect(t *testing.T) {
 	s := testServer(Config{
 		CORSOrigins:   []string{"https://mails.santos-tech.com", "https://app.santos-tech.com"},

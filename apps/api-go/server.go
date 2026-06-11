@@ -62,7 +62,7 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" && (len(s.cfg.CORSOrigins) == 0 || slices.Contains(s.cfg.CORSOrigins, origin)) {
+		if origin != "" && s.allowedOrigin(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
@@ -75,6 +75,15 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// allowedOrigin reporta se origin está na allowlist explícita.
+// Fail-closed: lista vazia bloqueia todas as origens.
+func (s *Server) allowedOrigin(origin string) bool {
+	if slices.Contains(s.cfg.CORSOrigins, origin) {
+		return true
+	}
+	return s.cfg.AuthWebOrigin != "" && origin == s.cfg.AuthWebOrigin
 }
 
 // ── Auth guard (cookie access_token ou Authorization: Bearer) ────────────────
