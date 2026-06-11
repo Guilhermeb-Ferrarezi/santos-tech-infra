@@ -43,3 +43,10 @@ Primeira fatia da migração do portal pra API Go central: overview, catálogo
 atual sem alteração, leitura por staffGuard e escrita por adminGuard (DELETE com
 sudo). Content/submissions/badges/goals e a desativação da API TS antiga ficam
 para planos seguintes.
+
+## 2026-06-10 — Portal API Go Fase 2 (conteúdo)
+Exercícios (CRUD + reorder + by-phase + daily-tasks + múltipla escolha via
+question/question_option, 409 se já há respostas), containers (container_tasks),
+materiais e vídeos (CRUD JSON; módulo embutido na description como [[module:id|nome]];
+URL pré-enviada via /auth/upload). Schema preservado. Falta: submissões/progresso,
+badges, goals, notificações (fases 3-5) e desativar a API TS antiga.

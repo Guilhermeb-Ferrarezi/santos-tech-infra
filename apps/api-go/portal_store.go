@@ -631,7 +631,7 @@ func (s *Server) portalDeleteClassRoom(ctx context.Context, roomID int64) error 
 // do mesmo escopo (module→course_id, phase→module_id). table/scopeCol vêm de uma
 // allowlist (não de input), então a interpolação é segura.
 func (s *Server) portalReorder(ctx context.Context, table, scopeCol, entity string, id int64, direction string) error {
-	if table != "module" && table != "phase" {
+	if table != "module" && table != "phase" && table != "exercise" {
 		return validationErr("tabela inválida")
 	}
 	tx, err := s.db.Begin(ctx)
