@@ -6,47 +6,53 @@ import (
 )
 
 // registerPortalRoutes registra as rotas do portal admin/professor sob /portal/*.
-// Leitura: portalRead (admin/professor OU cargo com `portal:read`). Escrita:
-// adminGuard; ações destrutivas (DELETE) exigem sudoGuard. Correção de respostas
-// e claim seguem staffGuard (trabalho de professor, não é leitura).
+// Permissões granulares por área (recursos `portal_*` no catálogo de cargos):
+//   - Leitura (GET): portalRead("portal_<área>") — admin/professor OU cargo com {área}:read.
+//   - Escrita (POST/PATCH): portalWrite("portal_<área>") — admin OU cargo com {área}:write
+//     (professor NÃO escreve, igual ao adminGuard anterior).
+//   - Exclusão (DELETE): permanece admin-only (adminGuard, +sudoGuard quando destrutivo).
+//   - Correção de respostas: portalCorrigir (admin/professor OU cargo com portal_correcao:corrigir).
+//   - Transversais (overview, busca de usuários): portalAnyRead (qualquer portal_*:read).
 func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	const min = time.Minute
 
-	mux.HandleFunc("GET /portal/overview", s.portalRead(s.handlePortalOverview))
+	mux.HandleFunc("GET /portal/overview", s.portalAnyRead(s.handlePortalOverview))
 
-	mux.HandleFunc("GET /portal/courses", s.portalRead(s.handlePortalListCourses))
-	mux.HandleFunc("POST /portal/courses", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateCourse)))
-	mux.HandleFunc("GET /portal/courses/{courseId}", s.portalRead(s.handlePortalGetCourse))
-	mux.HandleFunc("PATCH /portal/courses/{courseId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateCourse)))
+	// Cursos / módulos / fases → portal_cursos
+	mux.HandleFunc("GET /portal/courses", s.portalRead("portal_cursos", s.handlePortalListCourses))
+	mux.HandleFunc("POST /portal/courses", s.rateLimit(20, min, s.portalWrite("portal_cursos", s.handlePortalCreateCourse)))
+	mux.HandleFunc("GET /portal/courses/{courseId}", s.portalRead("portal_cursos", s.handlePortalGetCourse))
+	mux.HandleFunc("PATCH /portal/courses/{courseId}", s.rateLimit(30, min, s.portalWrite("portal_cursos", s.handlePortalUpdateCourse)))
 	mux.HandleFunc("DELETE /portal/courses/{courseId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteCourse)))
 
-	mux.HandleFunc("GET /portal/courses/{courseId}/modules", s.portalRead(s.handlePortalListModules))
-	mux.HandleFunc("POST /portal/courses/{courseId}/modules", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateModule)))
-	mux.HandleFunc("PATCH /portal/modules/{moduleId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateModule)))
-	mux.HandleFunc("PATCH /portal/modules/{moduleId}/reorder", s.rateLimit(30, min, s.adminGuard(s.handlePortalReorderModule)))
+	mux.HandleFunc("GET /portal/courses/{courseId}/modules", s.portalRead("portal_cursos", s.handlePortalListModules))
+	mux.HandleFunc("POST /portal/courses/{courseId}/modules", s.rateLimit(20, min, s.portalWrite("portal_cursos", s.handlePortalCreateModule)))
+	mux.HandleFunc("PATCH /portal/modules/{moduleId}", s.rateLimit(30, min, s.portalWrite("portal_cursos", s.handlePortalUpdateModule)))
+	mux.HandleFunc("PATCH /portal/modules/{moduleId}/reorder", s.rateLimit(30, min, s.portalWrite("portal_cursos", s.handlePortalReorderModule)))
 	mux.HandleFunc("DELETE /portal/modules/{moduleId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteModule)))
 
-	mux.HandleFunc("GET /portal/modules/{moduleId}/phases", s.portalRead(s.handlePortalListPhases))
-	mux.HandleFunc("POST /portal/modules/{moduleId}/phases", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreatePhase)))
-	mux.HandleFunc("PATCH /portal/phases/{phaseId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdatePhase)))
-	mux.HandleFunc("PATCH /portal/phases/{phaseId}/reorder", s.rateLimit(30, min, s.adminGuard(s.handlePortalReorderPhase)))
+	mux.HandleFunc("GET /portal/modules/{moduleId}/phases", s.portalRead("portal_cursos", s.handlePortalListPhases))
+	mux.HandleFunc("POST /portal/modules/{moduleId}/phases", s.rateLimit(20, min, s.portalWrite("portal_cursos", s.handlePortalCreatePhase)))
+	mux.HandleFunc("PATCH /portal/phases/{phaseId}", s.rateLimit(30, min, s.portalWrite("portal_cursos", s.handlePortalUpdatePhase)))
+	mux.HandleFunc("PATCH /portal/phases/{phaseId}/reorder", s.rateLimit(30, min, s.portalWrite("portal_cursos", s.handlePortalReorderPhase)))
 	mux.HandleFunc("DELETE /portal/phases/{phaseId}", s.adminGuard(s.sudoGuard(s.handlePortalDeletePhase)))
 
-	mux.HandleFunc("GET /portal/classes", s.portalRead(s.handlePortalListClasses))
-	mux.HandleFunc("POST /portal/classes", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateClass)))
-	mux.HandleFunc("GET /portal/classes/{classId}", s.portalRead(s.handlePortalGetClass))
-	mux.HandleFunc("PATCH /portal/classes/{classId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateClass)))
+	// Turmas / matrículas / salas → portal_turmas
+	mux.HandleFunc("GET /portal/classes", s.portalRead("portal_turmas", s.handlePortalListClasses))
+	mux.HandleFunc("POST /portal/classes", s.rateLimit(20, min, s.portalWrite("portal_turmas", s.handlePortalCreateClass)))
+	mux.HandleFunc("GET /portal/classes/{classId}", s.portalRead("portal_turmas", s.handlePortalGetClass))
+	mux.HandleFunc("PATCH /portal/classes/{classId}", s.rateLimit(30, min, s.portalWrite("portal_turmas", s.handlePortalUpdateClass)))
 	mux.HandleFunc("DELETE /portal/classes/{classId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteClass)))
-	mux.HandleFunc("GET /portal/classes/{classId}/students", s.portalRead(s.handlePortalListClassStudents))
-	mux.HandleFunc("POST /portal/classes/{classId}/students", s.rateLimit(20, min, s.adminGuard(s.handlePortalAddClassStudents)))
+	mux.HandleFunc("GET /portal/classes/{classId}/students", s.portalRead("portal_turmas", s.handlePortalListClassStudents))
+	mux.HandleFunc("POST /portal/classes/{classId}/students", s.rateLimit(20, min, s.portalWrite("portal_turmas", s.handlePortalAddClassStudents)))
 	mux.HandleFunc("DELETE /portal/classes/{classId}/students/{studentId}", s.adminGuard(s.handlePortalRemoveClassStudent))
-	mux.HandleFunc("GET /portal/classes/{classId}/cronograma", s.portalRead(s.handlePortalClassCronograma))
-	mux.HandleFunc("POST /portal/classes/{classId}/iniciar-fases", s.rateLimit(20, min, s.adminGuard(s.handlePortalIniciarFases)))
+	mux.HandleFunc("GET /portal/classes/{classId}/cronograma", s.portalRead("portal_turmas", s.handlePortalClassCronograma))
+	mux.HandleFunc("POST /portal/classes/{classId}/iniciar-fases", s.rateLimit(20, min, s.portalWrite("portal_turmas", s.handlePortalIniciarFases)))
 
-	mux.HandleFunc("GET /portal/classes/{classId}/rooms", s.portalRead(s.handlePortalListClassRooms))
-	mux.HandleFunc("POST /portal/classes/{classId}/rooms", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateClassRoom)))
-	mux.HandleFunc("PATCH /portal/rooms/{roomId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateClassRoom)))
-	mux.HandleFunc("PATCH /portal/rooms/{roomId}/status", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateClassRoomStatus)))
+	mux.HandleFunc("GET /portal/classes/{classId}/rooms", s.portalRead("portal_turmas", s.handlePortalListClassRooms))
+	mux.HandleFunc("POST /portal/classes/{classId}/rooms", s.rateLimit(20, min, s.portalWrite("portal_turmas", s.handlePortalCreateClassRoom)))
+	mux.HandleFunc("PATCH /portal/rooms/{roomId}", s.rateLimit(30, min, s.portalWrite("portal_turmas", s.handlePortalUpdateClassRoom)))
+	mux.HandleFunc("PATCH /portal/rooms/{roomId}/status", s.rateLimit(30, min, s.portalWrite("portal_turmas", s.handlePortalUpdateClassRoomStatus)))
 	mux.HandleFunc("DELETE /portal/rooms/{roomId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteClassRoom)))
 
 	s.registerPortalContentRoutes(mux)
@@ -55,51 +61,47 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	s.registerPortalNotificationRoutes(mux)
 }
 
-// registerPortalRewardsRoutes — Fase 4: badges (+holders) e goals (recompensas,
-// progresso, resgate). Escrita = adminGuard; exclusão de medalha/meta (cascata)
-// = sudoGuard. Resgate (claim) usa staffGuard pois o aluno pode resgatar o
-// próprio registro (o store restringe ao próprio user quando role=aluno).
+// registerPortalRewardsRoutes — Fase 4: medalhas (portal_medalhas) e metas
+// (portal_metas). DELETE destrutivo segue admin-only (+sudo). Claim segue
+// staffGuard (admin/professor).
 func (s *Server) registerPortalRewardsRoutes(mux *http.ServeMux) {
 	const min = time.Minute
 
-	// Busca de usuários do portal (seletor de alunos)
-	mux.HandleFunc("GET /portal/users", s.portalRead(s.handlePortalSearchUsers))
+	// Busca de usuários do portal (seletor transversal de alunos)
+	mux.HandleFunc("GET /portal/users", s.portalAnyRead(s.handlePortalSearchUsers))
 
-	// Badges
-	mux.HandleFunc("GET /portal/badges", s.portalRead(s.handlePortalListBadges))
-	mux.HandleFunc("POST /portal/badges", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateBadge)))
-	mux.HandleFunc("PATCH /portal/badges/{badgeId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateBadge)))
+	// Medalhas
+	mux.HandleFunc("GET /portal/badges", s.portalRead("portal_medalhas", s.handlePortalListBadges))
+	mux.HandleFunc("POST /portal/badges", s.rateLimit(20, min, s.portalWrite("portal_medalhas", s.handlePortalCreateBadge)))
+	mux.HandleFunc("PATCH /portal/badges/{badgeId}", s.rateLimit(30, min, s.portalWrite("portal_medalhas", s.handlePortalUpdateBadge)))
 	mux.HandleFunc("DELETE /portal/badges/{badgeId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteBadge)))
 
-	// Holders (atribuições de medalha)
-	mux.HandleFunc("GET /portal/badges/holders", s.portalRead(s.handlePortalListHolders))
-	mux.HandleFunc("POST /portal/badges/holders", s.rateLimit(30, min, s.adminGuard(s.handlePortalAssignBadge)))
-	mux.HandleFunc("PATCH /portal/badges/holders/{holderId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateHolder)))
+	mux.HandleFunc("GET /portal/badges/holders", s.portalRead("portal_medalhas", s.handlePortalListHolders))
+	mux.HandleFunc("POST /portal/badges/holders", s.rateLimit(30, min, s.portalWrite("portal_medalhas", s.handlePortalAssignBadge)))
+	mux.HandleFunc("PATCH /portal/badges/holders/{holderId}", s.rateLimit(30, min, s.portalWrite("portal_medalhas", s.handlePortalUpdateHolder)))
 	mux.HandleFunc("DELETE /portal/badges/holders/{holderId}", s.adminGuard(s.handlePortalDeleteHolder))
 
-	// Goals
-	mux.HandleFunc("GET /portal/goals", s.portalRead(s.handlePortalListGoals))
-	mux.HandleFunc("POST /portal/goals", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateGoal)))
-	mux.HandleFunc("GET /portal/goals/{goalId}", s.portalRead(s.handlePortalGetGoal))
-	mux.HandleFunc("PATCH /portal/goals/{goalId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateGoal)))
+	// Metas
+	mux.HandleFunc("GET /portal/goals", s.portalRead("portal_metas", s.handlePortalListGoals))
+	mux.HandleFunc("POST /portal/goals", s.rateLimit(20, min, s.portalWrite("portal_metas", s.handlePortalCreateGoal)))
+	mux.HandleFunc("GET /portal/goals/{goalId}", s.portalRead("portal_metas", s.handlePortalGetGoal))
+	mux.HandleFunc("PATCH /portal/goals/{goalId}", s.rateLimit(30, min, s.portalWrite("portal_metas", s.handlePortalUpdateGoal)))
 	mux.HandleFunc("DELETE /portal/goals/{goalId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteGoal)))
 
-	// Recompensas
-	mux.HandleFunc("GET /portal/goals/rewards", s.portalRead(s.handlePortalListGoalRewards))
-	mux.HandleFunc("POST /portal/goals/rewards", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateGoalReward)))
-	mux.HandleFunc("PATCH /portal/goals/rewards/{rewardId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateGoalReward)))
+	mux.HandleFunc("GET /portal/goals/rewards", s.portalRead("portal_metas", s.handlePortalListGoalRewards))
+	mux.HandleFunc("POST /portal/goals/rewards", s.rateLimit(20, min, s.portalWrite("portal_metas", s.handlePortalCreateGoalReward)))
+	mux.HandleFunc("PATCH /portal/goals/rewards/{rewardId}", s.rateLimit(30, min, s.portalWrite("portal_metas", s.handlePortalUpdateGoalReward)))
 	mux.HandleFunc("DELETE /portal/goals/rewards/{rewardId}", s.adminGuard(s.handlePortalDeleteGoalReward))
 
-	// Progresso de alunos / resgate
-	mux.HandleFunc("GET /portal/goals/students", s.portalRead(s.handlePortalListGoalStudents))
-	mux.HandleFunc("POST /portal/goals/students", s.rateLimit(30, min, s.adminGuard(s.handlePortalCreateGoalStudent)))
-	mux.HandleFunc("PATCH /portal/goals/students/{goalStudentId}", s.rateLimit(60, min, s.adminGuard(s.handlePortalUpdateGoalStudent)))
+	mux.HandleFunc("GET /portal/goals/students", s.portalRead("portal_metas", s.handlePortalListGoalStudents))
+	mux.HandleFunc("POST /portal/goals/students", s.rateLimit(30, min, s.portalWrite("portal_metas", s.handlePortalCreateGoalStudent)))
+	mux.HandleFunc("PATCH /portal/goals/students/{goalStudentId}", s.rateLimit(60, min, s.portalWrite("portal_metas", s.handlePortalUpdateGoalStudent)))
 	mux.HandleFunc("DELETE /portal/goals/students/{goalStudentId}", s.adminGuard(s.handlePortalDeleteGoalStudent))
 	mux.HandleFunc("POST /portal/goals/students/{goalStudentId}/claim", s.rateLimit(30, min, s.staffGuard(s.handlePortalClaimGoalReward)))
 }
 
-// registerPortalNotificationRoutes — Fase 4: notificações por-usuário (Postgres
-// central), templates/dispatches (proxy ao gateway externo) e activity logs.
+// registerPortalNotificationRoutes — Fase 4: notificações (portal_notificacoes)
+// e auditoria (portal_auditoria, só leitura). /me é autosserviço (qualquer sessão).
 func (s *Server) registerPortalNotificationRoutes(mux *http.ServeMux) {
 	const min = time.Minute
 
@@ -108,70 +110,68 @@ func (s *Server) registerPortalNotificationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /portal/notifications/read-all", s.rateLimit(30, min, s.authGuard(s.handlePortalMarkAllRead)))
 	mux.HandleFunc("PATCH /portal/notifications/{notificationId}/read", s.rateLimit(60, min, s.authGuard(s.handlePortalMarkNotificationRead)))
 
-	// Templates (proxy)
-	mux.HandleFunc("GET /portal/notifications/templates", s.portalRead(s.handlePortalListTemplates))
-	mux.HandleFunc("POST /portal/notifications/templates", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateTemplate)))
-	mux.HandleFunc("PUT /portal/notifications/templates/{templateId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateTemplate)))
+	// Templates / dispatches (proxy) → portal_notificacoes
+	mux.HandleFunc("GET /portal/notifications/templates", s.portalRead("portal_notificacoes", s.handlePortalListTemplates))
+	mux.HandleFunc("POST /portal/notifications/templates", s.rateLimit(20, min, s.portalWrite("portal_notificacoes", s.handlePortalCreateTemplate)))
+	mux.HandleFunc("PUT /portal/notifications/templates/{templateId}", s.rateLimit(30, min, s.portalWrite("portal_notificacoes", s.handlePortalUpdateTemplate)))
 	mux.HandleFunc("DELETE /portal/notifications/templates/{templateId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteTemplate)))
-	mux.HandleFunc("POST /portal/notifications/templates/{templateId}/dispatch", s.rateLimit(10, min, s.adminGuard(s.handlePortalDispatchTemplate)))
+	mux.HandleFunc("POST /portal/notifications/templates/{templateId}/dispatch", s.rateLimit(10, min, s.portalWrite("portal_notificacoes", s.handlePortalDispatchTemplate)))
 
-	// Dispatches (proxy)
-	mux.HandleFunc("GET /portal/notifications/dispatches", s.portalRead(s.handlePortalListDispatches))
+	mux.HandleFunc("GET /portal/notifications/dispatches", s.portalRead("portal_notificacoes", s.handlePortalListDispatches))
 	mux.HandleFunc("DELETE /portal/notifications/dispatches/{dispatchId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteDispatch)))
 
-	// Activity logs (auditoria)
-	mux.HandleFunc("GET /portal/activity-logs", s.portalRead(s.handlePortalActivityLogs))
+	// Auditoria (só leitura)
+	mux.HandleFunc("GET /portal/activity-logs", s.portalRead("portal_auditoria", s.handlePortalActivityLogs))
 }
 
-// registerPortalProgressRoutes — Fase 3: respostas, correção e progresso.
-// Correção (PATCH /answers) usa staffGuard porque avaliar é trabalho do
-// professor (alinhado à API antiga), diferente do "admin escreve" das demais.
+// registerPortalProgressRoutes — Fase 3: respostas, correção e progresso →
+// portal_correcao. Leitura = read; correção (PATCH /answers) = corrigir
+// (admin/professor ou cargo com portal_correcao:corrigir).
 func (s *Server) registerPortalProgressRoutes(mux *http.ServeMux) {
 	const min = time.Minute
 
-	mux.HandleFunc("GET /portal/exercises/{exerciseId}/answers", s.portalRead(s.handlePortalExerciseAnswers))
-	mux.HandleFunc("GET /portal/exercises/{exerciseId}/answer-students", s.portalRead(s.handlePortalExerciseAnswerStudents))
-	mux.HandleFunc("GET /portal/answers/students", s.portalRead(s.handlePortalAnswerStudents))
-	mux.HandleFunc("GET /portal/students/{studentId}/answered-exercises", s.portalRead(s.handlePortalStudentAnsweredExercises))
-	mux.HandleFunc("PATCH /portal/answers/batch", s.rateLimit(30, min, s.staffGuard(s.handlePortalBatchUpdateAnswers)))
-	mux.HandleFunc("PATCH /portal/answers/{answerId}", s.rateLimit(60, min, s.staffGuard(s.handlePortalUpdateAnswer)))
+	mux.HandleFunc("GET /portal/exercises/{exerciseId}/answers", s.portalRead("portal_correcao", s.handlePortalExerciseAnswers))
+	mux.HandleFunc("GET /portal/exercises/{exerciseId}/answer-students", s.portalRead("portal_correcao", s.handlePortalExerciseAnswerStudents))
+	mux.HandleFunc("GET /portal/answers/students", s.portalRead("portal_correcao", s.handlePortalAnswerStudents))
+	mux.HandleFunc("GET /portal/students/{studentId}/answered-exercises", s.portalRead("portal_correcao", s.handlePortalStudentAnsweredExercises))
+	mux.HandleFunc("PATCH /portal/answers/batch", s.rateLimit(30, min, s.portalCorrigir(s.handlePortalBatchUpdateAnswers)))
+	mux.HandleFunc("PATCH /portal/answers/{answerId}", s.rateLimit(60, min, s.portalCorrigir(s.handlePortalUpdateAnswer)))
 
-	mux.HandleFunc("GET /portal/phases/{phaseId}/progress", s.portalRead(s.handlePortalPhaseProgress))
-	mux.HandleFunc("GET /portal/classes/{classId}/progress", s.portalRead(s.handlePortalClassProgress))
+	mux.HandleFunc("GET /portal/phases/{phaseId}/progress", s.portalRead("portal_correcao", s.handlePortalPhaseProgress))
+	mux.HandleFunc("GET /portal/classes/{classId}/progress", s.portalRead("portal_correcao", s.handlePortalClassProgress))
 }
 
-// registerPortalContentRoutes — Fase 2: exercícios, questões, containers,
-// materiais e vídeos.
+// registerPortalContentRoutes — Fase 2: exercícios/containers (portal_exercicios),
+// materiais (portal_materiais) e vídeos (portal_videos).
 func (s *Server) registerPortalContentRoutes(mux *http.ServeMux) {
 	const min = time.Minute
 
-	// Exercícios (questões/opções embutidas no corpo)
-	mux.HandleFunc("GET /portal/phases/{phaseId}/exercises", s.portalRead(s.handlePortalListExercises))
-	mux.HandleFunc("POST /portal/phases/{phaseId}/exercises", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateExercise)))
-	mux.HandleFunc("GET /portal/exercises/{exerciseId}", s.portalRead(s.handlePortalGetExercise))
-	mux.HandleFunc("PATCH /portal/exercises/{exerciseId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateExercise)))
-	mux.HandleFunc("PATCH /portal/exercises/{exerciseId}/reorder", s.rateLimit(30, min, s.adminGuard(s.handlePortalReorderExercise)))
+	// Exercícios / containers → portal_exercicios
+	mux.HandleFunc("GET /portal/phases/{phaseId}/exercises", s.portalRead("portal_exercicios", s.handlePortalListExercises))
+	mux.HandleFunc("POST /portal/phases/{phaseId}/exercises", s.rateLimit(20, min, s.portalWrite("portal_exercicios", s.handlePortalCreateExercise)))
+	mux.HandleFunc("GET /portal/exercises/{exerciseId}", s.portalRead("portal_exercicios", s.handlePortalGetExercise))
+	mux.HandleFunc("PATCH /portal/exercises/{exerciseId}", s.rateLimit(30, min, s.portalWrite("portal_exercicios", s.handlePortalUpdateExercise)))
+	mux.HandleFunc("PATCH /portal/exercises/{exerciseId}/reorder", s.rateLimit(30, min, s.portalWrite("portal_exercicios", s.handlePortalReorderExercise)))
 	mux.HandleFunc("DELETE /portal/exercises/{exerciseId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteExercise)))
-	mux.HandleFunc("GET /portal/exercises/{exerciseId}/container", s.portalRead(s.handlePortalExerciseContainer))
+	mux.HandleFunc("GET /portal/exercises/{exerciseId}/container", s.portalRead("portal_exercicios", s.handlePortalExerciseContainer))
 
-	// Containers (agrupadores de exercícios por fase)
-	mux.HandleFunc("GET /portal/phases/{phaseId}/containers", s.portalRead(s.handlePortalListContainers))
-	mux.HandleFunc("POST /portal/containers", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateContainer)))
-	mux.HandleFunc("POST /portal/containers/add-exercises", s.rateLimit(20, min, s.adminGuard(s.handlePortalAddContainerExercises)))
+	mux.HandleFunc("GET /portal/phases/{phaseId}/containers", s.portalRead("portal_exercicios", s.handlePortalListContainers))
+	mux.HandleFunc("POST /portal/containers", s.rateLimit(20, min, s.portalWrite("portal_exercicios", s.handlePortalCreateContainer)))
+	mux.HandleFunc("POST /portal/containers/add-exercises", s.rateLimit(20, min, s.portalWrite("portal_exercicios", s.handlePortalAddContainerExercises)))
 	mux.HandleFunc("DELETE /portal/containers/group", s.adminGuard(s.sudoGuard(s.handlePortalDeleteContainerGroup)))
 	mux.HandleFunc("DELETE /portal/containers/{containerTaskId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteContainerTask)))
 
-	// Materiais (por curso; módulo embutido na description)
-	mux.HandleFunc("GET /portal/courses/{courseId}/materials", s.portalRead(s.handlePortalListMaterials))
-	mux.HandleFunc("POST /portal/courses/{courseId}/materials", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateMaterial)))
-	mux.HandleFunc("GET /portal/materials/{materialId}", s.portalRead(s.handlePortalGetMaterial))
-	mux.HandleFunc("PATCH /portal/materials/{materialId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateMaterial)))
+	// Materiais → portal_materiais
+	mux.HandleFunc("GET /portal/courses/{courseId}/materials", s.portalRead("portal_materiais", s.handlePortalListMaterials))
+	mux.HandleFunc("POST /portal/courses/{courseId}/materials", s.rateLimit(20, min, s.portalWrite("portal_materiais", s.handlePortalCreateMaterial)))
+	mux.HandleFunc("GET /portal/materials/{materialId}", s.portalRead("portal_materiais", s.handlePortalGetMaterial))
+	mux.HandleFunc("PATCH /portal/materials/{materialId}", s.rateLimit(30, min, s.portalWrite("portal_materiais", s.handlePortalUpdateMaterial)))
 	mux.HandleFunc("DELETE /portal/materials/{materialId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteMaterial)))
 
-	// Vídeos (módulo embutido na description)
-	mux.HandleFunc("GET /portal/videos", s.portalRead(s.handlePortalListVideos))
-	mux.HandleFunc("POST /portal/videos", s.rateLimit(20, min, s.adminGuard(s.handlePortalCreateVideo)))
-	mux.HandleFunc("GET /portal/videos/{videoId}", s.portalRead(s.handlePortalGetVideo))
-	mux.HandleFunc("PATCH /portal/videos/{videoId}", s.rateLimit(30, min, s.adminGuard(s.handlePortalUpdateVideo)))
+	// Vídeos → portal_videos
+	mux.HandleFunc("GET /portal/videos", s.portalRead("portal_videos", s.handlePortalListVideos))
+	mux.HandleFunc("POST /portal/videos", s.rateLimit(20, min, s.portalWrite("portal_videos", s.handlePortalCreateVideo)))
+	mux.HandleFunc("GET /portal/videos/{videoId}", s.portalRead("portal_videos", s.handlePortalGetVideo))
+	mux.HandleFunc("PATCH /portal/videos/{videoId}", s.rateLimit(30, min, s.portalWrite("portal_videos", s.handlePortalUpdateVideo)))
 	mux.HandleFunc("DELETE /portal/videos/{videoId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteVideo)))
 }
