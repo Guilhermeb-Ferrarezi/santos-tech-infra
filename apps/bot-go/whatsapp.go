@@ -354,7 +354,11 @@ func ParseMetaWebhook(body []byte, phoneNumberID string) ([]InboundMessage, erro
 
 // ValidateMetaHMAC verifica a assinatura HMAC-SHA256 do webhook da Meta.
 // signature deve vir do header X-Hub-Signature-256 no formato "sha256=<hex>".
+// Se appSecret estiver vazio (modo dev/sem credenciais), a validação é pulada.
 func ValidateMetaHMAC(body []byte, signature, appSecret string) bool {
+	if appSecret == "" {
+		return true
+	}
 	const prefix = "sha256="
 	if !strings.HasPrefix(signature, prefix) {
 		return false

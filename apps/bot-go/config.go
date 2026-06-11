@@ -51,10 +51,10 @@ func LoadConfig() Config {
 		RedisURL:    mustEnv("REDIS_URL"),
 		TenantID:    mustEnv("TENANT_ID"),
 
-		MetaAppSecret:          mustEnv("META_APP_SECRET"),
+		MetaAppSecret:          getEnv("META_APP_SECRET", ""),
 		MetaWebhookVerifyToken: mustEnv("META_WEBHOOK_VERIFY_TOKEN"),
-		MetaPhoneNumberID:      mustEnv("META_PHONE_NUMBER_ID"),
-		MetaAccessToken:        mustEnv("META_ACCESS_TOKEN"),
+		MetaPhoneNumberID:      getEnv("META_PHONE_NUMBER_ID", ""),
+		MetaAccessToken:        getEnv("META_ACCESS_TOKEN", ""),
 
 		AgentGoURL:    strings.TrimRight(getEnv("AGENT_GO_URL", "https://api.santos-tech.com"), "/"),
 		AgentGoSecret: mustEnv("AGENT_GO_SECRET"),
