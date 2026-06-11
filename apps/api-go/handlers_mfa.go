@@ -135,6 +135,7 @@ func (s *Server) handleMFAEmail(w http.ResponseWriter, r *http.Request) {
 
 // POST /auth/mfa/verify {challenge, code} — valida TOTP/email/recovery e emite a sessão.
 func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	var body struct {
 		Challenge string `json:"challenge"`
 		Code      string `json:"code"`
