@@ -12,6 +12,17 @@ func randomToken(nbytes int) string {
 	return hex.EncodeToString(b)
 }
 
+// isValidChallenge reports whether s is a well-formed MFA challenge token —
+// the exact output of randomToken(24): 48 lowercase hex characters.
+// Validates input before it reaches Redis key construction.
+func isValidChallenge(s string) bool {
+	if len(s) != 48 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
 func sha256Hex(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
