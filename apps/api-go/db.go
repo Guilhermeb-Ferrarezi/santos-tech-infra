@@ -84,6 +84,11 @@ ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS created_at  TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS updated_at  TIMESTAMPTZ NOT NULL DEFAULT now();
+-- Client OAuth fixo do app mobile (org/mobile-dash). client_id estável e
+-- conhecido pelo app; PKCE público (sem secret). Idempotente.
+INSERT INTO oauth_clients (client_id, name, redirect_uris)
+VALUES ('santos-tech-mobile', 'Santos Tech Mobile', ARRAY['santostech://auth'])
+ON CONFLICT (client_id) DO NOTHING;
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

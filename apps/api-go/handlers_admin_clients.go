@@ -4,12 +4,25 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 )
 
 // Gestão admin das aplicações OAuth ("Entrar com Santos Tech").
 // Padrão: handlers_admin_users.go (adminGuard nas rotas).
 
 var clientIDRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+// Esquema de deep link de app (ex.: santostech, com.exemplo.app). Segue o
+// formato de scheme da RFC 3986: começa com letra, seguido de letras/dígitos/
+// + - . — não inclui ':' nem '/'.
+var appSchemeRe = regexp.MustCompile(`^[a-z][a-z0-9+.-]*$`)
+
+// Esquemes que NUNCA podem ser redirect_uri: o valor flui pra window.location
+// no front, então estes seriam XSS/exfiltração. Bloqueio explícito (fail-closed).
+var dangerousSchemes = map[string]bool{
+	"javascript": true, "data": true, "vbscript": true,
+	"file": true, "blob": true, "about": true,
+}
 
 func validateOAuthClientInput(clientID string, uris []string) error {
 	if !clientIDRe.MatchString(clientID) {
@@ -20,10 +33,24 @@ func validateOAuthClientInput(clientID string, uris []string) error {
 	}
 	for _, raw := range uris {
 		u, err := url.Parse(raw)
-		// Só http(s): bloqueia javascript:, data: etc. — o redirect_uri flui
-		// pra window.location no front (stored XSS/open redirect se passar).
-		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		if err != nil || u.Scheme == "" {
 			return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "redirect_uri inválido: "+raw)
+		}
+		scheme := strings.ToLower(u.Scheme)
+		switch {
+		case dangerousSchemes[scheme]:
+			return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "redirect_uri com esquema não permitido: "+raw)
+		case scheme == "http" || scheme == "https":
+			// Web: exige host (bloqueia http:/// e similares).
+			if u.Host == "" {
+				return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "redirect_uri inválido: "+raw)
+			}
+		default:
+			// Deep link de app (ex.: santostech://auth). Aceita esquema custom
+			// válido por RFC 3986, exigindo um caminho/host após o "://".
+			if !appSchemeRe.MatchString(scheme) || u.Opaque != "" || (u.Host == "" && u.Path == "") {
+				return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "redirect_uri inválido: "+raw)
+			}
 		}
 	}
 	return nil
