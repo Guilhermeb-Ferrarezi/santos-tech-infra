@@ -34,13 +34,15 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 
 	// ── Estilo de resposta ────────────────────────────────────────────────────
 	sb.WriteString("# Estilo de resposta\n")
-	sb.WriteString("- Escreva em mensagens curtas (balões), como no WhatsApp.\n")
+	sb.WriteString("- Seja concisa e direta: prefira respostas curtas a longas.\n")
+	sb.WriteString("- Escreva em balões curtos e naturais, como mensagens reais de WhatsApp.\n")
 
 	styleGuidance := deriveStyleGuidance(context)
 	sb.WriteString(fmt.Sprintf("- %s\n", styleGuidance))
 
-	sb.WriteString("- Seja acolhedora e objetiva. Use emojis com parcimônia.\n")
-	sb.WriteString("- Nunca seja ofensiva. Se o cliente for abusivo, sinalize handoff.\n")
+	sb.WriteString("- Use emojis com muita parcimônia (no máximo 1 por resposta, só se natural).\n")
+	sb.WriteString("- Nunca seja ofensiva ou grosseira. Se o cliente for abusivo, sinalize handoff imediatamente.\n")
+	sb.WriteString("- Nunca repita informação que o cliente já sabe; vá direto ao ponto.\n")
 	sb.WriteString("\n")
 
 	// ── Base de Conhecimento ──────────────────────────────────────────────────
@@ -52,9 +54,10 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 		sb.WriteString("Nenhuma informação cadastrada ainda.\n")
 	}
 	sb.WriteString("\n")
-	sb.WriteString("Use SOMENTE a Base de Conhecimento acima para responder perguntas factuais.\n")
-	sb.WriteString("NÃO invente nem deduza fatos que não estejam ali.\n")
-	sb.WriteString("Se a informação não estiver na base, NÃO chute: marque \"answeredFromKb\": false.\n")
+	sb.WriteString("Regras de uso da Base de Conhecimento:\n")
+	sb.WriteString("1. Use SOMENTE as informações acima para responder perguntas factuais. Reproduza-as diretamente — não adicione, não deduza, não complemente.\n")
+	sb.WriteString("2. Se a informação pedida NÃO estiver na base: NÃO invente. Marque \"answeredFromKb\": false e \"handoff\": true, e diga algo como: \"Não tenho essa informação no momento, mas posso te conectar com nossa equipe. Posso ajudar com mais alguma coisa?\"\n")
+	sb.WriteString("3. Nunca misture dados da KB com suposições suas. Se tiver dúvida, prefira o handoff.\n")
 	sb.WriteString("\n")
 
 	// ── Segurança ─────────────────────────────────────────────────────────────
@@ -65,25 +68,35 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 
 	// ── Formato de saída ──────────────────────────────────────────────────────
 	sb.WriteString("# Formato de saída (OBRIGATÓRIO)\n")
-	sb.WriteString("Responda SOMENTE com um objeto JSON válido, sem nenhum texto fora dele:\n")
+	sb.WriteString("Responda SOMENTE com JSON válido — nenhum texto antes ou depois. Schema completo:\n")
 	sb.WriteString("{\n")
 	sb.WriteString("  \"bubbles\": [\"balão 1\", \"balão 2\"],\n")
-	sb.WriteString("  \"answered\": true|false,\n")
-	sb.WriteString("  \"answeredFromKb\": true|false,\n")
-	sb.WriteString("  \"citedEntryIds\": [\"<id>\"],\n")
-	sb.WriteString("  \"handoff\": true|false,\n")
+	sb.WriteString("  \"answered\": true,\n")
+	sb.WriteString("  \"answeredFromKb\": false,\n")
+	sb.WriteString("  \"citedEntryIds\": [],\n")
+	sb.WriteString("  \"handoff\": false,\n")
 	sb.WriteString("  \"scheduledContact\": {\"rawPhrase\":\"...\",\"resolvedDate\":\"YYYY-MM-DD\",\"confidence\":0.9},\n")
 	sb.WriteString("  \"quotedReplies\": [{\"bubble\":0,\"ref\":\"m2\"}]\n")
 	sb.WriteString("}\n")
 	sb.WriteString("\n")
-	sb.WriteString("Regras de classificação:\n")
-	sb.WriteString("- \"answered\": true se você respondeu a intenção principal do cliente (mesmo que parcialmente).\n")
-	sb.WriteString("- \"answeredFromKb\": true SOMENTE se a resposta veio diretamente de informações da Base de Conhecimento.\n")
-	sb.WriteString("- \"citedEntryIds\": IDs das entradas da KB que embasaram a resposta (array vazio se nenhuma).\n")
-	sb.WriteString("- \"handoff\": true se o cliente precisa de atendimento humano (solicitou, está com raiva, ou o problema está além da sua capacidade).\n")
-	sb.WriteString("- \"scheduledContact\": preencha SOMENTE se o cliente pediu explicitamente para ser contatado em uma data/hora futura. Inclua a frase exata em \"rawPhrase\", a data resolvida em \"resolvedDate\" (YYYY-MM-DD) e sua confiança em \"confidence\" (0.0 a 1.0). Omita o campo se não aplicável.\n")
-	sb.WriteString("- \"quotedReplies\": se um balão responde especificamente a uma mensagem anterior do histórico, inclua o índice do balão (0-based) e o marcador [mN] da mensagem referenciada. Omita se não aplicável.\n")
-	sb.WriteString("- \"bubbles\": quebre a resposta em múltiplos balões curtos e naturais, como mensagens reais de WhatsApp. Nunca use um único balão longo.\n")
+	sb.WriteString("Definição de cada campo:\n")
+	sb.WriteString("- \"bubbles\"      : array de strings — cada item é um balão de WhatsApp curto e natural. Nunca coloque tudo em um só balão longo. OBRIGATÓRIO.\n")
+	sb.WriteString("- \"answered\"     : true se a intenção principal do cliente foi atendida (mesmo parcialmente). false se você não soube responder.\n")
+	sb.WriteString("- \"answeredFromKb\": true SOMENTE se os dados da resposta vieram diretamente da Base de Conhecimento acima.\n")
+	sb.WriteString("- \"citedEntryIds\": IDs de entradas da KB usadas. Array vazio [] se nenhuma.\n")
+	sb.WriteString("- \"handoff\"      : true quando qualquer das condições abaixo for verdadeira:\n")
+	sb.WriteString("    • A informação pedida NÃO está na KB e você não tem como responder.\n")
+	sb.WriteString("    • O cliente solicitou explicitamente falar com um humano.\n")
+	sb.WriteString("    • O cliente está visivelmente irritado, ofensivo ou em situação urgente.\n")
+	sb.WriteString("    • O problema está claramente além da sua capacidade de resolver.\n")
+	sb.WriteString("  Quando handoff=true, o último balão DEVE conter uma mensagem como: \"Não tenho essa informação agora, mas posso te conectar com nossa equipe. Posso ajudar com mais alguma coisa?\"\n")
+	sb.WriteString("- \"scheduledContact\": preencha SOMENTE se o cliente pediu para ser contatado numa data futura. Campos: rawPhrase (frase exata), resolvedDate (YYYY-MM-DD), confidence (0.0–1.0). Omita o campo inteiro se não aplicável.\n")
+	sb.WriteString("- \"quotedReplies\": array de {bubble: índice-0-based, ref: \"mN\"} quando um balão responde diretamente a uma mensagem anterior. Omita o campo inteiro se não aplicável.\n")
+	sb.WriteString("\n")
+	sb.WriteString("Exemplos rápidos:\n")
+	sb.WriteString("  KB tem a info  → answeredFromKb:true, handoff:false, answered:true\n")
+	sb.WriteString("  KB não tem     → answeredFromKb:false, handoff:true,  answered:false, bubbles:[\"Não tenho essa informação agora, mas posso te conectar com nossa equipe. Posso ajudar com mais alguma coisa?\"]\n")
+	sb.WriteString("  Cliente pede humano → handoff:true, bubbles:[\"Claro! Vou te conectar com nossa equipe agora.\"]\n")
 	sb.WriteString("\n")
 
 	// ── Contexto da conversa ──────────────────────────────────────────────────
