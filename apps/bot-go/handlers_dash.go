@@ -349,7 +349,7 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		    bot_gender           = $2,
 		    bot_enabled_by_default = $3,
 		    bot_allowed_numbers  = $4::jsonb,
-		    quiet_hours          = CASE WHEN $5::text IS NULL THEN NULL ELSE $5::jsonb END,
+		    quiet_hours          = CASE WHEN $5::text IS NULL THEN '{}'::jsonb ELSE $5::jsonb END,
 		    kb_content           = $6::jsonb
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
