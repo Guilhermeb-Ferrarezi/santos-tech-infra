@@ -720,6 +720,23 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 	return &cfg, nil
 }
 
+// AppendKBEntry adiciona uma entrada à base de conhecimento do tenant via jsonb append.
+func (r *TenantConfigRepo) AppendKBEntry(ctx context.Context, tenantID TenantID, entry kbEntry) error {
+	entryJSON, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("AppendKBEntry: marshal: %w", err)
+	}
+	_, err = r.pool.Exec(ctx, `
+		UPDATE tenant_config
+		SET kb_content = COALESCE(kb_content, '[]'::jsonb) || $2::jsonb
+		WHERE tenant_id = $1
+	`, tenantID, "["+string(entryJSON)+"]")
+	if err != nil {
+		return fmt.Errorf("AppendKBEntry: exec: %w", err)
+	}
+	return nil
+}
+
 // ============================================================================
 // ScheduledContactRepo
 // ============================================================================

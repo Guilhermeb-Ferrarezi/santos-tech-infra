@@ -400,6 +400,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 				Payload: map[string]any{
 					"conversation_id": conv.ID,
 					"inbound_text":    inboundText,
+					"answer_bubbles":  output.Bubbles,
 				},
 				OccurredAt: time.Now(),
 			}

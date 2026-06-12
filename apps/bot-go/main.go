@@ -111,6 +111,7 @@ func main() {
 		ScheduledContacts: scheduled,
 		Sender:            sender,
 		Logger:            logger,
+		AgentGo:           agentClient,
 	})
 
 	// 13. Instancia Server
