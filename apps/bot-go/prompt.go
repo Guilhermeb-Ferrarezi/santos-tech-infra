@@ -12,38 +12,42 @@ import (
 func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText string, now time.Time) string {
 	var sb strings.Builder
 
-	// ── Identidade ────────────────────────────────────────────────────────────
-	sb.WriteString("# Identidade\n")
-	botName := cfg.BotName
-	if botName == "" {
-		botName = "Assistente"
-	}
-	sb.WriteString(fmt.Sprintf(
-		"Você é %s, uma atendente de uma empresa, atendendo clientes pelo WhatsApp.\n",
-		botName,
-	))
-	sb.WriteString("Refira-se a si mesma no feminino. Fale sempre em português do Brasil, de forma\n")
-	sb.WriteString("calorosa, natural e humana — como uma pessoa real, nunca como um robô.\n")
-
-	if cfg.RevealAIIfAsked {
-		sb.WriteString("Se o cliente perguntar diretamente se você é uma IA ou um robô, seja honesta e confirme que é uma assistente virtual, mas reforce seu compromisso em ajudar.\n")
+	if cfg.SystemPrompt != "" {
+		// ── Prompt customizado pelo operador ──────────────────────────────────
+		// Substitui identidade + estilo padrão quando preenchido no dashboard.
+		sb.WriteString(cfg.SystemPrompt)
+		sb.WriteString("\n\n")
 	} else {
-		sb.WriteString("Não mencione que você é uma IA, robô ou assistente virtual, mesmo se perguntada. Foque sempre em ajudar o cliente.\n")
+		// ── Identidade (padrão) ───────────────────────────────────────────────
+		sb.WriteString("# Identidade\n")
+		botName := cfg.BotName
+		if botName == "" {
+			botName = "Assistente"
+		}
+		sb.WriteString(fmt.Sprintf(
+			"Você é %s, uma atendente de uma empresa, atendendo clientes pelo WhatsApp.\n",
+			botName,
+		))
+		sb.WriteString("Refira-se a si mesma no feminino. Fale sempre em português do Brasil, de forma\n")
+		sb.WriteString("calorosa, natural e humana — como uma pessoa real, nunca como um robô.\n")
+
+		if cfg.RevealAIIfAsked {
+			sb.WriteString("Se o cliente perguntar diretamente se você é uma IA ou um robô, seja honesta e confirme que é uma assistente virtual, mas reforce seu compromisso em ajudar.\n")
+		} else {
+			sb.WriteString("Não mencione que você é uma IA, robô ou assistente virtual, mesmo se perguntada. Foque sempre em ajudar o cliente.\n")
+		}
+		sb.WriteString("\n")
+
+		// ── Estilo de resposta ────────────────────────────────────────────────
+		sb.WriteString("# Estilo de resposta\n")
+		sb.WriteString("- Seja concisa e direta: prefira respostas curtas a longas.\n")
+		sb.WriteString("- Escreva em balões curtos e naturais, como mensagens reais de WhatsApp.\n")
+		sb.WriteString(fmt.Sprintf("- %s\n", deriveStyleGuidance(context)))
+		sb.WriteString("- Use emojis com muita parcimônia (no máximo 1 por resposta, só se natural).\n")
+		sb.WriteString("- Nunca seja ofensiva ou grosseira. Se o cliente for abusivo, sinalize handoff imediatamente.\n")
+		sb.WriteString("- Nunca repita informação que o cliente já sabe; vá direto ao ponto.\n")
+		sb.WriteString("\n")
 	}
-	sb.WriteString("\n")
-
-	// ── Estilo de resposta ────────────────────────────────────────────────────
-	sb.WriteString("# Estilo de resposta\n")
-	sb.WriteString("- Seja concisa e direta: prefira respostas curtas a longas.\n")
-	sb.WriteString("- Escreva em balões curtos e naturais, como mensagens reais de WhatsApp.\n")
-
-	styleGuidance := deriveStyleGuidance(context)
-	sb.WriteString(fmt.Sprintf("- %s\n", styleGuidance))
-
-	sb.WriteString("- Use emojis com muita parcimônia (no máximo 1 por resposta, só se natural).\n")
-	sb.WriteString("- Nunca seja ofensiva ou grosseira. Se o cliente for abusivo, sinalize handoff imediatamente.\n")
-	sb.WriteString("- Nunca repita informação que o cliente já sabe; vá direto ao ponto.\n")
-	sb.WriteString("\n")
 
 	// ── Base de Conhecimento ──────────────────────────────────────────────────
 	sb.WriteString("# Base de Conhecimento (única fonte de verdade factual)\n")

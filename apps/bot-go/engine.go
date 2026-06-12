@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -257,6 +258,18 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	wamid := inbound.ProviderMessageID
 	prevText := ""
 
+	// Serializa o output do LLM para armazenar como reasoning no primeiro balão.
+	var reasoningJSON *string
+	if rb, err := json.Marshal(map[string]any{
+		"answered":       output.Answered,
+		"answeredFromKb": output.AnsweredFromKb,
+		"citedEntryIds":  output.CitedEntryIDs,
+		"handoff":        output.Handoff,
+	}); err == nil {
+		s := string(rb)
+		reasoningJSON = &s
+	}
+
 	for i, bubble := range output.Bubbles {
 		// Calcula delay de humanização
 		var delay time.Duration
@@ -281,6 +294,12 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			IdempotencyKey: idempotencyKey,
 		}
 
+		// Apenas o primeiro balão carrega o reasoning.
+		var bubbleReasoning *string
+		if i == 0 {
+			bubbleReasoning = reasoningJSON
+		}
+
 		// Envia e persiste dentro de uma transação individual por balão
 		txErr := e.withTenant(ctx, func(tx pgx.Tx) error {
 			providerMsgID, err := e.deps.Sender.SendMessage(ctx, outboundMsg)
@@ -289,7 +308,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 
 			// Persiste com ON CONFLICT DO NOTHING para exactly-once
-			if err := e.deps.Messages.RecordOutbound(ctx, tx, idempotencyKey, inbound.TenantID, conv.ID, providerMsgID, bubble); err != nil {
+			if err := e.deps.Messages.RecordOutbound(ctx, tx, idempotencyKey, inbound.TenantID, conv.ID, providerMsgID, bubble, bubbleReasoning); err != nil {
 				return fmt.Errorf("RecordOutbound bubble %d: %w", i, err)
 			}
 

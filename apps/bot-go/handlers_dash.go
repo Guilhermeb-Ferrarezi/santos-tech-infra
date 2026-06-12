@@ -23,10 +23,11 @@ type dashConv struct {
 }
 
 type dashMessage struct {
-	ID        string    `json:"id"`
-	Direction string    `json:"direction"` // "in" | "out"
-	Text      string    `json:"text"`
-	Ts        time.Time `json:"ts"`
+	ID        string              `json:"id"`
+	Direction string              `json:"direction"` // "in" | "out"
+	Text      string              `json:"text"`
+	Ts        time.Time           `json:"ts"`
+	Reasoning *json.RawMessage    `json:"reasoning,omitempty"`
 }
 
 type kbEntry struct {
@@ -36,13 +37,14 @@ type kbEntry struct {
 }
 
 type dashConfig struct {
-	BotName             string   `json:"botName"`
-	BotGender           string   `json:"botGender"`
-	BotEnabledByDefault bool     `json:"botEnabledByDefault"`
-	BotAllowedNumbers   []string `json:"botAllowedNumbers"`
-	QuietHoursStart     *string  `json:"quietHoursStart"`
-	QuietHoursEnd       *string  `json:"quietHoursEnd"`
+	BotName             string    `json:"botName"`
+	BotGender           string    `json:"botGender"`
+	BotEnabledByDefault bool      `json:"botEnabledByDefault"`
+	BotAllowedNumbers   []string  `json:"botAllowedNumbers"`
+	QuietHoursStart     *string   `json:"quietHoursStart"`
+	QuietHoursEnd       *string   `json:"quietHoursEnd"`
 	KBContent           []kbEntry `json:"kbContent"`
+	SystemPrompt        string    `json:"systemPrompt"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -128,13 +130,13 @@ func (s *Server) handleDashMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT 'in' AS direction, id::text, COALESCE(content->>'Text', '') AS text, received_at AS ts
+		SELECT 'in' AS direction, id::text, COALESCE(content->>'Text', '') AS text, received_at AS ts, NULL::jsonb AS reasoning
 		FROM inbound_message
 		WHERE tenant_id = $1 AND conversation_id = $2::uuid
 
 		UNION ALL
 
-		SELECT 'out', id::text, COALESCE(content->>'Text', ''), sent_at
+		SELECT 'out', id::text, COALESCE(content->>'Text', ''), sent_at, reasoning
 		FROM outbound_message
 		WHERE tenant_id = $1 AND conversation_id = $2::uuid AND status = 'sent'
 
@@ -151,9 +153,14 @@ func (s *Server) handleDashMessages(w http.ResponseWriter, r *http.Request) {
 	msgs := []dashMessage{}
 	for rows.Next() {
 		var m dashMessage
-		if err := rows.Scan(&m.Direction, &m.ID, &m.Text, &m.Ts); err != nil {
+		var rawReasoning []byte
+		if err := rows.Scan(&m.Direction, &m.ID, &m.Text, &m.Ts, &rawReasoning); err != nil {
 			s.logger.Error("dash: scan message", "err", err)
 			continue
+		}
+		if len(rawReasoning) > 0 {
+			r := json.RawMessage(rawReasoning)
+			m.Reasoning = &r
 		}
 		msgs = append(msgs, m)
 	}
@@ -282,12 +289,13 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		SELECT tc.bot_name, tc.bot_gender, tc.bot_enabled_by_default,
 		       tc.bot_allowed_numbers,
 		       tc.quiet_hours->>'start', tc.quiet_hours->>'end',
-		       tc.kb_content::text
+		       tc.kb_content::text,
+		       tc.system_prompt
 		FROM tenant_config tc
 		WHERE tc.tenant_id = $1
 	`, tenantID).Scan(
 		&cfg.BotName, &cfg.BotGender, &cfg.BotEnabledByDefault,
-		&allowedRaw, &qhStart, &qhEnd, &kbRaw,
+		&allowedRaw, &qhStart, &qhEnd, &kbRaw, &cfg.SystemPrompt,
 	)
 	if err != nil {
 		s.logger.Error("dash: get config", "err", err)
@@ -350,10 +358,11 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		    bot_enabled_by_default = $3,
 		    bot_allowed_numbers  = $4::jsonb,
 		    quiet_hours          = CASE WHEN $5::text IS NULL THEN '{}'::jsonb ELSE $5::jsonb END,
-		    kb_content           = $6::jsonb
+		    kb_content           = $6::jsonb,
+		    system_prompt        = $8
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
-		allowedJSON, quietHoursJSON, kbJSON, tenantID)
+		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)

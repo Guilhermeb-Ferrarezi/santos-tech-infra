@@ -304,8 +304,8 @@ func (r *MessageRepo) RecordInbound(ctx context.Context, tx pgx.Tx, wamid string
 }
 
 // RecordOutbound persiste um balão de saída em outbound_message.
-// Retorna erro se o insert falhar (ON CONFLICT DO NOTHING — exactly-once).
-func (r *MessageRepo) RecordOutbound(ctx context.Context, tx pgx.Tx, idempotencyKey string, tenantID TenantID, convID ConversationID, providerMessageID string, text string) error {
+// reasoning é o JSON do ResponderOutput, armazenado apenas no primeiro balão (nil para os demais).
+func (r *MessageRepo) RecordOutbound(ctx context.Context, tx pgx.Tx, idempotencyKey string, tenantID TenantID, convID ConversationID, providerMessageID string, text string, reasoning *string) error {
 	content := MessageContent{Type: "text", Text: text}
 	contentJSON, err := json.Marshal(content)
 	if err != nil {
@@ -314,10 +314,10 @@ func (r *MessageRepo) RecordOutbound(ctx context.Context, tx pgx.Tx, idempotency
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO outbound_message
-		  (tenant_id, conversation_id, provider_message_id, idempotency_key, intent_category, content, status, sent_at)
-		VALUES ($1, $2, $3, $4, 'FREE_FORM'::outbound_intent, $5, 'sent', now())
+		  (tenant_id, conversation_id, provider_message_id, idempotency_key, intent_category, content, status, sent_at, reasoning)
+		VALUES ($1, $2, $3, $4, 'FREE_FORM'::outbound_intent, $5, 'sent', now(), $6)
 		ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
-	`, tenantID, convID, nullableString(providerMessageID), idempotencyKey, contentJSON)
+	`, tenantID, convID, nullableString(providerMessageID), idempotencyKey, contentJSON, reasoning)
 	if err != nil {
 		return fmt.Errorf("MessageRepo.RecordOutbound: %w", err)
 	}
@@ -675,6 +675,7 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		SELECT tc.bot_name, tc.bot_gender,
 		       false AS reveal_ai_if_asked,
 		       tc.kb_content::text,
+		       tc.system_prompt,
 		       t.timezone,
 		       tc.quiet_hours->>'start' AS quiet_hours_start,
 		       tc.quiet_hours->>'end'   AS quiet_hours_end,
@@ -696,6 +697,7 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		&cfg.BotName, &cfg.BotGender,
 		&cfg.RevealAIIfAsked,
 		&kbJSON,
+		&cfg.SystemPrompt,
 		&cfg.Timezone,
 		&quietStart, &quietEnd,
 		&cfg.BotEnabledByDefault,

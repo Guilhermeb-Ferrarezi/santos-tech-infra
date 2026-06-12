@@ -104,6 +104,7 @@ type TenantConfig struct {
 	BotGender            string
 	RevealAIIfAsked      bool
 	KBContent            *string
+	SystemPrompt         string
 	Timezone             string
 	QuietHoursStart      *string
 	QuietHoursEnd        *string
