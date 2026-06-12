@@ -116,7 +116,7 @@ func TestCallGatewayUnconfigured(t *testing.T) {
 
 func TestPortalTemplateRequirements(t *testing.T) {
 	cases := []struct {
-		title, msg          string
+		title, msg           string
 		wantCurso, wantTurma bool
 	}{
 		{"Olá", "sem placeholder", false, false},
