@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -525,24 +527,58 @@ func (s *Server) handleDashGetConversation(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleDashLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tenantID := TenantID(s.cfg.TenantID)
+	q := r.URL.Query()
 
-	var before time.Time
-	if raw := r.URL.Query().Get("before"); raw != "" {
-		_ = before.UnmarshalText([]byte(raw))
+	page := atoiDefault(q.Get("page"), 1)
+	pageSize := atoiDefault(q.Get("pageSize"), 50)
+
+	filters := LogFilters{
+		Answered:       triBool(q.Get("answered")),
+		AnsweredFromKb: triBool(q.Get("kb")),
+		Handoff:        triBool(q.Get("handoff")),
+		ErrorsOnly:     q.Get("errors") == "true",
+		Search:         strings.TrimSpace(q.Get("q")),
 	}
 
-	entries, err := s.logRepo.List(ctx, tenantID, 50, before)
+	entries, total, err := s.logRepo.ListPaged(ctx, tenantID, filters, page, pageSize)
 	if err != nil {
 		s.logger.Error("dash: list logs", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	out := make([]dashProcessingLog, 0, len(entries))
+	logs := make([]dashProcessingLog, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, toDashLog(e))
+		logs = append(logs, toDashLog(e))
 	}
-	jsonOK(w, out)
+	jsonOK(w, map[string]any{
+		"logs":     logs,
+		"total":    total,
+		"page":     page,
+		"pageSize": pageSize,
+	})
+}
+
+// triBool converte "true"/"false" em *bool; qualquer outra coisa → nil (sem filtro).
+func triBool(v string) *bool {
+	switch v {
+	case "true":
+		t := true
+		return &t
+	case "false":
+		f := false
+		return &f
+	default:
+		return nil
+	}
+}
+
+// atoiDefault converte uma string para int, retornando def em caso de erro.
+func atoiDefault(v string, def int) int {
+	if n, err := strconv.Atoi(v); err == nil {
+		return n
+	}
+	return def
 }
 
 func toDashLog(e ProcessingLogEntry) dashProcessingLog {
