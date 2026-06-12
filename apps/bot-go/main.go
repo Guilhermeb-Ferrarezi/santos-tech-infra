@@ -86,19 +86,21 @@ func main() {
 
 	// 11. Instancia ConversationEngine
 	engine := NewConversationEngine(EngineDeps{
-		TenantID:  cfg.TenantID,
-		DB:        pool,
-		Contacts:  contacts,
-		Convs:     convs,
-		Messages:  messages,
-		Leads:     leads,
-		Config:    tenantCfg,
-		Responder: agentClient,
-		Sender:    sender,
-		Emitter:   outbox,
-		Logger:    logger,
-		Broadcast: hub.Broadcast,
-		LogRepo:   logRepo,
+		TenantID:            cfg.TenantID,
+		DB:                  pool,
+		Contacts:            contacts,
+		Convs:               convs,
+		Messages:            messages,
+		Leads:               leads,
+		Config:              tenantCfg,
+		Responder:           agentClient,
+		Sender:              sender,
+		Emitter:             outbox,
+		Logger:              logger,
+		Broadcast:           hub.Broadcast,
+		LogRepo:             logRepo,
+		AdminWhatsAppNumber: cfg.AdminWhatsAppNumber,
+		TenantCfgRepo:       tenantCfg,
 	})
 
 	// 12. Instancia Worker

@@ -16,6 +16,7 @@ type rawResponderOutput struct {
 	Handoff          bool            `json:"handoff"`
 	ScheduledContact json.RawMessage `json:"scheduledContact"`
 	QuotedReplies    json.RawMessage `json:"quotedReplies"`
+	KBEntry          *KBEntry        `json:"kbEntry"`
 }
 
 // ParseModelReply extrai e parseia o JSON de resposta do LLM.
@@ -51,6 +52,7 @@ func ParseModelReply(raw string) (ResponderOutput, error) {
 		AnsweredFromKb: *r.AnsweredFromKb,
 		CitedEntryIDs:  r.CitedEntryIDs,
 		Handoff:        r.Handoff,
+		KBEntry:        r.KBEntry,
 	}
 
 	// scheduledContact: descarta se malformado, sem falhar

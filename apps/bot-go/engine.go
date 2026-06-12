@@ -54,6 +54,11 @@ type EngineDeps struct {
 	LogRepo *ProcessingLogRepo
 	// Sleep é injetável para testes (padrão: time.Sleep).
 	Sleep func(time.Duration)
+	// AdminWhatsAppNumber é o número E.164 do administrador (opcional).
+	// Quando preenchido, conversas com esse número usam modo admin.
+	AdminWhatsAppNumber string
+	// TenantCfgRepo permite ao engine persistir entradas de KB (opcional).
+	TenantCfgRepo *TenantConfigRepo
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +244,12 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			e.deps.Broadcast(WSEvent{Type: "conversation.processing", ConversationID: conv.ID})
 		}
 
-		// l) Chama o Responder (LLM)
+		// l) Detecta conversa admin e sinaliza no cfg (transient)
+		if e.deps.AdminWhatsAppNumber != "" && contactPhone == e.deps.AdminWhatsAppNumber {
+			cfg.IsAdminConversation = true
+		}
+
+		// m) Chama o Responder (LLM)
 		respOut, err := e.deps.Responder.Respond(ctx, conv, convCtx, cfg, inboundText)
 		if err != nil {
 			return fmt.Errorf("Responder.Respond: %w", err)
@@ -255,6 +265,16 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	// Broadcast da mensagem inbound (após commit da fase 1).
 	if err == nil && inboundText != "" && e.deps.Broadcast != nil {
 		e.deps.Broadcast(WSEvent{Type: "message.new", ConversationID: conv.ID})
+	}
+
+	// Persiste entrada de KB quando admin forneceu informação (após commit).
+	if output.KBEntry != nil && output.KBEntry.Content != "" && e.deps.TenantCfgRepo != nil {
+		output.KBEntry.ID = fmt.Sprintf("admin-%d", time.Now().UnixMilli())
+		if kbErr := e.deps.TenantCfgRepo.AppendKBEntry(ctx, inbound.TenantID, *output.KBEntry); kbErr != nil {
+			log.Warn("engine: falha ao persistir kbEntry do admin", "err", kbErr)
+		} else {
+			log.Info("engine: entrada KB salva via admin", "title", output.KBEntry.Title)
+		}
 	}
 
 	// Se não há output (bot desabilitado, dedup, quiet hours, mídia sem texto),

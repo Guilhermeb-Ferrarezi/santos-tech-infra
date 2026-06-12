@@ -48,12 +48,6 @@ type dashMessage struct {
 	Reasoning *json.RawMessage    `json:"reasoning,omitempty"`
 }
 
-type kbEntry struct {
-	ID      string `json:"id"`
-	Title   string `json:"title,omitempty"`
-	Content string `json:"content"`
-}
-
 type dashConfig struct {
 	BotName             string    `json:"botName"`
 	BotGender           string    `json:"botGender"`
@@ -61,7 +55,7 @@ type dashConfig struct {
 	BotAllowedNumbers   []string  `json:"botAllowedNumbers"`
 	QuietHoursStart     *string   `json:"quietHoursStart"`
 	QuietHoursEnd       *string   `json:"quietHoursEnd"`
-	KBContent           []kbEntry `json:"kbContent"`
+	KBContent           []KBEntry `json:"kbContent"`
 	SystemPrompt        string    `json:"systemPrompt"`
 }
 
@@ -334,7 +328,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(*kbRaw), &cfg.KBContent)
 	}
 	if cfg.KBContent == nil {
-		cfg.KBContent = []kbEntry{}
+		cfg.KBContent = []KBEntry{}
 	}
 
 	jsonOK(w, cfg)

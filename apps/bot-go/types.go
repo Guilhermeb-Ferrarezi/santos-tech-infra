@@ -113,6 +113,16 @@ type TenantConfig struct {
 	QuietHoursEnd        *string
 	BotEnabledByDefault  bool
 	BotAllowedNumbers    []string
+
+	// Transient — não vem do banco; setado pelo engine antes de chamar o Responder.
+	IsAdminConversation bool
+}
+
+// KBEntry — entrada de base de conhecimento usada para extração e persistência.
+type KBEntry struct {
+	ID      string `json:"id"`
+	Title   string `json:"title,omitempty"`
+	Content string `json:"content"`
 }
 
 // KnowledgeBaseEntry — entrada da base de conhecimento para o prompt.
@@ -191,6 +201,7 @@ type ResponderOutput struct {
 	ScheduledContact *ScheduledContact
 	QuotedReplies    []QuotedReply
 	ToolCalls        []ToolCall
+	KBEntry          *KBEntry // presente quando admin fornece info para salvar na KB
 }
 
 // ScheduledContact — reativação pedida pelo cliente ("me chama em julho").

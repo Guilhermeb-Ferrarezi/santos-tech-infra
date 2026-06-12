@@ -721,7 +721,7 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 }
 
 // AppendKBEntry adiciona uma entrada à base de conhecimento do tenant via jsonb append.
-func (r *TenantConfigRepo) AppendKBEntry(ctx context.Context, tenantID TenantID, entry kbEntry) error {
+func (r *TenantConfigRepo) AppendKBEntry(ctx context.Context, tenantID TenantID, entry KBEntry) error {
 	entryJSON, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("AppendKBEntry: marshal: %w", err)

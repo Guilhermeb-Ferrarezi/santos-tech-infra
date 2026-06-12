@@ -255,9 +255,12 @@ func (w *Worker) notificaAdmin(ctx context.Context, ev DomainEvent) error {
 
 	var texto string
 	if ev.Type == "kb.gap_detected" {
-		texto = fmt.Sprintf("⚠️ Lacuna de conhecimento detectada. Pergunta: %s", question)
+		texto = fmt.Sprintf(
+			"📚 *Pergunta sem resposta na base de conhecimento:*\n\n_%s_\n\nResponda esta mensagem com a informação correta e eu salvo na KB automaticamente.",
+			question,
+		)
 	} else {
-		texto = fmt.Sprintf("⚠️ Notificação: %s", question)
+		texto = fmt.Sprintf("🔔 *Cliente aguardando atendimento humano:*\n\n_%s_", question)
 	}
 
 	if err := w.deps.Sender.SendText(ctx, w.deps.Config.AdminWhatsAppNumber, texto); err != nil {
@@ -311,7 +314,7 @@ func (w *Worker) handleKBGap(ctx context.Context, ev DomainEvent) error {
 	}
 	raw = raw[start : end+1]
 
-	var entry kbEntry
+	var entry KBEntry
 	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
 		return fmt.Errorf("handleKBGap: parse entry: %w", err)
 	}

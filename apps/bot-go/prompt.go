@@ -10,6 +10,10 @@ import (
 // BuildPrompt monta o prompt completo (system + histórico + mensagem atual)
 // para envio ao LLM via agent-go.
 func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText string, now time.Time) string {
+	if cfg.IsAdminConversation {
+		return buildAdminPrompt(context, inboundText, now)
+	}
+
 	var sb strings.Builder
 
 	if cfg.SystemPrompt != "" {
@@ -173,6 +177,52 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 		}
 	}
 	sb.WriteString(fmt.Sprintf("[m%d]: %s\n", userCount+1, inboundText))
+
+	return sb.String()
+}
+
+// buildAdminPrompt gera o prompt para conversas com o administrador do sistema.
+// O admin pode fornecer respostas a lacunas de KB; nesse caso o modelo deve
+// incluir "kbEntry" no JSON de saída para que o engine persista automaticamente.
+func buildAdminPrompt(context ConversationContext, inboundText string, now time.Time) string {
+	var sb strings.Builder
+
+	sb.WriteString("# Modo Administrador\n")
+	sb.WriteString("Você está em modo de administração. O interlocutor é um administrador do sistema.\n\n")
+
+	sb.WriteString("## Responsabilidades\n")
+	sb.WriteString("1. Quando o histórico mostrar que você enviou uma mensagem 📚 perguntando por uma informação, ")
+	sb.WriteString("e o admin responder com essa informação:\n")
+	sb.WriteString("   - Gere um campo \"kbEntry\" no JSON com título e conteúdo factuais e completos.\n")
+	sb.WriteString("   - Confirme para o admin que salvou.\n")
+	sb.WriteString("2. Para outras mensagens do admin, responda normalmente.\n\n")
+
+	sb.WriteString("## Formato de saída (OBRIGATÓRIO)\n")
+	sb.WriteString("Responda SOMENTE com JSON válido — nenhum texto antes ou depois:\n")
+	sb.WriteString("{\n")
+	sb.WriteString("  \"bubbles\": [\"balão 1\"],\n")
+	sb.WriteString("  \"answered\": true,\n")
+	sb.WriteString("  \"answeredFromKb\": false,\n")
+	sb.WriteString("  \"handoff\": false,\n")
+	sb.WriteString("  \"kbEntry\": {\"title\": \"...\", \"content\": \"...\"}\n")
+	sb.WriteString("}\n")
+	sb.WriteString("Omita o campo \"kbEntry\" se o admin NÃO estiver fornecendo informação para a KB.\n\n")
+
+	// Histórico recente
+	if len(context.RecentTurns) > 0 {
+		sb.WriteString("# Histórico recente\n")
+		for _, turn := range context.RecentTurns {
+			if turn.Role == "user" {
+				sb.WriteString(fmt.Sprintf("Admin: %s\n", turn.Text))
+			} else {
+				sb.WriteString(fmt.Sprintf("Bot: %s\n", turn.Text))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("# Mensagem atual do admin\n")
+	sb.WriteString(inboundText + "\n")
 
 	return sb.String()
 }
