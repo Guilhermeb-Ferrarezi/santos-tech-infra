@@ -107,7 +107,7 @@ func main() {
 	})
 
 	// 12. Instancia Server
-	server := NewServer(cfg, engine, webhooks, logger)
+	server := NewServer(cfg, engine, webhooks, pool, sender, logger)
 
 	// 13. Inicia worker em background
 	go worker.Start(ctx)

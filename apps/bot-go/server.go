@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ---------------------------------------------------------------------------
@@ -50,16 +54,20 @@ type Server struct {
 	cfg     Config
 	engine  *ConversationEngine
 	webhook *WebhookRepo
+	pool    *pgxpool.Pool
+	sender  *WhatsAppSender
 	logger  *slog.Logger
 	dbnc    *debouncer
 }
 
 // NewServer cria um Server com as dependências fornecidas.
-func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, logger *slog.Logger) *Server {
+func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, pool *pgxpool.Pool, sender *WhatsAppSender, logger *slog.Logger) *Server {
 	return &Server{
 		cfg:     cfg,
 		engine:  engine,
 		webhook: webhook,
+		pool:    pool,
+		sender:  sender,
 		logger:  logger,
 		dbnc:    newDebouncer(),
 	}
@@ -69,10 +77,59 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, log
 func (s *Server) Handler() http.Handler {
 	bp := s.cfg.BasePath
 	mux := http.NewServeMux()
+
+	// Webhook + health
 	mux.HandleFunc("GET "+bp+"/webhooks/whatsapp", s.handleVerify)
 	mux.HandleFunc("POST "+bp+"/webhooks/whatsapp", s.handleInbound)
 	mux.HandleFunc("GET "+bp+"/health", s.handleHealth)
+
+	// Dashboard API
+	da := s.dashMiddleware
+	mux.Handle("GET /api/conversations", da(s.handleDashConversations))
+	mux.Handle("GET /api/conversations/{id}", da(s.handleDashGetConversation))
+	mux.Handle("GET /api/conversations/{id}/messages", da(s.handleDashMessages))
+	mux.Handle("PATCH /api/conversations/{id}", da(s.handleDashPatchConversation))
+	mux.Handle("POST /api/conversations/{id}/messages", da(s.handleDashSendMessage))
+	mux.Handle("GET /api/config", da(s.handleDashGetConfig))
+	mux.Handle("PATCH /api/config", da(s.handleDashPatchConfig))
+	// OPTIONS preflight (sem auth)
+	mux.HandleFunc("OPTIONS /api/", func(w http.ResponseWriter, r *http.Request) {
+		s.setCORSHeaders(w)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	return mux
+}
+
+// dashMiddleware adiciona CORS e verifica X-Dash-Key.
+func (s *Server) dashMiddleware(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.setCORSHeaders(w)
+		if s.cfg.DashAPIKey == "" {
+			http.NotFound(w, r)
+			return
+		}
+		key := r.Header.Get("X-Dash-Key")
+		if key == "" {
+			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+				key = strings.TrimPrefix(auth, "Bearer ")
+			}
+		}
+		if subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) != 1 {
+			w.Header().Set("Content-Type", "application/json")
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	})
+}
+
+func (s *Server) setCORSHeaders(w http.ResponseWriter) {
+	if origin := s.cfg.DashCORSOrigin; origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dash-Key, Authorization")
+	}
 }
 
 // ---------------------------------------------------------------------------

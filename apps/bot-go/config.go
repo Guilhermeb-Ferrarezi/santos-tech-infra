@@ -41,6 +41,10 @@ type Config struct {
 	FollowUpTemplateLanguage     string
 
 	Production bool
+
+	// Dashboard
+	DashAPIKey     string
+	DashCORSOrigin string
 }
 
 func LoadConfig() Config {
@@ -71,6 +75,9 @@ func LoadConfig() Config {
 		FollowUpTemplateLanguage:     getEnv("FOLLOW_UP_TEMPLATE_LANGUAGE", "pt_BR"),
 
 		Production: getEnv("NODE_ENV", "development") == "production",
+
+		DashAPIKey:     getEnv("DASH_API_KEY", ""),
+		DashCORSOrigin: getEnv("DASH_CORS_ORIGIN", "https://santos-tech.com"),
 	}
 }
 
