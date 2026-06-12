@@ -95,7 +95,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("}\n")
 	sb.WriteString("\n")
 	sb.WriteString("Definição de cada campo:\n")
-	sb.WriteString("- \"bubbles\"      : array de strings — cada item é um balão de WhatsApp curto e natural. Nunca coloque tudo em um só balão longo. OBRIGATÓRIO.\n")
+	sb.WriteString("- \"bubbles\"      : array de strings — OBRIGATÓRIO. Use 1 balão na maioria das vezes. Use 2 SOMENTE quando a resposta tiver duas partes claramente separadas (ex: resposta + pergunta de qualificação). NUNCA mais de 2 balões.\n")
 	sb.WriteString("- \"answered\"     : true se a intenção principal do cliente foi atendida (mesmo parcialmente). false se você não soube responder.\n")
 	sb.WriteString("- \"answeredFromKb\": true SOMENTE se os dados da resposta vieram diretamente da Base de Conhecimento acima.\n")
 	sb.WriteString("- \"citedEntryIds\": IDs de entradas da KB usadas. Array vazio [] se nenhuma.\n")
