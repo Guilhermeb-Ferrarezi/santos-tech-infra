@@ -64,15 +64,15 @@ func main() {
 	logger.Info("Redis conectado")
 
 	// 7. Instancia repos
-	contacts  := NewContactRepo(pool)
-	convs     := NewConversationRepo(pool)
-	messages  := NewMessageRepo(pool)
-	leads     := NewLeadRepo(pool)
-	outbox    := NewOutboxRepo(pool)
-	webhooks  := NewWebhookRepo(pool)
+	contacts := NewContactRepo(pool)
+	convs := NewConversationRepo(pool)
+	messages := NewMessageRepo(pool)
+	leads := NewLeadRepo(pool)
+	outbox := NewOutboxRepo(pool)
+	webhooks := NewWebhookRepo(pool)
 	tenantCfg := NewTenantConfigRepo(pool)
 	scheduled := NewScheduledContactRepo(pool)
-	logRepo   := NewProcessingLogRepo(pool)
+	logRepo := NewProcessingLogRepo(pool)
 
 	// 8. Instancia AgentGoClient (Responder)
 	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret)
@@ -86,20 +86,20 @@ func main() {
 
 	// 11. Instancia ConversationEngine
 	engine := NewConversationEngine(EngineDeps{
-		TenantID:            cfg.TenantID,
-		DB:                  pool,
-		Contacts:            contacts,
-		Convs:               convs,
-		Messages:            messages,
-		Leads:               leads,
-		Config:              tenantCfg,
-		Responder:           agentClient,
-		Sender:              sender,
-		Emitter:             outbox,
-		Logger:              logger,
-		Broadcast:           hub.Broadcast,
-		LogRepo:             logRepo,
-		TenantCfgRepo:       tenantCfg,
+		TenantID:      cfg.TenantID,
+		DB:            pool,
+		Contacts:      contacts,
+		Convs:         convs,
+		Messages:      messages,
+		Leads:         leads,
+		Config:        tenantCfg,
+		Responder:     agentClient,
+		Sender:        sender,
+		Emitter:       outbox,
+		Logger:        logger,
+		Broadcast:     hub.Broadcast,
+		LogRepo:       logRepo,
+		TenantCfgRepo: tenantCfg,
 	})
 
 	// 12. Instancia Worker

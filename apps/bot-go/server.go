@@ -144,8 +144,8 @@ func (s *Server) setCORSHeaders(w http.ResponseWriter) {
 // ---------------------------------------------------------------------------
 
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
-	mode      := r.URL.Query().Get("hub.mode")
-	token     := r.URL.Query().Get("hub.verify_token")
+	mode := r.URL.Query().Get("hub.mode")
+	token := r.URL.Query().Get("hub.verify_token")
 	challenge := r.URL.Query().Get("hub.challenge")
 
 	if mode == "subscribe" && token == s.cfg.MetaWebhookVerifyToken {

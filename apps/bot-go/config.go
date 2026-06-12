@@ -17,10 +17,10 @@ type Config struct {
 	TenantID string
 
 	// Meta Cloud API (WhatsApp)
-	MetaAppSecret           string
-	MetaWebhookVerifyToken  string
-	MetaPhoneNumberID       string
-	MetaAccessToken         string
+	MetaAppSecret          string
+	MetaWebhookVerifyToken string
+	MetaPhoneNumberID      string
+	MetaAccessToken        string
 
 	// Agent-go (LLM)
 	AgentGoURL    string
@@ -30,10 +30,10 @@ type Config struct {
 	AdminWhatsAppNumber string // E.164, ex: 5516991445664
 
 	// Worker
-	OutboxBatchSize       int
-	OutboxIdleIntervalMs  int
-	OutboxMaxAttempts     int
-	FollowUpConcurrency   int
+	OutboxBatchSize      int
+	OutboxIdleIntervalMs int
+	OutboxMaxAttempts    int
+	FollowUpConcurrency  int
 
 	// Follow-up templates Meta (fora da janela 24h)
 	FollowUpHasApprovedTemplates bool

@@ -138,10 +138,19 @@ Antes de **todo** commit, rode e garanta que passa:
 **API Go (`apps/api-go`):**
 ```bash
 cd apps/api-go
-gofmt -l .        # formatação — não deve listar NENHUM arquivo (se listar: gofmt -w .)
-go vet ./...      # análise estática
-go build ./...    # compila sem erros
-go test ./...     # testes (ver nota acima: integração precisa de Postgres+Redis)
+gofmt -l .        # não deve listar NENHUM arquivo (se listar: gofmt -w .)
+go vet ./...
+go build ./...
+go test ./...     # integração precisa de Postgres+Redis
+```
+
+**Bot Go (`apps/bot-go`):**
+```bash
+# go está em ~/.local/bin — use o prefixo PATH abaixo
+bash -c "cd apps/bot-go && PATH=\$PATH:\$HOME/.local/bin gofmt -l ."   # deve ser vazio
+bash -c "cd apps/bot-go && PATH=\$PATH:\$HOME/.local/bin gofmt -w ."   # formata
+bash -c "cd apps/bot-go && PATH=\$PATH:\$HOME/.local/bin go vet ."
+bash -c "cd apps/bot-go && PATH=\$PATH:\$HOME/.local/bin go build ."
 ```
 
 **Frontend (`apps/auth-web`):**

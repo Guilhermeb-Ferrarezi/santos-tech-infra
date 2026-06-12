@@ -20,16 +20,16 @@ type ScheduledContactID = string
 type ConversationState string
 
 const (
-	StateNew                    ConversationState = "NEW"
-	StateEngaged                ConversationState = "ENGAGED"
-	StateAwaitingReply          ConversationState = "AWAITING_REPLY"
-	StateFollowupPending        ConversationState = "FOLLOWUP_PENDING"
-	StateConcludedPositive      ConversationState = "CONCLUDED_POSITIVE"
-	StateConcludedNegative      ConversationState = "CONCLUDED_NEGATIVE"
-	StateConcludedNoAnswer      ConversationState = "CONCLUDED_NO_ANSWER"
-	StateHandoff                ConversationState = "HANDOFF"
-	StateDormant                ConversationState = "DORMANT"
-	StateReactivationScheduled  ConversationState = "REACTIVATION_SCHEDULED"
+	StateNew                   ConversationState = "NEW"
+	StateEngaged               ConversationState = "ENGAGED"
+	StateAwaitingReply         ConversationState = "AWAITING_REPLY"
+	StateFollowupPending       ConversationState = "FOLLOWUP_PENDING"
+	StateConcludedPositive     ConversationState = "CONCLUDED_POSITIVE"
+	StateConcludedNegative     ConversationState = "CONCLUDED_NEGATIVE"
+	StateConcludedNoAnswer     ConversationState = "CONCLUDED_NO_ANSWER"
+	StateHandoff               ConversationState = "HANDOFF"
+	StateDormant               ConversationState = "DORMANT"
+	StateReactivationScheduled ConversationState = "REACTIVATION_SCHEDULED"
 )
 
 // CommunicationStyle — estilo detectado do cliente para espelhamento.
@@ -46,9 +46,9 @@ const (
 type OutboundIntent string
 
 const (
-	IntentFreeForm              OutboundIntent = "FREE_FORM"
+	IntentFreeForm               OutboundIntent = "FREE_FORM"
 	IntentStructuredReengagement OutboundIntent = "STRUCTURED_REENGAGEMENT"
-	IntentTransactionalUpdate   OutboundIntent = "TRANSACTIONAL_UPDATE"
+	IntentTransactionalUpdate    OutboundIntent = "TRANSACTIONAL_UPDATE"
 )
 
 // Contact — entidade raiz de identidade (desacoplada de canal).
@@ -74,20 +74,20 @@ type ChannelIdentity struct {
 
 // Conversation — thread de conversa por canal.
 type Conversation struct {
-	ID                      ConversationID
-	TenantID                TenantID
-	ContactID               ContactID
-	ChannelIdentityID       ChannelIdentityID
-	Channel                 string
-	State                   ConversationState
-	BotEnabled              bool
-	LastInboundAt           *time.Time
-	LastOutboundAt          *time.Time
-	LastInboundModality     string
-	Summary                 *string
-	StructuredFacts         map[string]any
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
+	ID                  ConversationID
+	TenantID            TenantID
+	ContactID           ContactID
+	ChannelIdentityID   ChannelIdentityID
+	Channel             string
+	State               ConversationState
+	BotEnabled          bool
+	LastInboundAt       *time.Time
+	LastOutboundAt      *time.Time
+	LastInboundModality string
+	Summary             *string
+	StructuredFacts     map[string]any
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // Lead — oportunidade de negócio gerada pela conversa.
@@ -102,18 +102,18 @@ type Lead struct {
 
 // TenantConfig — configurações do tenant (KB, persona, quiet hours, etc.).
 type TenantConfig struct {
-	TenantID             TenantID
-	BotName              string
-	BotGender            string
-	RevealAIIfAsked      bool
-	KBContent            *string
-	SystemPrompt         string
-	Timezone             string
-	QuietHoursStart      *string
-	QuietHoursEnd        *string
-	BotEnabledByDefault  bool
-	BotAllowedNumbers    []string
-	AdminWhatsAppNumber  string
+	TenantID            TenantID
+	BotName             string
+	BotGender           string
+	RevealAIIfAsked     bool
+	KBContent           *string
+	SystemPrompt        string
+	Timezone            string
+	QuietHoursStart     *string
+	QuietHoursEnd       *string
+	BotEnabledByDefault bool
+	BotAllowedNumbers   []string
+	AdminWhatsAppNumber string
 
 	// Transient — não vem do banco; setado pelo engine antes de chamar o Responder.
 	IsAdminConversation bool
@@ -156,14 +156,14 @@ type MessageContent struct {
 
 // OutboundMessage — mensagem a enviar (formato canônico, exactly-once via chave).
 type OutboundMessage struct {
-	TenantID          TenantID
-	ConversationID    ConversationID
-	Channel           string
-	To                string // telefone E.164 de destino
-	Intent            OutboundIntent
-	Content           MessageContent
-	IdempotencyKey    string
-	TemplatePayload   *TemplatePayload
+	TenantID        TenantID
+	ConversationID  ConversationID
+	Channel         string
+	To              string // telefone E.164 de destino
+	Intent          OutboundIntent
+	Content         MessageContent
+	IdempotencyKey  string
+	TemplatePayload *TemplatePayload
 }
 
 // TemplatePayload — template Meta para reengajamento fora da janela 24h.
@@ -181,8 +181,8 @@ type ConversationTurn struct {
 
 // ConversationContext — contexto montado para o prompt do LLM.
 type ConversationContext struct {
-	RecentTurns    []ConversationTurn
-	Summary        string
+	RecentTurns     []ConversationTurn
+	Summary         string
 	StructuredFacts map[string]any
 }
 
@@ -208,7 +208,7 @@ type ResponderOutput struct {
 // ScheduledContact — reativação pedida pelo cliente ("me chama em julho").
 type ScheduledContact struct {
 	RawPhrase    string
-	ResolvedDate string  // YYYY-MM-DD
+	ResolvedDate string // YYYY-MM-DD
 	Confidence   float64
 }
 
@@ -259,7 +259,7 @@ type ScheduledContactRow struct {
 
 // Persona — identidade do bot configurada pelo tenant.
 type Persona struct {
-	BotName        string
-	BotGender      string
+	BotName         string
+	BotGender       string
 	RevealAIIfAsked bool
 }

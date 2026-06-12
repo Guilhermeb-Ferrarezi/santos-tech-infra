@@ -41,11 +41,11 @@ type dashConv struct {
 }
 
 type dashMessage struct {
-	ID        string              `json:"id"`
-	Direction string              `json:"direction"` // "in" | "out"
-	Text      string              `json:"text"`
-	Ts        time.Time           `json:"ts"`
-	Reasoning *json.RawMessage    `json:"reasoning,omitempty"`
+	ID        string           `json:"id"`
+	Direction string           `json:"direction"` // "in" | "out"
+	Text      string           `json:"text"`
+	Ts        time.Time        `json:"ts"`
+	Reasoning *json.RawMessage `json:"reasoning,omitempty"`
 }
 
 type dashConfig struct {
@@ -55,9 +55,9 @@ type dashConfig struct {
 	BotAllowedNumbers   []string  `json:"botAllowedNumbers"`
 	QuietHoursStart     *string   `json:"quietHoursStart"`
 	QuietHoursEnd       *string   `json:"quietHoursEnd"`
-	KBContent            []KBEntry `json:"kbContent"`
-	SystemPrompt         string    `json:"systemPrompt"`
-	AdminWhatsAppNumber  string    `json:"adminWhatsAppNumber"`
+	KBContent           []KBEntry `json:"kbContent"`
+	SystemPrompt        string    `json:"systemPrompt"`
+	AdminWhatsAppNumber string    `json:"adminWhatsAppNumber"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
