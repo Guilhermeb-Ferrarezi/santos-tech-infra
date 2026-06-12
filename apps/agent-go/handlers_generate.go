@@ -269,7 +269,7 @@ func (s *Server) generateOnceWithTrace(ctx context.Context, prompt, model string
 	if model == "" {
 		model = s.cfg.DefaultModel
 	}
-	args := []string{"-p", "--output-format", "stream-json", "--model", model}
+	args := []string{"-p", "--output-format", "stream-json", "--verbose", "--model", model}
 	if web {
 		args = append(args, "--allowedTools", "WebSearch,WebFetch")
 	}
