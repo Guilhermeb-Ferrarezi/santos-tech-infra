@@ -99,7 +99,6 @@ func main() {
 		Logger:              logger,
 		Broadcast:           hub.Broadcast,
 		LogRepo:             logRepo,
-		AdminWhatsAppNumber: cfg.AdminWhatsAppNumber,
 		TenantCfgRepo:       tenantCfg,
 	})
 

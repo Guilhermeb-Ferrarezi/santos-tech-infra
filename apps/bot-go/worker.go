@@ -184,9 +184,7 @@ func (w *Worker) processEvent(ctx context.Context, ev DomainEvent) {
 		processingErr = w.handleMessageSent(ctx, ev)
 
 	case "kb.gap_detected":
-		if w.deps.Config.AdminWhatsAppNumber != "" {
-			processingErr = w.notificaAdmin(ctx, ev)
-		}
+		processingErr = w.notificaAdmin(ctx, ev)
 		if processingErr == nil && w.deps.AgentGo != nil && w.deps.TenantCfg != nil {
 			if err := w.handleKBGap(ctx, ev); err != nil {
 				w.deps.Logger.Warn("handleKBGap: falha ao persistir entrada KB", "err", err)
@@ -194,9 +192,7 @@ func (w *Worker) processEvent(ctx context.Context, ev DomainEvent) {
 		}
 
 	case "notification.requested":
-		if w.deps.Config.AdminWhatsAppNumber != "" {
-			processingErr = w.notificaAdmin(ctx, ev)
-		}
+		processingErr = w.notificaAdmin(ctx, ev)
 
 	default:
 		w.deps.Logger.Debug("processEvent: tipo de evento ignorado", "type", ev.Type, "eventID", ev.ID)
@@ -248,6 +244,14 @@ func (w *Worker) handleMessageSent(ctx context.Context, ev DomainEvent) error {
 
 // notificaAdmin envia uma notificação para o número de WhatsApp do admin.
 func (w *Worker) notificaAdmin(ctx context.Context, ev DomainEvent) error {
+	if w.deps.TenantCfg == nil {
+		return nil
+	}
+	cfg, err := w.deps.TenantCfg.Get(ctx, nil, ev.TenantID)
+	if err != nil || cfg.AdminWhatsAppNumber == "" {
+		return nil
+	}
+
 	question, _ := ev.Payload["question"].(string)
 	if question == "" {
 		question, _ = ev.Payload["message"].(string)
@@ -263,7 +267,7 @@ func (w *Worker) notificaAdmin(ctx context.Context, ev DomainEvent) error {
 		texto = fmt.Sprintf("🔔 *Cliente aguardando atendimento humano:*\n\n_%s_", question)
 	}
 
-	if err := w.deps.Sender.SendText(ctx, w.deps.Config.AdminWhatsAppNumber, texto); err != nil {
+	if err := w.deps.Sender.SendText(ctx, cfg.AdminWhatsAppNumber, texto); err != nil {
 		return fmt.Errorf("notificaAdmin: SendText: %w", err)
 	}
 

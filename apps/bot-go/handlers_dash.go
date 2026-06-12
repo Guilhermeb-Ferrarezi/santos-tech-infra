@@ -55,8 +55,9 @@ type dashConfig struct {
 	BotAllowedNumbers   []string  `json:"botAllowedNumbers"`
 	QuietHoursStart     *string   `json:"quietHoursStart"`
 	QuietHoursEnd       *string   `json:"quietHoursEnd"`
-	KBContent           []KBEntry `json:"kbContent"`
-	SystemPrompt        string    `json:"systemPrompt"`
+	KBContent            []KBEntry `json:"kbContent"`
+	SystemPrompt         string    `json:"systemPrompt"`
+	AdminWhatsAppNumber  string    `json:"adminWhatsAppNumber"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -302,12 +303,14 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		       tc.bot_allowed_numbers,
 		       tc.quiet_hours->>'start', tc.quiet_hours->>'end',
 		       tc.kb_content::text,
-		       tc.system_prompt
+		       tc.system_prompt,
+		       tc.admin_whatsapp_number
 		FROM tenant_config tc
 		WHERE tc.tenant_id = $1
 	`, tenantID).Scan(
 		&cfg.BotName, &cfg.BotGender, &cfg.BotEnabledByDefault,
 		&allowedRaw, &qhStart, &qhEnd, &kbRaw, &cfg.SystemPrompt,
+		&cfg.AdminWhatsAppNumber,
 	)
 	if err != nil {
 		s.logger.Error("dash: get config", "err", err)
@@ -365,16 +368,18 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 
 	_, err := s.pool.Exec(ctx, `
 		UPDATE tenant_config
-		SET bot_name             = $1,
-		    bot_gender           = $2,
+		SET bot_name               = $1,
+		    bot_gender             = $2,
 		    bot_enabled_by_default = $3,
-		    bot_allowed_numbers  = $4::jsonb,
-		    quiet_hours          = CASE WHEN $5::text IS NULL THEN '{}'::jsonb ELSE $5::jsonb END,
-		    kb_content           = $6::jsonb,
-		    system_prompt        = $8
+		    bot_allowed_numbers    = $4::jsonb,
+		    quiet_hours            = CASE WHEN $5::text IS NULL THEN '{}'::jsonb ELSE $5::jsonb END,
+		    kb_content             = $6::jsonb,
+		    system_prompt          = $8,
+		    admin_whatsapp_number  = $9
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
-		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt)
+		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt,
+		body.AdminWhatsAppNumber)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)

@@ -680,7 +680,8 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		       tc.quiet_hours->>'start' AS quiet_hours_start,
 		       tc.quiet_hours->>'end'   AS quiet_hours_end,
 		       tc.bot_enabled_by_default,
-		       tc.bot_allowed_numbers
+		       tc.bot_allowed_numbers,
+		       tc.admin_whatsapp_number
 		FROM tenant_config tc
 		JOIN tenants t ON t.id = tc.tenant_id
 		WHERE tc.tenant_id = $1
@@ -702,6 +703,7 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		&quietStart, &quietEnd,
 		&cfg.BotEnabledByDefault,
 		&allowedRaw,
+		&cfg.AdminWhatsAppNumber,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("TenantConfigRepo.Get: tenant %s não encontrado", tenantID)

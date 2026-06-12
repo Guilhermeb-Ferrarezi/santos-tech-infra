@@ -113,6 +113,7 @@ type TenantConfig struct {
 	QuietHoursEnd        *string
 	BotEnabledByDefault  bool
 	BotAllowedNumbers    []string
+	AdminWhatsAppNumber  string
 
 	// Transient — não vem do banco; setado pelo engine antes de chamar o Responder.
 	IsAdminConversation bool

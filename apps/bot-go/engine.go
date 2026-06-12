@@ -54,9 +54,6 @@ type EngineDeps struct {
 	LogRepo *ProcessingLogRepo
 	// Sleep é injetável para testes (padrão: time.Sleep).
 	Sleep func(time.Duration)
-	// AdminWhatsAppNumber é o número E.164 do administrador (opcional).
-	// Quando preenchido, conversas com esse número usam modo admin.
-	AdminWhatsAppNumber string
 	// TenantCfgRepo permite ao engine persistir entradas de KB (opcional).
 	TenantCfgRepo *TenantConfigRepo
 }
@@ -245,7 +242,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		}
 
 		// l) Detecta conversa admin e sinaliza no cfg (transient)
-		if e.deps.AdminWhatsAppNumber != "" && contactPhone == e.deps.AdminWhatsAppNumber {
+		if cfg.AdminWhatsAppNumber != "" && contactPhone == cfg.AdminWhatsAppNumber {
 			cfg.IsAdminConversation = true
 		}
 
