@@ -371,6 +371,29 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]bool{"ok": true})
 }
 
+// ── DELETE /api/conversations/{id} ──────────────────────────────────────────
+
+func (s *Server) handleDashDeleteConversation(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+	convID := r.PathValue("id")
+	if convID == "" {
+		jsonErr(w, "missing id", http.StatusBadRequest)
+		return
+	}
+
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM conversation
+		WHERE tenant_id = $1 AND id = $2::uuid
+	`, tenantID, convID)
+	if err != nil {
+		s.logger.Error("dash: delete conversation", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
 // handleDashGetConversationDetail returns the contact info + bot_enabled for a conversation.
 func (s *Server) handleDashGetConversation(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

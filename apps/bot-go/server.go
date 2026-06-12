@@ -89,6 +89,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/conversations/{id}", da(s.handleDashGetConversation))
 	mux.Handle("GET /api/conversations/{id}/messages", da(s.handleDashMessages))
 	mux.Handle("PATCH /api/conversations/{id}", da(s.handleDashPatchConversation))
+	mux.Handle("DELETE /api/conversations/{id}", da(s.handleDashDeleteConversation))
 	mux.Handle("POST /api/conversations/{id}/messages", da(s.handleDashSendMessage))
 	mux.Handle("GET /api/config", da(s.handleDashGetConfig))
 	mux.Handle("PATCH /api/config", da(s.handleDashPatchConfig))
