@@ -41,6 +41,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "email, nome e senha (mín. 8) são obrigatórios"))
 		return
 	}
+	if !emailRe.MatchString(body.Email) {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "email inválido"))
+		return
+	}
 	existing, err := s.userByEmail(r.Context(), body.Email)
 	if err != nil {
 		writeErr(w, err)

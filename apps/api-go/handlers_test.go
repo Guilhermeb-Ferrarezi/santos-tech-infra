@@ -27,6 +27,16 @@ func TestHandleRegisterValidation(t *testing.T) {
 	if w2.Code != http.StatusBadRequest {
 		t.Fatalf("senha curta: code=%d", w2.Code)
 	}
+
+	// email malformado → 400 antes do banco
+	for _, bad := range []string{"notanemail", "missing@tld", "@nodomain.com", "spaces in@email.com"} {
+		w3 := httptest.NewRecorder()
+		s.handleRegister(w3, httptest.NewRequest("POST", "/auth/register",
+			strings.NewReader(`{"email":"`+bad+`","name":"X","password":"12345678"}`)))
+		if w3.Code != http.StatusBadRequest {
+			t.Errorf("email inválido %q: code=%d (queria 400)", bad, w3.Code)
+		}
+	}
 }
 
 func TestHandleLoginBadBody(t *testing.T) {
