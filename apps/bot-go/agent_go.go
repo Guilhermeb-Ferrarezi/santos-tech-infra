@@ -31,6 +31,7 @@ type agentGoRequest struct {
 	Task  string `json:"task"`
 	Brief string `json:"brief"`
 	Model string `json:"model"`
+	Web   bool   `json:"web"`
 }
 
 // agentGoResponse é a resposta de POST /claude/generate.
@@ -43,7 +44,7 @@ type agentGoResponse struct {
 func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx ConversationContext, cfg TenantConfig, inboundText string) (ResponderOutput, error) {
 	prompt := BuildPrompt(cfg, convCtx, inboundText, time.Now())
 
-	raw, err := c.RespondWithModel(ctx, prompt, "opus")
+	raw, err := c.RespondWithModel(ctx, prompt, "opus", true)
 	if err != nil {
 		return ResponderOutput{}, fmt.Errorf("agent_go: respond: %w", err)
 	}
@@ -58,11 +59,13 @@ func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx 
 
 // RespondWithModel envia um prompt ao agent-go com o modelo especificado e retorna o texto bruto.
 // Usado por classificadores (ex: haiku) e pelo Respond principal.
-func (c *AgentGoClient) RespondWithModel(ctx context.Context, prompt, model string) (string, error) {
+// useWeb habilita WebSearch/WebFetch no Claude para esta geração.
+func (c *AgentGoClient) RespondWithModel(ctx context.Context, prompt, model string, useWeb bool) (string, error) {
 	reqBody := agentGoRequest{
 		Task:  "raw",
 		Brief: prompt,
 		Model: model,
+		Web:   useWeb,
 	}
 
 	payload, err := json.Marshal(reqBody)

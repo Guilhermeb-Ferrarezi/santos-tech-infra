@@ -113,7 +113,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "brief obrigatório para task raw"))
 			return
 		}
-		raw, err := s.generateOnce(r.Context(), req.Brief, "", "", req.Model, false, nil)
+		raw, err := s.generateOnce(r.Context(), req.Brief, "", "", req.Model, req.Web, nil)
 		if err != nil {
 			writeErr(w, err)
 			return
