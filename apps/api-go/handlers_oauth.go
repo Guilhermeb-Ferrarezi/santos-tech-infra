@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -76,6 +77,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, res.Body) // drain so the connection can be reused
 		fail("oauth_failed")
 		return
 	}
