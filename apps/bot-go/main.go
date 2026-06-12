@@ -79,7 +79,11 @@ func main() {
 	// 9. Instancia WhatsAppSender
 	sender := NewWhatsAppSender(cfg.MetaAccessToken, cfg.MetaPhoneNumberID)
 
-	// 10. Instancia ConversationEngine
+	// 10. Instancia WSHub e inicia loop em background
+	hub := NewWSHub(logger, cfg.DashCORSOrigin)
+	go hub.Run(ctx)
+
+	// 11. Instancia ConversationEngine
 	engine := NewConversationEngine(EngineDeps{
 		TenantID:  cfg.TenantID,
 		DB:        pool,
@@ -92,9 +96,10 @@ func main() {
 		Sender:    sender,
 		Emitter:   outbox,
 		Logger:    logger,
+		Broadcast: hub.Broadcast,
 	})
 
-	// 11. Instancia Worker
+	// 12. Instancia Worker
 	worker := NewWorker(WorkerDeps{
 		Config:            cfg,
 		DB:                pool,
@@ -106,19 +111,19 @@ func main() {
 		Logger:            logger,
 	})
 
-	// 12. Instancia Server
-	server := NewServer(cfg, engine, webhooks, pool, sender, logger)
+	// 13. Instancia Server
+	server := NewServer(cfg, engine, webhooks, pool, sender, logger, hub)
 
-	// 13. Inicia worker em background
+	// 14. Inicia worker em background
 	go worker.Start(ctx)
 
-	// 14. Configura servidor HTTP
+	// 15. Configura servidor HTTP
 	httpServer := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: server.Handler(),
 	}
 
-	// 15. Inicia servidor HTTP em goroutine separada
+	// 16. Inicia servidor HTTP em goroutine separada
 	go func() {
 		logger.Info("servidor HTTP iniciado", "addr", httpServer.Addr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -127,11 +132,11 @@ func main() {
 		}
 	}()
 
-	// 16. Aguarda sinal de shutdown
+	// 17. Aguarda sinal de shutdown
 	<-ctx.Done()
 	logger.Info("sinal de encerramento recebido, iniciando graceful shutdown...")
 
-	// 17. Graceful shutdown com timeout de 10s
+	// 18. Graceful shutdown com timeout de 10s
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

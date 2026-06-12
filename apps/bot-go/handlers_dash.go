@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -426,6 +427,23 @@ func (s *Server) handleDashGetConversation(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	jsonOK(w, c)
+}
+
+// ── GET /api/ws ───────────────────────────────────────────────────────────────
+// Upgrade para WebSocket. Auth via query param ?key= (browser JS não suporta
+// headers customizados em WebSocket nativamente).
+
+func (s *Server) handleDashWS(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.DashAPIKey == "" || s.hub == nil {
+		http.NotFound(w, r)
+		return
+	}
+	key := r.URL.Query().Get("key")
+	if subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) != 1 {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	s.hub.Upgrade(w, r)
 }
 
 // Garante que context é usado (lint).

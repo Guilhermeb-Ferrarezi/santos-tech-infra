@@ -48,6 +48,8 @@ type EngineDeps struct {
 	Sender    ChatSender
 	Emitter   EventEmitter
 	Logger    *slog.Logger
+	// Broadcast envia um evento WebSocket a todos os clientes do dashboard (opcional).
+	Broadcast func(ev WSEvent)
 	// Sleep é injetável para testes (padrão: time.Sleep).
 	Sleep func(time.Duration)
 }
@@ -238,6 +240,11 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		return fmt.Errorf("engine.Handle (fase 1): %w", err)
 	}
 
+	// Broadcast da mensagem inbound (após commit da fase 1).
+	if err == nil && inboundText != "" && e.deps.Broadcast != nil {
+		e.deps.Broadcast(WSEvent{Type: "message.new", ConversationID: conv.ID})
+	}
+
 	// Se não há output (bot desabilitado, dedup, quiet hours, mídia sem texto),
 	// trata o caso de fallback de mídia fora da transação e encerra.
 	if mediaFallback {
@@ -319,6 +326,11 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			return fmt.Errorf("engine.Handle (balão %d): %w", i, txErr)
 		}
 
+		// Broadcast do balão enviado (após commit da transação individual).
+		if e.deps.Broadcast != nil {
+			e.deps.Broadcast(WSEvent{Type: "message.new", ConversationID: conv.ID})
+		}
+
 		prevText = bubble
 	}
 
@@ -326,7 +338,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	// Fase 3: atualiza estado do FSM e emite eventos pós-envio
 	// -----------------------------------------------------------------------
 
-	return e.withTenant(ctx, func(tx pgx.Tx) error {
+	err = e.withTenant(ctx, func(tx pgx.Tx) error {
 		// Recarrega conversa para ter estado atual
 		convPtr, err := e.deps.Convs.FindByChannelIdentity(ctx, tx, conv.ChannelIdentityID)
 		if err != nil {
@@ -412,6 +424,10 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 
 		return nil
 	})
+	if err == nil && e.deps.Broadcast != nil {
+		e.deps.Broadcast(WSEvent{Type: "conversation.updated", ConversationID: conv.ID})
+	}
+	return err
 }
 
 // ---------------------------------------------------------------------------

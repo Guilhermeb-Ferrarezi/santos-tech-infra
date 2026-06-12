@@ -58,10 +58,11 @@ type Server struct {
 	sender  *WhatsAppSender
 	logger  *slog.Logger
 	dbnc    *debouncer
+	hub     *WSHub
 }
 
 // NewServer cria um Server com as dependências fornecidas.
-func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, pool *pgxpool.Pool, sender *WhatsAppSender, logger *slog.Logger) *Server {
+func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, pool *pgxpool.Pool, sender *WhatsAppSender, logger *slog.Logger, hub *WSHub) *Server {
 	return &Server{
 		cfg:     cfg,
 		engine:  engine,
@@ -70,6 +71,7 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		sender:  sender,
 		logger:  logger,
 		dbnc:    newDebouncer(),
+		hub:     hub,
 	}
 }
 
@@ -93,6 +95,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/conversations/{id}/messages", da(s.handleDashSendMessage))
 	mux.Handle("GET /api/config", da(s.handleDashGetConfig))
 	mux.Handle("PATCH /api/config", da(s.handleDashPatchConfig))
+	mux.HandleFunc("GET /api/ws", s.handleDashWS)
 	// OPTIONS preflight (sem auth)
 	mux.HandleFunc("OPTIONS /api/", func(w http.ResponseWriter, r *http.Request) {
 		s.setCORSHeaders(w)
