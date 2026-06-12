@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // IDs de domínio — strings UUID tipadas por alias para evitar troca acidental.
 type TenantID = string
@@ -172,6 +175,12 @@ type ConversationContext struct {
 	StructuredFacts map[string]any
 }
 
+// ToolCall — uso de ferramenta capturado durante geração do LLM.
+type ToolCall struct {
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input,omitempty"`
+}
+
 // ResponderOutput — saída parseada do LLM (contrato JSON do prompt).
 type ResponderOutput struct {
 	Bubbles          []string
@@ -181,6 +190,7 @@ type ResponderOutput struct {
 	Handoff          bool
 	ScheduledContact *ScheduledContact
 	QuotedReplies    []QuotedReply
+	ToolCalls        []ToolCall
 }
 
 // ScheduledContact — reativação pedida pelo cliente ("me chama em julho").

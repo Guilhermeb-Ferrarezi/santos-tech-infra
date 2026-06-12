@@ -36,7 +36,8 @@ type agentGoRequest struct {
 
 // agentGoResponse é a resposta de POST /claude/generate.
 type agentGoResponse struct {
-	Text string `json:"text"`
+	Text      string     `json:"text"`
+	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
 }
 
 // Respond implementa a interface Responder do engine.
@@ -44,15 +45,16 @@ type agentGoResponse struct {
 func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx ConversationContext, cfg TenantConfig, inboundText string) (ResponderOutput, error) {
 	prompt := BuildPrompt(cfg, convCtx, inboundText, time.Now())
 
-	raw, err := c.RespondWithModel(ctx, prompt, "opus", false)
+	result, err := c.callAPI(ctx, agentGoRequest{Task: "raw", Brief: prompt, Model: "opus"})
 	if err != nil {
 		return ResponderOutput{}, fmt.Errorf("agent_go: respond: %w", err)
 	}
 
-	out, err := ParseModelReply(raw)
+	out, err := ParseModelReply(result.Text)
 	if err != nil {
 		return ResponderOutput{}, fmt.Errorf("agent_go: parse reply: %w", err)
 	}
+	out.ToolCalls = result.ToolCalls
 
 	return out, nil
 }
@@ -61,44 +63,46 @@ func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx 
 // Usado por classificadores (ex: haiku) e pelo Respond principal.
 // useWeb habilita WebSearch/WebFetch no Claude para esta geração.
 func (c *AgentGoClient) RespondWithModel(ctx context.Context, prompt, model string, useWeb bool) (string, error) {
-	reqBody := agentGoRequest{
-		Task:  "raw",
-		Brief: prompt,
-		Model: model,
-		Web:   useWeb,
-	}
-
-	payload, err := json.Marshal(reqBody)
+	result, err := c.callAPI(ctx, agentGoRequest{Task: "raw", Brief: prompt, Model: model, Web: useWeb})
 	if err != nil {
-		return "", fmt.Errorf("agent_go: marshal request: %w", err)
+		return "", err
+	}
+	return result.Text, nil
+}
+
+// callAPI faz a requisição HTTP ao agent-go e retorna a resposta completa.
+func (c *AgentGoClient) callAPI(ctx context.Context, body agentGoRequest) (agentGoResponse, error) {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return agentGoResponse{}, fmt.Errorf("agent_go: marshal request: %w", err)
 	}
 
 	url := c.url + "/claude/generate"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
-		return "", fmt.Errorf("agent_go: new request: %w", err)
+		return agentGoResponse{}, fmt.Errorf("agent_go: new request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.secret)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("agent_go: http do: %w", err)
+		return agentGoResponse{}, fmt.Errorf("agent_go: http do: %w", err)
 	}
 	defer resp.Body.Close()
 
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("agent_go: status %d: %s", resp.StatusCode, string(raw))
+		return agentGoResponse{}, fmt.Errorf("agent_go: status %d: %s", resp.StatusCode, string(raw))
 	}
 
 	var result agentGoResponse
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return "", fmt.Errorf("agent_go: unmarshal response: %w", err)
+		return agentGoResponse{}, fmt.Errorf("agent_go: unmarshal response: %w", err)
 	}
 	if result.Text == "" {
-		return "", fmt.Errorf("agent_go: resposta vazia do servidor")
+		return agentGoResponse{}, fmt.Errorf("agent_go: resposta vazia do servidor")
 	}
 
-	return result.Text, nil
+	return result, nil
 }

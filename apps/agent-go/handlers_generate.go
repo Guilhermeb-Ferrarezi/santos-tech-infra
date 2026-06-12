@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -59,6 +60,12 @@ var diagramTools = map[string]string{
 	"miro":   "mcp__claude_ai_Miro",
 }
 
+// toolCallRecord captura um uso de ferramenta durante geração do LLM.
+type toolCallRecord struct {
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input,omitempty"`
+}
+
 // spamIssue é um problema de entregabilidade apontado pela análise de spam.
 type spamIssue struct {
 	Level string `json:"level"` // "alto" | "medio" | "baixo"
@@ -86,6 +93,8 @@ type generateResult struct {
 	// task "diagram": código Mermaid gerado (o quadro converte pra elementos
 	// Excalidraw no front).
 	Mermaid string `json:"mermaid,omitempty"`
+	// task "raw": tool calls capturados durante a geração (pode ser nil).
+	ToolCalls []toolCallRecord `json:"toolCalls,omitempty"`
 }
 
 type commandAction struct {
@@ -108,17 +117,18 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 
 	// task "raw": passa o brief diretamente ao Claude sem nenhum sistema de prompt.
 	// Usado por serviços internos (ex: bot-atendimento) que montam o próprio prompt.
+	// Usa stream-json para capturar tool calls emitidos durante a geração.
 	if req.Task == "raw" {
 		if strings.TrimSpace(req.Brief) == "" {
 			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "brief obrigatório para task raw"))
 			return
 		}
-		raw, err := s.generateOnce(r.Context(), req.Brief, "", "", req.Model, req.Web, nil)
+		raw, toolCalls, err := s.generateOnceWithTrace(r.Context(), req.Brief, req.Model, req.Web)
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, &generateResult{Text: raw})
+		writeJSON(w, http.StatusOK, &generateResult{Text: raw, ToolCalls: toolCalls})
 		return
 	}
 
@@ -235,6 +245,93 @@ func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime, 
 		return "", fmt.Errorf("claude não retornou resultado (subtype=%s)", env2.Subtype)
 	}
 	return env2.Result, nil
+}
+
+// generateOnceWithTrace é como generateOnce mas usa stream-json para capturar
+// tool calls emitidos pelo Claude durante a geração. Retorna o texto final e
+// a lista de tool calls (pode ser nil se nenhuma ferramenta foi usada).
+func (s *Server) generateOnceWithTrace(ctx context.Context, prompt, model string, web bool) (string, []toolCallRecord, error) {
+	dir, err := os.MkdirTemp(s.cfg.WorkspaceRoot, "gen-*")
+	if err != nil {
+		if dir, err = os.MkdirTemp("", "gen-*"); err != nil {
+			return "", nil, err
+		}
+	}
+	defer os.RemoveAll(dir)
+
+	timeout := 90 * time.Second
+	if web {
+		timeout = 240 * time.Second
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	if model == "" {
+		model = s.cfg.DefaultModel
+	}
+	args := []string{"-p", "--output-format", "stream-json", "--model", model}
+	if web {
+		args = append(args, "--allowedTools", "WebSearch,WebFetch")
+	}
+
+	cmd := exec.CommandContext(cctx, s.cfg.ClaudeBin, args...)
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(prompt)
+
+	env := os.Environ()
+	if tok, terr := s.oauthToken(ctx); terr == nil && tok != "" {
+		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
+	}
+	cmd.Env = env
+
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", nil, fmt.Errorf("claude falhou: %w", err)
+	}
+
+	var finalText string
+	var toolCalls []toolCallRecord
+
+	sc := bufio.NewScanner(bytes.NewReader(stdout.Bytes()))
+	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var ev map[string]any
+		if json.Unmarshal(line, &ev) != nil {
+			continue
+		}
+		switch ev["type"] {
+		case "assistant":
+			for _, block := range messageContent(ev) {
+				if block["type"] != "tool_use" {
+					continue
+				}
+				name, _ := block["name"].(string)
+				if name == "" {
+					continue
+				}
+				var inputRaw json.RawMessage
+				if inp, ok := block["input"]; ok {
+					inputRaw, _ = json.Marshal(inp)
+				}
+				toolCalls = append(toolCalls, toolCallRecord{Name: name, Input: inputRaw})
+			}
+		case "result":
+			if rs, _ := ev["result"].(string); rs != "" {
+				finalText = rs
+			}
+		}
+	}
+
+	if finalText == "" {
+		return "", nil, fmt.Errorf("claude não retornou resultado")
+	}
+	return finalText, toolCalls, nil
 }
 
 // buildGeneratePrompt monta a instrução conforme a tarefa. Em todos os casos o

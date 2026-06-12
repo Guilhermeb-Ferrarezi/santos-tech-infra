@@ -234,6 +234,11 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 		}
 
+		// Notifica o dashboard antes de chamar o LLM (non-blocking).
+		if e.deps.Broadcast != nil {
+			e.deps.Broadcast(WSEvent{Type: "conversation.processing", ConversationID: conv.ID})
+		}
+
 		// l) Chama o Responder (LLM)
 		respOut, err := e.deps.Responder.Respond(ctx, conv, convCtx, cfg, inboundText)
 		if err != nil {
@@ -440,6 +445,10 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		answered := output.Answered
 		answeredFromKb := output.AnsweredFromKb
 		handoff := output.Handoff
+		var toolCallsJSON json.RawMessage
+		if len(output.ToolCalls) > 0 {
+			toolCallsJSON, _ = json.Marshal(output.ToolCalls)
+		}
 		entry := ProcessingLogEntry{
 			TenantID:       inbound.TenantID,
 			ConversationID: conv.ID,
@@ -451,6 +460,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			Handoff:        &handoff,
 			CitedEntryIDs:  output.CitedEntryIDs,
 			Bubbles:        output.Bubbles,
+			ToolCalls:      toolCallsJSON,
 			ProcessingMs:   int(time.Since(handleStart).Milliseconds()),
 		}
 		if err != nil {

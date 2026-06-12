@@ -46,6 +46,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 		sb.WriteString("- Use emojis com muita parcimônia (no máximo 1 por resposta, só se natural).\n")
 		sb.WriteString("- Nunca seja ofensiva ou grosseira. Se o cliente for abusivo, sinalize handoff imediatamente.\n")
 		sb.WriteString("- Nunca repita informação que o cliente já sabe; vá direto ao ponto.\n")
+		sb.WriteString("- Não use frases de encerramento como 'estou por aqui se precisar', 'qualquer dúvida é só falar', 'pode me chamar', 'fico à disposição' ou variantes. Responda e finalize sem despedidas.\n")
 		sb.WriteString("\n")
 	}
 

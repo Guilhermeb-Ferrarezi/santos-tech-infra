@@ -14,19 +14,20 @@ import (
 // ── tipos de resposta/request ────────────────────────────────────────────────
 
 type dashProcessingLog struct {
-	ID             string    `json:"id"`
-	ConversationID string    `json:"conversationId"`
-	ContactPhone   string    `json:"contactPhone"`
-	ContactName    string    `json:"contactName"`
-	InboundText    string    `json:"inboundText"`
-	Answered       *bool     `json:"answered"`
-	AnsweredFromKb *bool     `json:"answeredFromKb"`
-	Handoff        *bool     `json:"handoff"`
-	CitedEntryIDs  []string  `json:"citedEntryIds"`
-	Bubbles        []string  `json:"bubbles"`
-	ProcessingMs   int       `json:"processingMs"`
-	Error          string    `json:"error,omitempty"`
-	CreatedAt      time.Time `json:"createdAt"`
+	ID             string          `json:"id"`
+	ConversationID string          `json:"conversationId"`
+	ContactPhone   string          `json:"contactPhone"`
+	ContactName    string          `json:"contactName"`
+	InboundText    string          `json:"inboundText"`
+	Answered       *bool           `json:"answered"`
+	AnsweredFromKb *bool           `json:"answeredFromKb"`
+	Handoff        *bool           `json:"handoff"`
+	CitedEntryIDs  []string        `json:"citedEntryIds"`
+	Bubbles        []string        `json:"bubbles"`
+	ToolCalls      json.RawMessage `json:"toolCalls,omitempty"`
+	ProcessingMs   int             `json:"processingMs"`
+	Error          string          `json:"error,omitempty"`
+	CreatedAt      time.Time       `json:"createdAt"`
 }
 
 type dashConv struct {
@@ -490,6 +491,7 @@ func toDashLog(e ProcessingLogEntry) dashProcessingLog {
 		Handoff:        e.Handoff,
 		CitedEntryIDs:  cited,
 		Bubbles:        bubbles,
+		ToolCalls:      e.ToolCalls,
 		ProcessingMs:   e.ProcessingMs,
 		Error:          e.Error,
 		CreatedAt:      e.CreatedAt,
