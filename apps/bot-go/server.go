@@ -131,6 +131,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/conversations/{id}/messages", da(s.handleDashSendMessage))
 	mux.Handle("GET /api/config", da(s.handleDashGetConfig))
 	mux.Handle("GET /api/config/default-prompt", da(s.handleDashDefaultPrompt))
+	mux.Handle("GET /api/config/default-admin-prompt", da(s.handleDashDefaultAdminPrompt))
 	mux.Handle("PATCH /api/config", da(s.handleDashPatchConfig))
 	mux.Handle("GET /api/logs", da(s.handleDashLogs))
 	mux.HandleFunc("GET /api/ws", s.handleDashWS)

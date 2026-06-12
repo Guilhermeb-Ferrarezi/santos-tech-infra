@@ -57,6 +57,7 @@ type dashConfig struct {
 	QuietHoursEnd        *string   `json:"quietHoursEnd"`
 	KBContent            []KBEntry `json:"kbContent"`
 	SystemPrompt         string    `json:"systemPrompt"`
+	AdminSystemPrompt    string    `json:"adminSystemPrompt"`
 	AdminWhatsAppNumbers []string  `json:"adminWhatsAppNumbers"`
 	DebounceMs           int       `json:"debounceMs"`
 }
@@ -306,6 +307,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		       tc.quiet_hours->>'start', tc.quiet_hours->>'end',
 		       tc.kb_content::text,
 		       tc.system_prompt,
+		       tc.admin_system_prompt,
 		       tc.admin_whatsapp_numbers,
 		       tc.debounce_ms
 		FROM tenant_config tc
@@ -313,6 +315,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 	`, tenantID).Scan(
 		&cfg.BotName, &cfg.BotGender, &cfg.BotEnabledByDefault,
 		&allowedRaw, &qhStart, &qhEnd, &kbRaw, &cfg.SystemPrompt,
+		&cfg.AdminSystemPrompt,
 		&adminNumbersRaw, &cfg.DebounceMs,
 	)
 	if err != nil {
@@ -352,6 +355,9 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 			ConversationContext{},
 		)
 	}
+	if cfg.AdminSystemPrompt == "" {
+		cfg.AdminSystemPrompt = DefaultAdminPrompt()
+	}
 
 	jsonOK(w, cfg)
 }
@@ -375,6 +381,13 @@ func (s *Server) handleDashDefaultPrompt(w http.ResponseWriter, r *http.Request)
 
 	cfg := TenantConfig{BotName: botName, BotGender: botGender}
 	jsonOK(w, map[string]string{"prompt": DefaultPersonaPrompt(cfg, ConversationContext{})})
+}
+
+// ── GET /api/config/default-admin-prompt ─────────────────────────────────────
+// Retorna a parte editável padrão (do código) do prompt do admin.
+
+func (s *Server) handleDashDefaultAdminPrompt(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"prompt": DefaultAdminPrompt()})
 }
 
 // ── PATCH /api/config ────────────────────────────────────────────────────────
@@ -436,11 +449,12 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		    system_prompt          = $8,
 		    admin_whatsapp_number  = $9,
 		    admin_whatsapp_numbers = $10::jsonb,
-		    debounce_ms            = $11
+		    debounce_ms            = $11,
+		    admin_system_prompt    = $12
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
 		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt,
-		legacyAdmin, adminNumbersJSON, debounceMs)
+		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)

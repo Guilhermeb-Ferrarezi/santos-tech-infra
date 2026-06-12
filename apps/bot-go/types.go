@@ -108,6 +108,7 @@ type TenantConfig struct {
 	RevealAIIfAsked      bool
 	KBContent            *string
 	SystemPrompt         string
+	AdminSystemPrompt    string
 	Timezone             string
 	QuietHoursStart      *string
 	QuietHoursEnd        *string

@@ -11,7 +11,7 @@ import (
 // para envio ao LLM via agent-go.
 func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText string, now time.Time) string {
 	if cfg.IsAdminConversation {
-		return buildAdminPrompt(context, inboundText, now)
+		return buildAdminPrompt(cfg, context, inboundText, now)
 	}
 
 	var sb strings.Builder
@@ -198,7 +198,11 @@ func DefaultPersonaPrompt(cfg TenantConfig, context ConversationContext) string 
 // buildAdminPrompt gera o prompt para conversas com o administrador do sistema.
 // O admin pode fornecer respostas a lacunas de KB; nesse caso o modelo deve
 // incluir "kbEntry" no JSON de saída para que o engine persista automaticamente.
-func buildAdminPrompt(context ConversationContext, inboundText string, now time.Time) string {
+// DefaultAdminPrompt retorna a parte EDITÁVEL do prompt do admin (comportamento,
+// tom, fontes de dados e responsabilidades). É o que o campo "Prompt do admin" do
+// dashboard substitui quando preenchido; exposto via GET /api/config/default-admin-prompt.
+// As partes mecânicas (clientes pendentes, formato de saída, histórico) ficam fixas.
+func DefaultAdminPrompt() string {
 	var sb strings.Builder
 
 	sb.WriteString("# Modo Administrador\n")
@@ -216,6 +220,20 @@ func buildAdminPrompt(context ConversationContext, inboundText string, now time.
 	sb.WriteString("   - Faça NO MÁXIMO uma pergunta de esclarecimento, e SOMENTE se a info for ambígua ou claramente atípica (ex.: um preço absurdamente baixo). Se o admin já deu valor + contexto, salve sem reperguntar.\n")
 	sb.WriteString("   - Nunca repita o pedido de confirmação. Se o admin disse algo como \"ta certo\" / \"pode salvar\", salve na hora.\n")
 	sb.WriteString("2. Responder clientes pendentes: veja \"Clientes aguardando\" abaixo. Quando a info que o admin deu responder a dúvida de algum cliente, proponha a resposta via \"clientActions\".\n\n")
+
+	return sb.String()
+}
+
+func buildAdminPrompt(cfg TenantConfig, context ConversationContext, inboundText string, now time.Time) string {
+	var sb strings.Builder
+
+	// Parte editável (comportamento) — customizável pelo admin via dashboard.
+	if cfg.AdminSystemPrompt != "" {
+		sb.WriteString(cfg.AdminSystemPrompt)
+		sb.WriteString("\n\n")
+	} else {
+		sb.WriteString(DefaultAdminPrompt())
+	}
 
 	// Clientes aguardando (dúvidas pendentes) — injetadas pelo engine no modo admin.
 	if len(context.PendingQuestions) > 0 {
