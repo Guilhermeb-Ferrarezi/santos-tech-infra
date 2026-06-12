@@ -20,8 +20,9 @@ const (
 
 // WSEvent é o payload enviado a todos os clientes conectados.
 type WSEvent struct {
-	Type           string `json:"type"`
-	ConversationID string `json:"conversationId,omitempty"`
+	Type           string              `json:"type"`
+	ConversationID string              `json:"conversationId,omitempty"`
+	Log            *dashProcessingLog  `json:"log,omitempty"`
 }
 
 // wsClient representa uma conexão WebSocket aberta.

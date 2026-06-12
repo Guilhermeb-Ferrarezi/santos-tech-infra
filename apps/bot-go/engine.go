@@ -50,6 +50,8 @@ type EngineDeps struct {
 	Logger    *slog.Logger
 	// Broadcast envia um evento WebSocket a todos os clientes do dashboard (opcional).
 	Broadcast func(ev WSEvent)
+	// LogRepo persiste logs de processamento para o painel de logs (opcional).
+	LogRepo *ProcessingLogRepo
 	// Sleep é injetável para testes (padrão: time.Sleep).
 	Sleep func(time.Duration)
 }
@@ -103,12 +105,16 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	// Fase 1: dentro de uma única transação — resolução, dedup, LLM
 	// -----------------------------------------------------------------------
 
+	handleStart := time.Now()
+
 	var (
 		conv          Conversation
 		cfg           TenantConfig
 		output        ResponderOutput
 		inboundText   string
 		mediaFallback bool
+		contactPhone  = inbound.ExternalID
+		contactName   string
 	)
 
 	err := e.withTenant(ctx, func(tx pgx.Tx) error {
@@ -130,6 +136,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 				return fmt.Errorf("CreateWithChannelIdentity: %w", err)
 			}
 		}
+		contactName = contact.DisplayName
 
 		// c) Resolve conversa
 		convPtr, err := e.deps.Convs.FindByChannelIdentity(ctx, tx, chIdentity.ID)
@@ -427,6 +434,41 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	if err == nil && e.deps.Broadcast != nil {
 		e.deps.Broadcast(WSEvent{Type: "conversation.updated", ConversationID: conv.ID})
 	}
+
+	// Grava log de processamento (assíncrono para não bloquear o fluxo).
+	if inboundText != "" && e.deps.LogRepo != nil {
+		answered := output.Answered
+		answeredFromKb := output.AnsweredFromKb
+		handoff := output.Handoff
+		entry := ProcessingLogEntry{
+			TenantID:       inbound.TenantID,
+			ConversationID: conv.ID,
+			ContactPhone:   contactPhone,
+			ContactName:    contactName,
+			InboundText:    inboundText,
+			Answered:       &answered,
+			AnsweredFromKb: &answeredFromKb,
+			Handoff:        &handoff,
+			CitedEntryIDs:  output.CitedEntryIDs,
+			Bubbles:        output.Bubbles,
+			ProcessingMs:   int(time.Since(handleStart).Milliseconds()),
+		}
+		if err != nil {
+			msg := err.Error()
+			entry.Error = msg
+		}
+		go func() {
+			if insertErr := e.deps.LogRepo.Insert(context.Background(), entry); insertErr != nil {
+				e.deps.Logger.Error("engine: falha ao gravar log de processamento", "err", insertErr)
+				return
+			}
+			if e.deps.Broadcast != nil {
+				dl := toDashLog(entry)
+				e.deps.Broadcast(WSEvent{Type: "log.new", Log: &dl})
+			}
+		}()
+	}
+
 	return err
 }
 

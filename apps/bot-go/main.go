@@ -72,6 +72,7 @@ func main() {
 	webhooks  := NewWebhookRepo(pool)
 	tenantCfg := NewTenantConfigRepo(pool)
 	scheduled := NewScheduledContactRepo(pool)
+	logRepo   := NewProcessingLogRepo(pool)
 
 	// 8. Instancia AgentGoClient (Responder)
 	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret)
@@ -97,6 +98,7 @@ func main() {
 		Emitter:   outbox,
 		Logger:    logger,
 		Broadcast: hub.Broadcast,
+		LogRepo:   logRepo,
 	})
 
 	// 12. Instancia Worker
@@ -112,7 +114,7 @@ func main() {
 	})
 
 	// 13. Instancia Server
-	server := NewServer(cfg, engine, webhooks, pool, sender, logger, hub)
+	server := NewServer(cfg, engine, webhooks, pool, sender, logger, hub, logRepo)
 
 	// 14. Inicia worker em background
 	go worker.Start(ctx)

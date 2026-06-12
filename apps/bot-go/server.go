@@ -59,10 +59,11 @@ type Server struct {
 	logger  *slog.Logger
 	dbnc    *debouncer
 	hub     *WSHub
+	logRepo *ProcessingLogRepo
 }
 
 // NewServer cria um Server com as dependências fornecidas.
-func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, pool *pgxpool.Pool, sender *WhatsAppSender, logger *slog.Logger, hub *WSHub) *Server {
+func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, pool *pgxpool.Pool, sender *WhatsAppSender, logger *slog.Logger, hub *WSHub, logRepo *ProcessingLogRepo) *Server {
 	return &Server{
 		cfg:     cfg,
 		engine:  engine,
@@ -72,6 +73,7 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		logger:  logger,
 		dbnc:    newDebouncer(),
 		hub:     hub,
+		logRepo: logRepo,
 	}
 }
 
@@ -95,6 +97,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/conversations/{id}/messages", da(s.handleDashSendMessage))
 	mux.Handle("GET /api/config", da(s.handleDashGetConfig))
 	mux.Handle("PATCH /api/config", da(s.handleDashPatchConfig))
+	mux.Handle("GET /api/logs", da(s.handleDashLogs))
 	mux.HandleFunc("GET /api/ws", s.handleDashWS)
 	// OPTIONS preflight (sem auth)
 	mux.HandleFunc("OPTIONS /api/", func(w http.ResponseWriter, r *http.Request) {

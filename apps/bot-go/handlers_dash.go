@@ -13,6 +13,22 @@ import (
 
 // ── tipos de resposta/request ────────────────────────────────────────────────
 
+type dashProcessingLog struct {
+	ID             string    `json:"id"`
+	ConversationID string    `json:"conversationId"`
+	ContactPhone   string    `json:"contactPhone"`
+	ContactName    string    `json:"contactName"`
+	InboundText    string    `json:"inboundText"`
+	Answered       *bool     `json:"answered"`
+	AnsweredFromKb *bool     `json:"answeredFromKb"`
+	Handoff        *bool     `json:"handoff"`
+	CitedEntryIDs  []string  `json:"citedEntryIds"`
+	Bubbles        []string  `json:"bubbles"`
+	ProcessingMs   int       `json:"processingMs"`
+	Error          string    `json:"error,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+}
+
 type dashConv struct {
 	ID           string     `json:"id"`
 	ContactName  string     `json:"contactName"`
@@ -427,6 +443,57 @@ func (s *Server) handleDashGetConversation(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	jsonOK(w, c)
+}
+
+// ── GET /api/logs ─────────────────────────────────────────────────────────────
+
+func (s *Server) handleDashLogs(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+
+	var before time.Time
+	if raw := r.URL.Query().Get("before"); raw != "" {
+		_ = before.UnmarshalText([]byte(raw))
+	}
+
+	entries, err := s.logRepo.List(ctx, tenantID, 50, before)
+	if err != nil {
+		s.logger.Error("dash: list logs", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	out := make([]dashProcessingLog, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, toDashLog(e))
+	}
+	jsonOK(w, out)
+}
+
+func toDashLog(e ProcessingLogEntry) dashProcessingLog {
+	cited := e.CitedEntryIDs
+	if cited == nil {
+		cited = []string{}
+	}
+	bubbles := e.Bubbles
+	if bubbles == nil {
+		bubbles = []string{}
+	}
+	return dashProcessingLog{
+		ID:             e.ID,
+		ConversationID: e.ConversationID,
+		ContactPhone:   e.ContactPhone,
+		ContactName:    e.ContactName,
+		InboundText:    e.InboundText,
+		Answered:       e.Answered,
+		AnsweredFromKb: e.AnsweredFromKb,
+		Handoff:        e.Handoff,
+		CitedEntryIDs:  cited,
+		Bubbles:        bubbles,
+		ProcessingMs:   e.ProcessingMs,
+		Error:          e.Error,
+		CreatedAt:      e.CreatedAt,
+	}
 }
 
 // ── GET /api/ws ───────────────────────────────────────────────────────────────
