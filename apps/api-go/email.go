@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -37,6 +38,7 @@ func (e *emailClient) send(ctx context.Context, to, subject, html string) error 
 		return err
 	}
 	defer res.Body.Close()
+	_, _ = io.Copy(io.Discard, res.Body)
 	if res.StatusCode >= 300 {
 		return fmt.Errorf("email api retornou status %d", res.StatusCode)
 	}
