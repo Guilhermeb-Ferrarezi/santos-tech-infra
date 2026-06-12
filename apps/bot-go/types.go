@@ -102,21 +102,48 @@ type Lead struct {
 
 // TenantConfig — configurações do tenant (KB, persona, quiet hours, etc.).
 type TenantConfig struct {
-	TenantID            TenantID
-	BotName             string
-	BotGender           string
-	RevealAIIfAsked     bool
-	KBContent           *string
-	SystemPrompt        string
-	Timezone            string
-	QuietHoursStart     *string
-	QuietHoursEnd       *string
-	BotEnabledByDefault bool
-	BotAllowedNumbers   []string
-	AdminWhatsAppNumber string
+	TenantID             TenantID
+	BotName              string
+	BotGender            string
+	RevealAIIfAsked      bool
+	KBContent            *string
+	SystemPrompt         string
+	Timezone             string
+	QuietHoursStart      *string
+	QuietHoursEnd        *string
+	BotEnabledByDefault  bool
+	BotAllowedNumbers    []string
+	AdminWhatsAppNumber  string   // legado (0014) — mantido por compatibilidade
+	AdminWhatsAppNumbers []string // múltiplos admins (0016) — fonte de verdade
 
 	// Transient — não vem do banco; setado pelo engine antes de chamar o Responder.
 	IsAdminConversation bool
+}
+
+// IsAdminNumber retorna true se o telefone for de um administrador (lista 0016,
+// com fallback ao número único legado).
+func (c TenantConfig) IsAdminNumber(phone string) bool {
+	if phone == "" {
+		return false
+	}
+	for _, n := range c.AdminWhatsAppNumbers {
+		if n == phone {
+			return true
+		}
+	}
+	return c.AdminWhatsAppNumber != "" && c.AdminWhatsAppNumber == phone
+}
+
+// AdminNumbers retorna a lista efetiva de números de admin (lista 0016 ou, se
+// vazia, o número único legado).
+func (c TenantConfig) AdminNumbers() []string {
+	if len(c.AdminWhatsAppNumbers) > 0 {
+		return c.AdminWhatsAppNumbers
+	}
+	if c.AdminWhatsAppNumber != "" {
+		return []string{c.AdminWhatsAppNumber}
+	}
+	return nil
 }
 
 // KBEntry — entrada de base de conhecimento usada para extração e persistência.

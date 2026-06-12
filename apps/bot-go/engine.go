@@ -243,7 +243,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 
 		// l) Detecta conversa admin e sinaliza no cfg (transient). Em modo admin,
 		// injeta as dúvidas pendentes para o LLM casar a info e rascunhar respostas.
-		if cfg.AdminWhatsAppNumber != "" && contactPhone == cfg.AdminWhatsAppNumber {
+		if cfg.IsAdminNumber(contactPhone) {
 			cfg.IsAdminConversation = true
 			if e.deps.Pending != nil {
 				pendings, err := e.deps.Pending.ListOpen(ctx, tx, inbound.TenantID)

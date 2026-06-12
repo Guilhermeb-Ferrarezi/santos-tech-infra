@@ -693,7 +693,8 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		       tc.quiet_hours->>'end'   AS quiet_hours_end,
 		       tc.bot_enabled_by_default,
 		       tc.bot_allowed_numbers,
-		       tc.admin_whatsapp_number
+		       tc.admin_whatsapp_number,
+		       tc.admin_whatsapp_numbers
 		FROM tenant_config tc
 		JOIN tenants t ON t.id = tc.tenant_id
 		WHERE tc.tenant_id = $1
@@ -714,6 +715,7 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 	var kbJSON *string
 	var quietStart, quietEnd *string
 	var allowedRaw []byte
+	var adminNumbersRaw []byte
 
 	err := row.Scan(
 		&cfg.BotName, &cfg.BotGender,
@@ -725,6 +727,7 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		&cfg.BotEnabledByDefault,
 		&allowedRaw,
 		&cfg.AdminWhatsAppNumber,
+		&adminNumbersRaw,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("TenantConfigRepo.Get: tenant %s não encontrado", tenantID)
@@ -738,6 +741,9 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 	cfg.QuietHoursEnd = quietEnd
 	if len(allowedRaw) > 0 {
 		_ = json.Unmarshal(allowedRaw, &cfg.BotAllowedNumbers)
+	}
+	if len(adminNumbersRaw) > 0 {
+		_ = json.Unmarshal(adminNumbersRaw, &cfg.AdminWhatsAppNumbers)
 	}
 
 	return &cfg, nil

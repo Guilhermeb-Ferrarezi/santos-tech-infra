@@ -46,6 +46,38 @@ func (d *debouncer) debounce(key string, delay time.Duration, fn func()) {
 }
 
 // ---------------------------------------------------------------------------
+// burstBuffer — acumula as mensagens de uma rajada por chave (ExternalID) para
+// que sejam combinadas em um único Handle quando o debounce dispara. Sem isso,
+// só a última mensagem da rajada seria processada (as anteriores se perdiam).
+// ---------------------------------------------------------------------------
+
+type burstItem struct {
+	msg     InboundMessage
+	eventID WebhookEventID
+}
+
+type burstBuffer struct {
+	mu    sync.Mutex
+	items map[string][]burstItem
+}
+
+func newBurstBuffer() *burstBuffer { return &burstBuffer{items: make(map[string][]burstItem)} }
+
+func (b *burstBuffer) add(key string, it burstItem) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.items[key] = append(b.items[key], it)
+}
+
+func (b *burstBuffer) take(key string) []burstItem {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := b.items[key]
+	delete(b.items, key)
+	return out
+}
+
+// ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
 
@@ -58,6 +90,7 @@ type Server struct {
 	sender  *WhatsAppSender
 	logger  *slog.Logger
 	dbnc    *debouncer
+	burst   *burstBuffer
 	hub     *WSHub
 	logRepo *ProcessingLogRepo
 }
@@ -72,6 +105,7 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		sender:  sender,
 		logger:  logger,
 		dbnc:    newDebouncer(),
+		burst:   newBurstBuffer(),
 		hub:     hub,
 		logRepo: logRepo,
 	}
@@ -96,6 +130,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/conversations/{id}", da(s.handleDashDeleteConversation))
 	mux.Handle("POST /api/conversations/{id}/messages", da(s.handleDashSendMessage))
 	mux.Handle("GET /api/config", da(s.handleDashGetConfig))
+	mux.Handle("GET /api/config/default-prompt", da(s.handleDashDefaultPrompt))
 	mux.Handle("PATCH /api/config", da(s.handleDashPatchConfig))
 	mux.Handle("GET /api/logs", da(s.handleDashLogs))
 	mux.HandleFunc("GET /api/ws", s.handleDashWS)
@@ -196,6 +231,9 @@ func (s *Server) processInbound(body []byte) {
 		return
 	}
 
+	// Janela de debounce configurável (tenant_config.debounce_ms).
+	window := s.debounceWindow(ctx)
+
 	for _, msg := range msgs {
 		msg.TenantID = s.cfg.TenantID
 
@@ -210,24 +248,93 @@ func (s *Server) processInbound(body []byte) {
 			continue
 		}
 
-		// Captura para o closure
-		eventID := id
-		captured := msg
+		// Acumula na rajada do número e agenda o flush (agrupa a rajada).
+		key := msg.ExternalID
+		s.burst.add(key, burstItem{msg: msg, eventID: id})
 
-		// Debounce de 1s por ExternalID (agrupa rajada do mesmo número)
-		s.dbnc.debounce(msg.ExternalID, time.Second, func() {
-			if err := s.engine.Handle(ctx, captured); err != nil {
-				s.logger.Error("engine.Handle falhou", "wamid", captured.ProviderMessageID, "err", err)
-				if markErr := s.webhook.MarkFailed(ctx, eventID, err.Error()); markErr != nil {
-					s.logger.Error("webhook.MarkFailed falhou", "id", eventID, "err", markErr)
-				}
-				return
-			}
-			if markErr := s.webhook.MarkDone(ctx, eventID); markErr != nil {
-				s.logger.Error("webhook.MarkDone falhou", "id", eventID, "err", markErr)
-			}
+		if window <= 0 {
+			// Sem agrupamento: processa imediatamente o que estiver acumulado.
+			s.flushBurst(ctx, key)
+			continue
+		}
+		s.dbnc.debounce(key, window, func() {
+			s.flushBurst(ctx, key)
 		})
 	}
+}
+
+// flushBurst combina as mensagens acumuladas de uma rajada em um único Handle.
+func (s *Server) flushBurst(ctx context.Context, key string) {
+	items := s.burst.take(key)
+	if len(items) == 0 {
+		return
+	}
+
+	combined := combineInbound(items)
+	if err := s.engine.Handle(ctx, combined); err != nil {
+		s.logger.Error("engine.Handle falhou", "wamid", combined.ProviderMessageID, "err", err)
+		for _, it := range items {
+			if markErr := s.webhook.MarkFailed(ctx, it.eventID, err.Error()); markErr != nil {
+				s.logger.Error("webhook.MarkFailed falhou", "id", it.eventID, "err", markErr)
+			}
+		}
+		return
+	}
+	for _, it := range items {
+		if markErr := s.webhook.MarkDone(ctx, it.eventID); markErr != nil {
+			s.logger.Error("webhook.MarkDone falhou", "id", it.eventID, "err", markErr)
+		}
+	}
+}
+
+// combineInbound junta os textos das mensagens da rajada numa única inbound.
+// Usa a última mensagem como base (wamid/timestamp). Se não houver texto em
+// nenhuma (só mídia), mantém a última mensagem como está.
+func combineInbound(items []burstItem) InboundMessage {
+	base := items[len(items)-1].msg
+
+	var parts []string
+	for _, it := range items {
+		if t := bestText(it.msg.Content); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	if len(parts) > 0 {
+		base.Content = MessageContent{Type: "text", Text: strings.Join(parts, "\n")}
+	}
+	return base
+}
+
+// bestText extrai o melhor texto de um conteúdo (texto, transcrição ou legenda).
+func bestText(c MessageContent) string {
+	switch c.Type {
+	case "text":
+		return c.Text
+	case "audio":
+		if c.Transcript != nil {
+			return *c.Transcript
+		}
+	default:
+		if c.Caption != nil {
+			return *c.Caption
+		}
+	}
+	return ""
+}
+
+// debounceWindow lê a janela de agrupamento configurada (tenant_config.debounce_ms).
+// Fallback de 1,5 s em erro; 0 desliga o agrupamento.
+func (s *Server) debounceWindow(ctx context.Context) time.Duration {
+	var ms int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT debounce_ms FROM tenant_config WHERE tenant_id = $1`, s.cfg.TenantID,
+	).Scan(&ms); err != nil {
+		return 1500 * time.Millisecond
+	}
+	if ms < 0 {
+		ms = 0
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 // ---------------------------------------------------------------------------

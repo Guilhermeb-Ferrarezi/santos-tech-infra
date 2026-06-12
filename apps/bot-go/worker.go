@@ -250,7 +250,11 @@ func (w *Worker) notificaAdmin(ctx context.Context, ev DomainEvent) error {
 		return nil
 	}
 	cfg, err := w.deps.TenantCfg.Get(ctx, nil, ev.TenantID)
-	if err != nil || cfg.AdminWhatsAppNumber == "" {
+	if err != nil {
+		return nil
+	}
+	admins := cfg.AdminNumbers()
+	if len(admins) == 0 {
 		return nil
 	}
 
@@ -272,11 +276,24 @@ func (w *Worker) notificaAdmin(ctx context.Context, ev DomainEvent) error {
 		texto = fmt.Sprintf("🔔 *Cliente aguardando atendimento humano:*\n\n_%s_", question)
 	}
 
-	if err := w.deps.Sender.SendText(ctx, cfg.AdminWhatsAppNumber, texto); err != nil {
-		return fmt.Errorf("notificaAdmin: SendText: %w", err)
+	var firstErr error
+	sent := 0
+	for _, admin := range admins {
+		if err := w.deps.Sender.SendText(ctx, admin, texto); err != nil {
+			w.deps.Logger.Error("notificaAdmin: falha ao enviar a um admin", "admin", admin, "err", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		sent++
+	}
+	// Só falha (para retry) se NENHUM admin recebeu; sucesso parcial não reprocessa.
+	if sent == 0 && firstErr != nil {
+		return fmt.Errorf("notificaAdmin: SendText: %w", firstErr)
 	}
 
-	w.deps.Logger.Info("notificaAdmin: notificação enviada ao admin", "eventType", ev.Type)
+	w.deps.Logger.Info("notificaAdmin: notificação enviada", "eventType", ev.Type, "admins", sent)
 	return nil
 }
 

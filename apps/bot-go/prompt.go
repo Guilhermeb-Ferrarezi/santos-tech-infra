@@ -22,36 +22,8 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 		sb.WriteString(cfg.SystemPrompt)
 		sb.WriteString("\n\n")
 	} else {
-		// ── Identidade (padrão) ───────────────────────────────────────────────
-		sb.WriteString("# Identidade\n")
-		botName := cfg.BotName
-		if botName == "" {
-			botName = "Assistente"
-		}
-		sb.WriteString(fmt.Sprintf(
-			"Você é %s, uma atendente de uma empresa, atendendo clientes pelo WhatsApp.\n",
-			botName,
-		))
-		sb.WriteString("Refira-se a si mesma no feminino. Fale sempre em português do Brasil, de forma\n")
-		sb.WriteString("calorosa, natural e humana — como uma pessoa real, nunca como um robô.\n")
-
-		if cfg.RevealAIIfAsked {
-			sb.WriteString("Se o cliente perguntar diretamente se você é uma IA ou um robô, seja honesta e confirme que é uma assistente virtual, mas reforce seu compromisso em ajudar.\n")
-		} else {
-			sb.WriteString("Não mencione que você é uma IA, robô ou assistente virtual, mesmo se perguntada. Foque sempre em ajudar o cliente.\n")
-		}
-		sb.WriteString("\n")
-
-		// ── Estilo de resposta ────────────────────────────────────────────────
-		sb.WriteString("# Estilo de resposta\n")
-		sb.WriteString("- Seja concisa e direta: prefira respostas curtas a longas.\n")
-		sb.WriteString("- Escreva em balões curtos e naturais, como mensagens reais de WhatsApp.\n")
-		sb.WriteString(fmt.Sprintf("- %s\n", deriveStyleGuidance(context)))
-		sb.WriteString("- Use emojis com muita parcimônia (no máximo 1 por resposta, só se natural).\n")
-		sb.WriteString("- Nunca seja ofensiva ou grosseira. Se o cliente for abusivo, sinalize handoff imediatamente.\n")
-		sb.WriteString("- Nunca repita informação que o cliente já sabe; vá direto ao ponto.\n")
-		sb.WriteString("- Não use frases de encerramento como 'estou por aqui se precisar', 'qualquer dúvida é só falar', 'pode me chamar', 'fico à disposição' ou variantes. Responda e finalize sem despedidas.\n")
-		sb.WriteString("\n")
+		// ── Identidade + estilo padrão ────────────────────────────────────────
+		sb.WriteString(DefaultPersonaPrompt(cfg, context))
 	}
 
 	// ── Base de Conhecimento ──────────────────────────────────────────────────
@@ -179,6 +151,46 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 		}
 	}
 	sb.WriteString(fmt.Sprintf("[m%d]: %s\n", userCount+1, inboundText))
+
+	return sb.String()
+}
+
+// DefaultPersonaPrompt retorna o bloco de identidade + estilo padrão do bot.
+// É o que o campo "Prompt do sistema" do dashboard substitui quando preenchido;
+// exposto via GET /api/config/default-prompt como ponto de partida editável.
+func DefaultPersonaPrompt(cfg TenantConfig, context ConversationContext) string {
+	var sb strings.Builder
+
+	// ── Identidade ────────────────────────────────────────────────────────────
+	sb.WriteString("# Identidade\n")
+	botName := cfg.BotName
+	if botName == "" {
+		botName = "Assistente"
+	}
+	sb.WriteString(fmt.Sprintf(
+		"Você é %s, uma atendente de uma empresa, atendendo clientes pelo WhatsApp.\n",
+		botName,
+	))
+	sb.WriteString("Refira-se a si mesma no feminino. Fale sempre em português do Brasil, de forma\n")
+	sb.WriteString("calorosa, natural e humana — como uma pessoa real, nunca como um robô.\n")
+
+	if cfg.RevealAIIfAsked {
+		sb.WriteString("Se o cliente perguntar diretamente se você é uma IA ou um robô, seja honesta e confirme que é uma assistente virtual, mas reforce seu compromisso em ajudar.\n")
+	} else {
+		sb.WriteString("Não mencione que você é uma IA, robô ou assistente virtual, mesmo se perguntada. Foque sempre em ajudar o cliente.\n")
+	}
+	sb.WriteString("\n")
+
+	// ── Estilo de resposta ──────────────────────────────────────────────────────
+	sb.WriteString("# Estilo de resposta\n")
+	sb.WriteString("- Seja concisa e direta: prefira respostas curtas a longas.\n")
+	sb.WriteString("- Escreva em balões curtos e naturais, como mensagens reais de WhatsApp.\n")
+	sb.WriteString(fmt.Sprintf("- %s\n", deriveStyleGuidance(context)))
+	sb.WriteString("- Use emojis com muita parcimônia (no máximo 1 por resposta, só se natural).\n")
+	sb.WriteString("- Nunca seja ofensiva ou grosseira. Se o cliente for abusivo, sinalize handoff imediatamente.\n")
+	sb.WriteString("- Nunca repita informação que o cliente já sabe; vá direto ao ponto.\n")
+	sb.WriteString("- Não use frases de encerramento como 'estou por aqui se precisar', 'qualquer dúvida é só falar', 'pode me chamar', 'fico à disposição' ou variantes. Responda e finalize sem despedidas.\n")
+	sb.WriteString("\n")
 
 	return sb.String()
 }

@@ -49,15 +49,16 @@ type dashMessage struct {
 }
 
 type dashConfig struct {
-	BotName             string    `json:"botName"`
-	BotGender           string    `json:"botGender"`
-	BotEnabledByDefault bool      `json:"botEnabledByDefault"`
-	BotAllowedNumbers   []string  `json:"botAllowedNumbers"`
-	QuietHoursStart     *string   `json:"quietHoursStart"`
-	QuietHoursEnd       *string   `json:"quietHoursEnd"`
-	KBContent           []KBEntry `json:"kbContent"`
-	SystemPrompt        string    `json:"systemPrompt"`
-	AdminWhatsAppNumber string    `json:"adminWhatsAppNumber"`
+	BotName              string    `json:"botName"`
+	BotGender            string    `json:"botGender"`
+	BotEnabledByDefault  bool      `json:"botEnabledByDefault"`
+	BotAllowedNumbers    []string  `json:"botAllowedNumbers"`
+	QuietHoursStart      *string   `json:"quietHoursStart"`
+	QuietHoursEnd        *string   `json:"quietHoursEnd"`
+	KBContent            []KBEntry `json:"kbContent"`
+	SystemPrompt         string    `json:"systemPrompt"`
+	AdminWhatsAppNumbers []string  `json:"adminWhatsAppNumbers"`
+	DebounceMs           int       `json:"debounceMs"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -295,6 +296,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 
 	var cfg dashConfig
 	var allowedRaw []byte
+	var adminNumbersRaw []byte
 	var qhStart, qhEnd *string
 	var kbRaw *string
 
@@ -304,13 +306,14 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		       tc.quiet_hours->>'start', tc.quiet_hours->>'end',
 		       tc.kb_content::text,
 		       tc.system_prompt,
-		       tc.admin_whatsapp_number
+		       tc.admin_whatsapp_numbers,
+		       tc.debounce_ms
 		FROM tenant_config tc
 		WHERE tc.tenant_id = $1
 	`, tenantID).Scan(
 		&cfg.BotName, &cfg.BotGender, &cfg.BotEnabledByDefault,
 		&allowedRaw, &qhStart, &qhEnd, &kbRaw, &cfg.SystemPrompt,
-		&cfg.AdminWhatsAppNumber,
+		&adminNumbersRaw, &cfg.DebounceMs,
 	)
 	if err != nil {
 		s.logger.Error("dash: get config", "err", err)
@@ -324,6 +327,12 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 	if cfg.BotAllowedNumbers == nil {
 		cfg.BotAllowedNumbers = []string{}
 	}
+	if len(adminNumbersRaw) > 0 {
+		_ = json.Unmarshal(adminNumbersRaw, &cfg.AdminWhatsAppNumbers)
+	}
+	if cfg.AdminWhatsAppNumbers == nil {
+		cfg.AdminWhatsAppNumbers = []string{}
+	}
 	cfg.QuietHoursStart = qhStart
 	cfg.QuietHoursEnd = qhEnd
 
@@ -335,6 +344,27 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w, cfg)
+}
+
+// ── GET /api/config/default-prompt ───────────────────────────────────────────
+// Retorna o prompt de identidade+estilo padrão (que está no código) para o
+// dashboard importar no campo editável "Prompt do sistema".
+
+func (s *Server) handleDashDefaultPrompt(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+
+	var botName, botGender string
+	if err := s.pool.QueryRow(ctx,
+		`SELECT bot_name, bot_gender FROM tenant_config WHERE tenant_id = $1`, tenantID,
+	).Scan(&botName, &botGender); err != nil {
+		s.logger.Error("dash: default-prompt", "err", err)
+		jsonErr(w, "config not found", http.StatusNotFound)
+		return
+	}
+
+	cfg := TenantConfig{BotName: botName, BotGender: botGender}
+	jsonOK(w, map[string]string{"prompt": DefaultPersonaPrompt(cfg, ConversationContext{})})
 }
 
 // ── PATCH /api/config ────────────────────────────────────────────────────────
@@ -352,6 +382,25 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 	allowedJSON, _ := json.Marshal(body.BotAllowedNumbers)
 	if body.BotAllowedNumbers == nil {
 		allowedJSON = []byte("[]")
+	}
+
+	adminNumbersJSON, _ := json.Marshal(body.AdminWhatsAppNumbers)
+	if body.AdminWhatsAppNumbers == nil {
+		adminNumbersJSON = []byte("[]")
+	}
+	// Mantém a coluna legada em sincronia (primeiro número da lista).
+	legacyAdmin := ""
+	if len(body.AdminWhatsAppNumbers) > 0 {
+		legacyAdmin = body.AdminWhatsAppNumbers[0]
+	}
+
+	// debounce_ms: clamp defensivo (0–15s; 0 = sem agrupamento).
+	debounceMs := body.DebounceMs
+	if debounceMs < 0 {
+		debounceMs = 0
+	}
+	if debounceMs > 15000 {
+		debounceMs = 15000
 	}
 
 	kbJSON, _ := json.Marshal(body.KBContent)
@@ -375,11 +424,13 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		    quiet_hours            = CASE WHEN $5::text IS NULL THEN '{}'::jsonb ELSE $5::jsonb END,
 		    kb_content             = $6::jsonb,
 		    system_prompt          = $8,
-		    admin_whatsapp_number  = $9
+		    admin_whatsapp_number  = $9,
+		    admin_whatsapp_numbers = $10::jsonb,
+		    debounce_ms            = $11
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
 		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt,
-		body.AdminWhatsAppNumber)
+		legacyAdmin, adminNumbersJSON, debounceMs)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)
