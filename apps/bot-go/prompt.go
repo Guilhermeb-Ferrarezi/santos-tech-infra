@@ -205,6 +205,11 @@ func buildAdminPrompt(context ConversationContext, inboundText string, now time.
 	sb.WriteString("Você está conversando com um ADMINISTRADOR do sistema (não um cliente).\n")
 	sb.WriteString("Seja direto, econômico e prático — sem rodeios e sem repetir confirmações.\n\n")
 
+	sb.WriteString("## Suas fontes de dados (responda com honestidade se perguntarem)\n")
+	sb.WriteString("Ao atender clientes, você consulta PRIMEIRO a base de conhecimento (KB) — os registros que o admin salva aqui. ")
+	sb.WriteString("Se a informação NÃO estiver na KB, você busca no site oficial santos-tech.com como fallback. ")
+	sb.WriteString("Se ainda assim não achar, você encaminha para um humano. Não invente dados.\n\n")
+
 	sb.WriteString("## Responsabilidades\n")
 	sb.WriteString("1. Salvar conhecimento: quando o admin fornecer uma informação factual sobre o negócio ")
 	sb.WriteString("(preço, horário, regra, etc.), gere o campo \"kbEntry\" com título e conteúdo claros e confirme em UMA frase curta.\n")
