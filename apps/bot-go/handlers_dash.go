@@ -79,7 +79,7 @@ func (s *Server) handleDashConversations(w http.ResponseWriter, r *http.Request)
 			conv.bot_enabled,
 			GREATEST(conv.last_inbound_at, conv.last_outbound_at) AS last_activity,
 			COALESCE(
-				(SELECT im.content->>'text'
+				(SELECT im.content->>'Text'
 				 FROM inbound_message im
 				 WHERE im.conversation_id = conv.id
 				 ORDER BY im.received_at DESC
@@ -128,13 +128,13 @@ func (s *Server) handleDashMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT 'in' AS direction, id::text, COALESCE(content->>'text', '') AS text, received_at AS ts
+		SELECT 'in' AS direction, id::text, COALESCE(content->>'Text', '') AS text, received_at AS ts
 		FROM inbound_message
 		WHERE tenant_id = $1 AND conversation_id = $2::uuid
 
 		UNION ALL
 
-		SELECT 'out', id::text, COALESCE(content->>'text', ''), sent_at
+		SELECT 'out', id::text, COALESCE(content->>'Text', ''), sent_at
 		FROM outbound_message
 		WHERE tenant_id = $1 AND conversation_id = $2::uuid AND status = 'sent'
 

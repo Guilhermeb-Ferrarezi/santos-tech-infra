@@ -346,7 +346,7 @@ func (r *MessageRepo) GetRecentTurns(ctx context.Context, tx pgx.Tx, convID Conv
 	rows, err := tx.Query(ctx, `
 		SELECT role, text FROM (
 			SELECT 'user'                                    AS role,
-			       COALESCE(content->>'text', '[mídia]')     AS text,
+			       COALESCE(content->>'Text', '[mídia]')     AS text,
 			       received_at                               AS ts
 			FROM inbound_message
 			WHERE conversation_id = $1
@@ -354,11 +354,11 @@ func (r *MessageRepo) GetRecentTurns(ctx context.Context, tx pgx.Tx, convID Conv
 			UNION ALL
 
 			SELECT 'assistant'         AS role,
-			       content->>'text'    AS text,
+			       content->>'Text'    AS text,
 			       created_at          AS ts
 			FROM outbound_message
 			WHERE conversation_id = $1
-			  AND content->>'text' IS NOT NULL
+			  AND content->>'Text' IS NOT NULL
 		) sub
 		ORDER BY ts DESC
 		LIMIT $2
