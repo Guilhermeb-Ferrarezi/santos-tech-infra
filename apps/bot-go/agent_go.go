@@ -45,7 +45,7 @@ type agentGoResponse struct {
 func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx ConversationContext, cfg TenantConfig, inboundText string) (ResponderOutput, error) {
 	prompt := BuildPrompt(cfg, convCtx, inboundText, time.Now())
 
-	result, err := c.callAPI(ctx, agentGoRequest{Task: "raw", Brief: prompt, Model: "opus"})
+	result, err := c.callAPI(ctx, agentGoRequest{Task: "raw", Brief: prompt, Model: "opus", Web: true})
 	if err != nil {
 		return ResponderOutput{}, fmt.Errorf("agent_go: respond: %w", err)
 	}

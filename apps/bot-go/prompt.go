@@ -51,7 +51,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	}
 
 	// ── Base de Conhecimento ──────────────────────────────────────────────────
-	sb.WriteString("# Base de Conhecimento (única fonte de verdade factual)\n")
+	sb.WriteString("# Base de Conhecimento (fonte primária de verdade factual)\n")
 	if cfg.KBContent != nil && *cfg.KBContent != "" {
 		var entries []struct {
 			ID      string `json:"id"`
@@ -74,10 +74,12 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 		sb.WriteString("Nenhuma informação cadastrada ainda.\n")
 	}
 	sb.WriteString("\n")
-	sb.WriteString("Regras de uso da Base de Conhecimento:\n")
-	sb.WriteString("1. Use SOMENTE as informações acima para responder perguntas factuais. Reproduza-as diretamente — não adicione, não deduza, não complemente.\n")
-	sb.WriteString("2. Se a informação pedida NÃO estiver na base: NÃO invente. Marque \"answeredFromKb\": false e \"handoff\": true, e diga algo como: \"Não tenho essa informação no momento, mas posso te conectar com nossa equipe. Posso ajudar com mais alguma coisa?\"\n")
-	sb.WriteString("3. Nunca misture dados da KB com suposições suas. Se tiver dúvida, prefira o handoff.\n")
+	sb.WriteString("Regras de uso da Base de Conhecimento e busca na web:\n")
+	sb.WriteString("1. Prefira sempre as informações da KB acima para perguntas factuais — são a fonte mais confiável.\n")
+	sb.WriteString("2. Se a informação NÃO estiver na KB: use WebFetch ou WebSearch para buscá-la antes de responder. Busque no site oficial da empresa ou em fontes confiáveis.\n")
+	sb.WriteString("3. Se encontrou na web: responda com a informação. Marque answeredFromKb: false, handoff: false, answered: true.\n")
+	sb.WriteString("4. Se NÃO encontrou em lugar nenhum (KB nem web): marque handoff: true e diga: \"Não tenho essa informação agora, mas posso te conectar com nossa equipe.\"\n")
+	sb.WriteString("5. Nunca invente dados. Se tiver dúvida sobre a veracidade do que encontrou na web, prefira o handoff.\n")
 	sb.WriteString("\n")
 
 	// ── Segurança ─────────────────────────────────────────────────────────────
@@ -114,9 +116,10 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("- \"quotedReplies\": array de {bubble: índice-0-based, ref: \"mN\"} quando um balão responde diretamente a uma mensagem anterior. Omita o campo inteiro se não aplicável.\n")
 	sb.WriteString("\n")
 	sb.WriteString("Exemplos rápidos:\n")
-	sb.WriteString("  KB tem a info  → answeredFromKb:true, handoff:false, answered:true\n")
-	sb.WriteString("  KB não tem     → answeredFromKb:false, handoff:true,  answered:false, bubbles:[\"Não tenho essa informação agora, mas posso te conectar com nossa equipe. Posso ajudar com mais alguma coisa?\"]\n")
-	sb.WriteString("  Cliente pede humano → handoff:true, bubbles:[\"Claro! Vou te conectar com nossa equipe agora.\"]\n")
+	sb.WriteString("  KB tem a info         → answeredFromKb:true,  handoff:false, answered:true\n")
+	sb.WriteString("  Achou na web          → answeredFromKb:false, handoff:false, answered:true\n")
+	sb.WriteString("  Não achou em nenhum   → answeredFromKb:false, handoff:true,  answered:false, bubbles:[\"Não tenho essa informação agora, mas posso te conectar com nossa equipe.\"]\n")
+	sb.WriteString("  Cliente pede humano   → handoff:true, bubbles:[\"Claro! Vou te conectar com nossa equipe agora.\"]\n")
 	sb.WriteString("\n")
 
 	// ── Contexto da conversa ──────────────────────────────────────────────────
