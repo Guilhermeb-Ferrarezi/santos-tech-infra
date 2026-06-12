@@ -118,7 +118,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if u.MFAMethod == "email" {
-			s.sendChallengeEmailCode(r.Context(), challenge, u.Email)
+			if err := s.sendChallengeEmailCode(r.Context(), challenge, u.Email); err != nil {
+				writeErr(w, err)
+				return
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"mfaRequired": true, "challenge": challenge,

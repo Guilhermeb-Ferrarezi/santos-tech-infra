@@ -129,7 +129,10 @@ func (s *Server) handleMFAEmail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido"))
 		return
 	}
-	s.sendChallengeEmailCode(r.Context(), body.Challenge, u.Email)
+	if err := s.sendChallengeEmailCode(r.Context(), body.Challenge, u.Email); err != nil {
+		writeErr(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
 
