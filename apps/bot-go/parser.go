@@ -14,6 +14,7 @@ type rawResponderOutput struct {
 	AnsweredFromKb   *bool           `json:"answeredFromKb"`
 	CitedEntryIDs    []string        `json:"citedEntryIds"`
 	Handoff          bool            `json:"handoff"`
+	Smalltalk        bool            `json:"smalltalk"`
 	ScheduledContact json.RawMessage `json:"scheduledContact"`
 	QuotedReplies    json.RawMessage `json:"quotedReplies"`
 	KBEntry          *KBEntry        `json:"kbEntry"`
@@ -53,6 +54,7 @@ func ParseModelReply(raw string) (ResponderOutput, error) {
 		AnsweredFromKb: *r.AnsweredFromKb,
 		CitedEntryIDs:  r.CitedEntryIDs,
 		Handoff:        r.Handoff,
+		Smalltalk:      r.Smalltalk,
 		KBEntry:        r.KBEntry,
 	}
 

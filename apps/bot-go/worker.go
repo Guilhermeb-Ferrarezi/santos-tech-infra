@@ -184,8 +184,10 @@ func (w *Worker) processEvent(ctx context.Context, ev DomainEvent) {
 		processingErr = w.handleMessageSent(ctx, ev)
 
 	case "kb.gap_detected":
-		processingErr = w.notificaAdmin(ctx, ev)
-		if processingErr == nil && w.deps.AgentGo != nil && w.deps.TenantCfg != nil {
+		// Gaps de KB são salvos silenciosamente — sem notificar o admin aqui.
+		// O admin só é avisado quando há cliente esperando de verdade (handoff,
+		// via notification.requested), que tem o fluxo de rascunho + confirmação.
+		if w.deps.AgentGo != nil && w.deps.TenantCfg != nil {
 			if err := w.handleKBGap(ctx, ev); err != nil {
 				w.deps.Logger.Warn("handleKBGap: falha ao persistir entrada KB", "err", err)
 			}

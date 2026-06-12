@@ -224,6 +224,7 @@ type ResponderOutput struct {
 	AnsweredFromKb   bool
 	CitedEntryIDs    []string
 	Handoff          bool
+	Smalltalk        bool // saudação/agradecimento/conversa fiada — não conta como gap de KB
 	ScheduledContact *ScheduledContact
 	QuotedReplies    []QuotedReply
 	ToolCalls        []ToolCall
