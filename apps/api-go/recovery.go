@@ -3,13 +3,10 @@ package main
 import "context"
 
 func (s *Server) insertRecoveryCodes(ctx context.Context, userID int64, hashes []string) error {
-	for _, h := range hashes {
-		if _, err := s.db.Exec(ctx,
-			`INSERT INTO recovery_codes (user_id, code_hash) VALUES ($1,$2)`, userID, h); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := s.db.Exec(ctx,
+		`INSERT INTO recovery_codes (user_id, code_hash) SELECT $1, unnest($2::text[])`,
+		userID, hashes)
+	return err
 }
 
 // consumeRecoveryCode marca um código como usado, se existir e estiver disponível.
