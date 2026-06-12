@@ -184,6 +184,31 @@ type ConversationContext struct {
 	RecentTurns     []ConversationTurn
 	Summary         string
 	StructuredFacts map[string]any
+	// PendingQuestions — dúvidas de clientes aguardando resposta. Injetadas
+	// SOMENTE em conversas admin, para o LLM casar a info fornecida e rascunhar.
+	PendingQuestions []PendingQuestion
+}
+
+// PendingQuestion — dúvida de um cliente que o bot não soube responder (handoff),
+// aguardando o admin fornecer a informação. Ver migration 0015.
+type PendingQuestion struct {
+	ID             string
+	TenantID       TenantID
+	ConversationID ConversationID
+	ClientPhone    string
+	ClientName     string
+	Question       string
+	Status         string // open | drafted | resolved
+	Draft          string
+	CreatedAt      time.Time
+}
+
+// ClientAction — ação proposta pelo LLM (modo admin) sobre uma dúvida pendente:
+// rascunhar (Send=false) ou enviar de fato ao cliente (Send=true).
+type ClientAction struct {
+	PendingID string
+	Draft     string
+	Send      bool
 }
 
 // ToolCall — uso de ferramenta capturado durante geração do LLM.
@@ -202,7 +227,8 @@ type ResponderOutput struct {
 	ScheduledContact *ScheduledContact
 	QuotedReplies    []QuotedReply
 	ToolCalls        []ToolCall
-	KBEntry          *KBEntry // presente quando admin fornece info para salvar na KB
+	KBEntry          *KBEntry       // presente quando admin fornece info para salvar na KB
+	ClientActions    []ClientAction // modo admin: rascunhos/envios para clientes pendentes
 }
 
 // ScheduledContact — reativação pedida pelo cliente ("me chama em julho").

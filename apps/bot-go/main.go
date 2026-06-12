@@ -73,6 +73,7 @@ func main() {
 	tenantCfg := NewTenantConfigRepo(pool)
 	scheduled := NewScheduledContactRepo(pool)
 	logRepo := NewProcessingLogRepo(pool)
+	pending := NewPendingQuestionRepo(pool)
 
 	// 8. Instancia AgentGoClient (Responder)
 	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret)
@@ -100,6 +101,7 @@ func main() {
 		Broadcast:     hub.Broadcast,
 		LogRepo:       logRepo,
 		TenantCfgRepo: tenantCfg,
+		Pending:       pending,
 	})
 
 	// 12. Instancia Worker

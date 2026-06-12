@@ -188,25 +188,54 @@ func buildAdminPrompt(context ConversationContext, inboundText string, now time.
 	var sb strings.Builder
 
 	sb.WriteString("# Modo Administrador\n")
-	sb.WriteString("Você está em modo de administração. O interlocutor é um administrador do sistema.\n\n")
+	sb.WriteString("Você está conversando com um ADMINISTRADOR do sistema (não um cliente).\n")
+	sb.WriteString("Seja direto, econômico e prático — sem rodeios e sem repetir confirmações.\n\n")
 
 	sb.WriteString("## Responsabilidades\n")
-	sb.WriteString("1. Quando o histórico mostrar que você enviou uma mensagem 📚 perguntando por uma informação, ")
-	sb.WriteString("e o admin responder com essa informação:\n")
-	sb.WriteString("   - Gere um campo \"kbEntry\" no JSON com título e conteúdo factuais e completos.\n")
-	sb.WriteString("   - Confirme para o admin que salvou.\n")
-	sb.WriteString("2. Para outras mensagens do admin, responda normalmente.\n\n")
+	sb.WriteString("1. Salvar conhecimento: quando o admin fornecer uma informação factual sobre o negócio ")
+	sb.WriteString("(preço, horário, regra, etc.), gere o campo \"kbEntry\" com título e conteúdo claros e confirme em UMA frase curta.\n")
+	sb.WriteString("   - Faça NO MÁXIMO uma pergunta de esclarecimento, e SOMENTE se a info for ambígua ou claramente atípica (ex.: um preço absurdamente baixo). Se o admin já deu valor + contexto, salve sem reperguntar.\n")
+	sb.WriteString("   - Nunca repita o pedido de confirmação. Se o admin disse algo como \"ta certo\" / \"pode salvar\", salve na hora.\n")
+	sb.WriteString("2. Responder clientes pendentes: veja \"Clientes aguardando\" abaixo. Quando a info que o admin deu responder a dúvida de algum cliente, proponha a resposta via \"clientActions\".\n\n")
+
+	// Clientes aguardando (dúvidas pendentes) — injetadas pelo engine no modo admin.
+	if len(context.PendingQuestions) > 0 {
+		sb.WriteString("## Clientes aguardando resposta\n")
+		for _, pq := range context.PendingQuestions {
+			who := pq.ClientName
+			if who == "" {
+				who = pq.ClientPhone
+			}
+			line := fmt.Sprintf("- id: %s | cliente: %s | perguntou: %q", pq.ID, who, pq.Question)
+			if pq.Draft != "" {
+				line += fmt.Sprintf(" | rascunho atual: %q", pq.Draft)
+			}
+			sb.WriteString(line + "\n")
+		}
+		sb.WriteString("\n")
+		sb.WriteString("Fluxo de resposta ao cliente (confirmação leve):\n")
+		sb.WriteString("- Ao identificar a dúvida que a info responde, proponha um rascunho com \"send\": false e MOSTRE o rascunho ao admin pedindo um ok rápido. NÃO envie ainda.\n")
+		sb.WriteString("- Quando o admin confirmar (ex.: \"sim\", \"pode mandar\", \"manda\"), repita a ação com o MESMO pendingId e \"send\": true para enviar de fato.\n")
+		sb.WriteString("- Se o admin corrigir o texto, gere novo rascunho (\"send\": false) com a correção e peça o ok de novo.\n")
+		sb.WriteString("- A resposta ao cliente deve ter o tom normal de atendimento (calorosa e curta), NUNCA o tom de admin.\n\n")
+	} else {
+		sb.WriteString("## Clientes aguardando resposta\n")
+		sb.WriteString("Nenhum cliente aguardando agora. Apenas salve o conhecimento; não use \"clientActions\".\n\n")
+	}
 
 	sb.WriteString("## Formato de saída (OBRIGATÓRIO)\n")
 	sb.WriteString("Responda SOMENTE com JSON válido — nenhum texto antes ou depois:\n")
 	sb.WriteString("{\n")
-	sb.WriteString("  \"bubbles\": [\"balão 1\"],\n")
+	sb.WriteString("  \"bubbles\": [\"mensagem curta ao admin\"],\n")
 	sb.WriteString("  \"answered\": true,\n")
 	sb.WriteString("  \"answeredFromKb\": false,\n")
 	sb.WriteString("  \"handoff\": false,\n")
-	sb.WriteString("  \"kbEntry\": {\"title\": \"...\", \"content\": \"...\"}\n")
+	sb.WriteString("  \"kbEntry\": {\"title\": \"...\", \"content\": \"...\"},\n")
+	sb.WriteString("  \"clientActions\": [{\"pendingId\": \"<id da lista acima>\", \"draft\": \"resposta ao cliente\", \"send\": false}]\n")
 	sb.WriteString("}\n")
-	sb.WriteString("Omita o campo \"kbEntry\" se o admin NÃO estiver fornecendo informação para a KB.\n\n")
+	sb.WriteString("- Omita \"kbEntry\" se o admin NÃO estiver fornecendo info nova para a KB.\n")
+	sb.WriteString("- Omita \"clientActions\" (ou use []) se não houver cliente a responder nesta mensagem.\n")
+	sb.WriteString("- Em \"bubbles\": ao propor um rascunho, mostre-o e peça o ok; ao enviar, confirme o envio em uma frase.\n\n")
 
 	// Histórico recente
 	if len(context.RecentTurns) > 0 {

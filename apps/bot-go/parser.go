@@ -17,6 +17,7 @@ type rawResponderOutput struct {
 	ScheduledContact json.RawMessage `json:"scheduledContact"`
 	QuotedReplies    json.RawMessage `json:"quotedReplies"`
 	KBEntry          *KBEntry        `json:"kbEntry"`
+	ClientActions    json.RawMessage `json:"clientActions"`
 }
 
 // ParseModelReply extrai e parseia o JSON de resposta do LLM.
@@ -67,7 +68,39 @@ func ParseModelReply(raw string) (ResponderOutput, error) {
 		out.QuotedReplies = qr
 	}
 
+	// clientActions (modo admin): descarta se malformado, sem falhar
+	if len(r.ClientActions) > 0 && string(r.ClientActions) != "null" {
+		out.ClientActions = parseClientActions(r.ClientActions)
+	}
+
 	return out, nil
+}
+
+// parseClientActions tenta parsear clientActions; retorna nil se inválido.
+func parseClientActions(raw json.RawMessage) []ClientAction {
+	var items []struct {
+		PendingID string `json:"pendingId"`
+		Draft     string `json:"draft"`
+		Send      bool   `json:"send"`
+	}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil
+	}
+	result := make([]ClientAction, 0, len(items))
+	for _, it := range items {
+		if it.PendingID == "" {
+			continue
+		}
+		result = append(result, ClientAction{
+			PendingID: it.PendingID,
+			Draft:     it.Draft,
+			Send:      it.Send,
+		})
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 // extractJSON encontra o primeiro '{' e o último '}' no texto, retornando o JSON.

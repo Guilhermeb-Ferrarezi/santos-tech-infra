@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -56,6 +57,8 @@ type EngineDeps struct {
 	Sleep func(time.Duration)
 	// TenantCfgRepo permite ao engine persistir entradas de KB (opcional).
 	TenantCfgRepo *TenantConfigRepo
+	// Pending — fila de dúvidas de clientes aguardando o admin (ciclo admin→cliente).
+	Pending *PendingQuestionRepo
 }
 
 // ---------------------------------------------------------------------------
@@ -238,9 +241,17 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 		}
 
-		// l) Detecta conversa admin e sinaliza no cfg (transient)
+		// l) Detecta conversa admin e sinaliza no cfg (transient). Em modo admin,
+		// injeta as dúvidas pendentes para o LLM casar a info e rascunhar respostas.
 		if cfg.AdminWhatsAppNumber != "" && contactPhone == cfg.AdminWhatsAppNumber {
 			cfg.IsAdminConversation = true
+			if e.deps.Pending != nil {
+				pendings, err := e.deps.Pending.ListOpen(ctx, tx, inbound.TenantID)
+				if err != nil {
+					return fmt.Errorf("Pending.ListOpen: %w", err)
+				}
+				convCtx.PendingQuestions = pendings
+			}
 		}
 
 		// Sinaliza para chamar o LLM fora da transação.
@@ -369,6 +380,13 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	}
 
 	// -----------------------------------------------------------------------
+	// Fase 2.5: modo admin — rascunha/envia respostas a clientes pendentes
+	// -----------------------------------------------------------------------
+	if len(output.ClientActions) > 0 {
+		e.executeClientActions(ctx, inbound, output.ClientActions)
+	}
+
+	// -----------------------------------------------------------------------
 	// Fase 3: atualiza estado do FSM e emite eventos pós-envio
 	// -----------------------------------------------------------------------
 
@@ -403,6 +421,14 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 			if err := e.deps.Emitter.Emit(ctx, tx, handoffEvent); err != nil {
 				return fmt.Errorf("Emit notification.requested (handoff): %w", err)
+			}
+
+			// Registra a dúvida do cliente na fila para o admin responder depois.
+			// Não aplica a conversas admin (admin não é um cliente esperando).
+			if !cfg.IsAdminConversation && inboundText != "" && e.deps.Pending != nil {
+				if err := e.deps.Pending.Insert(ctx, tx, inbound.TenantID, conv.ID, contactPhone, contactName, inboundText); err != nil {
+					return fmt.Errorf("Pending.Insert: %w", err)
+				}
 			}
 		}
 
@@ -526,6 +552,98 @@ func isBotEnabledFor(cfg TenantConfig, externalID string) bool {
 
 // applyTransition calcula o próximo estado da conversa dado o estado atual
 // e a saída do Responder.
+// executeClientActions processa as ações propostas pelo LLM no modo admin sobre
+// dúvidas pendentes: grava rascunho (Send=false) ou envia ao cliente (Send=true),
+// reengaja a conversa do cliente e resolve a pendência. Cada ação roda numa
+// transação própria, fora da conversa do admin.
+func (e *ConversationEngine) executeClientActions(ctx context.Context, inbound InboundMessage, actions []ClientAction) {
+	log := e.deps.Logger
+	if e.deps.Pending == nil || e.deps.Sender == nil {
+		return
+	}
+
+	for _, act := range actions {
+		if act.PendingID == "" {
+			continue
+		}
+
+		// Carrega a pendência ainda aberta — guarda de idempotência.
+		var pq *PendingQuestion
+		if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+			loaded, e2 := e.deps.Pending.Get(ctx, tx, inbound.TenantID, act.PendingID)
+			pq = loaded
+			return e2
+		}); err != nil {
+			log.Error("clientAction: falha ao carregar pendência", "id", act.PendingID, "err", err)
+			continue
+		}
+		if pq == nil {
+			continue // já resolvida ou inexistente
+		}
+
+		draft := strings.TrimSpace(act.Draft)
+		if draft == "" {
+			draft = pq.Draft // reaproveita rascunho anterior se o envio veio sem texto
+		}
+		if draft == "" {
+			continue
+		}
+
+		// Apenas rascunho: guarda e aguarda a confirmação do admin.
+		if !act.Send {
+			if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+				return e.deps.Pending.StoreDraft(ctx, tx, inbound.TenantID, pq.ID, draft)
+			}); err != nil {
+				log.Error("clientAction: falha ao guardar rascunho", "id", pq.ID, "err", err)
+			}
+			continue
+		}
+
+		// Envio confirmado: manda ao cliente, persiste, reengaja e resolve.
+		idemKey := fmt.Sprintf("pending:%s:reply", pq.ID)
+		outboundMsg := OutboundMessage{
+			TenantID:       inbound.TenantID,
+			ConversationID: pq.ConversationID,
+			Channel:        inbound.Channel,
+			To:             pq.ClientPhone,
+			Intent:         IntentFreeForm,
+			Content:        MessageContent{Type: "text", Text: draft},
+			IdempotencyKey: idemKey,
+		}
+		sendErr := e.withTenant(ctx, func(tx pgx.Tx) error {
+			providerMsgID, err := e.deps.Sender.SendMessage(ctx, outboundMsg)
+			if err != nil {
+				return fmt.Errorf("SendMessage: %w", err)
+			}
+			if err := e.deps.Messages.RecordOutbound(ctx, tx, idemKey, inbound.TenantID, pq.ConversationID, providerMsgID, draft, nil); err != nil {
+				return fmt.Errorf("RecordOutbound: %w", err)
+			}
+			if err := e.deps.Convs.SetState(ctx, tx, inbound.TenantID, pq.ConversationID, StateEngaged); err != nil {
+				return fmt.Errorf("SetState: %w", err)
+			}
+			if err := e.deps.Pending.MarkResolved(ctx, tx, inbound.TenantID, pq.ID); err != nil {
+				return fmt.Errorf("MarkResolved: %w", err)
+			}
+			return nil
+		})
+		if sendErr != nil {
+			log.Error("clientAction: falha ao enviar ao cliente", "id", pq.ID, "err", sendErr)
+			who := pq.ClientName
+			if who == "" {
+				who = pq.ClientPhone
+			}
+			_ = e.deps.Sender.SendText(ctx, inbound.ExternalID,
+				fmt.Sprintf("⚠️ Não consegui enviar a resposta para %s agora. Tenta de novo daqui a pouco.", who))
+			continue
+		}
+
+		if e.deps.Broadcast != nil {
+			e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: pq.ConversationID})
+		}
+		log.Info("clientAction: resposta enviada ao cliente", "pendingID", pq.ID, "conv", pq.ConversationID)
+	}
+}
+
 func applyTransition(current ConversationState, output ResponderOutput) ConversationState {
 	switch current {
 	case StateNew:

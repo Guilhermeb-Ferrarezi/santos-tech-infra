@@ -277,6 +277,18 @@ func (r *ConversationRepo) SetBotEnabled(ctx context.Context, tx pgx.Tx, tenantI
 	return nil
 }
 
+// SetState atualiza apenas o estado do FSM de uma conversa.
+func (r *ConversationRepo) SetState(ctx context.Context, tx pgx.Tx, tenantID TenantID, convID ConversationID, state ConversationState) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE conversation SET state = $1::conversation_state, updated_at = now()
+		WHERE tenant_id = $2 AND id = $3
+	`, string(state), tenantID, convID)
+	if err != nil {
+		return fmt.Errorf("ConversationRepo.SetState: %w", err)
+	}
+	return nil
+}
+
 // ============================================================================
 // MessageRepo — gravação de inbound + histórico de turnos
 // ============================================================================
@@ -744,6 +756,101 @@ func (r *TenantConfigRepo) AppendKBEntry(ctx context.Context, tenantID TenantID,
 	`, tenantID, "["+string(entryJSON)+"]")
 	if err != nil {
 		return fmt.Errorf("AppendKBEntry: exec: %w", err)
+	}
+	return nil
+}
+
+// ============================================================================
+// PendingQuestionRepo — fila de dúvidas de clientes aguardando o admin (0015)
+// ============================================================================
+
+type PendingQuestionRepo struct{ pool *pgxpool.Pool }
+
+func NewPendingQuestionRepo(pool *pgxpool.Pool) *PendingQuestionRepo {
+	return &PendingQuestionRepo{pool: pool}
+}
+
+// Insert grava uma dúvida pendente quando o bot dá handoff. Idempotente por
+// conversa+pergunta abertas para não duplicar se o cliente reenviar.
+func (r *PendingQuestionRepo) Insert(ctx context.Context, tx pgx.Tx, tenantID TenantID, convID ConversationID, clientPhone, clientName, question string) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO pending_question (tenant_id, conversation_id, client_phone, client_name, question, status)
+		SELECT $1, $2, $3, $4, $5, 'open'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM pending_question
+			WHERE tenant_id = $1 AND conversation_id = $2 AND status IN ('open', 'drafted')
+		)
+	`, tenantID, convID, clientPhone, clientName, question)
+	if err != nil {
+		return fmt.Errorf("PendingQuestionRepo.Insert: %w", err)
+	}
+	return nil
+}
+
+// ListOpen retorna as pendências abertas/rascunhadas do tenant (para casamento).
+func (r *PendingQuestionRepo) ListOpen(ctx context.Context, tx pgx.Tx, tenantID TenantID) ([]PendingQuestion, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, conversation_id, client_phone, client_name, question, status, COALESCE(draft, ''), created_at
+		FROM pending_question
+		WHERE tenant_id = $1 AND status IN ('open', 'drafted')
+		ORDER BY created_at
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("PendingQuestionRepo.ListOpen: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PendingQuestion
+	for rows.Next() {
+		pq := PendingQuestion{TenantID: tenantID}
+		if err := rows.Scan(&pq.ID, &pq.ConversationID, &pq.ClientPhone, &pq.ClientName,
+			&pq.Question, &pq.Status, &pq.Draft, &pq.CreatedAt); err != nil {
+			return nil, fmt.Errorf("PendingQuestionRepo.ListOpen scan: %w", err)
+		}
+		out = append(out, pq)
+	}
+	return out, rows.Err()
+}
+
+// Get carrega uma pendência por id (escopada ao tenant). Retorna nil se ausente
+// ou já resolvida — usado como guarda de idempotência antes de enviar ao cliente.
+func (r *PendingQuestionRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID, id string) (*PendingQuestion, error) {
+	pq := PendingQuestion{TenantID: tenantID, ID: id}
+	err := tx.QueryRow(ctx, `
+		SELECT conversation_id, client_phone, client_name, question, status, COALESCE(draft, ''), created_at
+		FROM pending_question
+		WHERE tenant_id = $1 AND id = $2 AND status IN ('open', 'drafted')
+	`, tenantID, id).Scan(&pq.ConversationID, &pq.ClientPhone, &pq.ClientName,
+		&pq.Question, &pq.Status, &pq.Draft, &pq.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("PendingQuestionRepo.Get: %w", err)
+	}
+	return &pq, nil
+}
+
+// StoreDraft grava o rascunho proposto e move a pendência para 'drafted'.
+func (r *PendingQuestionRepo) StoreDraft(ctx context.Context, tx pgx.Tx, tenantID TenantID, id, draft string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE pending_question SET draft = $3, status = 'drafted', updated_at = now()
+		WHERE tenant_id = $1 AND id = $2 AND status IN ('open', 'drafted')
+	`, tenantID, id, draft)
+	if err != nil {
+		return fmt.Errorf("PendingQuestionRepo.StoreDraft: %w", err)
+	}
+	return nil
+}
+
+// MarkResolved marca a pendência como resolvida (após enviar ao cliente).
+func (r *PendingQuestionRepo) MarkResolved(ctx context.Context, tx pgx.Tx, tenantID TenantID, id string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE pending_question SET status = 'resolved', updated_at = now()
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantID, id)
+	if err != nil {
+		return fmt.Errorf("PendingQuestionRepo.MarkResolved: %w", err)
 	}
 	return nil
 }
