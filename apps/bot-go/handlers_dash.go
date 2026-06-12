@@ -343,6 +343,16 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		cfg.KBContent = []KBEntry{}
 	}
 
+	// Se ainda não houver prompt customizado, mostra o prompt padrão (do código)
+	// já preenchido e editável no dashboard. O bot continua usando esse mesmo
+	// texto por padrão, então preencher não muda o comportamento.
+	if cfg.SystemPrompt == "" {
+		cfg.SystemPrompt = DefaultPersonaPrompt(
+			TenantConfig{BotName: cfg.BotName, BotGender: cfg.BotGender},
+			ConversationContext{},
+		)
+	}
+
 	jsonOK(w, cfg)
 }
 
