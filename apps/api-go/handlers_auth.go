@@ -27,6 +27,7 @@ func (s *Server) issueSession(ctx context.Context, w http.ResponseWriter, r *htt
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Email    string `json:"email"`
 		Name     string `json:"name"`
@@ -76,6 +77,7 @@ const (
 )
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Identifier string `json:"identifier"`
 		Password   string `json:"password"`
