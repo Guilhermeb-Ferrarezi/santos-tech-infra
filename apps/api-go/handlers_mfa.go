@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/base32"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -61,7 +62,10 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 	for i, c := range codes {
 		hashes[i] = sha256Hex(c)
 	}
-	_ = s.deleteRecoveryCodes(r.Context(), uid)
+	if err := s.deleteRecoveryCodes(r.Context(), uid); err != nil {
+		writeErr(w, err)
+		return
+	}
 	if err := s.insertRecoveryCodes(r.Context(), uid, hashes); err != nil {
 		writeErr(w, err)
 		return
@@ -106,7 +110,9 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	_ = s.deleteRecoveryCodes(r.Context(), uid)
+	if err := s.deleteRecoveryCodes(r.Context(), uid); err != nil {
+		slog.Warn("falha ao remover recovery codes ao desativar MFA", "uid", uid, "err", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"disabled": true})
 }
 
