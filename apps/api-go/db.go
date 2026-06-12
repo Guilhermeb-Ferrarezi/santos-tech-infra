@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -529,10 +530,13 @@ func (s *Server) listCustomRoles(ctx context.Context) ([]CustomRole, error) {
 }
 
 func (s *Server) createCustomRole(ctx context.Context, name string, description *string, perms map[string][]string) (*CustomRole, error) {
-	raw, _ := json.Marshal(perms)
+	raw, err := json.Marshal(perms)
+	if err != nil {
+		return nil, fmt.Errorf("marshal permissions: %w", err)
+	}
 	var cr CustomRole
 	var rawOut []byte
-	err := s.db.QueryRow(ctx,
+	err = s.db.QueryRow(ctx,
 		`INSERT INTO custom_roles (name, description, permissions)
 		 VALUES ($1, $2, $3::jsonb) RETURNING id::text, name, description, permissions, created_at, updated_at`,
 		name, description, string(raw)).
@@ -564,10 +568,13 @@ func (s *Server) getCustomRole(ctx context.Context, id string) (*CustomRole, err
 }
 
 func (s *Server) updateCustomRole(ctx context.Context, id, name string, description *string, perms map[string][]string) (*CustomRole, error) {
-	raw, _ := json.Marshal(perms)
+	raw, err := json.Marshal(perms)
+	if err != nil {
+		return nil, fmt.Errorf("marshal permissions: %w", err)
+	}
 	var cr CustomRole
 	var rawOut []byte
-	err := s.db.QueryRow(ctx,
+	err = s.db.QueryRow(ctx,
 		`UPDATE custom_roles SET name=$2, description=$3, permissions=$4::jsonb, updated_at=now()
 		 WHERE id=$1::uuid RETURNING id::text, name, description, permissions, created_at, updated_at`,
 		id, name, description, string(raw)).
