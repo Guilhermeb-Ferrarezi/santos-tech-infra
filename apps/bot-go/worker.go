@@ -256,6 +256,9 @@ func (w *Worker) notificaAdmin(ctx context.Context, ev DomainEvent) error {
 	if question == "" {
 		question, _ = ev.Payload["message"].(string)
 	}
+	if question == "" {
+		question, _ = ev.Payload["inbound_text"].(string)
+	}
 
 	var texto string
 	if ev.Type == "kb.gap_detected" {

@@ -117,6 +117,8 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		mediaFallback bool
 		contactPhone  = inbound.ExternalID
 		contactName   string
+		convCtx       ConversationContext
+		llmReady      bool
 	)
 
 	err := e.withTenant(ctx, func(tx pgx.Tx) error {
@@ -217,7 +219,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		if conv.Summary != nil {
 			summary = *conv.Summary
 		}
-		convCtx := ConversationContext{
+		convCtx = ConversationContext{
 			RecentTurns:     recentTurns,
 			Summary:         summary,
 			StructuredFacts: conv.StructuredFacts,
@@ -236,32 +238,35 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 		}
 
-		// Notifica o dashboard antes de chamar o LLM (non-blocking).
-		if e.deps.Broadcast != nil {
-			e.deps.Broadcast(WSEvent{Type: "conversation.processing", ConversationID: conv.ID})
-		}
-
 		// l) Detecta conversa admin e sinaliza no cfg (transient)
 		if cfg.AdminWhatsAppNumber != "" && contactPhone == cfg.AdminWhatsAppNumber {
 			cfg.IsAdminConversation = true
 		}
 
-		// m) Chama o Responder (LLM)
-		respOut, err := e.deps.Responder.Respond(ctx, conv, convCtx, cfg, inboundText)
-		if err != nil {
-			return fmt.Errorf("Responder.Respond: %w", err)
-		}
-		output = respOut
-
+		// Sinaliza para chamar o LLM fora da transação.
+		llmReady = true
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("engine.Handle (fase 1): %w", err)
 	}
 
-	// Broadcast da mensagem inbound (após commit da fase 1).
+	// Broadcast da mensagem inbound logo após o commit — antes do LLM.
+	// O dashboard recebe a mensagem imediatamente sem esperar a resposta.
 	if err == nil && inboundText != "" && e.deps.Broadcast != nil {
-		e.deps.Broadcast(WSEvent{Type: "message.new", ConversationID: conv.ID})
+		e.deps.Broadcast(WSEvent{Type: "message.inbound", ConversationID: conv.ID})
+	}
+
+	// Chama o LLM fora da transação (assíncrono ao commit da inbound).
+	if llmReady {
+		if e.deps.Broadcast != nil {
+			e.deps.Broadcast(WSEvent{Type: "conversation.processing", ConversationID: conv.ID})
+		}
+		respOut, llmErr := e.deps.Responder.Respond(ctx, conv, convCtx, cfg, inboundText)
+		if llmErr != nil {
+			return fmt.Errorf("engine.Handle (responder): %w", llmErr)
+		}
+		output = respOut
 	}
 
 	// Persiste entrada de KB quando admin forneceu informação (após commit).
@@ -357,7 +362,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 
 		// Broadcast do balão enviado (após commit da transação individual).
 		if e.deps.Broadcast != nil {
-			e.deps.Broadcast(WSEvent{Type: "message.new", ConversationID: conv.ID})
+			e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: conv.ID})
 		}
 
 		prevText = bubble
