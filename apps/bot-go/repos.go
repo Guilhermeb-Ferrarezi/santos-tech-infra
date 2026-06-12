@@ -671,7 +671,7 @@ type TenantConfigRepo struct{ pool *pgxpool.Pool }
 // Get retorna a configuração do tenant. Aceita tx para uso dentro de withTenant.
 // Assinatura alinhada com engine.go: (ctx, tx, tenantID).
 func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID) (*TenantConfig, error) {
-	row := tx.QueryRow(ctx, `
+	const query = `
 		SELECT tc.bot_name, tc.bot_gender,
 		       false AS reveal_ai_if_asked,
 		       tc.kb_content::text,
@@ -685,7 +685,16 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		FROM tenant_config tc
 		JOIN tenants t ON t.id = tc.tenant_id
 		WHERE tc.tenant_id = $1
-	`, tenantID)
+	`
+
+	// tx é opcional: quando nil (ex.: chamadas do worker fora de transação),
+	// usa o pool diretamente. Chamar tx.QueryRow num pgx.Tx nil causaria panic.
+	var row pgx.Row
+	if tx != nil {
+		row = tx.QueryRow(ctx, query, tenantID)
+	} else {
+		row = r.pool.QueryRow(ctx, query, tenantID)
+	}
 
 	var cfg TenantConfig
 	cfg.TenantID = tenantID
