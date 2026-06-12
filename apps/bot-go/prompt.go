@@ -76,7 +76,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("\n")
 	sb.WriteString("Regras de uso da Base de Conhecimento e busca na web:\n")
 	sb.WriteString("1. Prefira sempre as informações da KB acima para perguntas factuais — são a fonte mais confiável.\n")
-	sb.WriteString("2. Se a informação NÃO estiver na KB: use WebFetch ou WebSearch para buscá-la antes de responder. Busque no site oficial da empresa ou em fontes confiáveis.\n")
+	sb.WriteString("2. Se a informação NÃO estiver na KB: use WebFetch para buscar em https://santos-tech.com (site oficial) antes de responder. Para perguntas sobre cursos, tente também https://santos-tech.com/cursos.\n")
 	sb.WriteString("3. Se encontrou na web: responda com a informação. Marque answeredFromKb: false, handoff: false, answered: true.\n")
 	sb.WriteString("4. Se NÃO encontrou em lugar nenhum (KB nem web): marque handoff: true e diga: \"Não tenho essa informação agora, mas posso te conectar com nossa equipe.\"\n")
 	sb.WriteString("5. Nunca invente dados. Se tiver dúvida sobre a veracidade do que encontrou na web, prefira o handoff.\n")

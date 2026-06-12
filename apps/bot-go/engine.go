@@ -391,8 +391,8 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 		}
 
-		// q) Gap na KB detectado
-		if !output.AnsweredFromKb && output.Answered {
+		// q) Gap na KB detectado (só quando não é handoff — handoff já notifica via notification.requested)
+		if !output.AnsweredFromKb && output.Answered && !output.Handoff {
 			kbGapEvent := DomainEvent{
 				TenantID:    inbound.TenantID,
 				AggregateID: conv.ID,
