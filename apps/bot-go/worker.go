@@ -373,7 +373,7 @@ func (w *Worker) processFollowUp(ctx context.Context, row ScheduledContactRow) {
 			summaryCtx,
 		)
 
-		text, err := w.deps.AgentGo.RespondWithModel(ctx, prompt, "claude-haiku-4-5", false)
+		text, err := w.deps.AgentGo.RespondWithModel(ctx, prompt, "haiku", false)
 		if err != nil {
 			handleErr(fmt.Errorf("RespondWithModel: %w", err))
 			return

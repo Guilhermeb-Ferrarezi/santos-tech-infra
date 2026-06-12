@@ -48,8 +48,23 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	// ── Base de Conhecimento ──────────────────────────────────────────────────
 	sb.WriteString("# Base de Conhecimento (única fonte de verdade factual)\n")
 	if cfg.KBContent != nil && *cfg.KBContent != "" {
-		sb.WriteString(*cfg.KBContent)
-		sb.WriteString("\n")
+		var entries []struct {
+			ID      string `json:"id"`
+			Title   string `json:"title"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(*cfg.KBContent), &entries); err == nil && len(entries) > 0 {
+			for _, e := range entries {
+				if e.Title != "" {
+					fmt.Fprintf(&sb, "## %s (id: %s)\n%s\n\n", e.Title, e.ID, e.Content)
+				} else {
+					fmt.Fprintf(&sb, "## Entrada (id: %s)\n%s\n\n", e.ID, e.Content)
+				}
+			}
+		} else {
+			sb.WriteString(*cfg.KBContent)
+			sb.WriteString("\n")
+		}
 	} else {
 		sb.WriteString("Nenhuma informação cadastrada ainda.\n")
 	}

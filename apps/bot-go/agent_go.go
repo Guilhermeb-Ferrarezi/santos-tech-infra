@@ -44,7 +44,7 @@ type agentGoResponse struct {
 func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx ConversationContext, cfg TenantConfig, inboundText string) (ResponderOutput, error) {
 	prompt := BuildPrompt(cfg, convCtx, inboundText, time.Now())
 
-	raw, err := c.RespondWithModel(ctx, prompt, "opus", true)
+	raw, err := c.RespondWithModel(ctx, prompt, "opus", false)
 	if err != nil {
 		return ResponderOutput{}, fmt.Errorf("agent_go: respond: %w", err)
 	}
