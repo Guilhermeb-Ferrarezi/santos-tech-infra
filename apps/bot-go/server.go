@@ -46,9 +46,10 @@ func (d *debouncer) debounce(key string, delay time.Duration, fn func()) {
 }
 
 // ---------------------------------------------------------------------------
-// burstBuffer — acumula as mensagens de uma rajada por chave (ExternalID) para
-// que sejam combinadas em um único Handle quando o debounce dispara. Sem isso,
-// só a última mensagem da rajada seria processada (as anteriores se perdiam).
+// burstBuffer — acumula as mensagens de uma rajada por chave (ExternalID) e
+// SERIALIZA o processamento por chave. Só um Handle roda por conversa de cada
+// vez; mensagens que chegam durante o processamento entram numa única resposta
+// de continuação depois (coalescing) — evita respostas concorrentes e repetidas.
 // ---------------------------------------------------------------------------
 
 type burstItem struct {
@@ -57,11 +58,17 @@ type burstItem struct {
 }
 
 type burstBuffer struct {
-	mu    sync.Mutex
-	items map[string][]burstItem
+	mu         sync.Mutex
+	items      map[string][]burstItem
+	processing map[string]bool
 }
 
-func newBurstBuffer() *burstBuffer { return &burstBuffer{items: make(map[string][]burstItem)} }
+func newBurstBuffer() *burstBuffer {
+	return &burstBuffer{
+		items:      make(map[string][]burstItem),
+		processing: make(map[string]bool),
+	}
+}
 
 func (b *burstBuffer) add(key string, it burstItem) {
 	b.mu.Lock()
@@ -69,12 +76,37 @@ func (b *burstBuffer) add(key string, it burstItem) {
 	b.items[key] = append(b.items[key], it)
 }
 
-func (b *burstBuffer) take(key string) []burstItem {
+// beginOrQueue tenta assumir o processamento da chave. Se já há um Handle em
+// andamento para ela, retorna nil (as mensagens ficam no buffer e serão pegas
+// pelo loop atual). Senão marca como em processamento e devolve os itens.
+func (b *burstBuffer) beginOrQueue(key string) []burstItem {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := b.items[key]
+	if b.processing[key] {
+		return nil
+	}
+	items := b.items[key]
+	if len(items) == 0 {
+		return nil
+	}
 	delete(b.items, key)
-	return out
+	b.processing[key] = true
+	return items
+}
+
+// next é chamado ao terminar um Handle. Se chegaram mensagens novas durante o
+// processamento, devolve-as (o loop continua, mantendo o lock). Senão libera a
+// chave e retorna nil.
+func (b *burstBuffer) next(key string) []burstItem {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	items := b.items[key]
+	if len(items) == 0 {
+		delete(b.processing, key)
+		return nil
+	}
+	delete(b.items, key)
+	return items
 }
 
 // ---------------------------------------------------------------------------
@@ -264,27 +296,35 @@ func (s *Server) processInbound(body []byte) {
 	}
 }
 
-// flushBurst combina as mensagens acumuladas de uma rajada em um único Handle.
+// flushBurst processa a rajada acumulada serializando por conversa. Enquanto um
+// Handle roda (~LLM), novas mensagens da mesma conversa ficam no buffer e são
+// processadas numa única continuação ao final — sem respostas concorrentes.
 func (s *Server) flushBurst(ctx context.Context, key string) {
-	items := s.burst.take(key)
-	if len(items) == 0 {
+	items := s.burst.beginOrQueue(key)
+	if items == nil {
+		// Nada a fazer agora: ou já está sendo processado (as mensagens ficam
+		// no buffer para o loop atual pegar), ou não há itens.
 		return
 	}
 
-	combined := combineInbound(items)
-	if err := s.engine.Handle(ctx, combined); err != nil {
-		s.logger.Error("engine.Handle falhou", "wamid", combined.ProviderMessageID, "err", err)
-		for _, it := range items {
-			if markErr := s.webhook.MarkFailed(ctx, it.eventID, err.Error()); markErr != nil {
-				s.logger.Error("webhook.MarkFailed falhou", "id", it.eventID, "err", markErr)
+	for items != nil {
+		combined := combineInbound(items)
+		if err := s.engine.Handle(ctx, combined); err != nil {
+			s.logger.Error("engine.Handle falhou", "wamid", combined.ProviderMessageID, "err", err)
+			for _, it := range items {
+				if markErr := s.webhook.MarkFailed(ctx, it.eventID, err.Error()); markErr != nil {
+					s.logger.Error("webhook.MarkFailed falhou", "id", it.eventID, "err", markErr)
+				}
+			}
+		} else {
+			for _, it := range items {
+				if markErr := s.webhook.MarkDone(ctx, it.eventID); markErr != nil {
+					s.logger.Error("webhook.MarkDone falhou", "id", it.eventID, "err", markErr)
+				}
 			}
 		}
-		return
-	}
-	for _, it := range items {
-		if markErr := s.webhook.MarkDone(ctx, it.eventID); markErr != nil {
-			s.logger.Error("webhook.MarkDone falhou", "id", it.eventID, "err", markErr)
-		}
+		// Pega mensagens que chegaram durante o Handle (continua) ou libera a chave.
+		items = s.burst.next(key)
 	}
 }
 
