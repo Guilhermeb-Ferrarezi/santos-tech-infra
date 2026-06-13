@@ -119,6 +119,10 @@ func (s *Server) handleMFAEmail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
+	if !isValidChallenge(body.Challenge) {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
+		return
+	}
 	uid, ok := s.challengeUser(r.Context(), body.Challenge)
 	if !ok {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
@@ -142,6 +146,10 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
+		return
+	}
+	if !isValidChallenge(body.Challenge) {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
 		return
 	}
 	uid, ok := s.challengeUser(r.Context(), body.Challenge)
