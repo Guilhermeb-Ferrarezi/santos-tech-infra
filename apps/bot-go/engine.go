@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,6 +26,8 @@ type Responder interface {
 type ChatSender interface {
 	SendMessage(ctx context.Context, msg OutboundMessage) (providerMessageID string, err error)
 	SendText(ctx context.Context, to, text string) error
+	// SendTypingIndicator exibe "digitando…" para a mensagem inbound informada.
+	SendTypingIndicator(ctx context.Context, messageID string) error
 }
 
 // EventEmitter grava domain events no outbox (dentro da transação corrente).
@@ -273,7 +276,10 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		if e.deps.Broadcast != nil {
 			e.deps.Broadcast(WSEvent{Type: "conversation.processing", ConversationID: conv.ID})
 		}
+		// Mostra "digitando…" no WhatsApp enquanto o LLM pensa.
+		stopTyping := e.startTypingIndicator(ctx, inbound.ProviderMessageID)
 		respOut, llmErr := e.deps.Responder.Respond(ctx, conv, convCtx, cfg, inboundText)
+		stopTyping()
 		if llmErr != nil {
 			return fmt.Errorf("engine.Handle (responder): %w", llmErr)
 		}
@@ -643,6 +649,41 @@ func (e *ConversationEngine) executeClientActions(ctx context.Context, inbound I
 		}
 		log.Info("clientAction: resposta enviada ao cliente", "pendingID", pq.ID, "conv", pq.ConversationID)
 	}
+}
+
+// startTypingIndicator exibe "digitando…" no WhatsApp e o mantém vivo (a API
+// expira em ~25s) reenviando a cada 20s, até a função de parada ser chamada.
+// Retorna uma função idempotente para encerrar o indicador.
+func (e *ConversationEngine) startTypingIndicator(ctx context.Context, messageID string) func() {
+	if e.deps.Sender == nil || messageID == "" {
+		return func() {}
+	}
+
+	send := func() {
+		if err := e.deps.Sender.SendTypingIndicator(ctx, messageID); err != nil {
+			e.deps.Logger.Debug("typing indicator falhou", "err", err)
+		}
+	}
+	send() // imediato
+
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				send()
+			}
+		}
+	}()
+
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }) }
 }
 
 func applyTransition(current ConversationState, output ResponderOutput) ConversationState {

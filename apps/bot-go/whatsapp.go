@@ -63,6 +63,45 @@ func (s *WhatsAppSender) SendText(ctx context.Context, to, text string) error {
 	return err
 }
 
+// SendTypingIndicator marca a mensagem como lida e exibe o indicador "digitando…"
+// no WhatsApp do destinatário por até 25s (ou até o bot enviar a resposta).
+// Best-effort: usado enquanto o LLM processa. Resposta da API é {success:true}.
+func (s *WhatsAppSender) SendTypingIndicator(ctx context.Context, messageID string) error {
+	if messageID == "" {
+		return nil
+	}
+	body := map[string]any{
+		"messaging_product": "whatsapp",
+		"status":            "read",
+		"message_id":        messageID,
+		"typing_indicator":  map[string]any{"type": "text"},
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("whatsapp: marshal typing: %w", err)
+	}
+
+	url := fmt.Sprintf("https://graph.facebook.com/v21.0/%s/messages", s.phoneNumberID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("whatsapp: new typing request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+s.accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("whatsapp: typing http do: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("whatsapp: typing status %d: %s", resp.StatusCode, string(raw))
+	}
+	return nil
+}
+
 func (s *WhatsAppSender) post(ctx context.Context, body map[string]any) (string, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
