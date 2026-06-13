@@ -52,7 +52,19 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("\n")
 	sb.WriteString("Regras de uso da Base de Conhecimento e busca na web:\n")
 	sb.WriteString("1. SEMPRE verifique primeiro a KB acima. Se a informação estiver lá, responda diretamente — sem chamar nenhuma ferramenta.\n")
-	sb.WriteString("2. Só use ferramenta web se a KB não tiver a informação. Use APENAS WebFetch com URLs específicas: https://santos-tech.com ou https://santos-tech.com/cursos. NÃO use ToolSearch, WebSearch ou qualquer busca genérica.\n")
+	sb.WriteString("2. Só use ferramenta web se a KB não tiver a informação. Use APENAS WebFetch e SOMENTE nestas páginas oficiais do site (escolha a mais provável de conter a resposta):\n")
+	if len(cfg.AllowedWebURLs) > 0 {
+		max := len(cfg.AllowedWebURLs)
+		if max > 60 {
+			max = 60
+		}
+		for _, u := range cfg.AllowedWebURLs[:max] {
+			fmt.Fprintf(&sb, "   - %s\n", u)
+		}
+	} else {
+		sb.WriteString("   - https://santos-tech.com\n")
+	}
+	sb.WriteString("   NÃO busque nenhuma URL fora desta lista e não faça busca genérica na web (WebSearch).\n")
 	sb.WriteString("3. Se encontrou via WebFetch: responda com a informação. Marque answeredFromKb: false, handoff: false, answered: true.\n")
 	sb.WriteString("4. Se NÃO encontrou em lugar nenhum (KB nem WebFetch): marque handoff: true e diga: \"Não tenho essa informação agora, mas posso te conectar com nossa equipe.\"\n")
 	sb.WriteString("5. Nunca invente dados. Se tiver dúvida sobre a veracidade do que encontrou na web, prefira o handoff.\n")

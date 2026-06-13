@@ -76,7 +76,8 @@ func main() {
 	pending := NewPendingQuestionRepo(pool)
 
 	// 8. Instancia AgentGoClient (Responder)
-	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret)
+	sitemapCache := NewSitemapCache(cfg.SiteURL)
+	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret, sitemapCache)
 
 	// 9. Instancia WhatsAppSender
 	sender := NewWhatsAppSender(cfg.MetaAccessToken, cfg.MetaPhoneNumberID)

@@ -119,6 +119,8 @@ type TenantConfig struct {
 
 	// Transient — não vem do banco; setado pelo engine antes de chamar o Responder.
 	IsAdminConversation bool
+	// AllowedWebURLs — páginas (do sitemap) que o bot pode consultar via WebFetch.
+	AllowedWebURLs []string
 }
 
 // IsAdminNumber retorna true se o telefone for de um administrador (lista 0016,

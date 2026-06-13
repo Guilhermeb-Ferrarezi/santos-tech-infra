@@ -26,6 +26,9 @@ type Config struct {
 	AgentGoURL    string
 	AgentGoSecret string
 
+	// Site oficial — fonte das rotas que o bot pode consultar (via sitemap.xml).
+	SiteURL string
+
 	// Notificações admin
 	AdminWhatsAppNumber string // E.164, ex: 5516991445664
 
@@ -62,6 +65,8 @@ func LoadConfig() Config {
 
 		AgentGoURL:    strings.TrimRight(getEnv("AGENT_GO_URL", "https://api.santos-tech.com"), "/"),
 		AgentGoSecret: mustEnv("AGENT_GO_SECRET"),
+
+		SiteURL: strings.TrimRight(getEnv("SITE_URL", "https://santos-tech.com"), "/"),
 
 		AdminWhatsAppNumber: getEnv("ADMIN_WHATSAPP_NUMBER", ""),
 
