@@ -30,8 +30,11 @@ type Config struct {
 	SiteURL string
 
 	// Notion — agendamento de aulas (token de integração escopado + base de agenda).
-	NotionToken      string
-	NotionAgendaDBID string
+	// NotionExperimentalDSID: data source ("Agenda — Aulas Experimentais"). O bot lê
+	// os horários ocupados e grava os agendamentos AQUI — separado da agenda de aulas
+	// regulares, pra não confundir com quem já é aluno.
+	NotionToken            string
+	NotionExperimentalDSID string
 
 	// Evolution API — captura de leads do número não-oficial (webhook).
 	EvolutionWebhookSecret string
@@ -78,8 +81,9 @@ func LoadConfig() Config {
 
 		SiteURL: strings.TrimRight(getEnv("SITE_URL", "https://santos-tech.com"), "/"),
 
-		NotionToken:      getEnv("NOTION_TOKEN", ""),
-		NotionAgendaDBID: getEnv("NOTION_AGENDA_DB_ID", "1e1c30d6-77df-44dd-8f2f-6889777de5cc"),
+		NotionToken: getEnv("NOTION_TOKEN", ""),
+		// Data source "Agenda — Aulas Experimentais" (database multi-source 37ef7f42…80bc).
+		NotionExperimentalDSID: getEnv("NOTION_EXPERIMENTAL_AGENDA_DS_ID", "37ef7f42-1ce5-8044-bcd2-000b3efd7f76"),
 
 		EvolutionWebhookSecret: getEnv("EVOLUTION_WEBHOOK_SECRET", ""),
 		EvolutionAPIURL:        strings.TrimRight(getEnv("EVOLUTION_API_URL", ""), "/"),

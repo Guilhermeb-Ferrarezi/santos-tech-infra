@@ -829,19 +829,25 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 
 		day := firstNonEmpty(act.Day, pb.ProposedDay)
 		tm := firstNonEmpty(act.Time, pb.ProposedTime)
-		period := firstNonEmpty(act.Period, pb.ProposedPeriod)
 
 		switch act.Action {
 		case "confirm":
-			// Grava no Notion (se configurado).
+			// Grava no Notion (data source "Agenda — Aulas Experimentais"), se configurado.
 			var notionErr error
 			if e.deps.Notion != nil && e.deps.Notion.Enabled() {
+				// Converte o dia/hora coletados ("terça 19h30") numa data concreta.
+				// Se não der pra resolver, grava sem data e marca Status "Confirmar"
+				// pro admin completar manualmente.
+				dataHora, resolved := ResolveBookingDateTime(day, tm, time.Now())
+				status := "Agendada"
+				if !resolved {
+					status = "Confirmar"
+				}
 				notionErr = e.deps.Notion.CreateBooking(ctx, Booking{
-					Title:    bookingTitle(*pb),
-					Dia:      day,
-					Horario:  tm,
-					Periodo:  period,
-					Conteudo: pb.Course,
+					Aluno:    firstNonEmpty(pb.ClientName, pb.ClientPhone),
+					WhatsApp: pb.ClientPhone,
+					DataHora: dataHora,
+					Status:   status,
 				})
 				if notionErr != nil {
 					log.Error("bookingAction: falha ao gravar no Notion", "id", pb.ID, "err", notionErr)
@@ -922,16 +928,6 @@ func (e *ConversationEngine) sendClientReply(ctx context.Context, inbound Inboun
 		e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: convID})
 	}
 	return err
-}
-
-// bookingTitle monta o título da aula gravada no Notion.
-func bookingTitle(pb PendingBooking) string {
-	who := firstNonEmpty(pb.ClientName, pb.ClientPhone)
-	label := "Aula experimental"
-	if pb.Kind == "individual" {
-		label = "Aula individual"
-	}
-	return label + " — " + who
 }
 
 // courseSuffix devolve ", curso X" quando há curso, ou string vazia.

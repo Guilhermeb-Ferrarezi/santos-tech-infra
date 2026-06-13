@@ -75,22 +75,22 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("Você pode ajudar o cliente a agendar uma AULA EXPERIMENTAL (gratuita) ou uma AULA INDIVIDUAL de adulto.\n")
 	sb.WriteString("Horário de funcionamento: Seg–Sex das 8h às 22h, Sáb das 8h às 18h.\n")
 	if len(cfg.Schedule) > 0 {
-		sb.WriteString("Horários JÁ OCUPADOS (não proponha estes):\n")
+		sb.WriteString("Aulas experimentais JÁ AGENDADAS (não proponha estes horários):\n")
 		for _, e := range cfg.Schedule {
 			line := "- "
-			if e.Dia != "" {
-				line += e.Dia + " "
+			if e.Display != "" {
+				line += e.Display + " "
 			}
-			if e.Horario != "" {
-				line += e.Horario + " "
+			if e.Aluno != "" {
+				line += "— " + e.Aluno + " "
 			}
 			if e.Professor != "" {
 				line += "(prof. " + e.Professor + ") "
 			}
-			if e.Conteudo != "" {
-				line += "— " + e.Conteudo
+			if e.Status != "" {
+				line += "[" + e.Status + "]"
 			}
-			sb.WriteString(line + "\n")
+			sb.WriteString(strings.TrimRight(line, " ") + "\n")
 		}
 	}
 	sb.WriteString("Fluxo de agendamento:\n")

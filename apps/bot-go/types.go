@@ -126,25 +126,23 @@ type TenantConfig struct {
 	Schedule []ScheduleEntry
 }
 
-// ScheduleEntry — uma aula já agendada lida da base "Agenda de Aulas" do Notion.
+// ScheduleEntry — uma aula experimental já agendada, lida do data source
+// "Agenda — Aulas Experimentais" do Notion (horários ocupados).
 type ScheduleEntry struct {
-	Aula      string
-	Dia       string
-	Horario   string
-	Periodo   string
-	Professor string
-	Conteudo  string
-	Aluno     string
+	Aluno     string // Aluno/Responsável (title)
+	DataHora  string // ISO 8601 (start do campo "Data e hora")
+	Display   string // formatado pra humano, ex.: "ter 17/06 às 19:30"
+	Status    string // Agendada | Confirmar | Em andamento | Feita | Faltou | Remarcou
+	Professor string // Professor(a) (person) — best-effort, pode vir vazio
+	WhatsApp  string
 }
 
-// Booking — dados para gravar uma nova aula na agenda do Notion.
+// Booking — dados para gravar uma aula experimental na agenda do Notion.
 type Booking struct {
-	Title    string // ex.: "Aula experimental — João"
-	Dia      string
-	Horario  string
-	Periodo  string
-	Data     string // YYYY-MM-DD, opcional
-	Conteudo string // opcional
+	Aluno    string // Aluno/Responsável (title)
+	WhatsApp string // telefone do cliente (E.164 ou como veio)
+	DataHora string // ISO 8601 com hora; vazio = não resolvido (cai pra Status "Confirmar")
+	Status   string // "Agendada" (com data) | "Confirmar" (sem data resolvida)
 }
 
 // SchedulingRequest — pedido de agendamento detectado pelo LLM na conversa do cliente.
