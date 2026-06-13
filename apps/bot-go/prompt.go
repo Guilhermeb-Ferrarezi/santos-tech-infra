@@ -117,7 +117,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("  \"citedEntryIds\": [],\n")
 	sb.WriteString("  \"handoff\": false,\n")
 	sb.WriteString("  \"smalltalk\": false,\n")
-	sb.WriteString("  \"schedulingRequest\": {\"kind\":\"experimental\",\"studentName\":\"...\",\"age\":0,\"course\":\"...\",\"proposedDay\":\"20/06\",\"proposedTime\":\"19h30\",\"proposedPeriod\":\"Noite\",\"notes\":\"...\"},\n")
+	sb.WriteString("  \"schedulingRequest\": {\"kind\":\"experimental\",\"studentName\":\"...\",\"age\":0,\"course\":\"...\",\"proposedDay\":\"quinta\",\"proposedDate\":\"2026-07-30\",\"proposedTime\":\"19h30\",\"proposedPeriod\":\"Noite\",\"notes\":\"...\"},\n")
 	sb.WriteString("  \"scheduledContact\": {\"rawPhrase\":\"...\",\"resolvedDate\":\"YYYY-MM-DD\",\"confidence\":0.9},\n")
 	sb.WriteString("  \"quotedReplies\": [{\"bubble\":0,\"ref\":\"m2\"}]\n")
 	sb.WriteString("}\n")
@@ -134,7 +134,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("    • O problema está claramente além da sua capacidade de resolver.\n")
 	sb.WriteString("  Quando handoff=true, o último balão DEVE conter uma mensagem como: \"Não tenho essa informação agora, mas posso te conectar com nossa equipe. Posso ajudar com mais alguma coisa?\"\n")
 	sb.WriteString("- \"smalltalk\"    : true quando a mensagem do cliente for apenas saudação, agradecimento, despedida ou conversa fiada — SEM pergunta factual sobre o negócio (ex.: \"oi\", \"bom dia\", \"obrigado\", \"blz\"). false quando houver uma pergunta real. Serve para não registrar conversa fiada como lacuna de conhecimento.\n")
-	sb.WriteString("- \"schedulingRequest\": preencha SOMENTE quando o cliente quiser agendar e você já tiver um horário proposto. kind: \"experimental\" ou \"individual\". Inclua studentName, age (0 se adulto/não informado), course, proposedDay, proposedTime (ex.: \"19h30\"), proposedPeriod (Manhã/Tarde/Noite) e notes. IMPORTANTE: proposedDay deve ser a DATA CONCRETA no formato DD/MM (ex.: \"20/06\") — calcule a data a partir da data atual informada acima; só use o nome do dia (\"Sábado\") se realmente não souber a data. Omita o campo inteiro se não for agendamento.\n")
+	sb.WriteString("- \"schedulingRequest\": preencha SOMENTE quando o cliente quiser agendar e você já tiver um horário proposto. kind: \"experimental\" ou \"individual\". Inclua studentName, age (0 se adulto/não informado), course, proposedDay, proposedDate, proposedTime (ex.: \"19h30\"), proposedPeriod (Manhã/Tarde/Noite) e notes. CRÍTICO: \"proposedDate\" deve ser a DATA EXATA no formato YYYY-MM-DD que você está propondo — CALCULE a partir da data atual informada acima (ex.: cliente diz \"30 de julho\" → \"2026-07-30\"; \"sábado que vem\" → a data daquele sábado). SEMPRE preencha proposedDate; é ela que define o dia gravado. \"proposedDay\" é só o rótulo humano (\"quinta\"). Omita o campo inteiro se não for agendamento.\n")
 	sb.WriteString("- \"scheduledContact\": preencha SOMENTE se o cliente pediu para ser contatado numa data futura. Campos: rawPhrase (frase exata), resolvedDate (YYYY-MM-DD), confidence (0.0–1.0). Omita o campo inteiro se não aplicável.\n")
 	sb.WriteString("- \"quotedReplies\": array de {bubble: índice-0-based, ref: \"mN\"} quando um balão responde diretamente a uma mensagem anterior. Omita o campo inteiro se não aplicável.\n")
 	sb.WriteString("\n")
@@ -310,11 +310,8 @@ func buildAdminPrompt(cfg TenantConfig, context ConversationContext, inboundText
 	if len(context.PendingBookings) > 0 {
 		sb.WriteString("## Agendamentos aguardando confirmação\n")
 		for _, b := range context.PendingBookings {
-			who := b.ClientName
-			if who == "" {
-				who = b.ClientPhone
-			}
-			line := fmt.Sprintf("- id: %s | %s | cliente: %s", b.ID, b.Kind, who)
+			// Nome informado na conversa + perfil do WhatsApp, ex.: "Guilherme (moto da apple)".
+			line := fmt.Sprintf("- id: %s | %s | cliente: %s", b.ID, b.Kind, bookingAluno(b))
 			if b.Course != "" {
 				line += " | curso: " + b.Course
 			}

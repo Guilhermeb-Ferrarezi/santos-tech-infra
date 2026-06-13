@@ -151,7 +151,8 @@ type SchedulingRequest struct {
 	StudentName    string
 	Age            int
 	Course         string
-	ProposedDay    string
+	ProposedDay    string // rótulo humano (ex.: "quinta" ou "30/07")
+	ProposedDate   string // data exata ISO YYYY-MM-DD calculada pelo LLM (preferida)
 	ProposedTime   string
 	ProposedPeriod string
 	Notes          string
@@ -177,6 +178,7 @@ type PendingBooking struct {
 	Kind           string
 	Course         string
 	ProposedDay    string
+	ProposedDate   string // data exata ISO YYYY-MM-DD (preferida na hora de gravar). Ver migration 0025.
 	ProposedTime   string
 	ProposedPeriod string
 	Age            int

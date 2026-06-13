@@ -973,10 +973,10 @@ func (r *PendingBookingRepo) Insert(ctx context.Context, tx pgx.Tx, b PendingBoo
 	_, err := tx.Exec(ctx, `
 		INSERT INTO pending_booking
 		  (tenant_id, conversation_id, client_phone, client_name, student_name, kind, course,
-		   proposed_day, proposed_time, proposed_period, age, notes, channel, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'open')
+		   proposed_day, proposed_date, proposed_time, proposed_period, age, notes, channel, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'open')
 	`, b.TenantID, b.ConversationID, b.ClientPhone, b.ClientName, b.StudentName, b.Kind, b.Course,
-		b.ProposedDay, b.ProposedTime, b.ProposedPeriod, agePtr, b.Notes, channel)
+		b.ProposedDay, b.ProposedDate, b.ProposedTime, b.ProposedPeriod, agePtr, b.Notes, channel)
 	if err != nil {
 		return fmt.Errorf("PendingBookingRepo.Insert: %w", err)
 	}
@@ -987,7 +987,7 @@ func (r *PendingBookingRepo) Insert(ctx context.Context, tx pgx.Tx, b PendingBoo
 func (r *PendingBookingRepo) ListOpen(ctx context.Context, tx pgx.Tx, tenantID TenantID) ([]PendingBooking, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id, conversation_id, client_phone, client_name, COALESCE(student_name, ''), kind, course,
-		       proposed_day, proposed_time, proposed_period, COALESCE(age, 0), notes, status, COALESCE(channel, 'whatsapp'), created_at
+		       proposed_day, COALESCE(proposed_date, ''), proposed_time, proposed_period, COALESCE(age, 0), notes, status, COALESCE(channel, 'whatsapp'), created_at
 		FROM pending_booking
 		WHERE tenant_id = $1 AND status = 'open'
 		ORDER BY created_at
@@ -1001,7 +1001,7 @@ func (r *PendingBookingRepo) ListOpen(ctx context.Context, tx pgx.Tx, tenantID T
 	for rows.Next() {
 		b := PendingBooking{TenantID: tenantID}
 		if err := rows.Scan(&b.ID, &b.ConversationID, &b.ClientPhone, &b.ClientName, &b.StudentName, &b.Kind, &b.Course,
-			&b.ProposedDay, &b.ProposedTime, &b.ProposedPeriod, &b.Age, &b.Notes, &b.Status, &b.Channel, &b.CreatedAt); err != nil {
+			&b.ProposedDay, &b.ProposedDate, &b.ProposedTime, &b.ProposedPeriod, &b.Age, &b.Notes, &b.Status, &b.Channel, &b.CreatedAt); err != nil {
 			return nil, fmt.Errorf("PendingBookingRepo.ListOpen scan: %w", err)
 		}
 		out = append(out, b)
@@ -1014,11 +1014,11 @@ func (r *PendingBookingRepo) Get(ctx context.Context, tx pgx.Tx, tenantID Tenant
 	b := PendingBooking{TenantID: tenantID, ID: id}
 	err := tx.QueryRow(ctx, `
 		SELECT conversation_id, client_phone, client_name, COALESCE(student_name, ''), kind, course,
-		       proposed_day, proposed_time, proposed_period, COALESCE(age, 0), notes, status, COALESCE(channel, 'whatsapp'), created_at
+		       proposed_day, COALESCE(proposed_date, ''), proposed_time, proposed_period, COALESCE(age, 0), notes, status, COALESCE(channel, 'whatsapp'), created_at
 		FROM pending_booking
 		WHERE tenant_id = $1 AND id = $2 AND status = 'open'
 	`, tenantID, id).Scan(&b.ConversationID, &b.ClientPhone, &b.ClientName, &b.StudentName, &b.Kind, &b.Course,
-		&b.ProposedDay, &b.ProposedTime, &b.ProposedPeriod, &b.Age, &b.Notes, &b.Status, &b.Channel, &b.CreatedAt)
+		&b.ProposedDay, &b.ProposedDate, &b.ProposedTime, &b.ProposedPeriod, &b.Age, &b.Notes, &b.Status, &b.Channel, &b.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

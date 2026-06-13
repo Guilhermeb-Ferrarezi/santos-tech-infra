@@ -540,6 +540,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 				Kind:           sr.Kind,
 				Course:         sr.Course,
 				ProposedDay:    sr.ProposedDay,
+				ProposedDate:   sr.ProposedDate,
 				ProposedTime:   sr.ProposedTime,
 				ProposedPeriod: sr.ProposedPeriod,
 				Age:            sr.Age,
@@ -833,13 +834,15 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 
 		switch act.Action {
 		case "confirm":
+			// Data exata: prioriza o override do admin, depois a data ISO que o LLM
+			// calculou (proposedDate), e só por último o rótulo ("quinta") resolvido.
+			// Se nada resolver, grava sem data e marca Status "Confirmar" pro admin.
+			dateInput := firstNonEmpty(act.Day, pb.ProposedDate, pb.ProposedDay)
+			dataHora, resolved := ResolveBookingDateTime(dateInput, tm, time.Now())
+
 			// Grava no Notion (data source "Agenda — Aulas Experimentais"), se configurado.
 			var notionErr error
 			if e.deps.Notion != nil && e.deps.Notion.Enabled() {
-				// Converte o dia/hora coletados ("terça 19h30") numa data concreta.
-				// Se não der pra resolver, grava sem data e marca Status "Confirmar"
-				// pro admin completar manualmente.
-				dataHora, resolved := ResolveBookingDateTime(day, tm, time.Now())
 				status := "Agendada"
 				if !resolved {
 					status = "Confirmar"
@@ -868,7 +871,12 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 					log.Error("bookingAction: falha ao avançar lead", "id", pb.ID, "err", err)
 				}
 			}
-			msg := fmt.Sprintf("Prontinho! Sua aula ficou marcada para %s às %s. Qualquer coisa, é só me chamar. 😊", day, tm)
+			// Prefere a data resolvida ("qui 30/07 às 19:00") na mensagem; senão o rótulo.
+			quando := fmt.Sprintf("%s às %s", day, tm)
+			if resolved {
+				quando = formatBRDateTime(dataHora)
+			}
+			msg := fmt.Sprintf("Prontinho! Sua aula ficou marcada para %s. Qualquer coisa, é só me chamar. 😊", quando)
 			if err := e.sendClientReply(ctx, inbound, pb.ConversationID, pb.ClientPhone, pb.Channel, "booking:"+pb.ID+":confirm", msg); err != nil {
 				log.Error("bookingAction: falha ao avisar cliente", "id", pb.ID, "err", err)
 			}

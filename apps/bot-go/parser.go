@@ -98,6 +98,7 @@ func parseSchedulingRequest(raw json.RawMessage) *SchedulingRequest {
 		Age            int    `json:"age"`
 		Course         string `json:"course"`
 		ProposedDay    string `json:"proposedDay"`
+		ProposedDate   string `json:"proposedDate"`
 		ProposedTime   string `json:"proposedTime"`
 		ProposedPeriod string `json:"proposedPeriod"`
 		Notes          string `json:"notes"`
@@ -106,12 +107,20 @@ func parseSchedulingRequest(raw json.RawMessage) *SchedulingRequest {
 		return nil
 	}
 	// Precisa de pelo menos um horário proposto para virar pendência.
-	if s.ProposedDay == "" && s.ProposedTime == "" {
+	if s.ProposedDay == "" && s.ProposedDate == "" && s.ProposedTime == "" {
 		return nil
 	}
 	kind := s.Kind
 	if kind != "individual" {
 		kind = "experimental"
+	}
+	// Só aceita proposedDate no formato ISO YYYY-MM-DD; senão descarta (cai no
+	// resolvedor a partir do proposedDay).
+	proposedDate := s.ProposedDate
+	if proposedDate != "" {
+		if _, err := time.Parse("2006-01-02", proposedDate); err != nil {
+			proposedDate = ""
+		}
 	}
 	return &SchedulingRequest{
 		Kind:           kind,
@@ -119,6 +128,7 @@ func parseSchedulingRequest(raw json.RawMessage) *SchedulingRequest {
 		Age:            s.Age,
 		Course:         s.Course,
 		ProposedDay:    s.ProposedDay,
+		ProposedDate:   proposedDate,
 		ProposedTime:   s.ProposedTime,
 		ProposedPeriod: s.ProposedPeriod,
 		Notes:          s.Notes,
