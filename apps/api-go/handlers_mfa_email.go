@@ -22,15 +22,18 @@ func mfaEmailAcctCDKey(uid int64) string { return fmt.Sprintf("mfa_email_acct_cd
 // sendChallengeEmailCode gera e envia o código do 2º passo preso a um challenge de
 // login. Reusado pelo login por senha, pelo OAuth (método preferido = email) e pelo
 // reenvio explícito (/auth/mfa/email).
-func (s *Server) sendChallengeEmailCode(ctx context.Context, challenge, email string) {
+func (s *Server) sendChallengeEmailCode(ctx context.Context, challenge, email string) error {
 	code := emailCode()
-	s.rdb.Set(ctx, "mfa_email:"+challenge, code, 10*time.Minute)
+	if err := s.rdb.Set(ctx, "mfa_email:"+challenge, code, 10*time.Minute).Err(); err != nil {
+		return err
+	}
 	html := emailCodeHTML(code, "Use o código abaixo para concluir o seu login:")
 	go func(to string) {
 		c, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
 		_ = s.email.send(c, to, "Seu código de verificação — Santos Tech", html)
 	}(email)
+	return nil
 }
 
 // mfaMethods devolve os métodos de 2º fator disponíveis para o usuário.
@@ -133,7 +136,10 @@ func (s *Server) handleMFAEmailEnable(w http.ResponseWriter, r *http.Request) {
 		for i, c := range codes {
 			hashes[i] = sha256Hex(c)
 		}
-		_ = s.deleteRecoveryCodes(r.Context(), uid)
+		if err := s.deleteRecoveryCodes(r.Context(), uid); err != nil {
+			writeErr(w, err)
+			return
+		}
 		if err := s.insertRecoveryCodes(r.Context(), uid, hashes); err != nil {
 			writeErr(w, err)
 			return

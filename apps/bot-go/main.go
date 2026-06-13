@@ -74,12 +74,16 @@ func main() {
 	scheduled := NewScheduledContactRepo(pool)
 	logRepo := NewProcessingLogRepo(pool)
 	pending := NewPendingQuestionRepo(pool)
+	bookings := NewPendingBookingRepo(pool)
+	notionClient := NewNotionClient(cfg.NotionToken, cfg.NotionAgendaDBID)
 
 	// 8. Instancia AgentGoClient (Responder)
-	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret)
+	sitemapCache := NewSitemapCache(cfg.SiteURL)
+	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret, sitemapCache, notionClient)
 
-	// 9. Instancia WhatsAppSender
+	// 9. Instancia WhatsAppSender + cliente Evolution (canal não-oficial)
 	sender := NewWhatsAppSender(cfg.MetaAccessToken, cfg.MetaPhoneNumberID)
+	evolutionClient := NewEvolutionClient(cfg.EvolutionAPIURL, cfg.EvolutionAPIKey, cfg.EvolutionInstance)
 
 	// 10. Instancia WSHub e inicia loop em background
 	hub := NewWSHub(logger, cfg.DashCORSOrigin)
@@ -102,6 +106,31 @@ func main() {
 		LogRepo:       logRepo,
 		TenantCfgRepo: tenantCfg,
 		Pending:       pending,
+		Bookings:      bookings,
+		Notion:        notionClient,
+	})
+
+	// 11b. Engine para o canal Evolution: mesmos repos, mas responde via Evolution.
+	// ForceBotEnabled — o gate é o toggle (evolution_bot_reply_enabled), não o whitelist.
+	evoEngine := NewConversationEngine(EngineDeps{
+		TenantID:        cfg.TenantID,
+		DB:              pool,
+		Contacts:        contacts,
+		Convs:           convs,
+		Messages:        messages,
+		Leads:           leads,
+		Config:          tenantCfg,
+		Responder:       agentClient,
+		Sender:          evolutionClient,
+		Emitter:         outbox,
+		Logger:          logger,
+		Broadcast:       hub.Broadcast,
+		LogRepo:         logRepo,
+		TenantCfgRepo:   tenantCfg,
+		Pending:         pending,
+		Bookings:        bookings,
+		Notion:          notionClient,
+		ForceBotEnabled: true,
 	})
 
 	// 12. Instancia Worker
@@ -118,7 +147,7 @@ func main() {
 	})
 
 	// 13. Instancia Server
-	server := NewServer(cfg, engine, webhooks, pool, sender, logger, hub, logRepo)
+	server := NewServer(cfg, engine, webhooks, pool, sender, logger, hub, logRepo, evoEngine, evolutionClient)
 
 	// 14. Inicia worker em background
 	go worker.Start(ctx)

@@ -12,17 +12,22 @@ import (
 
 // AgentGoClient é o cliente HTTP para o agent-go (api.santos-tech.com).
 type AgentGoClient struct {
-	url    string
-	secret string
-	http   *http.Client
+	url     string
+	secret  string
+	http    *http.Client
+	sitemap *SitemapCache
+	notion  *NotionClient
 }
 
 // NewAgentGoClient cria um cliente com timeout de 120s (adequado para inferência).
-func NewAgentGoClient(url, secret string) *AgentGoClient {
+// sitemap fornece as URLs do site (WebFetch); notion fornece a agenda de aulas.
+func NewAgentGoClient(url, secret string, sitemap *SitemapCache, notion *NotionClient) *AgentGoClient {
 	return &AgentGoClient{
-		url:    url,
-		secret: secret,
-		http:   &http.Client{Timeout: 120 * time.Second},
+		url:     url,
+		secret:  secret,
+		http:    &http.Client{Timeout: 120 * time.Second},
+		sitemap: sitemap,
+		notion:  notion,
 	}
 }
 
@@ -43,6 +48,14 @@ type agentGoResponse struct {
 // Respond implementa a interface Responder do engine.
 // Monta o prompt completo, envia ao agent-go e parseia a resposta.
 func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx ConversationContext, cfg TenantConfig, inboundText string) (ResponderOutput, error) {
+	// Páginas que o bot pode consultar via WebFetch vêm do sitemap.xml do site.
+	if c.sitemap != nil {
+		cfg.AllowedWebURLs = c.sitemap.URLs(ctx)
+	}
+	// Agenda de aulas (Notion) para o bot propor horários de agendamento.
+	if c.notion != nil && !cfg.IsAdminConversation {
+		cfg.Schedule = c.notion.Schedule(ctx)
+	}
 	prompt := BuildPrompt(cfg, convCtx, inboundText, time.Now())
 
 	result, err := c.callAPI(ctx, agentGoRequest{Task: "raw", Brief: prompt, Model: "opus", Web: true})

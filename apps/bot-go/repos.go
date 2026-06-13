@@ -425,17 +425,18 @@ func (r *LeadRepo) FindByConversation(ctx context.Context, tenantID TenantID, co
 	return &l, nil
 }
 
-// Create cria um lead com status='open'. Usa ON CONFLICT para idempotência.
+// Create cria um lead com status='novo' (CRM). ON CONFLICT mantém o status atual
+// (idempotente — não rebaixa um lead que já avançou no funil).
 func (r *LeadRepo) Create(ctx context.Context, tx pgx.Tx, tenantID TenantID, contactID ContactID, convID ConversationID) (*Lead, error) {
 	var l Lead
 	l.TenantID = tenantID
 	l.ContactID = contactID
 	l.ConversationID = convID
-	l.Status = "open"
+	l.Status = "novo"
 
 	err := tx.QueryRow(ctx, `
 		INSERT INTO lead (tenant_id, contact_id, status)
-		VALUES ($1, $2, 'open')
+		VALUES ($1, $2, 'novo')
 		ON CONFLICT (tenant_id, contact_id) DO UPDATE SET status = lead.status
 		RETURNING id, created_at
 	`, tenantID, contactID).Scan(&l.ID, &l.CreatedAt)
@@ -443,6 +444,39 @@ func (r *LeadRepo) Create(ctx context.Context, tx pgx.Tx, tenantID TenantID, con
 		return nil, fmt.Errorf("LeadRepo.Create: %w", err)
 	}
 	return &l, nil
+}
+
+// CreateWithOrigin cria um lead (status 'novo') com a origem informada. ON CONFLICT
+// mantém o lead existente (não rebaixa nem troca a origem). Usado pela captura
+// de leads da Evolution (origin='evolution').
+func (r *LeadRepo) CreateWithOrigin(ctx context.Context, tx pgx.Tx, tenantID TenantID, contactID ContactID, origin string) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO lead (tenant_id, contact_id, status, origin)
+		VALUES ($1, $2, 'novo', $3)
+		ON CONFLICT (tenant_id, contact_id) DO NOTHING
+	`, tenantID, contactID, origin)
+	if err != nil {
+		return fmt.Errorf("LeadRepo.CreateWithOrigin: %w", err)
+	}
+	return nil
+}
+
+// SetStatusByConversation avança o status do lead vinculado a uma conversa (via
+// contact). Não rebaixa leads já em 'matriculado'/'perdido'. Usado pelo tie-in
+// de agendamento (confirmar aula → 'aula_marcada').
+func (r *LeadRepo) SetStatusByConversation(ctx context.Context, tx pgx.Tx, tenantID TenantID, convID ConversationID, status string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE lead l
+		SET status = $3, updated_at = now()
+		FROM conversation c
+		WHERE c.id = $2 AND c.tenant_id = $1
+		  AND l.tenant_id = $1 AND l.contact_id = c.contact_id
+		  AND l.status NOT IN ('matriculado', 'perdido')
+	`, tenantID, convID, status)
+	if err != nil {
+		return fmt.Errorf("LeadRepo.SetStatusByConversation: %w", err)
+	}
+	return nil
 }
 
 // ============================================================================
@@ -859,6 +893,92 @@ func (r *PendingQuestionRepo) MarkResolved(ctx context.Context, tx pgx.Tx, tenan
 	`, tenantID, id)
 	if err != nil {
 		return fmt.Errorf("PendingQuestionRepo.MarkResolved: %w", err)
+	}
+	return nil
+}
+
+// ============================================================================
+// PendingBookingRepo — agendamentos aguardando confirmação do admin (0018)
+// ============================================================================
+
+type PendingBookingRepo struct{ pool *pgxpool.Pool }
+
+func NewPendingBookingRepo(pool *pgxpool.Pool) *PendingBookingRepo {
+	return &PendingBookingRepo{pool: pool}
+}
+
+// Insert grava um agendamento proposto (status 'open').
+func (r *PendingBookingRepo) Insert(ctx context.Context, tx pgx.Tx, b PendingBooking) error {
+	var agePtr *int
+	if b.Age > 0 {
+		agePtr = &b.Age
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO pending_booking
+		  (tenant_id, conversation_id, client_phone, client_name, kind, course,
+		   proposed_day, proposed_time, proposed_period, age, notes, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'open')
+	`, b.TenantID, b.ConversationID, b.ClientPhone, b.ClientName, b.Kind, b.Course,
+		b.ProposedDay, b.ProposedTime, b.ProposedPeriod, agePtr, b.Notes)
+	if err != nil {
+		return fmt.Errorf("PendingBookingRepo.Insert: %w", err)
+	}
+	return nil
+}
+
+// ListOpen retorna os agendamentos abertos do tenant (para o prompt do admin).
+func (r *PendingBookingRepo) ListOpen(ctx context.Context, tx pgx.Tx, tenantID TenantID) ([]PendingBooking, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, conversation_id, client_phone, client_name, kind, course,
+		       proposed_day, proposed_time, proposed_period, COALESCE(age, 0), notes, status, created_at
+		FROM pending_booking
+		WHERE tenant_id = $1 AND status = 'open'
+		ORDER BY created_at
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("PendingBookingRepo.ListOpen: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PendingBooking
+	for rows.Next() {
+		b := PendingBooking{TenantID: tenantID}
+		if err := rows.Scan(&b.ID, &b.ConversationID, &b.ClientPhone, &b.ClientName, &b.Kind, &b.Course,
+			&b.ProposedDay, &b.ProposedTime, &b.ProposedPeriod, &b.Age, &b.Notes, &b.Status, &b.CreatedAt); err != nil {
+			return nil, fmt.Errorf("PendingBookingRepo.ListOpen scan: %w", err)
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// Get carrega um agendamento aberto por id (guarda de idempotência).
+func (r *PendingBookingRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID, id string) (*PendingBooking, error) {
+	b := PendingBooking{TenantID: tenantID, ID: id}
+	err := tx.QueryRow(ctx, `
+		SELECT conversation_id, client_phone, client_name, kind, course,
+		       proposed_day, proposed_time, proposed_period, COALESCE(age, 0), notes, status, created_at
+		FROM pending_booking
+		WHERE tenant_id = $1 AND id = $2 AND status = 'open'
+	`, tenantID, id).Scan(&b.ConversationID, &b.ClientPhone, &b.ClientName, &b.Kind, &b.Course,
+		&b.ProposedDay, &b.ProposedTime, &b.ProposedPeriod, &b.Age, &b.Notes, &b.Status, &b.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("PendingBookingRepo.Get: %w", err)
+	}
+	return &b, nil
+}
+
+// MarkStatus atualiza o status (confirmed | rejected) de um agendamento.
+func (r *PendingBookingRepo) MarkStatus(ctx context.Context, tx pgx.Tx, tenantID TenantID, id, status string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE pending_booking SET status = $3, updated_at = now()
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantID, id, status)
+	if err != nil {
+		return fmt.Errorf("PendingBookingRepo.MarkStatus: %w", err)
 	}
 	return nil
 }

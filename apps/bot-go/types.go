@@ -119,6 +119,71 @@ type TenantConfig struct {
 
 	// Transient — não vem do banco; setado pelo engine antes de chamar o Responder.
 	IsAdminConversation bool
+	// AllowedWebURLs — páginas (do sitemap) que o bot pode consultar via WebFetch.
+	AllowedWebURLs []string
+	// Schedule — aulas já agendadas (do Notion), injetadas no prompt do cliente
+	// para o bot propor horários livres. Vazio = agendamento desabilitado/sem dados.
+	Schedule []ScheduleEntry
+}
+
+// ScheduleEntry — uma aula já agendada lida da base "Agenda de Aulas" do Notion.
+type ScheduleEntry struct {
+	Aula      string
+	Dia       string
+	Horario   string
+	Periodo   string
+	Professor string
+	Conteudo  string
+	Aluno     string
+}
+
+// Booking — dados para gravar uma nova aula na agenda do Notion.
+type Booking struct {
+	Title    string // ex.: "Aula experimental — João"
+	Dia      string
+	Horario  string
+	Periodo  string
+	Data     string // YYYY-MM-DD, opcional
+	Conteudo string // opcional
+}
+
+// SchedulingRequest — pedido de agendamento detectado pelo LLM na conversa do cliente.
+type SchedulingRequest struct {
+	Kind           string // "experimental" | "individual"
+	StudentName    string
+	Age            int
+	Course         string
+	ProposedDay    string
+	ProposedTime   string
+	ProposedPeriod string
+	Notes          string
+}
+
+// BookingAction — ação do admin sobre um agendamento pendente.
+type BookingAction struct {
+	BookingID string
+	Action    string // "confirm" | "adjust" | "reject"
+	Day       string
+	Time      string
+	Period    string
+}
+
+// PendingBooking — agendamento aguardando confirmação do admin. Ver migration 0018.
+type PendingBooking struct {
+	ID             string
+	TenantID       TenantID
+	ConversationID ConversationID
+	ClientPhone    string
+	ClientName     string
+	Kind           string
+	Course         string
+	ProposedDay    string
+	ProposedTime   string
+	ProposedPeriod string
+	Age            int
+	Notes          string
+	Status         string // open | confirmed | rejected
+	CreatedAt      time.Time
 }
 
 // IsAdminNumber retorna true se o telefone for de um administrador (lista 0016,
@@ -215,6 +280,9 @@ type ConversationContext struct {
 	// PendingQuestions — dúvidas de clientes aguardando resposta. Injetadas
 	// SOMENTE em conversas admin, para o LLM casar a info fornecida e rascunhar.
 	PendingQuestions []PendingQuestion
+	// PendingBookings — agendamentos aguardando confirmação. Injetados SOMENTE
+	// em conversas admin, para o LLM confirmar/ajustar/rejeitar.
+	PendingBookings []PendingBooking
 }
 
 // PendingQuestion — dúvida de um cliente que o bot não soube responder (handoff),
@@ -247,17 +315,19 @@ type ToolCall struct {
 
 // ResponderOutput — saída parseada do LLM (contrato JSON do prompt).
 type ResponderOutput struct {
-	Bubbles          []string
-	Answered         bool
-	AnsweredFromKb   bool
-	CitedEntryIDs    []string
-	Handoff          bool
-	Smalltalk        bool // saudação/agradecimento/conversa fiada — não conta como gap de KB
-	ScheduledContact *ScheduledContact
-	QuotedReplies    []QuotedReply
-	ToolCalls        []ToolCall
-	KBEntry          *KBEntry       // presente quando admin fornece info para salvar na KB
-	ClientActions    []ClientAction // modo admin: rascunhos/envios para clientes pendentes
+	Bubbles           []string
+	Answered          bool
+	AnsweredFromKb    bool
+	CitedEntryIDs     []string
+	Handoff           bool
+	Smalltalk         bool // saudação/agradecimento/conversa fiada — não conta como gap de KB
+	ScheduledContact  *ScheduledContact
+	QuotedReplies     []QuotedReply
+	ToolCalls         []ToolCall
+	KBEntry           *KBEntry           // presente quando admin fornece info para salvar na KB
+	ClientActions     []ClientAction     // modo admin: rascunhos/envios para clientes pendentes
+	SchedulingRequest *SchedulingRequest // cliente: pedido de agendamento detectado
+	BookingActions    []BookingAction    // modo admin: confirmar/ajustar/rejeitar agendamentos
 }
 
 // ScheduledContact — reativação pedida pelo cliente ("me chama em julho").

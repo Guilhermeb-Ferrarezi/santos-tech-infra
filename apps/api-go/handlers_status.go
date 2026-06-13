@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -37,6 +38,7 @@ func (s *Server) checkHTTP(url string) func(ctx context.Context) error {
 			return err
 		}
 		defer res.Body.Close()
+		_, _ = io.Copy(io.Discard, res.Body) // drain so the connection can be reused
 		if res.StatusCode >= 400 {
 			return appErr(res.StatusCode, "UNHEALTHY", "status "+res.Status)
 		}

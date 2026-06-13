@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -53,7 +55,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state, returnTo, _ := strings.Cut(sc.Value, "|")
-	if state != q.Get("state") {
+	if subtle.ConstantTimeCompare([]byte(state), []byte(q.Get("state"))) != 1 {
 		fail("oauth_failed")
 		return
 	}
@@ -76,6 +78,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, res.Body) // drain so the connection can be reused
 		fail("oauth_failed")
 		return
 	}
@@ -109,7 +112,10 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if u.MFAMethod == "email" {
-			s.sendChallengeEmailCode(r.Context(), challenge, u.Email)
+			if err := s.sendChallengeEmailCode(r.Context(), challenge, u.Email); err != nil {
+				fail("oauth_failed")
+				return
+			}
 		}
 		dest := origin + "/?mfa_challenge=" + challenge + "&mfa_method=" + u.MFAMethod +
 			"&mfa_methods=" + strings.Join(mfaMethods(u), ",")

@@ -79,9 +79,7 @@ func (s *Server) handleEmailVerifyConfirm(w http.ResponseWriter, r *http.Request
 	}
 	// Teto de tentativas: o código de 6 dígitos não pode ser brute-forçável na janela.
 	attempts, _ := s.rdb.Incr(r.Context(), emailVerifyAttKey(uid)).Result()
-	if attempts == 1 {
-		s.rdb.Expire(r.Context(), emailVerifyAttKey(uid), emailVerifyTTL)
-	}
+	s.rdb.ExpireNX(r.Context(), emailVerifyAttKey(uid), emailVerifyTTL)
 	if attempts > emailVerifyMaxAttempts {
 		s.rdb.Del(r.Context(), emailVerifyKey(uid), emailVerifyAttKey(uid))
 		writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Muitas tentativas; envie outro código"))

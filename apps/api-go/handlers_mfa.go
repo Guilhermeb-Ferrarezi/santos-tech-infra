@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/base32"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,7 +28,10 @@ func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	s.rdb.Set(r.Context(), "mfa_setup:"+strconv.FormatInt(uid, 10), key.Secret(), 10*time.Minute)
+	if err := s.rdb.Set(r.Context(), "mfa_setup:"+strconv.FormatInt(uid, 10), key.Secret(), 10*time.Minute).Err(); err != nil {
+		writeErr(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"secret": key.Secret(), "otpauthUrl": key.URL()})
 }
 
@@ -61,7 +65,10 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 	for i, c := range codes {
 		hashes[i] = sha256Hex(c)
 	}
-	_ = s.deleteRecoveryCodes(r.Context(), uid)
+	if err := s.deleteRecoveryCodes(r.Context(), uid); err != nil {
+		writeErr(w, err)
+		return
+	}
 	if err := s.insertRecoveryCodes(r.Context(), uid, hashes); err != nil {
 		writeErr(w, err)
 		return
@@ -106,7 +113,9 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	_ = s.deleteRecoveryCodes(r.Context(), uid)
+	if err := s.deleteRecoveryCodes(r.Context(), uid); err != nil {
+		slog.Warn("falha ao remover recovery codes ao desativar MFA", "uid", uid, "err", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"disabled": true})
 }
 
@@ -119,6 +128,10 @@ func (s *Server) handleMFAEmail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
+	if !isValidChallenge(body.Challenge) {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
+		return
+	}
 	uid, ok := s.challengeUser(r.Context(), body.Challenge)
 	if !ok {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
@@ -129,18 +142,26 @@ func (s *Server) handleMFAEmail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido"))
 		return
 	}
-	s.sendChallengeEmailCode(r.Context(), body.Challenge, u.Email)
+	if err := s.sendChallengeEmailCode(r.Context(), body.Challenge, u.Email); err != nil {
+		writeErr(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
 
 // POST /auth/mfa/verify {challenge, code} — valida TOTP/email/recovery e emite a sessão.
 func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	var body struct {
 		Challenge string `json:"challenge"`
 		Code      string `json:"code"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
+		return
+	}
+	if !isValidChallenge(body.Challenge) {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
 		return
 	}
 	uid, ok := s.challengeUser(r.Context(), body.Challenge)
@@ -160,9 +181,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	// Teto de tentativas por challenge: sem isso, o OTP de email (6 dígitos) seria
 	// retentável até o limite por IP (burlável). Após N falhas, invalida o desafio.
 	attempts, _ := s.rdb.Incr(r.Context(), "mfa_attempts:"+body.Challenge).Result()
-	if attempts == 1 {
-		s.rdb.Expire(r.Context(), "mfa_attempts:"+body.Challenge, 10*time.Minute)
-	}
+	s.rdb.ExpireNX(r.Context(), "mfa_attempts:"+body.Challenge, 10*time.Minute)
 	if attempts > 5 {
 		s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "mfa_attempts:"+body.Challenge)
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Faça login novamente."))
@@ -212,7 +231,9 @@ func genRecoveryCodes(n int) []string {
 	enc := base32.StdEncoding.WithPadding(base32.NoPadding)
 	for i := range codes {
 		b := make([]byte, 5)
-		_, _ = rand.Read(b)
+		if _, err := rand.Read(b); err != nil {
+			panic("crypto/rand unavailable: " + err.Error())
+		}
 		codes[i] = enc.EncodeToString(b) // 8 chars A-Z2-7
 	}
 	return codes
@@ -220,7 +241,9 @@ func genRecoveryCodes(n int) []string {
 
 func emailCode() string {
 	b := make([]byte, 3)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
 	n := int(b[0])<<16 | int(b[1])<<8 | int(b[2])
 	return fmt.Sprintf("%06d", n%1000000)
 }

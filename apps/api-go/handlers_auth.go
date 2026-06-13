@@ -27,6 +27,7 @@ func (s *Server) issueSession(ctx context.Context, w http.ResponseWriter, r *htt
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Email    string `json:"email"`
 		Name     string `json:"name"`
@@ -39,6 +40,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
 	if body.Email == "" || body.Name == "" || len(body.Password) < 8 || len(body.Password) > 128 {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "email, nome e senha (entre 8 e 128 caracteres) são obrigatórios"))
+		return
+	}
+	if !emailRe.MatchString(body.Email) {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "email inválido"))
 		return
 	}
 	existing, err := s.userByEmail(r.Context(), body.Email)
@@ -76,6 +81,8 @@ const (
 )
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Identifier string `json:"identifier"`
 		Password   string `json:"password"`
@@ -96,9 +103,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if u == nil || u.LoginDisabled || u.PasswordHash == nil || !verifyPassword(body.Password, *u.PasswordHash) {
-		if cnt, _ := s.rdb.Incr(r.Context(), lockKey).Result(); cnt == 1 {
-			s.rdb.Expire(r.Context(), lockKey, loginFailWindow)
-		}
+		s.rdb.Incr(r.Context(), lockKey)
+		s.rdb.ExpireNX(r.Context(), lockKey, loginFailWindow)
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_CREDENTIALS", "Email ou senha inválidos"))
 		return
 	}
@@ -118,7 +124,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if u.MFAMethod == "email" {
-			s.sendChallengeEmailCode(r.Context(), challenge, u.Email)
+			if err := s.sendChallengeEmailCode(r.Context(), challenge, u.Email); err != nil {
+				writeErr(w, err)
+				return
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"mfaRequired": true, "challenge": challenge,
@@ -179,6 +188,7 @@ func (s *Server) allowedRedirect(raw string) bool {
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	token := ""
 	if c, err := r.Cookie("access_token"); err == nil {
 		token = c.Value
@@ -217,6 +227,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	c, err := r.Cookie("refresh_token")
 	if err != nil || c.Value == "" {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Refresh token ausente"))
