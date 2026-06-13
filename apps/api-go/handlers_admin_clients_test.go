@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestValidateOAuthClientInput(t *testing.T) {
 	cases := []struct {
@@ -31,5 +36,27 @@ func TestValidateOAuthClientInput(t *testing.T) {
 		if (err == nil) != c.ok {
 			t.Errorf("clientID=%q uris=%v: err=%v, esperava ok=%v", c.clientID, c.uris, err, c.ok)
 		}
+	}
+}
+
+func TestUpdateOAuthClientBadID(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("PATCH", "/auth/admin/oauth-clients/nao-uuid", strings.NewReader(`{}`))
+	r.SetPathValue("id", "nao-uuid")
+	s.handleUpdateOAuthClient(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}
+
+func TestDeleteOAuthClientBadID(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("DELETE", "/auth/admin/oauth-clients/nao-uuid", nil)
+	r.SetPathValue("id", "nao-uuid")
+	s.handleDeleteOAuthClient(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
 	}
 }

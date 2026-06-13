@@ -51,6 +51,7 @@ func (s *Server) sendResetEmail(to, url string) {
 }
 
 func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Token       string `json:"token"`
 		NewPassword string `json:"newPassword"`
@@ -69,7 +70,11 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_TOKEN", "Link de recuperação inválido ou expirado"))
 		return
 	}
-	uid, _ := strconv.ParseInt(idStr, 10, 64)
+	uid, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || uid <= 0 {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_TOKEN", "Link de recuperação inválido ou expirado"))
+		return
+	}
 	// Antes de gravar: se o usuário ainda não tinha senha (convite pendente),
 	// esta é a PRIMEIRA senha — manda o email de "conta ativada" depois.
 	u, err := s.userByID(r.Context(), uid)

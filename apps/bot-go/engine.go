@@ -66,6 +66,9 @@ type EngineDeps struct {
 	Bookings *PendingBookingRepo
 	// Notion — cliente para ler/gravar a agenda de aulas (agendamento).
 	Notion *NotionClient
+	// ForceBotEnabled — força o bot ativo nas conversas deste engine (ex.: canal
+	// Evolution, cujo gate é o toggle externo, não o whitelist do tenant).
+	ForceBotEnabled bool
 }
 
 // ---------------------------------------------------------------------------
@@ -158,15 +161,23 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			return fmt.Errorf("FindByChannelIdentity (conv): %w", err)
 		}
 		if convPtr == nil {
-			convPtr, err = e.deps.Convs.Create(ctx, tx, inbound.TenantID, contact.ID, chIdentity.ID, inbound.Channel, isBotEnabledFor(cfg, inbound.ExternalID))
+			convPtr, err = e.deps.Convs.Create(ctx, tx, inbound.TenantID, contact.ID, chIdentity.ID, inbound.Channel, isBotEnabledFor(cfg, inbound.ExternalID) || e.deps.ForceBotEnabled)
 			if err != nil {
 				return fmt.Errorf("Create conversation: %w", err)
 			}
 		}
 		conv = *convPtr
 
-		// d) Humano no controle → ignora
-		if !conv.BotEnabled {
+		// c2) Captura de lead (CRM): todo cliente (não-admin) que escreve vira lead.
+		// Idempotente — não rebaixa um lead que já avançou no funil.
+		if e.deps.Leads != nil && !cfg.IsAdminNumber(contactPhone) {
+			if _, err := e.deps.Leads.Create(ctx, tx, inbound.TenantID, contact.ID, conv.ID); err != nil {
+				return fmt.Errorf("Leads.Create: %w", err)
+			}
+		}
+
+		// d) Humano no controle → ignora (a menos que o engine force o bot, ex.: Evolution)
+		if !conv.BotEnabled && !e.deps.ForceBotEnabled {
 			log.Info("bot desabilitado para esta conversa, ignorando mensagem")
 			return nil
 		}
@@ -791,6 +802,14 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 				return e.deps.Bookings.MarkStatus(ctx, tx, inbound.TenantID, pb.ID, "confirmed")
 			}); err != nil {
 				log.Error("bookingAction: falha ao marcar confirmado", "id", pb.ID, "err", err)
+			}
+			// Tie-in CRM: avança o lead para 'aula_marcada'.
+			if e.deps.Leads != nil {
+				if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+					return e.deps.Leads.SetStatusByConversation(ctx, tx, inbound.TenantID, pb.ConversationID, "aula_marcada")
+				}); err != nil {
+					log.Error("bookingAction: falha ao avançar lead", "id", pb.ID, "err", err)
+				}
 			}
 			msg := fmt.Sprintf("Prontinho! Sua aula ficou marcada para %s às %s. Qualquer coisa, é só me chamar. 😊", day, tm)
 			if err := e.sendClientReply(ctx, inbound, pb.ConversationID, pb.ClientPhone, "booking:"+pb.ID+":confirm", msg); err != nil {
