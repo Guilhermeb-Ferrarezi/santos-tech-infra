@@ -74,10 +74,12 @@ func main() {
 	scheduled := NewScheduledContactRepo(pool)
 	logRepo := NewProcessingLogRepo(pool)
 	pending := NewPendingQuestionRepo(pool)
+	bookings := NewPendingBookingRepo(pool)
+	notionClient := NewNotionClient(cfg.NotionToken, cfg.NotionAgendaDBID)
 
 	// 8. Instancia AgentGoClient (Responder)
 	sitemapCache := NewSitemapCache(cfg.SiteURL)
-	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret, sitemapCache)
+	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret, sitemapCache, notionClient)
 
 	// 9. Instancia WhatsAppSender
 	sender := NewWhatsAppSender(cfg.MetaAccessToken, cfg.MetaPhoneNumberID)
@@ -103,6 +105,8 @@ func main() {
 		LogRepo:       logRepo,
 		TenantCfgRepo: tenantCfg,
 		Pending:       pending,
+		Bookings:      bookings,
+		Notion:        notionClient,
 	})
 
 	// 12. Instancia Worker

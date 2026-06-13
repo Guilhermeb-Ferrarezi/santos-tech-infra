@@ -9,16 +9,18 @@ import (
 
 // rawResponderOutput é a estrutura intermediária para unmarshal do JSON do LLM.
 type rawResponderOutput struct {
-	Bubbles          []any           `json:"bubbles"`
-	Answered         *bool           `json:"answered"`
-	AnsweredFromKb   *bool           `json:"answeredFromKb"`
-	CitedEntryIDs    []string        `json:"citedEntryIds"`
-	Handoff          bool            `json:"handoff"`
-	Smalltalk        bool            `json:"smalltalk"`
-	ScheduledContact json.RawMessage `json:"scheduledContact"`
-	QuotedReplies    json.RawMessage `json:"quotedReplies"`
-	KBEntry          *KBEntry        `json:"kbEntry"`
-	ClientActions    json.RawMessage `json:"clientActions"`
+	Bubbles           []any           `json:"bubbles"`
+	Answered          *bool           `json:"answered"`
+	AnsweredFromKb    *bool           `json:"answeredFromKb"`
+	CitedEntryIDs     []string        `json:"citedEntryIds"`
+	Handoff           bool            `json:"handoff"`
+	Smalltalk         bool            `json:"smalltalk"`
+	ScheduledContact  json.RawMessage `json:"scheduledContact"`
+	QuotedReplies     json.RawMessage `json:"quotedReplies"`
+	KBEntry           *KBEntry        `json:"kbEntry"`
+	ClientActions     json.RawMessage `json:"clientActions"`
+	SchedulingRequest json.RawMessage `json:"schedulingRequest"`
+	BookingActions    json.RawMessage `json:"bookingActions"`
 }
 
 // ParseModelReply extrai e parseia o JSON de resposta do LLM.
@@ -75,7 +77,83 @@ func ParseModelReply(raw string) (ResponderOutput, error) {
 		out.ClientActions = parseClientActions(r.ClientActions)
 	}
 
+	// schedulingRequest (cliente): descarta se malformado, sem falhar
+	if len(r.SchedulingRequest) > 0 && string(r.SchedulingRequest) != "null" {
+		out.SchedulingRequest = parseSchedulingRequest(r.SchedulingRequest)
+	}
+
+	// bookingActions (modo admin): descarta se malformado, sem falhar
+	if len(r.BookingActions) > 0 && string(r.BookingActions) != "null" {
+		out.BookingActions = parseBookingActions(r.BookingActions)
+	}
+
 	return out, nil
+}
+
+// parseSchedulingRequest extrai o pedido de agendamento; nil se inválido.
+func parseSchedulingRequest(raw json.RawMessage) *SchedulingRequest {
+	var s struct {
+		Kind           string `json:"kind"`
+		StudentName    string `json:"studentName"`
+		Age            int    `json:"age"`
+		Course         string `json:"course"`
+		ProposedDay    string `json:"proposedDay"`
+		ProposedTime   string `json:"proposedTime"`
+		ProposedPeriod string `json:"proposedPeriod"`
+		Notes          string `json:"notes"`
+	}
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil
+	}
+	// Precisa de pelo menos um horário proposto para virar pendência.
+	if s.ProposedDay == "" && s.ProposedTime == "" {
+		return nil
+	}
+	kind := s.Kind
+	if kind != "individual" {
+		kind = "experimental"
+	}
+	return &SchedulingRequest{
+		Kind:           kind,
+		StudentName:    s.StudentName,
+		Age:            s.Age,
+		Course:         s.Course,
+		ProposedDay:    s.ProposedDay,
+		ProposedTime:   s.ProposedTime,
+		ProposedPeriod: s.ProposedPeriod,
+		Notes:          s.Notes,
+	}
+}
+
+// parseBookingActions extrai as ações do admin sobre agendamentos; nil se inválido.
+func parseBookingActions(raw json.RawMessage) []BookingAction {
+	var items []struct {
+		BookingID string `json:"bookingId"`
+		Action    string `json:"action"`
+		Day       string `json:"day"`
+		Time      string `json:"time"`
+		Period    string `json:"period"`
+	}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil
+	}
+	result := make([]BookingAction, 0, len(items))
+	for _, it := range items {
+		if it.BookingID == "" || it.Action == "" {
+			continue
+		}
+		result = append(result, BookingAction{
+			BookingID: it.BookingID,
+			Action:    it.Action,
+			Day:       it.Day,
+			Time:      it.Time,
+			Period:    it.Period,
+		})
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 // parseClientActions tenta parsear clientActions; retorna nil se inválido.

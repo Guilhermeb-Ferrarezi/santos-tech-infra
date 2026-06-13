@@ -267,13 +267,18 @@ func (w *Worker) notificaAdmin(ctx context.Context, ev DomainEvent) error {
 	}
 
 	var texto string
-	if ev.Type == "kb.gap_detected" {
+	switch {
+	case ev.Type == "kb.gap_detected":
 		texto = fmt.Sprintf(
 			"📚 *Pergunta sem resposta na base de conhecimento:*\n\n_%s_\n\nResponda esta mensagem com a informação correta e eu salvo na KB automaticamente.",
 			question,
 		)
-	} else {
-		texto = fmt.Sprintf("🔔 *Cliente aguardando atendimento humano:*\n\n_%s_", question)
+	default:
+		if ntype, _ := ev.Payload["type"].(string); ntype == "BOOKING" {
+			texto = "📅 *Novo pedido de agendamento:*\n\n" + question
+		} else {
+			texto = fmt.Sprintf("🔔 *Cliente aguardando atendimento humano:*\n\n_%s_", question)
+		}
 	}
 
 	var firstErr error

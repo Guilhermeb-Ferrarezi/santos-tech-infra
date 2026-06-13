@@ -62,6 +62,10 @@ type EngineDeps struct {
 	TenantCfgRepo *TenantConfigRepo
 	// Pending — fila de dúvidas de clientes aguardando o admin (ciclo admin→cliente).
 	Pending *PendingQuestionRepo
+	// Bookings — agendamentos aguardando confirmação do admin.
+	Bookings *PendingBookingRepo
+	// Notion — cliente para ler/gravar a agenda de aulas (agendamento).
+	Notion *NotionClient
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +259,13 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 				}
 				convCtx.PendingQuestions = pendings
 			}
+			if e.deps.Bookings != nil {
+				bks, err := e.deps.Bookings.ListOpen(ctx, tx, inbound.TenantID)
+				if err != nil {
+					return fmt.Errorf("Bookings.ListOpen: %w", err)
+				}
+				convCtx.PendingBookings = bks
+			}
 		}
 
 		// Sinaliza para chamar o LLM fora da transação.
@@ -391,6 +402,9 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	if len(output.ClientActions) > 0 {
 		e.executeClientActions(ctx, inbound, output.ClientActions)
 	}
+	if len(output.BookingActions) > 0 {
+		e.executeBookingActions(ctx, inbound, output.BookingActions)
+	}
 
 	// -----------------------------------------------------------------------
 	// Fase 3: atualiza estado do FSM e emite eventos pós-envio
@@ -461,6 +475,46 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 			if err := e.deps.Emitter.Emit(ctx, tx, kbGapEvent); err != nil {
 				return fmt.Errorf("Emit kb.gap_detected: %w", err)
+			}
+		}
+
+		// q2) Pedido de agendamento do cliente → grava pendência + notifica admin.
+		if !cfg.IsAdminConversation && output.SchedulingRequest != nil && e.deps.Bookings != nil {
+			sr := output.SchedulingRequest
+			pb := PendingBooking{
+				TenantID:       inbound.TenantID,
+				ConversationID: conv.ID,
+				ClientPhone:    contactPhone,
+				ClientName:     contactName,
+				Kind:           sr.Kind,
+				Course:         sr.Course,
+				ProposedDay:    sr.ProposedDay,
+				ProposedTime:   sr.ProposedTime,
+				ProposedPeriod: sr.ProposedPeriod,
+				Age:            sr.Age,
+				Notes:          sr.Notes,
+			}
+			if err := e.deps.Bookings.Insert(ctx, tx, pb); err != nil {
+				return fmt.Errorf("Bookings.Insert: %w", err)
+			}
+			name := sr.StudentName
+			if name == "" {
+				name = contactName
+			}
+			bookingEvent := DomainEvent{
+				TenantID:    inbound.TenantID,
+				AggregateID: conv.ID,
+				Type:        "notification.requested",
+				Payload: map[string]any{
+					"type":            "BOOKING",
+					"conversation_id": conv.ID,
+					"message": fmt.Sprintf("%s — %s%s, proposto: %s %s %s. Responda aqui para confirmar, ajustar o horário ou recusar.",
+						sr.Kind, name, courseSuffix(sr.Course), sr.ProposedDay, sr.ProposedTime, sr.ProposedPeriod),
+				},
+				OccurredAt: time.Now(),
+			}
+			if err := e.deps.Emitter.Emit(ctx, tx, bookingEvent); err != nil {
+				return fmt.Errorf("Emit notification.requested (booking): %w", err)
 			}
 		}
 
@@ -684,6 +738,143 @@ func (e *ConversationEngine) startTypingIndicator(ctx context.Context, messageID
 
 	var once sync.Once
 	return func() { once.Do(func() { close(done) }) }
+}
+
+// executeBookingActions processa as decisões do admin sobre agendamentos: confirma
+// (grava a aula no Notion + avisa o cliente), ajusta (re-propõe ao cliente) ou recusa.
+func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound InboundMessage, actions []BookingAction) {
+	log := e.deps.Logger
+	if e.deps.Bookings == nil || e.deps.Sender == nil {
+		return
+	}
+
+	for _, act := range actions {
+		if act.BookingID == "" {
+			continue
+		}
+
+		var pb *PendingBooking
+		if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+			loaded, e2 := e.deps.Bookings.Get(ctx, tx, inbound.TenantID, act.BookingID)
+			pb = loaded
+			return e2
+		}); err != nil {
+			log.Error("bookingAction: falha ao carregar agendamento", "id", act.BookingID, "err", err)
+			continue
+		}
+		if pb == nil {
+			continue // já decidido ou inexistente
+		}
+
+		day := firstNonEmpty(act.Day, pb.ProposedDay)
+		tm := firstNonEmpty(act.Time, pb.ProposedTime)
+		period := firstNonEmpty(act.Period, pb.ProposedPeriod)
+
+		switch act.Action {
+		case "confirm":
+			// Grava no Notion (se configurado).
+			var notionErr error
+			if e.deps.Notion != nil && e.deps.Notion.Enabled() {
+				notionErr = e.deps.Notion.CreateBooking(ctx, Booking{
+					Title:    bookingTitle(*pb),
+					Dia:      day,
+					Horario:  tm,
+					Periodo:  period,
+					Conteudo: pb.Course,
+				})
+				if notionErr != nil {
+					log.Error("bookingAction: falha ao gravar no Notion", "id", pb.ID, "err", notionErr)
+				}
+			}
+			// Marca confirmado e avisa o cliente.
+			if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+				return e.deps.Bookings.MarkStatus(ctx, tx, inbound.TenantID, pb.ID, "confirmed")
+			}); err != nil {
+				log.Error("bookingAction: falha ao marcar confirmado", "id", pb.ID, "err", err)
+			}
+			msg := fmt.Sprintf("Prontinho! Sua aula ficou marcada para %s às %s. Qualquer coisa, é só me chamar. 😊", day, tm)
+			if err := e.sendClientReply(ctx, inbound, pb.ConversationID, pb.ClientPhone, "booking:"+pb.ID+":confirm", msg); err != nil {
+				log.Error("bookingAction: falha ao avisar cliente", "id", pb.ID, "err", err)
+			}
+			if notionErr != nil {
+				who := firstNonEmpty(pb.ClientName, pb.ClientPhone)
+				_ = e.deps.Sender.SendText(ctx, inbound.ExternalID,
+					fmt.Sprintf("⚠️ Confirmei com %s, mas não consegui gravar no Notion. Lance manualmente: %s %s.", who, day, tm))
+			}
+
+		case "adjust":
+			msg := fmt.Sprintf("Consegui um horário: %s às %s. Pode ser pra você?", day, tm)
+			if err := e.sendClientReply(ctx, inbound, pb.ConversationID, pb.ClientPhone, fmt.Sprintf("booking:%s:adjust:%s%s", pb.ID, day, tm), msg); err != nil {
+				log.Error("bookingAction: falha ao re-propor ao cliente", "id", pb.ID, "err", err)
+			}
+
+		case "reject":
+			if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+				return e.deps.Bookings.MarkStatus(ctx, tx, inbound.TenantID, pb.ID, "rejected")
+			}); err != nil {
+				log.Error("bookingAction: falha ao marcar recusado", "id", pb.ID, "err", err)
+			}
+		}
+	}
+}
+
+// sendClientReply envia uma mensagem ao cliente numa conversa específica (cross-conversa),
+// persiste o balão, reengaja a conversa e faz broadcast. Usado por agendamentos.
+func (e *ConversationEngine) sendClientReply(ctx context.Context, inbound InboundMessage, convID ConversationID, toPhone, idemKey, text string) error {
+	outboundMsg := OutboundMessage{
+		TenantID:       inbound.TenantID,
+		ConversationID: convID,
+		Channel:        inbound.Channel,
+		To:             toPhone,
+		Intent:         IntentFreeForm,
+		Content:        MessageContent{Type: "text", Text: text},
+		IdempotencyKey: idemKey,
+	}
+	err := e.withTenant(ctx, func(tx pgx.Tx) error {
+		providerMsgID, err := e.deps.Sender.SendMessage(ctx, outboundMsg)
+		if err != nil {
+			return fmt.Errorf("SendMessage: %w", err)
+		}
+		if err := e.deps.Messages.RecordOutbound(ctx, tx, idemKey, inbound.TenantID, convID, providerMsgID, text, nil); err != nil {
+			return fmt.Errorf("RecordOutbound: %w", err)
+		}
+		if err := e.deps.Convs.SetState(ctx, tx, inbound.TenantID, convID, StateEngaged); err != nil {
+			return fmt.Errorf("SetState: %w", err)
+		}
+		return nil
+	})
+	if err == nil && e.deps.Broadcast != nil {
+		e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: convID})
+	}
+	return err
+}
+
+// bookingTitle monta o título da aula gravada no Notion.
+func bookingTitle(pb PendingBooking) string {
+	who := firstNonEmpty(pb.ClientName, pb.ClientPhone)
+	label := "Aula experimental"
+	if pb.Kind == "individual" {
+		label = "Aula individual"
+	}
+	return label + " — " + who
+}
+
+// courseSuffix devolve ", curso X" quando há curso, ou string vazia.
+func courseSuffix(course string) string {
+	if course == "" {
+		return ""
+	}
+	return ", " + course
+}
+
+// firstNonEmpty retorna o primeiro valor não-vazio.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func applyTransition(current ConversationState, output ResponderOutput) ConversationState {

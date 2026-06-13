@@ -16,16 +16,18 @@ type AgentGoClient struct {
 	secret  string
 	http    *http.Client
 	sitemap *SitemapCache
+	notion  *NotionClient
 }
 
 // NewAgentGoClient cria um cliente com timeout de 120s (adequado para inferência).
-// sitemap (opcional) fornece as URLs do site que o bot pode consultar via WebFetch.
-func NewAgentGoClient(url, secret string, sitemap *SitemapCache) *AgentGoClient {
+// sitemap fornece as URLs do site (WebFetch); notion fornece a agenda de aulas.
+func NewAgentGoClient(url, secret string, sitemap *SitemapCache, notion *NotionClient) *AgentGoClient {
 	return &AgentGoClient{
 		url:     url,
 		secret:  secret,
 		http:    &http.Client{Timeout: 120 * time.Second},
 		sitemap: sitemap,
+		notion:  notion,
 	}
 }
 
@@ -49,6 +51,10 @@ func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx 
 	// Páginas que o bot pode consultar via WebFetch vêm do sitemap.xml do site.
 	if c.sitemap != nil {
 		cfg.AllowedWebURLs = c.sitemap.URLs(ctx)
+	}
+	// Agenda de aulas (Notion) para o bot propor horários de agendamento.
+	if c.notion != nil && !cfg.IsAdminConversation {
+		cfg.Schedule = c.notion.Schedule(ctx)
 	}
 	prompt := BuildPrompt(cfg, convCtx, inboundText, time.Now())
 

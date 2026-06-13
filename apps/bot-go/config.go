@@ -29,6 +29,10 @@ type Config struct {
 	// Site oficial — fonte das rotas que o bot pode consultar (via sitemap.xml).
 	SiteURL string
 
+	// Notion — agendamento de aulas (token de integração escopado + base de agenda).
+	NotionToken      string
+	NotionAgendaDBID string
+
 	// Notificações admin
 	AdminWhatsAppNumber string // E.164, ex: 5516991445664
 
@@ -67,6 +71,9 @@ func LoadConfig() Config {
 		AgentGoSecret: mustEnv("AGENT_GO_SECRET"),
 
 		SiteURL: strings.TrimRight(getEnv("SITE_URL", "https://santos-tech.com"), "/"),
+
+		NotionToken:      getEnv("NOTION_TOKEN", ""),
+		NotionAgendaDBID: getEnv("NOTION_AGENDA_DB_ID", "1e1c30d6-77df-44dd-8f2f-6889777de5cc"),
 
 		AdminWhatsAppNumber: getEnv("ADMIN_WHATSAPP_NUMBER", ""),
 
