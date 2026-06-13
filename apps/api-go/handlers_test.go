@@ -65,6 +65,22 @@ func TestHandleRefreshNoCookie(t *testing.T) {
 	}
 }
 
+func TestHandleRefreshInvalidJWT(t *testing.T) {
+	s := testServer(Config{JWTRefreshSecret: "secret"})
+	for _, bad := range []string{"not-a-jwt", "a.b.c", ""} {
+		if bad == "" {
+			continue // sem cookie já coberto por TestHandleRefreshNoCookie
+		}
+		req := httptest.NewRequest("POST", "/auth/refresh", nil)
+		req.AddCookie(&http.Cookie{Name: "refresh_token", Value: bad})
+		w := httptest.NewRecorder()
+		s.handleRefresh(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("token %q: code=%d (queria 401)", bad, w.Code)
+		}
+	}
+}
+
 func TestHandleMeNoToken(t *testing.T) {
 	s := testServer(Config{})
 	w := httptest.NewRecorder()

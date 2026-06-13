@@ -271,6 +271,10 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Usuário não encontrado"))
 		return
 	}
+	if u.SuspendedAt != nil || u.LoginDisabled {
+		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado"))
+		return
+	}
 	_ = s.deleteSession(r.Context(), sid) // rotaciona
 	if err := s.issueSession(r.Context(), w, r, u, sid); err != nil {
 		writeErr(w, err)
