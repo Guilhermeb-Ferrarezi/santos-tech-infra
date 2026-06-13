@@ -581,6 +581,114 @@ func atoiDefault(v string, def int) int {
 	return def
 }
 
+// ── CRM: leads ────────────────────────────────────────────────────────────────
+
+type dashLead struct {
+	ID             string     `json:"id"`
+	ContactName    string     `json:"contactName"`
+	Phone          string     `json:"phone"`
+	Status         string     `json:"status"`
+	Interest       string     `json:"interest"`
+	Owner          string     `json:"owner"`
+	ConversationID string     `json:"conversationId"`
+	LastActivity   *time.Time `json:"lastActivity"`
+	CreatedAt      time.Time  `json:"createdAt"`
+}
+
+// leadFunnelStatuses — estágios válidos do funil do CRM.
+var leadFunnelStatuses = map[string]bool{
+	"novo": true, "em_atendimento": true, "aula_marcada": true,
+	"matriculado": true, "perdido": true,
+}
+
+// GET /api/leads — lista o funil de leads do WhatsApp.
+func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT l.id::text, COALESCE(ct.display_name, ''), COALESCE(ci.external_id, ''),
+		       l.status, COALESCE(l.interest, ''), COALESCE(l.owner, ''),
+		       COALESCE(cv.id::text, ''), cv.last_inbound_at, l.created_at
+		FROM lead l
+		JOIN contact ct ON ct.tenant_id = l.tenant_id AND ct.id = l.contact_id
+		LEFT JOIN LATERAL (
+			SELECT external_id FROM channel_identity
+			WHERE tenant_id = l.tenant_id AND contact_id = l.contact_id LIMIT 1
+		) ci ON true
+		LEFT JOIN LATERAL (
+			SELECT id, last_inbound_at FROM conversation
+			WHERE tenant_id = l.tenant_id AND contact_id = l.contact_id
+			ORDER BY last_inbound_at DESC NULLS LAST LIMIT 1
+		) cv ON true
+		WHERE l.tenant_id = $1
+		ORDER BY cv.last_inbound_at DESC NULLS LAST, l.created_at DESC
+	`, tenantID)
+	if err != nil {
+		s.logger.Error("dash: list leads", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	out := make([]dashLead, 0)
+	for rows.Next() {
+		var l dashLead
+		if err := rows.Scan(&l.ID, &l.ContactName, &l.Phone, &l.Status,
+			&l.Interest, &l.Owner, &l.ConversationID, &l.LastActivity, &l.CreatedAt); err != nil {
+			s.logger.Error("dash: scan lead", "err", err)
+			jsonErr(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		// Normaliza status legado para o funil.
+		if !leadFunnelStatuses[l.Status] {
+			l.Status = "novo"
+		}
+		out = append(out, l)
+	}
+	jsonOK(w, out)
+}
+
+// PATCH /api/leads/{id} — atualiza status (e opcional owner/interest) de um lead.
+func (s *Server) handleDashPatchLead(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+	id := r.PathValue("id")
+
+	var body struct {
+		Status   *string `json:"status"`
+		Owner    *string `json:"owner"`
+		Interest *string `json:"interest"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if body.Status != nil && !leadFunnelStatuses[*body.Status] {
+		jsonErr(w, "invalid status", http.StatusBadRequest)
+		return
+	}
+
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE lead SET
+		  status   = COALESCE($3, status),
+		  owner    = COALESCE($4, owner),
+		  interest = COALESCE($5, interest),
+		  updated_at = now()
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantID, id, body.Status, body.Owner, body.Interest)
+	if err != nil {
+		s.logger.Error("dash: patch lead", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		jsonErr(w, "lead not found", http.StatusNotFound)
+		return
+	}
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
 func toDashLog(e ProcessingLogEntry) dashProcessingLog {
 	cited := e.CitedEntryIDs
 	if cited == nil {

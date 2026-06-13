@@ -425,17 +425,18 @@ func (r *LeadRepo) FindByConversation(ctx context.Context, tenantID TenantID, co
 	return &l, nil
 }
 
-// Create cria um lead com status='open'. Usa ON CONFLICT para idempotência.
+// Create cria um lead com status='novo' (CRM). ON CONFLICT mantém o status atual
+// (idempotente — não rebaixa um lead que já avançou no funil).
 func (r *LeadRepo) Create(ctx context.Context, tx pgx.Tx, tenantID TenantID, contactID ContactID, convID ConversationID) (*Lead, error) {
 	var l Lead
 	l.TenantID = tenantID
 	l.ContactID = contactID
 	l.ConversationID = convID
-	l.Status = "open"
+	l.Status = "novo"
 
 	err := tx.QueryRow(ctx, `
 		INSERT INTO lead (tenant_id, contact_id, status)
-		VALUES ($1, $2, 'open')
+		VALUES ($1, $2, 'novo')
 		ON CONFLICT (tenant_id, contact_id) DO UPDATE SET status = lead.status
 		RETURNING id, created_at
 	`, tenantID, contactID).Scan(&l.ID, &l.CreatedAt)
@@ -443,6 +444,24 @@ func (r *LeadRepo) Create(ctx context.Context, tx pgx.Tx, tenantID TenantID, con
 		return nil, fmt.Errorf("LeadRepo.Create: %w", err)
 	}
 	return &l, nil
+}
+
+// SetStatusByConversation avança o status do lead vinculado a uma conversa (via
+// contact). Não rebaixa leads já em 'matriculado'/'perdido'. Usado pelo tie-in
+// de agendamento (confirmar aula → 'aula_marcada').
+func (r *LeadRepo) SetStatusByConversation(ctx context.Context, tx pgx.Tx, tenantID TenantID, convID ConversationID, status string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE lead l
+		SET status = $3, updated_at = now()
+		FROM conversation c
+		WHERE c.id = $2 AND c.tenant_id = $1
+		  AND l.tenant_id = $1 AND l.contact_id = c.contact_id
+		  AND l.status NOT IN ('matriculado', 'perdido')
+	`, tenantID, convID, status)
+	if err != nil {
+		return fmt.Errorf("LeadRepo.SetStatusByConversation: %w", err)
+	}
+	return nil
 }
 
 // ============================================================================

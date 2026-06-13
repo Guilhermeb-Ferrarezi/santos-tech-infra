@@ -165,6 +165,14 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		}
 		conv = *convPtr
 
+		// c2) Captura de lead (CRM): todo cliente (não-admin) que escreve vira lead.
+		// Idempotente — não rebaixa um lead que já avançou no funil.
+		if e.deps.Leads != nil && !cfg.IsAdminNumber(contactPhone) {
+			if _, err := e.deps.Leads.Create(ctx, tx, inbound.TenantID, contact.ID, conv.ID); err != nil {
+				return fmt.Errorf("Leads.Create: %w", err)
+			}
+		}
+
 		// d) Humano no controle → ignora
 		if !conv.BotEnabled {
 			log.Info("bot desabilitado para esta conversa, ignorando mensagem")
@@ -791,6 +799,14 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 				return e.deps.Bookings.MarkStatus(ctx, tx, inbound.TenantID, pb.ID, "confirmed")
 			}); err != nil {
 				log.Error("bookingAction: falha ao marcar confirmado", "id", pb.ID, "err", err)
+			}
+			// Tie-in CRM: avança o lead para 'aula_marcada'.
+			if e.deps.Leads != nil {
+				if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+					return e.deps.Leads.SetStatusByConversation(ctx, tx, inbound.TenantID, pb.ConversationID, "aula_marcada")
+				}); err != nil {
+					log.Error("bookingAction: falha ao avançar lead", "id", pb.ID, "err", err)
+				}
 			}
 			msg := fmt.Sprintf("Prontinho! Sua aula ficou marcada para %s às %s. Qualquer coisa, é só me chamar. 😊", day, tm)
 			if err := e.sendClientReply(ctx, inbound, pb.ConversationID, pb.ClientPhone, "booking:"+pb.ID+":confirm", msg); err != nil {

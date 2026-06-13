@@ -166,6 +166,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/config/default-admin-prompt", da(s.handleDashDefaultAdminPrompt))
 	mux.Handle("PATCH /api/config", da(s.handleDashPatchConfig))
 	mux.Handle("GET /api/logs", da(s.handleDashLogs))
+	mux.Handle("GET /api/leads", da(s.handleDashLeads))
+	mux.Handle("PATCH /api/leads/{id}", da(s.handleDashPatchLead))
 	mux.HandleFunc("GET /api/ws", s.handleDashWS)
 	// OPTIONS preflight (sem auth)
 	mux.HandleFunc("OPTIONS /api/", func(w http.ResponseWriter, r *http.Request) {
