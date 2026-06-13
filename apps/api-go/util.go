@@ -8,7 +8,9 @@ import (
 
 func randomToken(nbytes int) string {
 	b := make([]byte, nbytes)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }
 

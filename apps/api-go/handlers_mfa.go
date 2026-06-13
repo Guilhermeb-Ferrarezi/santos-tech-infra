@@ -219,7 +219,9 @@ func genRecoveryCodes(n int) []string {
 	enc := base32.StdEncoding.WithPadding(base32.NoPadding)
 	for i := range codes {
 		b := make([]byte, 5)
-		_, _ = rand.Read(b)
+		if _, err := rand.Read(b); err != nil {
+			panic("crypto/rand unavailable: " + err.Error())
+		}
 		codes[i] = enc.EncodeToString(b) // 8 chars A-Z2-7
 	}
 	return codes
@@ -227,7 +229,9 @@ func genRecoveryCodes(n int) []string {
 
 func emailCode() string {
 	b := make([]byte, 3)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
 	n := int(b[0])<<16 | int(b[1])<<8 | int(b[2])
 	return fmt.Sprintf("%06d", n%1000000)
 }
