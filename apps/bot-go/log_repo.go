@@ -10,9 +10,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ProcessingLogEntry representa um registro de processamento de mensagem.
+// ProcessingLogEntry representa um registro de processamento de mensagem ou uma
+// AÇÃO do sistema (Kind="action", ex.: agendamento gravado no Notion) que não está
+// amarrada a um turno de conversa.
 type ProcessingLogEntry struct {
 	ID             string
+	Kind           string // "message" (padrão) | "action"
 	TenantID       string
 	ConversationID string
 	ContactPhone   string
@@ -49,12 +52,17 @@ func (r *ProcessingLogRepo) Insert(ctx context.Context, e ProcessingLogEntry) er
 		toolCallsArg = e.ToolCalls
 	}
 
+	kind := e.Kind
+	if kind == "" {
+		kind = "message"
+	}
+
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO bot_processing_log
-		  (tenant_id, conversation_id, contact_phone, contact_name, inbound_text,
+		  (tenant_id, kind, conversation_id, contact_phone, contact_name, inbound_text,
 		   answered, answered_from_kb, handoff, cited_entry_ids, bubbles, tool_calls, processing_ms, error)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-	`, e.TenantID, convID, e.ContactPhone, e.ContactName, e.InboundText,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	`, e.TenantID, kind, convID, e.ContactPhone, e.ContactName, e.InboundText,
 		e.Answered, e.AnsweredFromKb, e.Handoff,
 		citedJSON, bubblesJSON, toolCallsArg, e.ProcessingMs, nullableString(e.Error))
 	if err != nil {
@@ -114,7 +122,7 @@ func (r *ProcessingLogRepo) ListPaged(ctx context.Context, tenantID string, f Lo
 
 	args = append(args, pageSize, (page-1)*pageSize)
 	query := fmt.Sprintf(`
-		SELECT id::text, tenant_id,
+		SELECT id::text, COALESCE(kind, 'message'), tenant_id,
 		       COALESCE(conversation_id::text, ''),
 		       contact_phone, contact_name, inbound_text,
 		       answered, answered_from_kb, handoff,
@@ -138,7 +146,7 @@ func (r *ProcessingLogRepo) ListPaged(ctx context.Context, tenantID string, f Lo
 		var e ProcessingLogEntry
 		var citedRaw, bubblesRaw, toolCallsRaw string
 		if err := rows.Scan(
-			&e.ID, &e.TenantID, &e.ConversationID,
+			&e.ID, &e.Kind, &e.TenantID, &e.ConversationID,
 			&e.ContactPhone, &e.ContactName, &e.InboundText,
 			&e.Answered, &e.AnsweredFromKb, &e.Handoff,
 			&citedRaw, &bubblesRaw, &toolCallsRaw,
@@ -169,7 +177,7 @@ func (r *ProcessingLogRepo) List(ctx context.Context, tenantID string, limit int
 	}
 
 	rows, err := r.pool.Query(ctx, `
-		SELECT id::text, tenant_id,
+		SELECT id::text, COALESCE(kind, 'message'), tenant_id,
 		       COALESCE(conversation_id::text, ''),
 		       contact_phone, contact_name, inbound_text,
 		       answered, answered_from_kb, handoff,
@@ -191,7 +199,7 @@ func (r *ProcessingLogRepo) List(ctx context.Context, tenantID string, limit int
 		var e ProcessingLogEntry
 		var citedRaw, bubblesRaw, toolCallsRaw string
 		if err := rows.Scan(
-			&e.ID, &e.TenantID, &e.ConversationID,
+			&e.ID, &e.Kind, &e.TenantID, &e.ConversationID,
 			&e.ContactPhone, &e.ContactName, &e.InboundText,
 			&e.Answered, &e.AnsweredFromKb, &e.Handoff,
 			&citedRaw, &bubblesRaw, &toolCallsRaw,

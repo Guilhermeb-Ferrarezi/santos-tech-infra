@@ -17,6 +17,7 @@ import (
 
 type dashProcessingLog struct {
 	ID             string          `json:"id"`
+	Kind           string          `json:"kind"` // "message" | "action"
 	ConversationID string          `json:"conversationId"`
 	ContactPhone   string          `json:"contactPhone"`
 	ContactName    string          `json:"contactName"`
@@ -730,8 +731,13 @@ func toDashLog(e ProcessingLogEntry) dashProcessingLog {
 	if bubbles == nil {
 		bubbles = []string{}
 	}
+	kind := e.Kind
+	if kind == "" {
+		kind = "message"
+	}
 	return dashProcessingLog{
 		ID:             e.ID,
+		Kind:           kind,
 		ConversationID: e.ConversationID,
 		ContactPhone:   e.ContactPhone,
 		ContactName:    e.ContactName,

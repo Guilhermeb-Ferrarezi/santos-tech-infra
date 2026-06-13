@@ -856,6 +856,16 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 				if notionErr != nil {
 					log.Error("bookingAction: falha ao gravar no Notion", "id", pb.ID, "err", notionErr)
 				}
+
+				// Registra a ação no log do dashboard (fora do turno de conversa).
+				quandoLog := firstNonEmpty(formatBRDateTime(dataHora), strings.TrimSpace(day+" "+tm))
+				desc := fmt.Sprintf("📅 Agendamento no Notion: %s — %s%s, %s [%s]",
+					bookingAluno(*pb), pb.Kind, courseSuffix(pb.Course), quandoLog, status)
+				errStr := ""
+				if notionErr != nil {
+					errStr = notionErr.Error()
+				}
+				e.logAction(inbound.TenantID, pb.ConversationID, pb.ClientPhone, bookingAluno(*pb), desc, errStr)
 			}
 			// Marca confirmado e avisa o cliente.
 			if err := e.withTenant(ctx, func(tx pgx.Tx) error {
@@ -937,6 +947,35 @@ func (e *ConversationEngine) sendClientReply(ctx context.Context, inbound Inboun
 		e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: convID})
 	}
 	return err
+}
+
+// logAction grava uma AÇÃO do sistema no log (kind="action"), fora de um turno de
+// conversa, e transmite pro dashboard em tempo real. Best-effort (async).
+func (e *ConversationEngine) logAction(tenantID TenantID, convID ConversationID, phone, name, description, errStr string) {
+	if e.deps.LogRepo == nil {
+		return
+	}
+	entry := ProcessingLogEntry{
+		Kind:           "action",
+		TenantID:       tenantID,
+		ConversationID: convID,
+		ContactPhone:   phone,
+		ContactName:    name,
+		InboundText:    description,
+		Error:          errStr,
+	}
+	go func() {
+		if err := e.deps.LogRepo.Insert(context.Background(), entry); err != nil {
+			if e.deps.Logger != nil {
+				e.deps.Logger.Error("engine: falha ao gravar log de ação", "err", err)
+			}
+			return
+		}
+		if e.deps.Broadcast != nil {
+			dl := toDashLog(entry)
+			e.deps.Broadcast(WSEvent{Type: "log.new", Log: &dl})
+		}
+	}()
 }
 
 // bookingAluno monta o "Aluno/Responsável" gravado no Notion: o nome informado na
