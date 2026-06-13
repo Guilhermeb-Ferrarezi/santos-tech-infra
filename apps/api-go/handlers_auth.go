@@ -97,9 +97,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if u == nil || u.LoginDisabled || u.PasswordHash == nil || !verifyPassword(body.Password, *u.PasswordHash) {
-		if cnt, _ := s.rdb.Incr(r.Context(), lockKey).Result(); cnt == 1 {
-			s.rdb.Expire(r.Context(), lockKey, loginFailWindow)
-		}
+		s.rdb.Incr(r.Context(), lockKey)
+		s.rdb.ExpireNX(r.Context(), lockKey, loginFailWindow)
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_CREDENTIALS", "Email ou senha inválidos"))
 		return
 	}

@@ -31,9 +31,9 @@ func (s *Server) allow(ctx context.Context, key string, max int, window time.Dur
 	if err != nil {
 		return true
 	}
-	if n == 1 {
-		s.rdb.Expire(ctx, key, window)
-	}
+	// ExpireNX (Redis 7 EXPIRE … NX) sets the TTL only if the key has none yet —
+	// single atomic command, no race between INCR and EXPIRE.
+	s.rdb.ExpireNX(ctx, key, window)
 	return n <= int64(max)
 }
 

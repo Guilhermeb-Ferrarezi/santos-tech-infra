@@ -161,9 +161,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	// Teto de tentativas por challenge: sem isso, o OTP de email (6 dígitos) seria
 	// retentável até o limite por IP (burlável). Após N falhas, invalida o desafio.
 	attempts, _ := s.rdb.Incr(r.Context(), "mfa_attempts:"+body.Challenge).Result()
-	if attempts == 1 {
-		s.rdb.Expire(r.Context(), "mfa_attempts:"+body.Challenge, 10*time.Minute)
-	}
+	s.rdb.ExpireNX(r.Context(), "mfa_attempts:"+body.Challenge, 10*time.Minute)
 	if attempts > 5 {
 		s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "mfa_attempts:"+body.Challenge)
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Faça login novamente."))
