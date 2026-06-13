@@ -80,6 +80,17 @@ const (
 	loginFailWindow = 15 * time.Minute
 )
 
+// dummyPasswordHash é computado uma vez no boot para que handleLogin sempre
+// execute verifyPassword (argon2id, ~300ms) mesmo quando o identificador não
+// corresponde a nenhuma conta — impede enumeração de usuários por timing.
+var dummyPasswordHash = func() string {
+	h, err := hashPassword("__timing_sentinel__")
+	if err != nil {
+		panic("argon2id dummy hash: " + err.Error())
+	}
+	return h
+}()
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
@@ -102,7 +113,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if u == nil || u.LoginDisabled || u.PasswordHash == nil || !verifyPassword(body.Password, *u.PasswordHash) {
+	// Normaliza o tempo de resposta: executa verifyPassword mesmo quando o
+	// identificador não existe, tornando "conta inexistente" indistinguível
+	// de "senha incorreta" para quem mede latências.
+	hash := dummyPasswordHash
+	if u != nil && u.PasswordHash != nil {
+		hash = *u.PasswordHash
+	}
+	if u == nil || u.LoginDisabled || u.PasswordHash == nil || !verifyPassword(body.Password, hash) {
 		s.rdb.Incr(r.Context(), lockKey)
 		s.rdb.ExpireNX(r.Context(), lockKey, loginFailWindow)
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_CREDENTIALS", "Email ou senha inválidos"))
