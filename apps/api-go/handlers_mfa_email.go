@@ -133,7 +133,10 @@ func (s *Server) handleMFAEmailEnable(w http.ResponseWriter, r *http.Request) {
 		for i, c := range codes {
 			hashes[i] = sha256Hex(c)
 		}
-		_ = s.deleteRecoveryCodes(r.Context(), uid)
+		if err := s.deleteRecoveryCodes(r.Context(), uid); err != nil {
+			writeErr(w, err)
+			return
+		}
 		if err := s.insertRecoveryCodes(r.Context(), uid, hashes); err != nil {
 			writeErr(w, err)
 			return
