@@ -11,6 +11,7 @@ import (
 )
 
 func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Email string `json:"email"`
 	}

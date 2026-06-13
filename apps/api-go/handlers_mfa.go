@@ -37,6 +37,7 @@ func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 
 // POST /auth/mfa/enable {code} — confirma o TOTP e ativa o MFA, devolve recovery codes.
 func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	uid := userIDFrom(r)
 	var body struct {
 		Code string `json:"code"`
@@ -78,6 +79,7 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 
 // POST /auth/mfa/disable {code} — desativa (aceita TOTP, recovery ou código por email).
 func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	uid := userIDFrom(r)
 	var body struct {
 		Code string `json:"code"`
@@ -139,6 +141,7 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 
 // POST /auth/mfa/email {challenge} — envia um código OTP por email (2º passo do login).
 func (s *Server) handleMFAEmail(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Challenge string `json:"challenge"`
 	}
@@ -170,6 +173,7 @@ func (s *Server) handleMFAEmail(w http.ResponseWriter, r *http.Request) {
 // POST /auth/mfa/verify {challenge, code} — valida TOTP/email/recovery e emite a sessão.
 func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Challenge string `json:"challenge"`
 		Code      string `json:"code"`
