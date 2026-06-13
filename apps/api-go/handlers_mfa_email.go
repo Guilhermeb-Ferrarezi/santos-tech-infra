@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -61,7 +62,12 @@ func (s *Server) handleMFAEmailCode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusConflict, "EMAIL_NOT_VERIFIED", "Verifique seu email antes de usá-lo como 2º fator"))
 		return
 	}
-	if n, _ := s.rdb.Exists(r.Context(), mfaEmailAcctCDKey(uid)).Result(); n == 1 {
+	n, errCD := s.rdb.Exists(r.Context(), mfaEmailAcctCDKey(uid)).Result()
+	if errCD != nil {
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao verificar cooldown"))
+		return
+	}
+	if n == 1 {
 		writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Aguarde um pouco antes de reenviar"))
 		return
 	}
@@ -70,7 +76,9 @@ func (s *Server) handleMFAEmailCode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao gerar o código"))
 		return
 	}
-	s.rdb.Set(r.Context(), mfaEmailAcctCDKey(uid), "1", mfaEmailAcctCooldown)
+	if err := s.rdb.Set(r.Context(), mfaEmailAcctCDKey(uid), "1", mfaEmailAcctCooldown).Err(); err != nil {
+		slog.Warn("falha ao gravar cooldown do código de email MFA", "uid", uid, "err", err)
+	}
 	html := emailCodeHTML(code, "Use o código abaixo para confirmar a alteração do 2FA da sua conta:")
 	go func(to string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -90,7 +98,9 @@ func (s *Server) consumeAcctEmailCode(ctx context.Context, uid int64, code strin
 	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(code)), []byte(want)) != 1 {
 		return false
 	}
-	s.rdb.Del(ctx, mfaEmailAcctKey(uid))
+	if err := s.rdb.Del(ctx, mfaEmailAcctKey(uid)).Err(); err != nil {
+		slog.Warn("falha ao remover código de email MFA após consumo", "uid", uid, "err", err)
+	}
 	return true
 }
 

@@ -97,7 +97,9 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.deleteUserSessions(r.Context(), uid)
-	s.rdb.Del(r.Context(), "pwd_reset:"+hash)
+	if err := s.rdb.Del(r.Context(), "pwd_reset:"+hash).Err(); err != nil {
+		slog.Error("falha ao remover token de reset de senha do Redis", "err", err)
+	}
 	if firstPassword {
 		go s.sendWelcomeEmail(u.Email, u.Name)
 	}
