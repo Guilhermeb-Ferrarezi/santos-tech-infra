@@ -590,6 +590,7 @@ type dashLead struct {
 	Status         string     `json:"status"`
 	Interest       string     `json:"interest"`
 	Owner          string     `json:"owner"`
+	Origin         string     `json:"origin"`
 	ConversationID string     `json:"conversationId"`
 	LastActivity   *time.Time `json:"lastActivity"`
 	CreatedAt      time.Time  `json:"createdAt"`
@@ -608,7 +609,7 @@ func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT l.id::text, COALESCE(ct.display_name, ''), COALESCE(ci.external_id, ''),
-		       l.status, COALESCE(l.interest, ''), COALESCE(l.owner, ''),
+		       l.status, COALESCE(l.interest, ''), COALESCE(l.owner, ''), COALESCE(l.origin, 'oficial'),
 		       COALESCE(cv.id::text, ''), cv.last_inbound_at, l.created_at
 		FROM lead l
 		JOIN contact ct ON ct.tenant_id = l.tenant_id AND ct.id = l.contact_id
@@ -635,7 +636,7 @@ func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var l dashLead
 		if err := rows.Scan(&l.ID, &l.ContactName, &l.Phone, &l.Status,
-			&l.Interest, &l.Owner, &l.ConversationID, &l.LastActivity, &l.CreatedAt); err != nil {
+			&l.Interest, &l.Owner, &l.Origin, &l.ConversationID, &l.LastActivity, &l.CreatedAt); err != nil {
 			s.logger.Error("dash: scan lead", "err", err)
 			jsonErr(w, "internal error", http.StatusInternalServerError)
 			return

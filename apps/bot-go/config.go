@@ -33,6 +33,9 @@ type Config struct {
 	NotionToken      string
 	NotionAgendaDBID string
 
+	// Evolution API — captura de leads do número não-oficial (webhook).
+	EvolutionWebhookSecret string
+
 	// Notificações admin
 	AdminWhatsAppNumber string // E.164, ex: 5516991445664
 
@@ -74,6 +77,8 @@ func LoadConfig() Config {
 
 		NotionToken:      getEnv("NOTION_TOKEN", ""),
 		NotionAgendaDBID: getEnv("NOTION_AGENDA_DB_ID", "1e1c30d6-77df-44dd-8f2f-6889777de5cc"),
+
+		EvolutionWebhookSecret: getEnv("EVOLUTION_WEBHOOK_SECRET", ""),
 
 		AdminWhatsAppNumber: getEnv("ADMIN_WHATSAPP_NUMBER", ""),
 

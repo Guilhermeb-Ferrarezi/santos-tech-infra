@@ -446,6 +446,21 @@ func (r *LeadRepo) Create(ctx context.Context, tx pgx.Tx, tenantID TenantID, con
 	return &l, nil
 }
 
+// CreateWithOrigin cria um lead (status 'novo') com a origem informada. ON CONFLICT
+// mantém o lead existente (não rebaixa nem troca a origem). Usado pela captura
+// de leads da Evolution (origin='evolution').
+func (r *LeadRepo) CreateWithOrigin(ctx context.Context, tx pgx.Tx, tenantID TenantID, contactID ContactID, origin string) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO lead (tenant_id, contact_id, status, origin)
+		VALUES ($1, $2, 'novo', $3)
+		ON CONFLICT (tenant_id, contact_id) DO NOTHING
+	`, tenantID, contactID, origin)
+	if err != nil {
+		return fmt.Errorf("LeadRepo.CreateWithOrigin: %w", err)
+	}
+	return nil
+}
+
 // SetStatusByConversation avança o status do lead vinculado a uma conversa (via
 // contact). Não rebaixa leads já em 'matriculado'/'perdido'. Usado pelo tie-in
 // de agendamento (confirmar aula → 'aula_marcada').

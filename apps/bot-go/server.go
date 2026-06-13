@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -125,21 +126,28 @@ type Server struct {
 	burst   *burstBuffer
 	hub     *WSHub
 	logRepo *ProcessingLogRepo
+	// Captura de leads da Evolution (webhook).
+	contacts   *ContactRepo
+	leads      *LeadRepo
+	withTenant func(ctx context.Context, fn func(pgx.Tx) error) error
 }
 
 // NewServer cria um Server com as dependências fornecidas.
 func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, pool *pgxpool.Pool, sender *WhatsAppSender, logger *slog.Logger, hub *WSHub, logRepo *ProcessingLogRepo) *Server {
 	return &Server{
-		cfg:     cfg,
-		engine:  engine,
-		webhook: webhook,
-		pool:    pool,
-		sender:  sender,
-		logger:  logger,
-		dbnc:    newDebouncer(),
-		burst:   newBurstBuffer(),
-		hub:     hub,
-		logRepo: logRepo,
+		cfg:        cfg,
+		engine:     engine,
+		webhook:    webhook,
+		pool:       pool,
+		sender:     sender,
+		logger:     logger,
+		dbnc:       newDebouncer(),
+		burst:      newBurstBuffer(),
+		hub:        hub,
+		logRepo:    logRepo,
+		contacts:   NewContactRepo(pool),
+		leads:      NewLeadRepo(pool),
+		withTenant: withTenant(pool, cfg.TenantID),
 	}
 }
 
@@ -151,6 +159,7 @@ func (s *Server) Handler() http.Handler {
 	// Webhook + health
 	mux.HandleFunc("GET "+bp+"/webhooks/whatsapp", s.handleVerify)
 	mux.HandleFunc("POST "+bp+"/webhooks/whatsapp", s.handleInbound)
+	mux.HandleFunc("POST "+bp+"/webhooks/evolution", s.handleEvolutionWebhook)
 	mux.HandleFunc("GET "+bp+"/health", s.handleHealth)
 
 	// Dashboard API
@@ -387,4 +396,86 @@ func (s *Server) debounceWindow(ctx context.Context) time.Duration {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+// ---------------------------------------------------------------------------
+// Evolution API — captura de leads do número não-oficial (só captura, sem responder)
+// ---------------------------------------------------------------------------
+
+type evolutionWebhook struct {
+	Event    string `json:"event"`
+	Instance string `json:"instance"`
+	Data     struct {
+		Key struct {
+			RemoteJid string `json:"remoteJid"`
+			FromMe    bool   `json:"fromMe"`
+		} `json:"key"`
+		PushName string `json:"pushName"`
+	} `json:"data"`
+}
+
+// handleEvolutionWebhook recebe eventos da Evolution e captura leads (origin=evolution).
+// Autenticado por segredo em ?secret=. ACK imediato; processa em background.
+func (s *Server) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request) {
+	secret := s.cfg.EvolutionWebhookSecret
+	if secret == "" || subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("secret")), []byte(secret)) != 1 {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+	if err != nil {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusOK) // ACK rápido para a Evolution
+
+	var ev evolutionWebhook
+	if err := json.Unmarshal(body, &ev); err != nil {
+		s.logger.Debug("evolution: payload inválido", "err", err)
+		return
+	}
+	go s.captureEvolutionLead(ev)
+}
+
+// captureEvolutionLead cria/atualiza um lead a partir de uma mensagem recebida na
+// Evolution. Ignora grupos, status e mensagens próprias. Não responde nada.
+func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
+	if !strings.Contains(strings.ToLower(ev.Event), "upsert") || ev.Data.Key.FromMe {
+		return
+	}
+	jid := ev.Data.Key.RemoteJid
+	if jid == "" || strings.HasSuffix(jid, "@g.us") || strings.HasPrefix(jid, "status@") {
+		return
+	}
+	phone := jid
+	if i := strings.IndexAny(phone, "@:"); i > 0 {
+		phone = phone[:i]
+	}
+	if phone == "" {
+		return
+	}
+	name := ev.Data.PushName
+
+	ctx := context.Background()
+	err := s.withTenant(ctx, func(tx pgx.Tx) error {
+		contact, _, err := s.contacts.FindByChannelIdentity(ctx, tx, "whatsapp", phone)
+		if err != nil {
+			return err
+		}
+		if contact == nil {
+			contact, _, err = s.contacts.CreateWithChannelIdentity(ctx, tx, s.cfg.TenantID, "whatsapp", phone, name)
+			if err != nil {
+				return err
+			}
+		}
+		return s.leads.CreateWithOrigin(ctx, tx, s.cfg.TenantID, contact.ID, "evolution")
+	})
+	if err != nil {
+		s.logger.Error("evolution: falha ao capturar lead", "phone", phone, "err", err)
+		return
+	}
+	if s.hub != nil {
+		s.hub.Broadcast(WSEvent{Type: "lead.new"})
+	}
 }
