@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -99,10 +100,14 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 	// próprio, o que permitiria brute-force do 2º fator limitado só pelo IP. Conta
 	// a tentativa ANTES de validar; zera ao confirmar com sucesso (mais abaixo).
 	attemptKey := "sudo_attempts:" + strconv.FormatInt(uid, 10)
-	attempts, _ := s.rdb.Incr(r.Context(), attemptKey).Result()
-	if attempts == 1 {
-		s.rdb.Expire(r.Context(), attemptKey, 15*time.Minute)
+	sudoAttemptsCmd := s.rdb.Incr(r.Context(), attemptKey)
+	if sudoAttemptsCmd.Err() != nil {
+		slog.Warn("sudo_attempts: redis error; rejecting to fail closed", "uid", uid, "err", sudoAttemptsCmd.Err())
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+		return
 	}
+	attempts := sudoAttemptsCmd.Val()
+	s.rdb.ExpireNX(r.Context(), attemptKey, 15*time.Minute)
 	if attempts > 5 {
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
 		return
