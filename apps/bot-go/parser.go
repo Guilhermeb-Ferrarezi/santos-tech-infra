@@ -200,16 +200,18 @@ func extractJSON(s string) string {
 	return s[start : end+1]
 }
 
-// extractBubbles converte []any em []string, validando que não está vazio.
+// extractBubbles converte []any em []string. Um array vazio é VÁLIDO e significa
+// "não responder" (ex.: cliente só mandou um "ok"/agradecimento) — o engine fica
+// quieto nesse caso. Só ignora entradas que não sejam string.
 func extractBubbles(raw []any) ([]string, error) {
-	if len(raw) == 0 {
-		return nil, fmt.Errorf("campo obrigatório ausente ou vazio: bubbles")
-	}
 	bubbles := make([]string, 0, len(raw))
 	for i, v := range raw {
 		s, ok := v.(string)
 		if !ok {
 			return nil, fmt.Errorf("bubbles[%d] não é string", i)
+		}
+		if strings.TrimSpace(s) == "" {
+			continue // descarta balões vazios
 		}
 		bubbles = append(bubbles, s)
 	}

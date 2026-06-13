@@ -98,6 +98,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("- Colete o necessário: nome do aluno; idade (se criança); curso/área de interesse; dias e horários que prefere.\n")
 	sb.WriteString("- Proponha UM horário livre (dentro do funcionamento e fora dos ocupados) e confirme com o cliente (\"posso marcar terça 19h30?\"). Preencha o campo \"schedulingRequest\".\n")
 	sb.WriteString("- NÃO garanta que está marcado: diga que vai confirmar a disponibilidade e retorna. A confirmação final é de um humano.\n")
+	sb.WriteString("- Depois de dizer que vai confirmar e retornar, NÃO fique repetindo. Se o cliente só responder com confirmação/agradecimento/despedida (ex.: \"ok\", \"blz\", \"valeu\", \"tá bom\", \"obrigado\", \"👍\"), NÃO mande outra mensagem: retorne \"bubbles\": []. Mandar mais uma confirmação por cima é irritante.\n")
 	sb.WriteString("\n")
 
 	// ── Segurança ─────────────────────────────────────────────────────────────
@@ -122,7 +123,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("}\n")
 	sb.WriteString("\n")
 	sb.WriteString("Definição de cada campo:\n")
-	sb.WriteString("- \"bubbles\"      : array de strings — OBRIGATÓRIO. Use 1 balão na maioria das vezes. Use 2 SOMENTE quando a resposta tiver duas partes claramente separadas (ex: resposta + pergunta de qualificação). NUNCA mais de 2 balões.\n")
+	sb.WriteString("- \"bubbles\"      : array de strings. Use 1 balão na maioria das vezes. Use 2 SOMENTE quando a resposta tiver duas partes claramente separadas (ex: resposta + pergunta de qualificação). NUNCA mais de 2 balões. Use [] (array VAZIO) para NÃO enviar nada — quando o cliente só mandou uma confirmação/agradecimento/despedida que não pede resposta (\"ok\", \"valeu\", \"blz\", \"tá\", \"👍\") e a conversa já está encerrada ou aguardando ação humana. NÃO use [] se houver schedulingRequest ou scheduledContact a registrar.\n")
 	sb.WriteString("- \"answered\"     : true se a intenção principal do cliente foi atendida (mesmo parcialmente). false se você não soube responder.\n")
 	sb.WriteString("- \"answeredFromKb\": true SOMENTE se os dados da resposta vieram diretamente da Base de Conhecimento acima.\n")
 	sb.WriteString("- \"citedEntryIds\": IDs de entradas da KB usadas. Array vazio [] se nenhuma.\n")
@@ -142,6 +143,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("  Achou na web          → answeredFromKb:false, handoff:false, answered:true\n")
 	sb.WriteString("  Não achou em nenhum   → answeredFromKb:false, handoff:true,  answered:false, bubbles:[\"Não tenho essa informação agora, mas posso te conectar com nossa equipe.\"]\n")
 	sb.WriteString("  Cliente pede humano   → handoff:true, bubbles:[\"Claro! Vou te conectar com nossa equipe agora.\"]\n")
+	sb.WriteString("  Cliente só diz \"ok\"   → answered:true, bubbles:[]  (não responde nada)\n")
 	sb.WriteString("\n")
 
 	// ── Contexto da conversa ──────────────────────────────────────────────────
