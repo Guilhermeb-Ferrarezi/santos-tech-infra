@@ -38,8 +38,9 @@ func TestResolveBookingDateTime(t *testing.T) {
 		day, tm string
 		want    string // RFC3339 esperado, ou "" se !ok
 	}{
-		// quarta é hoje (17/06) → próxima ocorrência = hoje
-		{"quarta", "19h30", "2026-06-17T19:30:00-03:00"},
+		// quarta é HOJE (17/06): agendar pra "quarta" significa a PRÓXIMA (24/06),
+		// nunca hoje — esse era o bug que gravava a aula no dia errado.
+		{"quarta", "19h30", "2026-06-24T19:30:00-03:00"},
 		// terça → próxima terça (23/06)
 		{"terça", "9h", "2026-06-23T09:00:00-03:00"},
 		{"ter", "9h", "2026-06-23T09:00:00-03:00"},
@@ -64,6 +65,24 @@ func TestResolveBookingDateTime(t *testing.T) {
 		}
 		if !ok || got != c.want {
 			t.Errorf("ResolveBookingDateTime(%q,%q) = (%q,%v), quer %q", c.day, c.tm, got, ok, c.want)
+		}
+	}
+}
+
+func TestBookingAluno(t *testing.T) {
+	cases := []struct {
+		student, wpp, phone, want string
+	}{
+		{"Guilherme", "moto da apple", "5516999", "Guilherme (moto da apple)"},
+		{"Guilherme", "", "5516999", "Guilherme"},
+		{"", "moto da apple", "5516999", "moto da apple"},
+		{"João", "joão", "5516999", "João"}, // iguais (case-insensitive) → não duplica
+		{"", "", "5516999", "5516999"},
+	}
+	for _, c := range cases {
+		got := bookingAluno(PendingBooking{StudentName: c.student, ClientName: c.wpp, ClientPhone: c.phone})
+		if got != c.want {
+			t.Errorf("bookingAluno(%q,%q) = %q, quer %q", c.student, c.wpp, got, c.want)
 		}
 	}
 }

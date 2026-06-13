@@ -172,7 +172,8 @@ type PendingBooking struct {
 	TenantID       TenantID
 	ConversationID ConversationID
 	ClientPhone    string
-	ClientName     string
+	ClientName     string // nome do perfil do WhatsApp (ex.: "moto da apple")
+	StudentName    string // nome informado na conversa (ex.: "Guilherme"). Ver migration 0024.
 	Kind           string
 	Course         string
 	ProposedDay    string

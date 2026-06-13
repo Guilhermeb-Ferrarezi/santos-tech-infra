@@ -536,6 +536,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 				ConversationID: conv.ID,
 				ClientPhone:    contactPhone,
 				ClientName:     contactName,
+				StudentName:    sr.StudentName,
 				Kind:           sr.Kind,
 				Course:         sr.Course,
 				ProposedDay:    sr.ProposedDay,
@@ -844,7 +845,7 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 					status = "Confirmar"
 				}
 				notionErr = e.deps.Notion.CreateBooking(ctx, Booking{
-					Aluno:    firstNonEmpty(pb.ClientName, pb.ClientPhone),
+					Aluno:    bookingAluno(*pb),
 					WhatsApp: pb.ClientPhone,
 					DataHora: dataHora,
 					Status:   status,
@@ -928,6 +929,24 @@ func (e *ConversationEngine) sendClientReply(ctx context.Context, inbound Inboun
 		e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: convID})
 	}
 	return err
+}
+
+// bookingAluno monta o "Aluno/Responsável" gravado no Notion: o nome informado na
+// conversa com o nome do perfil do WhatsApp entre parênteses, ex.: "Guilherme (moto
+// da apple)". Se só houver um dos dois, usa o que tiver; sem nenhum, cai no telefone.
+func bookingAluno(pb PendingBooking) string {
+	student := strings.TrimSpace(pb.StudentName)
+	wpp := strings.TrimSpace(pb.ClientName)
+	switch {
+	case student != "" && wpp != "" && !strings.EqualFold(student, wpp):
+		return student + " (" + wpp + ")"
+	case student != "":
+		return student
+	case wpp != "":
+		return wpp
+	default:
+		return pb.ClientPhone
+	}
 }
 
 // courseSuffix devolve ", curso X" quando há curso, ou string vazia.

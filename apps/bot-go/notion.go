@@ -260,11 +260,16 @@ func resolveDay(day string, now time.Time) (int, time.Month, int, bool) {
 	if y, mo, d, ok := parseSlashDate(s, now); ok {
 		return y, mo, d, true
 	}
-	// Dia da semana (pega a próxima ocorrência, incluindo hoje).
+	// Dia da semana → próxima ocorrência. Se cair em HOJE (ex.: "sábado" dito num
+	// sábado), pula pra semana que vem: agendar é sempre pra frente, e "hoje" tem
+	// palavra própria. Evita gravar a aula no dia errado.
 	key := strings.Fields(s)
 	if len(key) > 0 {
 		if wd, ok := weekdaysPT[key[0]]; ok {
 			ahead := (int(wd) - int(now.Weekday()) + 7) % 7
+			if ahead == 0 {
+				ahead = 7
+			}
 			t := now.AddDate(0, 0, ahead)
 			return t.Year(), t.Month(), t.Day(), true
 		}
