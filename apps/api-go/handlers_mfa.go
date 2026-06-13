@@ -100,10 +100,14 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 	// (TOTP/recovery/OTP de email) limitado só pelo rate-limit por IP. Conta a
 	// tentativa ANTES de validar; zera ao desativar com sucesso (mais abaixo).
 	attemptKey := "mfa_disable_attempts:" + strconv.FormatInt(uid, 10)
-	attempts, _ := s.rdb.Incr(r.Context(), attemptKey).Result()
-	if attempts == 1 {
-		s.rdb.Expire(r.Context(), attemptKey, 15*time.Minute)
+	disableAttemptsCmd := s.rdb.Incr(r.Context(), attemptKey)
+	if disableAttemptsCmd.Err() != nil {
+		slog.Warn("mfa_disable_attempts: redis error; rejecting to fail closed", "uid", uid, "err", disableAttemptsCmd.Err())
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+		return
 	}
+	attempts := disableAttemptsCmd.Val()
+	s.rdb.ExpireNX(r.Context(), attemptKey, 15*time.Minute)
 	if attempts > 5 {
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
 		return
@@ -194,7 +198,15 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	// Teto de tentativas por challenge: sem isso, o OTP de email (6 dígitos) seria
 	// retentável até o limite por IP (burlável). Após N falhas, invalida o desafio.
-	attempts, _ := s.rdb.Incr(r.Context(), "mfa_attempts:"+body.Challenge).Result()
+	// fail-closed: se o Redis falhar, não sabemos quantas tentativas já houve;
+	// rejeitar é mais seguro do que deixar passar (OTP de e-mail tem apenas 10⁶ combinações).
+	attemptsCmd := s.rdb.Incr(r.Context(), "mfa_attempts:"+body.Challenge)
+	if attemptsCmd.Err() != nil {
+		slog.Warn("mfa_attempts: redis error; rejecting to fail closed", "challenge", body.Challenge, "err", attemptsCmd.Err())
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+		return
+	}
+	attempts := attemptsCmd.Val()
 	s.rdb.ExpireNX(r.Context(), "mfa_attempts:"+body.Challenge, 10*time.Minute)
 	if attempts > 5 {
 		s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "mfa_attempts:"+body.Challenge)
