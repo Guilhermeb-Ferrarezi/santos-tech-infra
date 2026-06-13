@@ -243,22 +243,35 @@ func (s *Server) handleDashSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.sender.accessToken == "" || s.sender.phoneNumberID == "" {
-		jsonErr(w, "Meta API não configurada", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Encontra o número do destinatário
-	var phone string
+	// Encontra o número do destinatário E o canal real da conversa — o envio manual
+	// do dashboard deve sair pelo MESMO canal por onde o cliente fala (Meta para
+	// 'whatsapp', Evolution para 'evolution'), não hardcodar 'whatsapp'/s.sender.
+	var phone, channel string
 	err := s.pool.QueryRow(ctx, `
-		SELECT ci.external_id
+		SELECT ci.external_id, conv.channel::text
 		FROM conversation conv
 		JOIN channel_identity ci ON ci.id = conv.channel_identity_id
 		WHERE conv.tenant_id = $1 AND conv.id = $2::uuid
-	`, tenantID, convID).Scan(&phone)
+	`, tenantID, convID).Scan(&phone, &channel)
 	if err != nil {
 		jsonErr(w, "conversation not found", http.StatusNotFound)
 		return
+	}
+
+	// Escolhe o sender pelo canal da conversa.
+	var sender ChatSender
+	if channel == "evolution" {
+		if s.evoClient == nil || !s.evoClient.Enabled() {
+			jsonErr(w, "Evolution API não configurada", http.StatusServiceUnavailable)
+			return
+		}
+		sender = s.evoClient
+	} else {
+		if s.sender.accessToken == "" || s.sender.phoneNumberID == "" {
+			jsonErr(w, "Meta API não configurada", http.StatusServiceUnavailable)
+			return
+		}
+		sender = s.sender
 	}
 
 	content := MessageContent{Type: "text", Text: body.Text}
@@ -267,14 +280,14 @@ func (s *Server) handleDashSendMessage(w http.ResponseWriter, r *http.Request) {
 	outMsg := OutboundMessage{
 		TenantID:       tenantID,
 		ConversationID: ConversationID(convID),
-		Channel:        "whatsapp",
+		Channel:        channel,
 		To:             phone,
 		Intent:         IntentFreeForm,
 		Content:        content,
 		IdempotencyKey: idemKey,
 	}
 
-	wamid, err := s.sender.SendMessage(ctx, outMsg)
+	wamid, err := sender.SendMessage(ctx, outMsg)
 	if err != nil {
 		s.logger.Error("dash: send message", "err", err)
 		jsonErr(w, "falha ao enviar mensagem", http.StatusInternalServerError)

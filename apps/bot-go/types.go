@@ -183,7 +183,10 @@ type PendingBooking struct {
 	Age            int
 	Notes          string
 	Status         string // open | confirmed | rejected
-	CreatedAt      time.Time
+	// Channel — canal de origem do CLIENTE (whatsapp | evolution). Define por qual
+	// sender o aviso/resposta sai. Ver migration 0023.
+	Channel   string
+	CreatedAt time.Time
 }
 
 // IsAdminNumber retorna true se o telefone for de um administrador (lista 0016,
@@ -296,7 +299,10 @@ type PendingQuestion struct {
 	Question       string
 	Status         string // open | drafted | resolved
 	Draft          string
-	CreatedAt      time.Time
+	// Channel — canal de origem do CLIENTE (whatsapp | evolution). Define por qual
+	// sender a resposta sai. Ver migration 0023.
+	Channel   string
+	CreatedAt time.Time
 }
 
 // ClientAction — ação proposta pelo LLM (modo admin) sobre uma dúvida pendente:

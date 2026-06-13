@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -298,24 +299,27 @@ func (s *Server) processInbound(body []byte) {
 		}
 
 		// Acumula na rajada do número e agenda o flush (agrupa a rajada).
-		key := msg.ExternalID
+		// Chave prefixada pelo provider para não colidir com a Evolution (mesmo
+		// telefone em canais distintos = engines distintos).
+		key := "whatsapp:" + msg.ExternalID
 		s.burst.add(key, burstItem{msg: msg, eventID: id})
 
 		if window <= 0 {
 			// Sem agrupamento: processa imediatamente o que estiver acumulado.
-			s.flushBurst(ctx, key)
+			s.flushBurst(ctx, s.engine, key)
 			continue
 		}
 		s.dbnc.debounce(key, window, func() {
-			s.flushBurst(ctx, key)
+			s.flushBurst(ctx, s.engine, key)
 		})
 	}
 }
 
-// flushBurst processa a rajada acumulada serializando por conversa. Enquanto um
-// Handle roda (~LLM), novas mensagens da mesma conversa ficam no buffer e são
-// processadas numa única continuação ao final — sem respostas concorrentes.
-func (s *Server) flushBurst(ctx context.Context, key string) {
+// flushBurst processa a rajada acumulada serializando por conversa, usando o engine
+// informado (Meta ou Evolution). Enquanto um Handle roda (~LLM), novas mensagens da
+// mesma conversa ficam no buffer e são processadas numa única continuação ao final —
+// sem respostas concorrentes.
+func (s *Server) flushBurst(ctx context.Context, engine *ConversationEngine, key string) {
 	items := s.burst.beginOrQueue(key)
 	if items == nil {
 		// Nada a fazer agora: ou já está sendo processado (as mensagens ficam
@@ -325,14 +329,22 @@ func (s *Server) flushBurst(ctx context.Context, key string) {
 
 	for items != nil {
 		combined := combineInbound(items)
-		if err := s.engine.Handle(ctx, combined); err != nil {
+		err := engine.Handle(ctx, combined)
+		switch {
+		case errors.Is(err, ErrMessageHeld):
+			// Mensagem retida (quiet hours): NÃO marca done nem failed. O engine já
+			// deixou a inbound em 'failed' + next_retry_at; o drenador de retries do
+			// worker reprocessa quando vencer. Marcar done aqui a descartaria.
+			s.logger.Debug("flushBurst: mensagem retida (quiet hours), aguardando retry",
+				"wamid", combined.ProviderMessageID)
+		case err != nil:
 			s.logger.Error("engine.Handle falhou", "wamid", combined.ProviderMessageID, "err", err)
 			for _, it := range items {
 				if markErr := s.webhook.MarkFailed(ctx, it.eventID, err.Error()); markErr != nil {
 					s.logger.Error("webhook.MarkFailed falhou", "id", it.eventID, "err", markErr)
 				}
 			}
-		} else {
+		default:
 			for _, it := range items {
 				if markErr := s.webhook.MarkDone(ctx, it.eventID); markErr != nil {
 					s.logger.Error("webhook.MarkDone falhou", "id", it.eventID, "err", markErr)
@@ -508,17 +520,47 @@ func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
 
 	// Bot responde via Evolution SOMENTE se o toggle estiver ligado e houver texto.
 	if text != "" && s.evoEngine != nil && s.evolutionBotReplyEnabled(ctx) {
+		providerMsgID := ev.Data.Key.ID
+		if providerMsgID == "" {
+			s.logger.Debug("evolution: sem id de mensagem, ignorando resposta do bot", "phone", phone)
+			return
+		}
+
+		// Dedup via WebhookRepo (provider 'evolution') — a reentrega do Baileys com o
+		// mesmo id não dispara resposta dupla. Reusa o mesmo mecanismo do WhatsApp.
+		rawBody, _ := json.Marshal(ev)
+		id, isDuplicate, err := s.webhook.Record(ctx, s.cfg.TenantID, "evolution", providerMsgID, rawBody)
+		if err != nil {
+			s.logger.Error("evolution: erro ao registrar webhook event", "id", providerMsgID, "err", err)
+			return
+		}
+		if isDuplicate {
+			s.logger.Debug("evolution: webhook duplicado, ignorando", "id", providerMsgID)
+			return
+		}
+
 		inbound := InboundMessage{
 			TenantID:          s.cfg.TenantID,
 			Channel:           "evolution",
 			ExternalID:        phone,
 			DisplayHandle:     name,
-			ProviderMessageID: ev.Data.Key.ID,
+			ProviderMessageID: providerMsgID,
 			Content:           MessageContent{Type: "text", Text: text},
 			ReceivedAt:        time.Now(),
 		}
-		if err := s.evoEngine.Handle(ctx, inbound); err != nil {
-			s.logger.Error("evolution: engine.Handle", "phone", phone, "err", err)
+
+		// Coalescing/debounce idêntico ao WhatsApp, com chave prefixada por canal
+		// para não colidir com o mesmo telefone no número oficial.
+		key := "evolution:" + phone
+		s.burst.add(key, burstItem{msg: inbound, eventID: id})
+
+		window := s.debounceWindow(ctx)
+		if window <= 0 {
+			s.flushBurst(ctx, s.evoEngine, key)
+			return
 		}
+		s.dbnc.debounce(key, window, func() {
+			s.flushBurst(ctx, s.evoEngine, key)
+		})
 	}
 }

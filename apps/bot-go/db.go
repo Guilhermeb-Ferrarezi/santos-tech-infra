@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,10 +19,22 @@ import (
 var migrationsFS embed.FS
 
 // openDB conecta ao Postgres via pgxpool e retorna o pool pronto.
+// Configura MaxConns e MaxConnLifetime explicitamente para limitar o uso de
+// conexões (evita estourar o limite do Postgres) e reciclar conexões periodicamente
+// (evita conexões "presas" atrás de pgbouncer/proxies ou após failover).
 func openDB(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+	poolCfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("pgxpool.New: %w", err)
+		return nil, fmt.Errorf("pgxpool.ParseConfig: %w", err)
+	}
+	poolCfg.MaxConns = 10                       // teto de conexões simultâneas
+	poolCfg.MaxConnLifetime = 30 * time.Minute  // recicla conexões a cada 30 min
+	poolCfg.MaxConnIdleTime = 5 * time.Minute   // fecha conexões ociosas
+	poolCfg.HealthCheckPeriod = 1 * time.Minute // checagem periódica de saúde
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	if err != nil {
+		return nil, fmt.Errorf("pgxpool.NewWithConfig: %w", err)
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()

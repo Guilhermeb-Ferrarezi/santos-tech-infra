@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,6 +13,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrMessageHeld sinaliza que a mensagem NÃO foi processada agora — foi RETIDA
+// para reprocessamento futuro (ex.: quiet hours). Quem chamou (flushBurst) NÃO
+// deve marcar o webhook como 'done' nesse caso: o SetNextRetryAt já o deixou em
+// 'failed' + next_retry_at, e o drenador de retries do worker o reprocessará.
+var ErrMessageHeld = errors.New("mensagem retida para reprocessamento")
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -50,8 +57,13 @@ type EngineDeps struct {
 	Config    *TenantConfigRepo
 	Responder Responder
 	Sender    ChatSender
-	Emitter   EventEmitter
-	Logger    *slog.Logger
+	// EvolutionSender — sender do canal não-oficial (Evolution). Quando presente,
+	// o engine roteia a resposta ao CLIENTE pelo sender correto conforme o canal de
+	// origem do cliente (Meta para 'whatsapp', Evolution para 'evolution'), em vez de
+	// usar sempre e.deps.Sender (que é o sender do canal do ADMIN/da conversa atual).
+	EvolutionSender ChatSender
+	Emitter         EventEmitter
+	Logger          *slog.Logger
 	// Broadcast envia um evento WebSocket a todos os clientes do dashboard (opcional).
 	Broadcast func(ev WSEvent)
 	// LogRepo persiste logs de processamento para o painel de logs (opcional).
@@ -95,6 +107,18 @@ func NewConversationEngine(deps EngineDeps) *ConversationEngine {
 	}
 }
 
+// senderFor escolhe o ChatSender adequado ao canal informado. 'evolution' usa o
+// EvolutionSender (número não-oficial) quando disponível; qualquer outro canal
+// (ou ausência do sender Evolution) cai no Sender padrão (Meta/oficial). Isso
+// garante que respostas a um cliente saiam pelo MESMO canal por onde ele falou,
+// independentemente do canal da conversa em que o admin/engine está rodando.
+func (e *ConversationEngine) senderFor(channel string) ChatSender {
+	if channel == "evolution" && e.deps.EvolutionSender != nil {
+		return e.deps.EvolutionSender
+	}
+	return e.deps.Sender
+}
+
 // ---------------------------------------------------------------------------
 // Handle — ponto de entrada principal
 // ---------------------------------------------------------------------------
@@ -132,6 +156,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		contactName   string
 		convCtx       ConversationContext
 		llmReady      bool
+		held          bool // mensagem retida (quiet hours) — não marcar webhook done
 	)
 
 	err := e.withTenant(ctx, func(tx pgx.Tx) error {
@@ -255,6 +280,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 				if err := e.deps.Messages.SetNextRetryAt(ctx, tx, inbound.ProviderMessageID, nextRetry); err != nil {
 					return fmt.Errorf("SetNextRetryAt: %w", err)
 				}
+				held = true
 				return nil
 			}
 		}
@@ -285,6 +311,13 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	})
 	if err != nil {
 		return fmt.Errorf("engine.Handle (fase 1): %w", err)
+	}
+
+	// Mensagem retida (quiet hours): a inbound já foi marcada para retry; sinaliza
+	// ao chamador para NÃO marcar o webhook como done. O drenador de retries do
+	// worker reprocessará quando next_retry_at vencer.
+	if held {
+		return ErrMessageHeld
 	}
 
 	// Broadcast da mensagem inbound logo após o commit — antes do LLM.
@@ -447,6 +480,8 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 					"type":            "HANDOFF",
 					"conversation_id": conv.ID,
 					"contact_id":      conv.ContactID,
+					// Canal de origem — define por qual sender o admin é notificado.
+					"channel": inbound.Channel,
 				},
 				OccurredAt: time.Now(),
 			}
@@ -457,7 +492,9 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			// Registra a dúvida do cliente na fila para o admin responder depois.
 			// Não aplica a conversas admin (admin não é um cliente esperando).
 			if !cfg.IsAdminConversation && inboundText != "" && e.deps.Pending != nil {
-				if err := e.deps.Pending.Insert(ctx, tx, inbound.TenantID, conv.ID, contactPhone, contactName, inboundText); err != nil {
+				// inbound.Channel aqui é o canal do CLIENTE (handoff só ocorre fora de
+				// conversa admin) — grava para rotear o reply pelo sender correto depois.
+				if err := e.deps.Pending.Insert(ctx, tx, inbound.TenantID, conv.ID, contactPhone, contactName, inboundText, inbound.Channel); err != nil {
 					return fmt.Errorf("Pending.Insert: %w", err)
 				}
 			}
@@ -481,6 +518,8 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 					"conversation_id": conv.ID,
 					"inbound_text":    inboundText,
 					"answer_bubbles":  output.Bubbles,
+					// Canal de origem — define por qual sender o admin é notificado.
+					"channel": inbound.Channel,
 				},
 				OccurredAt: time.Now(),
 			}
@@ -504,6 +543,8 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 				ProposedPeriod: sr.ProposedPeriod,
 				Age:            sr.Age,
 				Notes:          sr.Notes,
+				// Canal de origem do CLIENTE — define por qual sender o aviso ao cliente sai.
+				Channel: inbound.Channel,
 			}
 			if err := e.deps.Bookings.Insert(ctx, tx, pb); err != nil {
 				return fmt.Errorf("Bookings.Insert: %w", err)
@@ -519,6 +560,8 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 				Payload: map[string]any{
 					"type":            "BOOKING",
 					"conversation_id": conv.ID,
+					// Canal de origem — define por qual sender o admin é notificado.
+					"channel": inbound.Channel,
 					"message": fmt.Sprintf("%s — %s%s, proposto: %s %s %s. Responda aqui para confirmar, ajustar o horário ou recusar.",
 						sr.Kind, name, courseSuffix(sr.Course), sr.ProposedDay, sr.ProposedTime, sr.ProposedPeriod),
 				},
@@ -672,18 +715,25 @@ func (e *ConversationEngine) executeClientActions(ctx context.Context, inbound I
 		}
 
 		// Envio confirmado: manda ao cliente, persiste, reengaja e resolve.
+		// Usa o canal de ORIGEM DO CLIENTE (gravado na pendência), não o canal do
+		// admin (inbound.Channel) — senão a resposta sairia pelo número errado.
+		clientChannel := pq.Channel
+		if clientChannel == "" {
+			clientChannel = "whatsapp"
+		}
+		clientSender := e.senderFor(clientChannel)
 		idemKey := fmt.Sprintf("pending:%s:reply", pq.ID)
 		outboundMsg := OutboundMessage{
 			TenantID:       inbound.TenantID,
 			ConversationID: pq.ConversationID,
-			Channel:        inbound.Channel,
+			Channel:        clientChannel,
 			To:             pq.ClientPhone,
 			Intent:         IntentFreeForm,
 			Content:        MessageContent{Type: "text", Text: draft},
 			IdempotencyKey: idemKey,
 		}
 		sendErr := e.withTenant(ctx, func(tx pgx.Tx) error {
-			providerMsgID, err := e.deps.Sender.SendMessage(ctx, outboundMsg)
+			providerMsgID, err := clientSender.SendMessage(ctx, outboundMsg)
 			if err != nil {
 				return fmt.Errorf("SendMessage: %w", err)
 			}
@@ -812,7 +862,7 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 				}
 			}
 			msg := fmt.Sprintf("Prontinho! Sua aula ficou marcada para %s às %s. Qualquer coisa, é só me chamar. 😊", day, tm)
-			if err := e.sendClientReply(ctx, inbound, pb.ConversationID, pb.ClientPhone, "booking:"+pb.ID+":confirm", msg); err != nil {
+			if err := e.sendClientReply(ctx, inbound, pb.ConversationID, pb.ClientPhone, pb.Channel, "booking:"+pb.ID+":confirm", msg); err != nil {
 				log.Error("bookingAction: falha ao avisar cliente", "id", pb.ID, "err", err)
 			}
 			if notionErr != nil {
@@ -823,7 +873,7 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 
 		case "adjust":
 			msg := fmt.Sprintf("Consegui um horário: %s às %s. Pode ser pra você?", day, tm)
-			if err := e.sendClientReply(ctx, inbound, pb.ConversationID, pb.ClientPhone, fmt.Sprintf("booking:%s:adjust:%s%s", pb.ID, day, tm), msg); err != nil {
+			if err := e.sendClientReply(ctx, inbound, pb.ConversationID, pb.ClientPhone, pb.Channel, fmt.Sprintf("booking:%s:adjust:%s%s", pb.ID, day, tm), msg); err != nil {
 				log.Error("bookingAction: falha ao re-propor ao cliente", "id", pb.ID, "err", err)
 			}
 
@@ -839,18 +889,24 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 
 // sendClientReply envia uma mensagem ao cliente numa conversa específica (cross-conversa),
 // persiste o balão, reengaja a conversa e faz broadcast. Usado por agendamentos.
-func (e *ConversationEngine) sendClientReply(ctx context.Context, inbound InboundMessage, convID ConversationID, toPhone, idemKey, text string) error {
+// clientChannel é o canal de ORIGEM DO CLIENTE (whatsapp | evolution) — define por
+// qual sender a mensagem sai, independentemente do canal do admin (inbound.Channel).
+func (e *ConversationEngine) sendClientReply(ctx context.Context, inbound InboundMessage, convID ConversationID, toPhone, clientChannel, idemKey, text string) error {
+	if clientChannel == "" {
+		clientChannel = "whatsapp"
+	}
+	clientSender := e.senderFor(clientChannel)
 	outboundMsg := OutboundMessage{
 		TenantID:       inbound.TenantID,
 		ConversationID: convID,
-		Channel:        inbound.Channel,
+		Channel:        clientChannel,
 		To:             toPhone,
 		Intent:         IntentFreeForm,
 		Content:        MessageContent{Type: "text", Text: text},
 		IdempotencyKey: idemKey,
 	}
 	err := e.withTenant(ctx, func(tx pgx.Tx) error {
-		providerMsgID, err := e.deps.Sender.SendMessage(ctx, outboundMsg)
+		providerMsgID, err := clientSender.SendMessage(ctx, outboundMsg)
 		if err != nil {
 			return fmt.Errorf("SendMessage: %w", err)
 		}

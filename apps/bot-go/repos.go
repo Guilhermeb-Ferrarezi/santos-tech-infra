@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -66,20 +67,68 @@ func (r *ContactRepo) FindByChannelIdentity(ctx context.Context, tx pgx.Tx, chan
 	return &c, &ci, nil
 }
 
-// CreateWithChannelIdentity cria um novo Contact e uma ChannelIdentity associada
-// dentro de uma transação com SET LOCAL app.tenant_id já definido.
-func (r *ContactRepo) CreateWithChannelIdentity(ctx context.Context, tx pgx.Tx, tenantID TenantID, channel, externalID, displayHandle string) (*Contact, *ChannelIdentity, error) {
-	var c Contact
-	c.TenantID = tenantID
-	c.DisplayName = displayHandle
+// FindContactByPhone procura um contato existente cujo telefone (em qualquer canal)
+// normalize para o mesmo E.164 do externalID informado. Permite deduplicar o mesmo
+// telefone entre canais (oficial 'whatsapp' e 'evolution') num único contato.
+// Retorna nil quando não há contato com esse telefone.
+func (r *ContactRepo) FindContactByPhone(ctx context.Context, tx pgx.Tx, tenantID TenantID, externalID string) (*Contact, error) {
+	norm := normalizePhone(externalID)
+	if norm == "" {
+		return nil, nil
+	}
+	row := tx.QueryRow(ctx, `
+		SELECT c.id, c.tenant_id, c.display_name, c.communication_style, c.created_at, c.updated_at
+		FROM contact c
+		JOIN channel_identity ci ON ci.contact_id = c.id AND ci.tenant_id = c.tenant_id
+		WHERE c.tenant_id = $1
+		  AND regexp_replace(ci.external_id, '\D', '', 'g') = $2
+		ORDER BY c.created_at ASC
+		LIMIT 1
+	`, tenantID, norm)
 
-	err := tx.QueryRow(ctx, `
-		INSERT INTO contact (tenant_id, display_name)
-		VALUES ($1, $2)
-		RETURNING id, tenant_id, display_name, created_at, updated_at
-	`, tenantID, displayHandle).Scan(&c.ID, &c.TenantID, &c.DisplayName, &c.CreatedAt, &c.UpdatedAt)
+	var c Contact
+	var style *string
+	err := row.Scan(&c.ID, &c.TenantID, &c.DisplayName, &style, &c.CreatedAt, &c.UpdatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("ContactRepo.CreateWithChannelIdentity insert contact: %w", err)
+		return nil, fmt.Errorf("ContactRepo.FindContactByPhone: %w", err)
+	}
+	if style != nil {
+		s := CommunicationStyle(*style)
+		c.CommunicationStyle = &s
+	}
+	return &c, nil
+}
+
+// CreateWithChannelIdentity cria (ou reusa) um Contact e cria a ChannelIdentity
+// associada, dentro de uma transação com SET LOCAL app.tenant_id já definido.
+// DEDUP cross-canal: se já existir um contato com o MESMO telefone (E.164
+// normalizado) em qualquer canal, reusa esse contato em vez de criar outro — assim
+// o mesmo número no oficial e na Evolution vira 1 contato (e 1 lead), preservando
+// threads separadas por channel_identity/conversation.
+func (r *ContactRepo) CreateWithChannelIdentity(ctx context.Context, tx pgx.Tx, tenantID TenantID, channel, externalID, displayHandle string) (*Contact, *ChannelIdentity, error) {
+	// Tenta reusar um contato existente pelo telefone (dedup cross-canal).
+	existing, err := r.FindContactByPhone(ctx, tx, tenantID, externalID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var c Contact
+	if existing != nil {
+		c = *existing
+	} else {
+		c.TenantID = tenantID
+		c.DisplayName = displayHandle
+		err := tx.QueryRow(ctx, `
+			INSERT INTO contact (tenant_id, display_name)
+			VALUES ($1, $2)
+			RETURNING id, tenant_id, display_name, created_at, updated_at
+		`, tenantID, displayHandle).Scan(&c.ID, &c.TenantID, &c.DisplayName, &c.CreatedAt, &c.UpdatedAt)
+		if err != nil {
+			return nil, nil, fmt.Errorf("ContactRepo.CreateWithChannelIdentity insert contact: %w", err)
+		}
 	}
 
 	var ci ChannelIdentity
@@ -814,15 +863,19 @@ func NewPendingQuestionRepo(pool *pgxpool.Pool) *PendingQuestionRepo {
 
 // Insert grava uma dúvida pendente quando o bot dá handoff. Idempotente por
 // conversa+pergunta abertas para não duplicar se o cliente reenviar.
-func (r *PendingQuestionRepo) Insert(ctx context.Context, tx pgx.Tx, tenantID TenantID, convID ConversationID, clientPhone, clientName, question string) error {
+func (r *PendingQuestionRepo) Insert(ctx context.Context, tx pgx.Tx, tenantID TenantID, convID ConversationID, clientPhone, clientName, question, channel string) error {
+	// channel = canal de origem do CLIENTE; define por qual sender o reply sai (0023).
+	if channel == "" {
+		channel = "whatsapp"
+	}
 	_, err := tx.Exec(ctx, `
-		INSERT INTO pending_question (tenant_id, conversation_id, client_phone, client_name, question, status)
-		SELECT $1, $2, $3, $4, $5, 'open'
+		INSERT INTO pending_question (tenant_id, conversation_id, client_phone, client_name, question, channel, status)
+		SELECT $1, $2, $3, $4, $5, $6, 'open'
 		WHERE NOT EXISTS (
 			SELECT 1 FROM pending_question
 			WHERE tenant_id = $1 AND conversation_id = $2 AND status IN ('open', 'drafted')
 		)
-	`, tenantID, convID, clientPhone, clientName, question)
+	`, tenantID, convID, clientPhone, clientName, question, channel)
 	if err != nil {
 		return fmt.Errorf("PendingQuestionRepo.Insert: %w", err)
 	}
@@ -832,7 +885,7 @@ func (r *PendingQuestionRepo) Insert(ctx context.Context, tx pgx.Tx, tenantID Te
 // ListOpen retorna as pendências abertas/rascunhadas do tenant (para casamento).
 func (r *PendingQuestionRepo) ListOpen(ctx context.Context, tx pgx.Tx, tenantID TenantID) ([]PendingQuestion, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT id, conversation_id, client_phone, client_name, question, status, COALESCE(draft, ''), created_at
+		SELECT id, conversation_id, client_phone, client_name, question, status, COALESCE(draft, ''), COALESCE(channel, 'whatsapp'), created_at
 		FROM pending_question
 		WHERE tenant_id = $1 AND status IN ('open', 'drafted')
 		ORDER BY created_at
@@ -846,7 +899,7 @@ func (r *PendingQuestionRepo) ListOpen(ctx context.Context, tx pgx.Tx, tenantID 
 	for rows.Next() {
 		pq := PendingQuestion{TenantID: tenantID}
 		if err := rows.Scan(&pq.ID, &pq.ConversationID, &pq.ClientPhone, &pq.ClientName,
-			&pq.Question, &pq.Status, &pq.Draft, &pq.CreatedAt); err != nil {
+			&pq.Question, &pq.Status, &pq.Draft, &pq.Channel, &pq.CreatedAt); err != nil {
 			return nil, fmt.Errorf("PendingQuestionRepo.ListOpen scan: %w", err)
 		}
 		out = append(out, pq)
@@ -859,11 +912,11 @@ func (r *PendingQuestionRepo) ListOpen(ctx context.Context, tx pgx.Tx, tenantID 
 func (r *PendingQuestionRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID, id string) (*PendingQuestion, error) {
 	pq := PendingQuestion{TenantID: tenantID, ID: id}
 	err := tx.QueryRow(ctx, `
-		SELECT conversation_id, client_phone, client_name, question, status, COALESCE(draft, ''), created_at
+		SELECT conversation_id, client_phone, client_name, question, status, COALESCE(draft, ''), COALESCE(channel, 'whatsapp'), created_at
 		FROM pending_question
 		WHERE tenant_id = $1 AND id = $2 AND status IN ('open', 'drafted')
 	`, tenantID, id).Scan(&pq.ConversationID, &pq.ClientPhone, &pq.ClientName,
-		&pq.Question, &pq.Status, &pq.Draft, &pq.CreatedAt)
+		&pq.Question, &pq.Status, &pq.Draft, &pq.Channel, &pq.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -913,13 +966,17 @@ func (r *PendingBookingRepo) Insert(ctx context.Context, tx pgx.Tx, b PendingBoo
 	if b.Age > 0 {
 		agePtr = &b.Age
 	}
+	channel := b.Channel
+	if channel == "" {
+		channel = "whatsapp"
+	}
 	_, err := tx.Exec(ctx, `
 		INSERT INTO pending_booking
 		  (tenant_id, conversation_id, client_phone, client_name, kind, course,
-		   proposed_day, proposed_time, proposed_period, age, notes, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'open')
+		   proposed_day, proposed_time, proposed_period, age, notes, channel, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'open')
 	`, b.TenantID, b.ConversationID, b.ClientPhone, b.ClientName, b.Kind, b.Course,
-		b.ProposedDay, b.ProposedTime, b.ProposedPeriod, agePtr, b.Notes)
+		b.ProposedDay, b.ProposedTime, b.ProposedPeriod, agePtr, b.Notes, channel)
 	if err != nil {
 		return fmt.Errorf("PendingBookingRepo.Insert: %w", err)
 	}
@@ -930,7 +987,7 @@ func (r *PendingBookingRepo) Insert(ctx context.Context, tx pgx.Tx, b PendingBoo
 func (r *PendingBookingRepo) ListOpen(ctx context.Context, tx pgx.Tx, tenantID TenantID) ([]PendingBooking, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id, conversation_id, client_phone, client_name, kind, course,
-		       proposed_day, proposed_time, proposed_period, COALESCE(age, 0), notes, status, created_at
+		       proposed_day, proposed_time, proposed_period, COALESCE(age, 0), notes, status, COALESCE(channel, 'whatsapp'), created_at
 		FROM pending_booking
 		WHERE tenant_id = $1 AND status = 'open'
 		ORDER BY created_at
@@ -944,7 +1001,7 @@ func (r *PendingBookingRepo) ListOpen(ctx context.Context, tx pgx.Tx, tenantID T
 	for rows.Next() {
 		b := PendingBooking{TenantID: tenantID}
 		if err := rows.Scan(&b.ID, &b.ConversationID, &b.ClientPhone, &b.ClientName, &b.Kind, &b.Course,
-			&b.ProposedDay, &b.ProposedTime, &b.ProposedPeriod, &b.Age, &b.Notes, &b.Status, &b.CreatedAt); err != nil {
+			&b.ProposedDay, &b.ProposedTime, &b.ProposedPeriod, &b.Age, &b.Notes, &b.Status, &b.Channel, &b.CreatedAt); err != nil {
 			return nil, fmt.Errorf("PendingBookingRepo.ListOpen scan: %w", err)
 		}
 		out = append(out, b)
@@ -957,11 +1014,11 @@ func (r *PendingBookingRepo) Get(ctx context.Context, tx pgx.Tx, tenantID Tenant
 	b := PendingBooking{TenantID: tenantID, ID: id}
 	err := tx.QueryRow(ctx, `
 		SELECT conversation_id, client_phone, client_name, kind, course,
-		       proposed_day, proposed_time, proposed_period, COALESCE(age, 0), notes, status, created_at
+		       proposed_day, proposed_time, proposed_period, COALESCE(age, 0), notes, status, COALESCE(channel, 'whatsapp'), created_at
 		FROM pending_booking
 		WHERE tenant_id = $1 AND id = $2 AND status = 'open'
 	`, tenantID, id).Scan(&b.ConversationID, &b.ClientPhone, &b.ClientName, &b.Kind, &b.Course,
-		&b.ProposedDay, &b.ProposedTime, &b.ProposedPeriod, &b.Age, &b.Notes, &b.Status, &b.CreatedAt)
+		&b.ProposedDay, &b.ProposedTime, &b.ProposedPeriod, &b.Age, &b.Notes, &b.Status, &b.Channel, &b.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -1118,4 +1175,17 @@ func nullableString(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// normalizePhone reduz um external_id ao seu E.164 "cru" (somente dígitos),
+// para deduplicar o mesmo telefone entre canais (ex.: '5516...@s.whatsapp.net'
+// na Evolution vs '5516...' no oficial). Retorna "" se não houver dígitos.
+func normalizePhone(s string) string {
+	var b strings.Builder
+	for _, ch := range s {
+		if ch >= '0' && ch <= '9' {
+			b.WriteRune(ch)
+		}
+	}
+	return b.String()
 }

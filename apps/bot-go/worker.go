@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -28,6 +29,13 @@ type WorkerDeps struct {
 	// Repos
 	Outbox            *OutboxRepo
 	ScheduledContacts *ScheduledContactRepo
+	// Webhook — usado pelo drenador de retries (mensagens retidas em quiet hours).
+	Webhook *WebhookRepo
+
+	// Engines para reprocessar mensagens retidas (quiet hours) quando o retry vence.
+	// Engine = canal oficial (Meta); EvoEngine = canal não-oficial (Evolution).
+	Engine    *ConversationEngine
+	EvoEngine *ConversationEngine
 
 	// Atalhos derivados (populados em NewWorker se ausentes).
 	Scheduled *ScheduledContactRepo
@@ -36,6 +44,10 @@ type WorkerDeps struct {
 	AgentGo   *AgentGoClient
 	TenantCfg *TenantConfigRepo
 	Sender    ChatSender
+	// EvolutionSender — sender do canal não-oficial (Evolution). Usado para notificar
+	// o admin pelo MESMO canal de origem do cliente (quando payload.channel='evolution'),
+	// para que a resposta do admin volte e seja roteada pelo canal certo.
+	EvolutionSender ChatSender
 }
 
 // Worker processa o outbox de domain events e os follow-ups agendados.
@@ -95,6 +107,12 @@ func (w *Worker) Start(ctx context.Context) {
 	go func() {
 		defer wg.Done()
 		w.followUpLoop(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.retryLoop(ctx)
 	}()
 
 	<-ctx.Done()
@@ -258,6 +276,18 @@ func (w *Worker) notificaAdmin(ctx context.Context, ev DomainEvent) error {
 		return nil
 	}
 
+	// Escolhe o sender conforme o canal de ORIGEM do cliente (gravado no payload).
+	// Se o cliente veio pela Evolution, o admin é avisado pela Evolution — assim a
+	// resposta do admin volta pelo mesmo canal e é roteada ao cliente corretamente.
+	channel, _ := ev.Payload["channel"].(string)
+	notifSender := w.deps.Sender
+	if channel == "evolution" && w.deps.EvolutionSender != nil {
+		notifSender = w.deps.EvolutionSender
+	}
+	if notifSender == nil {
+		return nil
+	}
+
 	question, _ := ev.Payload["question"].(string)
 	if question == "" {
 		question, _ = ev.Payload["message"].(string)
@@ -284,7 +314,7 @@ func (w *Worker) notificaAdmin(ctx context.Context, ev DomainEvent) error {
 	var firstErr error
 	sent := 0
 	for _, admin := range admins {
-		if err := w.deps.Sender.SendText(ctx, admin, texto); err != nil {
+		if err := notifSender.SendText(ctx, admin, texto); err != nil {
 			w.deps.Logger.Error("notificaAdmin: falha ao enviar a um admin", "admin", admin, "err", err)
 			if firstErr == nil {
 				firstErr = err
@@ -360,6 +390,132 @@ func (w *Worker) handleKBGap(ctx context.Context, ev DomainEvent) error {
 
 	w.deps.Logger.Info("handleKBGap: entrada KB criada", "title", entry.Title)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// retryLoop — drena mensagens RETIDAS (quiet hours) e as reprocessa
+// ---------------------------------------------------------------------------
+
+// retryLoop reprocessa, a cada 60s, as mensagens retidas em quiet hours. Espelha
+// o followUpLoop. O engine, ao receber uma mensagem em quiet hours, grava o
+// webhook_event como 'failed' + next_retry_at (via SetNextRetryAt). Quando
+// next_retry_at vence, este loop redrena e re-invoca o engine — fechando o ciclo
+// que antes ficava órfão (mensagem fora do horário sumia para sempre).
+func (w *Worker) retryLoop(ctx context.Context) {
+	// Sem repo de webhook ou engine, não há o que drenar (ex.: testes do worker).
+	if w.deps.Webhook == nil || w.deps.Engine == nil {
+		return
+	}
+
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	w.runRetries(ctx) // imediato na primeira vez
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			w.runRetries(ctx)
+		}
+	}
+}
+
+// runRetries busca os webhooks 'failed' vencidos e reprocessa cada um.
+func (w *Worker) runRetries(ctx context.Context) {
+	const limit = 20
+	events, err := w.deps.Webhook.PendingRetries(ctx, limit)
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		w.deps.Logger.Error("retryLoop: erro ao buscar retries pendentes", "err", err)
+		return
+	}
+	for _, ev := range events {
+		w.processRetry(ctx, ev)
+	}
+}
+
+// processRetry reconstrói a InboundMessage de um webhook retido e re-invoca o engine
+// do canal correspondente. Em sucesso, marca o webhook 'done'; se ainda estiver em
+// quiet hours (held), o SetNextRetryAt já reagendou (deixa como está); em erro real,
+// MarkFailed aplica novo backoff.
+func (w *Worker) processRetry(ctx context.Context, ev WebhookEvent) {
+	log := w.deps.Logger.With("webhookID", ev.ID, "provider", ev.Provider)
+
+	inbound, engine, ok := w.rebuildInbound(ev)
+	if !ok {
+		// Não foi possível reconstruir (payload inesperado ou canal sem engine):
+		// marca done para não ficar em loop eterno de retry.
+		log.Warn("retryLoop: não foi possível reconstruir inbound, descartando")
+		if err := w.deps.Webhook.MarkDone(ctx, ev.ID); err != nil {
+			log.Error("retryLoop: erro ao descartar webhook", "err", err)
+		}
+		return
+	}
+
+	err := engine.Handle(ctx, inbound)
+	switch {
+	case errors.Is(err, ErrMessageHeld):
+		// Ainda em quiet hours: o engine já reagendou o next_retry_at. Não toca.
+		log.Debug("retryLoop: mensagem ainda retida, aguardando próximo retry")
+	case err != nil:
+		log.Error("retryLoop: reprocessamento falhou", "err", err)
+		if mErr := w.deps.Webhook.MarkFailed(ctx, ev.ID, err.Error()); mErr != nil {
+			log.Error("retryLoop: erro ao marcar webhook failed", "err", mErr)
+		}
+	default:
+		if mErr := w.deps.Webhook.MarkDone(ctx, ev.ID); mErr != nil {
+			log.Error("retryLoop: erro ao marcar webhook done", "err", mErr)
+		}
+		log.Info("retryLoop: mensagem retida reprocessada com sucesso")
+	}
+}
+
+// rebuildInbound reconstrói a InboundMessage a partir do raw_payload guardado e
+// escolhe o engine do canal. Retorna ok=false quando não dá para reconstruir.
+func (w *Worker) rebuildInbound(ev WebhookEvent) (InboundMessage, *ConversationEngine, bool) {
+	switch ev.Provider {
+	case "evolution":
+		if w.deps.EvoEngine == nil {
+			return InboundMessage{}, nil, false
+		}
+		var wh evolutionWebhook
+		if err := json.Unmarshal(ev.RawPayload, &wh); err != nil {
+			return InboundMessage{}, nil, false
+		}
+		phone := wh.Data.Key.RemoteJid
+		if i := strings.IndexAny(phone, "@:"); i > 0 {
+			phone = phone[:i]
+		}
+		text := wh.Data.Message.Conversation
+		if text == "" {
+			text = wh.Data.Message.ExtendedTextMessage.Text
+		}
+		if phone == "" || text == "" {
+			return InboundMessage{}, nil, false
+		}
+		return InboundMessage{
+			TenantID:          ev.TenantID,
+			Channel:           "evolution",
+			ExternalID:        phone,
+			DisplayHandle:     wh.Data.PushName,
+			ProviderMessageID: ev.ProviderEventID,
+			Content:           MessageContent{Type: "text", Text: text},
+			ReceivedAt:        time.Now(),
+		}, w.deps.EvoEngine, true
+
+	default: // 'whatsapp' (Meta)
+		msgs, err := ParseMetaWebhook(ev.RawPayload, w.deps.Config.MetaPhoneNumberID)
+		if err != nil || len(msgs) == 0 {
+			return InboundMessage{}, nil, false
+		}
+		m := msgs[0]
+		m.TenantID = ev.TenantID
+		return m, w.deps.Engine, true
+	}
 }
 
 // followUpLoop processa follow-ups agendados a cada 60 segundos.
