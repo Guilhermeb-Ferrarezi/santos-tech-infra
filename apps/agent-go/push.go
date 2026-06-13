@@ -58,7 +58,9 @@ func (s *Server) notifyTurnDone(ctx context.Context, conv *Conversation, status 
 		msgs = append(msgs, expoMessage{To: t, Title: title, Body: body, Sound: "default",
 			Data: map[string]any{"conversationId": conv.ID}})
 	}
-	sendExpoPush(msgs)
+	// (#7) Fire-and-forget: o POST ao Expo (até 15s de timeout) não deve bloquear o
+	// fim do turno. Roda em goroutine própria, com contexto independente do request.
+	go sendExpoPush(msgs)
 }
 
 func sendExpoPush(msgs []expoMessage) {

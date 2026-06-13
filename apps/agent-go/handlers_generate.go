@@ -489,16 +489,21 @@ func writeEmailFormatRules(b *strings.Builder) {
 }
 
 // parseGenerateResult extrai o objeto JSON da resposta do modelo, tolerando cercas
-// de código e texto ao redor (pega do primeiro "{" ao último "}").
+// de código e texto ao redor.
+//
+// (#6) Antes fatiávamos do 1º "{" ao ÚLTIMO "}". Isso corrompe uma resposta JSON
+// válida que tenha um "}" depois do objeto (ex.: o modelo escreve o JSON e adiciona
+// uma frase com "}", ou um segundo bloco) — o slice englobava lixo e o Unmarshal
+// falhava. Agora usamos um json.Decoder a partir do 1º "{": ele lê o PRIMEIRO objeto
+// JSON válido e para, ignorando qualquer coisa depois.
 func parseGenerateResult(raw string) (*generateResult, error) {
 	s := strings.TrimSpace(raw)
 	if i := strings.IndexByte(s, '{'); i >= 0 {
-		if j := strings.LastIndexByte(s, '}'); j >= i {
-			s = s[i : j+1]
-		}
+		s = s[i:]
 	}
 	var res generateResult
-	if err := json.Unmarshal([]byte(s), &res); err != nil {
+	dec := json.NewDecoder(strings.NewReader(s))
+	if err := dec.Decode(&res); err != nil {
 		return nil, err
 	}
 	if res.Subject == "" && res.HTML == "" && res.Text == "" && len(res.Subjects) == 0 &&

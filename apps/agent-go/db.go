@@ -11,7 +11,19 @@ import (
 )
 
 func newDB(ctx context.Context, url string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, url)
+	// (#9) Configura o pool explicitamente em vez de usar o default (que deixa
+	// MaxConns = max(4, numCPU) e sem teto de vida das conexões). Num Postgres
+	// compartilhado do ecossistema, um teto baixo e a reciclagem periódica evitam
+	// esgotar as conexões do servidor e acumular conexões mortas (NAT/idle timeout).
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxConns = 10                      // teto de conexões deste serviço
+	cfg.MaxConnLifetime = 30 * time.Minute // recicla conexões periodicamente
+	cfg.MaxConnIdleTime = 5 * time.Minute  // fecha conexões ociosas
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

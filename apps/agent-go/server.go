@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -101,7 +102,10 @@ func (s *Server) authGuardUser(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		// Serviços internos (ex: bot-atendimento) usam INTERNAL_SECRET como Bearer.
-		if s.cfg.InternalSecret != "" && token == s.cfg.InternalSecret {
+		// (#5) Comparação em tempo constante: o `==` de strings retorna no 1º byte
+		// diferente, abrindo um canal de timing para adivinhar o segredo byte a byte.
+		if s.cfg.InternalSecret != "" &&
+			subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.InternalSecret)) == 1 {
 			next(w, r.WithContext(context.WithValue(r.Context(), userIDKey, int64(0))))
 			return
 		}

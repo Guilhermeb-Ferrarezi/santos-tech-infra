@@ -10,10 +10,34 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
+
+// turnSlots é um semáforo GLOBAL (package-level) que limita quantos processos
+// `claude` rodam ao mesmo tempo na VPS — em rajada (vários turnos disparados de
+// uma vez) isso evita estourar a RAM com N processos Node pesados. Capacidade =
+// CLAUDE_MAX_CONCURRENT (default 4). Inicializado em initTurnSlots (chamado no boot).
+var turnSlots chan struct{}
+
+// initTurnSlots cria o semáforo global de processos Claude. Idempotente o bastante
+// para o boot: cap vem de CLAUDE_MAX_CONCURRENT (default 4, mínimo 1).
+func initTurnSlots() {
+	n := 4
+	if v := os.Getenv("CLAUDE_MAX_CONCURRENT"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			n = parsed
+		}
+	}
+	turnSlots = make(chan struct{}, n)
+}
+
+// turnTimeout é o teto de duração de um único turno do CLI. Passado esse tempo o
+// contexto é cancelado e o grupo de processos é morto (ver exec/Setpgid).
+const turnTimeout = 8 * time.Minute
 
 // turnEvent é o evento normalizado enviado ao cliente (WS) durante um turno.
 type turnEvent struct {
@@ -79,7 +103,28 @@ func (m *SessionManager) dispatch(convID string, ev turnEvent) {
 	m.mu.Unlock()
 }
 
-// Interrupt encerra o turno em andamento de uma conversa (SIGTERM — o CLI salva a sessão).
+// signalProcessGroup envia um sinal ao GRUPO de processos do comando (#3). Como o
+// processo é iniciado com Setpgid, o pgid == pid do líder; o sinal negativo (-pgid)
+// atinge o líder E todos os filhos (bash, MCP servers etc.), não só o pai.
+func signalProcessGroup(cmd *exec.Cmd, sig syscall.Signal) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	pid := cmd.Process.Pid
+	// Tenta o grupo (-pid); se falhar (grupo não criado), cai pro processo só.
+	if err := syscall.Kill(-pid, sig); err != nil {
+		_ = cmd.Process.Signal(sig)
+	}
+}
+
+// killProcessGroup força SIGKILL no grupo — usado na limpeza pós-turno como rede
+// de segurança contra processos órfãos.
+func killProcessGroup(cmd *exec.Cmd) {
+	signalProcessGroup(cmd, syscall.SIGKILL)
+}
+
+// Interrupt encerra o turno em andamento de uma conversa (SIGTERM no GRUPO — o CLI
+// salva a sessão; os filhos também recebem o sinal e não viram zumbis).
 func (m *SessionManager) Interrupt(convID string) bool {
 	m.mu.Lock()
 	cmd := m.runs[convID]
@@ -87,7 +132,7 @@ func (m *SessionManager) Interrupt(convID string) bool {
 	if cmd == nil || cmd.Process == nil {
 		return false
 	}
-	_ = cmd.Process.Signal(syscall.SIGTERM)
+	signalProcessGroup(cmd, syscall.SIGTERM)
 	return true
 }
 
@@ -102,7 +147,8 @@ func (m *SessionManager) InterruptAll() int {
 	n := 0
 	for _, c := range cmds {
 		if c.Process != nil {
-			_ = c.Process.Signal(syscall.SIGTERM)
+			// SIGTERM no GRUPO (mata o `claude` + filhos), não só o processo pai.
+			signalProcessGroup(c, syscall.SIGTERM)
 			n++
 		}
 	}
@@ -271,29 +317,80 @@ func (m *SessionManager) claudeArgs(conv *Conversation, mediaGlob string) []stri
 	return args
 }
 
-// claudeEnv monta o ambiente do processo: token OAuth + tokens de infra para o agente.
-func (m *SessionManager) claudeEnv(ctx context.Context) []string {
-	env := os.Environ()
+// claudeEnv monta o ambiente MÍNIMO e EXPLÍCITO do processo `claude`.
+//
+// SEGURANÇA (#1): o processo roda com --dangerously-skip-permissions, então um
+// prompt injection consegue ler qualquer variável de ambiente e exfiltrá-la via
+// bash/curl. Por isso NÃO usamos mais `os.Environ()` cru (que vazava TODO o
+// ambiente do container) nem injetamos tokens de infra por padrão. Montamos uma
+// allow-list: só as variáveis que o CLI legitimamente precisa para rodar.
+//
+// Removidos do env do Claude (antes vazavam por padrão):
+//   - EASYPANEL_TOKEN / EASYPANEL_URL
+//   - CLOUDFLARE_API_TOKEN
+//   - GITHUB_TOKEN / GITHUB_PERSONAL_ACCESS_TOKEN no caso geral
+//   - todo o resto de os.Environ() (qualquer segredo do container)
+//
+// Mantidos / passados explicitamente:
+//   - CLAUDE_CODE_OAUTH_TOKEN: credencial da assinatura, sem ela o CLI não roda.
+//   - HOME, PATH, LANG, TERM, TMPDIR, SHELL, USER, LOGNAME, XDG_*: essenciais para
+//     o Node/CLI achar binários, config do usuário, locale, etc.
+//   - GITHUB_TOKEN/GITHUB_PERSONAL_ACCESS_TOKEN: SÓ quando a conversa tem repo
+//     clonado (o agente legitimamente faz git push/pull). Sem repo, fica de fora.
+//
+// Observação: o MCP do GitHub recebe o token no PRÓPRIO env do servidor MCP
+// (writeMCPConfig em mcp.go), então não depende deste env do processo Claude.
+func (m *SessionManager) claudeEnv(ctx context.Context, conv *Conversation) []string {
+	env := []string{}
+	// Repassa só variáveis de runtime essenciais do ambiente do container (sem segredos).
+	for _, key := range []string{
+		"HOME", "PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "SHELL", "USER", "LOGNAME",
+		"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+		"NODE_PATH", "SSL_CERT_FILE", "SSL_CERT_DIR",
+	} {
+		if v := os.Getenv(key); v != "" {
+			env = append(env, key+"="+v)
+		}
+	}
 	if tok, err := m.s.oauthToken(ctx); err == nil && tok != "" {
 		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
 	}
-	if t := m.s.cfg.GithubToken; t != "" {
-		env = append(env, "GITHUB_TOKEN="+t, "GITHUB_PERSONAL_ACCESS_TOKEN="+t)
-	}
-	if t := m.s.cfg.EasypanelToken; t != "" {
-		env = append(env, "EASYPANEL_TOKEN="+t, "EASYPANEL_URL="+m.s.cfg.EasypanelURL)
-	}
-	if t := m.s.cfg.CloudflareToken; t != "" {
-		env = append(env, "CLOUDFLARE_API_TOKEN="+t)
+	// GITHUB_TOKEN só quando há repo clonado nesta conversa (git push/pull legítimo).
+	// Sem repo, não há motivo para o token estar no env — não o injetamos.
+	if conv != nil && conv.Repo != nil && *conv.Repo != "" && m.s.cfg.GithubToken != "" {
+		env = append(env, "GITHUB_TOKEN="+m.s.cfg.GithubToken,
+			"GITHUB_PERSONAL_ACCESS_TOKEN="+m.s.cfg.GithubToken)
 	}
 	return env
 }
 
 func (m *SessionManager) exec(ctx context.Context, conv *Conversation, prompt, mediaGlob string, emit func(turnEvent)) error {
+	// Semáforo global (#2): bloqueia até haver uma vaga de processo Claude livre.
+	// Respeita o cancelamento do ctx (timeout do turno / shutdown) para não travar.
+	select {
+	case turnSlots <- struct{}{}:
+		defer func() { <-turnSlots }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	// Timeout do turno (#3): teto de duração; ao estourar, o ctx é cancelado e o
+	// processo (e seu grupo) é morto abaixo. Deriva do ctx recebido para também
+	// respeitar cancelamentos externos.
+	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, m.s.cfg.ClaudeBin, m.claudeArgs(conv, mediaGlob)...)
 	cmd.Dir = conv.Workdir
-	cmd.Env = m.claudeEnv(ctx)
+	cmd.Env = m.claudeEnv(ctx, conv)
 	cmd.Stdin = strings.NewReader(prompt)
+	// (#3) Roda o CLI no PRÓPRIO grupo de processos (Setpgid): assim o kill-switch /
+	// timeout consegue matar o GRUPO inteiro (o `claude` + os filhos que ele spawna,
+	// ex.: bash, MCP servers) e não só o processo pai — senão filhos viram zumbis.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Se o ctx for cancelado (timeout/shutdown) e o processo não sair sozinho, o
+	// exec mata após este atraso. Combinado com o kill de grupo no Interrupt.
+	cmd.WaitDelay = 10 * time.Second
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -307,7 +404,10 @@ func (m *SessionManager) exec(ctx context.Context, conv *Conversation, prompt, m
 	m.mu.Lock()
 	m.runs[conv.ID] = cmd
 	m.mu.Unlock()
+	// (#3) Garante que o GRUPO de processos morra quando esta função retornar (turno
+	// terminou por timeout, erro ou cancelamento) — defesa contra processos órfãos.
 	defer func() {
+		killProcessGroup(cmd)
 		m.mu.Lock()
 		delete(m.runs, conv.ID)
 		m.mu.Unlock()

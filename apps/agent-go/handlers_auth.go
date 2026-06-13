@@ -146,6 +146,8 @@ func (a *claudeAuth) start(claudeBin string) (state, authURL string, err error) 
 	}
 	_ = cmd.Process.Kill()
 	_ = ptmx.Close()
+	// (#8) Reap o processo morto para não deixar zumbi/goroutine do PTY vazada.
+	_ = cmd.Wait()
 	return "", "", errURLNotFound(buf.String())
 }
 
@@ -158,7 +160,12 @@ func (a *claudeAuth) complete(state, code string) (string, error) {
 	if p == nil {
 		return "", errState
 	}
-	defer func() { _ = p.ptmx.Close() }()
+	// (#8) Ao sair, fecha o PTY e reap o processo (Wait) — evita zumbi/goroutine
+	// vazada em TODOS os caminhos de retorno (sucesso, fallback e timeout).
+	defer func() {
+		_ = p.ptmx.Close()
+		_ = p.cmd.Wait()
+	}()
 
 	if _, err := p.ptmx.Write([]byte(strings.TrimSpace(code) + "\n")); err != nil {
 		return "", err
@@ -168,7 +175,6 @@ func (a *claudeAuth) complete(state, code string) (string, error) {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if m := tokenRe.FindString(cleanTTY(p.buf.String())); m != "" {
-			_, _ = p.cmd.Process.Wait()
 			return m, nil
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -194,6 +200,8 @@ func (a *claudeAuth) gc() {
 		if time.Since(p.created) > 5*time.Minute {
 			_ = p.cmd.Process.Kill()
 			_ = p.ptmx.Close()
+			// (#8) Reap o processo morto (evita zumbi/goroutine do PTY vazada).
+			_ = p.cmd.Wait()
 			delete(a.pend, state)
 		}
 	}

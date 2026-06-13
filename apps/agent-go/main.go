@@ -32,6 +32,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Semáforo global de processos Claude (teto de concorrência p/ não estourar RAM).
+	initTurnSlots()
+
+	// Limpeza de estado órfão: locks de turno e status 'running' que sobraram de um
+	// deploy/restart anterior (o processo Claude morreu junto, mas a chave ficou).
+	if err := cleanupOrphans(ctx, db, rdb); err != nil {
+		// Não-fatal: é melhor subir e servir do que travar o boot por uma limpeza.
+		slog.Warn("falha ao limpar estado órfão no boot", "err", err)
+	}
+
 	srv := NewServer(cfg, db, rdb)
 	slog.Info("agent-go ouvindo", "port", cfg.Port)
 	if err := http.ListenAndServe(":"+cfg.Port, srv.Routes()); err != nil {
