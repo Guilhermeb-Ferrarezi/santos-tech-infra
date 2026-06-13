@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -54,7 +55,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state, returnTo, _ := strings.Cut(sc.Value, "|")
-	if state != q.Get("state") {
+	if subtle.ConstantTimeCompare([]byte(state), []byte(q.Get("state"))) != 1 {
 		fail("oauth_failed")
 		return
 	}
