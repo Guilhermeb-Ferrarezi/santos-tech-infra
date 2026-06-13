@@ -66,6 +66,9 @@ type EngineDeps struct {
 	Bookings *PendingBookingRepo
 	// Notion — cliente para ler/gravar a agenda de aulas (agendamento).
 	Notion *NotionClient
+	// ForceBotEnabled — força o bot ativo nas conversas deste engine (ex.: canal
+	// Evolution, cujo gate é o toggle externo, não o whitelist do tenant).
+	ForceBotEnabled bool
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +161,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			return fmt.Errorf("FindByChannelIdentity (conv): %w", err)
 		}
 		if convPtr == nil {
-			convPtr, err = e.deps.Convs.Create(ctx, tx, inbound.TenantID, contact.ID, chIdentity.ID, inbound.Channel, isBotEnabledFor(cfg, inbound.ExternalID))
+			convPtr, err = e.deps.Convs.Create(ctx, tx, inbound.TenantID, contact.ID, chIdentity.ID, inbound.Channel, isBotEnabledFor(cfg, inbound.ExternalID) || e.deps.ForceBotEnabled)
 			if err != nil {
 				return fmt.Errorf("Create conversation: %w", err)
 			}
@@ -173,8 +176,8 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 		}
 
-		// d) Humano no controle → ignora
-		if !conv.BotEnabled {
+		// d) Humano no controle → ignora (a menos que o engine force o bot, ex.: Evolution)
+		if !conv.BotEnabled && !e.deps.ForceBotEnabled {
 			log.Info("bot desabilitado para esta conversa, ignorando mensagem")
 			return nil
 		}

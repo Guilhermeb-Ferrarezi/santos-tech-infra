@@ -51,17 +51,18 @@ type dashMessage struct {
 }
 
 type dashConfig struct {
-	BotName              string    `json:"botName"`
-	BotGender            string    `json:"botGender"`
-	BotEnabledByDefault  bool      `json:"botEnabledByDefault"`
-	BotAllowedNumbers    []string  `json:"botAllowedNumbers"`
-	QuietHoursStart      *string   `json:"quietHoursStart"`
-	QuietHoursEnd        *string   `json:"quietHoursEnd"`
-	KBContent            []KBEntry `json:"kbContent"`
-	SystemPrompt         string    `json:"systemPrompt"`
-	AdminSystemPrompt    string    `json:"adminSystemPrompt"`
-	AdminWhatsAppNumbers []string  `json:"adminWhatsAppNumbers"`
-	DebounceMs           int       `json:"debounceMs"`
+	BotName                  string    `json:"botName"`
+	BotGender                string    `json:"botGender"`
+	BotEnabledByDefault      bool      `json:"botEnabledByDefault"`
+	BotAllowedNumbers        []string  `json:"botAllowedNumbers"`
+	QuietHoursStart          *string   `json:"quietHoursStart"`
+	QuietHoursEnd            *string   `json:"quietHoursEnd"`
+	KBContent                []KBEntry `json:"kbContent"`
+	SystemPrompt             string    `json:"systemPrompt"`
+	AdminSystemPrompt        string    `json:"adminSystemPrompt"`
+	AdminWhatsAppNumbers     []string  `json:"adminWhatsAppNumbers"`
+	DebounceMs               int       `json:"debounceMs"`
+	EvolutionBotReplyEnabled bool      `json:"evolutionBotReplyEnabled"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -311,14 +312,15 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		       tc.system_prompt,
 		       tc.admin_system_prompt,
 		       tc.admin_whatsapp_numbers,
-		       tc.debounce_ms
+		       tc.debounce_ms,
+		       tc.evolution_bot_reply_enabled
 		FROM tenant_config tc
 		WHERE tc.tenant_id = $1
 	`, tenantID).Scan(
 		&cfg.BotName, &cfg.BotGender, &cfg.BotEnabledByDefault,
 		&allowedRaw, &qhStart, &qhEnd, &kbRaw, &cfg.SystemPrompt,
 		&cfg.AdminSystemPrompt,
-		&adminNumbersRaw, &cfg.DebounceMs,
+		&adminNumbersRaw, &cfg.DebounceMs, &cfg.EvolutionBotReplyEnabled,
 	)
 	if err != nil {
 		s.logger.Error("dash: get config", "err", err)
@@ -452,11 +454,12 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		    admin_whatsapp_number  = $9,
 		    admin_whatsapp_numbers = $10::jsonb,
 		    debounce_ms            = $11,
-		    admin_system_prompt    = $12
+		    admin_system_prompt    = $12,
+		    evolution_bot_reply_enabled = $13
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
 		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt,
-		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt)
+		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt, body.EvolutionBotReplyEnabled)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)
@@ -648,6 +651,21 @@ func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
 		out = append(out, l)
 	}
 	jsonOK(w, out)
+}
+
+// GET /api/evolution/instances — status dos números conectados na Evolution.
+func (s *Server) handleDashEvolutionInstances(w http.ResponseWriter, r *http.Request) {
+	if s.evoClient == nil {
+		jsonOK(w, []EvolutionInstance{})
+		return
+	}
+	insts, err := s.evoClient.Instances(r.Context())
+	if err != nil {
+		s.logger.Error("dash: evolution instances", "err", err)
+		jsonOK(w, []EvolutionInstance{})
+		return
+	}
+	jsonOK(w, insts)
 }
 
 // PATCH /api/leads/{id} — atualiza status (e opcional owner/interest) de um lead.
