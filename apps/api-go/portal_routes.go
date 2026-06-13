@@ -79,7 +79,7 @@ func (s *Server) registerPortalRewardsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /portal/badges/holders", s.portalRead("portal_medalhas", s.handlePortalListHolders))
 	mux.HandleFunc("POST /portal/badges/holders", s.rateLimit(30, min, s.portalWrite("portal_medalhas", s.handlePortalAssignBadge)))
 	mux.HandleFunc("PATCH /portal/badges/holders/{holderId}", s.rateLimit(30, min, s.portalWrite("portal_medalhas", s.handlePortalUpdateHolder)))
-	mux.HandleFunc("DELETE /portal/badges/holders/{holderId}", s.adminGuard(s.handlePortalDeleteHolder))
+	mux.HandleFunc("DELETE /portal/badges/holders/{holderId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteHolder)))
 
 	// Metas
 	mux.HandleFunc("GET /portal/goals", s.portalRead("portal_metas", s.handlePortalListGoals))
@@ -91,12 +91,12 @@ func (s *Server) registerPortalRewardsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /portal/goals/rewards", s.portalRead("portal_metas", s.handlePortalListGoalRewards))
 	mux.HandleFunc("POST /portal/goals/rewards", s.rateLimit(20, min, s.portalWrite("portal_metas", s.handlePortalCreateGoalReward)))
 	mux.HandleFunc("PATCH /portal/goals/rewards/{rewardId}", s.rateLimit(30, min, s.portalWrite("portal_metas", s.handlePortalUpdateGoalReward)))
-	mux.HandleFunc("DELETE /portal/goals/rewards/{rewardId}", s.adminGuard(s.handlePortalDeleteGoalReward))
+	mux.HandleFunc("DELETE /portal/goals/rewards/{rewardId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteGoalReward)))
 
 	mux.HandleFunc("GET /portal/goals/students", s.portalRead("portal_metas", s.handlePortalListGoalStudents))
 	mux.HandleFunc("POST /portal/goals/students", s.rateLimit(30, min, s.portalWrite("portal_metas", s.handlePortalCreateGoalStudent)))
 	mux.HandleFunc("PATCH /portal/goals/students/{goalStudentId}", s.rateLimit(60, min, s.portalWrite("portal_metas", s.handlePortalUpdateGoalStudent)))
-	mux.HandleFunc("DELETE /portal/goals/students/{goalStudentId}", s.adminGuard(s.handlePortalDeleteGoalStudent))
+	mux.HandleFunc("DELETE /portal/goals/students/{goalStudentId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteGoalStudent)))
 	mux.HandleFunc("POST /portal/goals/students/{goalStudentId}/claim", s.rateLimit(30, min, s.staffGuard(s.handlePortalClaimGoalReward)))
 }
 
