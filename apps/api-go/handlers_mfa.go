@@ -100,10 +100,14 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 	// (TOTP/recovery/OTP de email) limitado só pelo rate-limit por IP. Conta a
 	// tentativa ANTES de validar; zera ao desativar com sucesso (mais abaixo).
 	attemptKey := "mfa_disable_attempts:" + strconv.FormatInt(uid, 10)
-	attempts, _ := s.rdb.Incr(r.Context(), attemptKey).Result()
-	if attempts == 1 {
-		s.rdb.Expire(r.Context(), attemptKey, 15*time.Minute)
+	disableAttemptsCmd := s.rdb.Incr(r.Context(), attemptKey)
+	if disableAttemptsCmd.Err() != nil {
+		slog.Warn("mfa_disable_attempts: redis error; rejecting to fail closed", "uid", uid, "err", disableAttemptsCmd.Err())
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+		return
 	}
+	attempts := disableAttemptsCmd.Val()
+	s.rdb.ExpireNX(r.Context(), attemptKey, 15*time.Minute)
 	if attempts > 5 {
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
 		return
