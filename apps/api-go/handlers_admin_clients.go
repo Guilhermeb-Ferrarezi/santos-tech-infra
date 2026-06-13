@@ -98,6 +98,10 @@ func (s *Server) handleCreateOAuthClient(w http.ResponseWriter, r *http.Request)
 
 // PATCH /auth/admin/oauth-clients/{id} {name?, redirectUris?, isActive?}
 func (s *Server) handleUpdateOAuthClient(w http.ResponseWriter, r *http.Request) {
+	if !isValidUUID(r.PathValue("id")) {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "id inválido"))
+		return
+	}
 	var body struct {
 		Name         *string  `json:"name"`
 		RedirectURIs []string `json:"redirectUris"`
@@ -128,6 +132,10 @@ func (s *Server) handleUpdateOAuthClient(w http.ResponseWriter, r *http.Request)
 
 // DELETE /auth/admin/oauth-clients/{id}
 func (s *Server) handleDeleteOAuthClient(w http.ResponseWriter, r *http.Request) {
+	if !isValidUUID(r.PathValue("id")) {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "id inválido"))
+		return
+	}
 	ok, err := s.deleteOAuthClient(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeErr(w, err)
