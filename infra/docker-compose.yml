@@ -1,3 +1,13 @@
+# Stack de DEV. Em produção, Postgres/Redis são gerenciados pela Coolify.
+# As senhas locais vêm de variáveis de ambiente com defaults só-para-dev.
+# Postgres/Redis NÃO publicam portas no host: os apps falam com eles pela
+# rede interna do compose (hostnames `postgres` e `redis`).
+x-db-env: &db-env
+  # Sobrescreve DATABASE_URL/REDIS_URL do .env para apontar pra rede interna do compose,
+  # mantendo consistência com as senhas dos serviços postgres/redis abaixo.
+  DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-dev_only_change_me}@postgres:5432/santos_tech?sslmode=disable
+  REDIS_URL: redis://default:${REDIS_PASSWORD:-dev_only_change_me}@redis:6379
+
 services:
   api:
     build:
@@ -12,6 +22,8 @@ services:
         condition: service_healthy
     env_file:
       - ../.env
+    environment:
+      <<: *db-env
     restart: unless-stopped
 
   agent-go:
@@ -27,6 +39,8 @@ services:
         condition: service_healthy
     env_file:
       - ../.env
+    environment:
+      <<: *db-env
     volumes:
       - claude_home:/home/agent/.claude   # credenciais OAuth + sessões .jsonl (--resume)
       - claude_workspaces:/data/workspaces # checkouts dos repositórios
@@ -54,11 +68,10 @@ services:
     environment:
       POSTGRES_DB: santos_tech
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_only_change_me}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # Sem `ports:` — acessível apenas via rede interna do compose (hostname `postgres`).
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -67,13 +80,15 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-dev_only_change_me}"]
+    # Sem `ports:` — acessível apenas via rede interna do compose (hostname `redis`).
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 5
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-dev_only_change_me}
 
 volumes:
   postgres_data:

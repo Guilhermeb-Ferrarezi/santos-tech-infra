@@ -8,4 +8,5 @@ RUN CGO_ENABLED=0 go build -trimpath -o /auth .
 FROM gcr.io/distroless/static-debian12
 COPY --from=build /auth /auth
 EXPOSE 3000
+USER nonroot:nonroot
 ENTRYPOINT ["/auth"]

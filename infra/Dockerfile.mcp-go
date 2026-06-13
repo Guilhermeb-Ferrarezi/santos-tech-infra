@@ -10,4 +10,5 @@ COPY --from=build /mcp /mcp
 COPY docs/openapi.yaml /openapi.yaml
 ENV OPENAPI_PATH=/openapi.yaml
 EXPOSE 3335
+USER nonroot:nonroot
 ENTRYPOINT ["/mcp"]
