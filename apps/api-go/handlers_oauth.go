@@ -112,7 +112,10 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if u.MFAMethod == "email" {
-			s.sendChallengeEmailCode(r.Context(), challenge, u.Email)
+			if err := s.sendChallengeEmailCode(r.Context(), challenge, u.Email); err != nil {
+				fail("oauth_failed")
+				return
+			}
 		}
 		dest := origin + "/?mfa_challenge=" + challenge + "&mfa_method=" + u.MFAMethod +
 			"&mfa_methods=" + strings.Join(mfaMethods(u), ",")
