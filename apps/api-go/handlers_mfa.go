@@ -27,7 +27,10 @@ func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	s.rdb.Set(r.Context(), "mfa_setup:"+strconv.FormatInt(uid, 10), key.Secret(), 10*time.Minute)
+	if err := s.rdb.Set(r.Context(), "mfa_setup:"+strconv.FormatInt(uid, 10), key.Secret(), 10*time.Minute).Err(); err != nil {
+		writeErr(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"secret": key.Secret(), "otpauthUrl": key.URL()})
 }
 
