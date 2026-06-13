@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -138,7 +139,9 @@ func (s *Server) allow(ctx context.Context, key string, max int, window time.Dur
 	}
 	// ExpireNX (Redis 7 EXPIRE … NX) sets the TTL only if the key has none yet —
 	// single atomic command, no race between INCR and EXPIRE.
-	s.rdb.ExpireNX(ctx, key, window)
+	if err := s.rdb.ExpireNX(ctx, key, window).Err(); err != nil {
+		slog.Warn("rate limit: ExpireNX falhou; chave pode não expirar", "key", key, "err", err)
+	}
 	return n <= int64(max)
 }
 
