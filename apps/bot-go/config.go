@@ -17,23 +17,36 @@ type Config struct {
 	TenantID string
 
 	// Meta Cloud API (WhatsApp)
-	MetaAppSecret           string
-	MetaWebhookVerifyToken  string
-	MetaPhoneNumberID       string
-	MetaAccessToken         string
+	MetaAppSecret          string
+	MetaWebhookVerifyToken string
+	MetaPhoneNumberID      string
+	MetaAccessToken        string
 
 	// Agent-go (LLM)
 	AgentGoURL    string
 	AgentGoSecret string
 
+	// Site oficial — fonte das rotas que o bot pode consultar (via sitemap.xml).
+	SiteURL string
+
+	// Notion — agendamento de aulas (token de integração escopado + base de agenda).
+	NotionToken      string
+	NotionAgendaDBID string
+
+	// Evolution API — captura de leads do número não-oficial (webhook).
+	EvolutionWebhookSecret string
+	EvolutionAPIURL        string
+	EvolutionAPIKey        string
+	EvolutionInstance      string
+
 	// Notificações admin
 	AdminWhatsAppNumber string // E.164, ex: 5516991445664
 
 	// Worker
-	OutboxBatchSize       int
-	OutboxIdleIntervalMs  int
-	OutboxMaxAttempts     int
-	FollowUpConcurrency   int
+	OutboxBatchSize      int
+	OutboxIdleIntervalMs int
+	OutboxMaxAttempts    int
+	FollowUpConcurrency  int
 
 	// Follow-up templates Meta (fora da janela 24h)
 	FollowUpHasApprovedTemplates bool
@@ -41,6 +54,10 @@ type Config struct {
 	FollowUpTemplateLanguage     string
 
 	Production bool
+
+	// Dashboard
+	DashAPIKey     string
+	DashCORSOrigin string
 }
 
 func LoadConfig() Config {
@@ -59,6 +76,16 @@ func LoadConfig() Config {
 		AgentGoURL:    strings.TrimRight(getEnv("AGENT_GO_URL", "https://api.santos-tech.com"), "/"),
 		AgentGoSecret: mustEnv("AGENT_GO_SECRET"),
 
+		SiteURL: strings.TrimRight(getEnv("SITE_URL", "https://santos-tech.com"), "/"),
+
+		NotionToken:      getEnv("NOTION_TOKEN", ""),
+		NotionAgendaDBID: getEnv("NOTION_AGENDA_DB_ID", "1e1c30d6-77df-44dd-8f2f-6889777de5cc"),
+
+		EvolutionWebhookSecret: getEnv("EVOLUTION_WEBHOOK_SECRET", ""),
+		EvolutionAPIURL:        strings.TrimRight(getEnv("EVOLUTION_API_URL", ""), "/"),
+		EvolutionAPIKey:        getEnv("EVOLUTION_API_KEY", ""),
+		EvolutionInstance:      getEnv("EVOLUTION_INSTANCE", ""),
+
 		AdminWhatsAppNumber: getEnv("ADMIN_WHATSAPP_NUMBER", ""),
 
 		OutboxBatchSize:      envInt("OUTBOX_BATCH_SIZE", 50),
@@ -71,6 +98,9 @@ func LoadConfig() Config {
 		FollowUpTemplateLanguage:     getEnv("FOLLOW_UP_TEMPLATE_LANGUAGE", "pt_BR"),
 
 		Production: getEnv("NODE_ENV", "development") == "production",
+
+		DashAPIKey:     getEnv("DASH_API_KEY", ""),
+		DashCORSOrigin: getEnv("DASH_CORS_ORIGIN", "https://santos-tech.com"),
 	}
 }
 

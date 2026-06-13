@@ -2,12 +2,17 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ---------------------------------------------------------------------------
@@ -42,6 +47,70 @@ func (d *debouncer) debounce(key string, delay time.Duration, fn func()) {
 }
 
 // ---------------------------------------------------------------------------
+// burstBuffer — acumula as mensagens de uma rajada por chave (ExternalID) e
+// SERIALIZA o processamento por chave. Só um Handle roda por conversa de cada
+// vez; mensagens que chegam durante o processamento entram numa única resposta
+// de continuação depois (coalescing) — evita respostas concorrentes e repetidas.
+// ---------------------------------------------------------------------------
+
+type burstItem struct {
+	msg     InboundMessage
+	eventID WebhookEventID
+}
+
+type burstBuffer struct {
+	mu         sync.Mutex
+	items      map[string][]burstItem
+	processing map[string]bool
+}
+
+func newBurstBuffer() *burstBuffer {
+	return &burstBuffer{
+		items:      make(map[string][]burstItem),
+		processing: make(map[string]bool),
+	}
+}
+
+func (b *burstBuffer) add(key string, it burstItem) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.items[key] = append(b.items[key], it)
+}
+
+// beginOrQueue tenta assumir o processamento da chave. Se já há um Handle em
+// andamento para ela, retorna nil (as mensagens ficam no buffer e serão pegas
+// pelo loop atual). Senão marca como em processamento e devolve os itens.
+func (b *burstBuffer) beginOrQueue(key string) []burstItem {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.processing[key] {
+		return nil
+	}
+	items := b.items[key]
+	if len(items) == 0 {
+		return nil
+	}
+	delete(b.items, key)
+	b.processing[key] = true
+	return items
+}
+
+// next é chamado ao terminar um Handle. Se chegaram mensagens novas durante o
+// processamento, devolve-as (o loop continua, mantendo o lock). Senão libera a
+// chave e retorna nil.
+func (b *burstBuffer) next(key string) []burstItem {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	items := b.items[key]
+	if len(items) == 0 {
+		delete(b.processing, key)
+		return nil
+	}
+	delete(b.items, key)
+	return items
+}
+
+// ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
 
@@ -50,18 +119,39 @@ type Server struct {
 	cfg     Config
 	engine  *ConversationEngine
 	webhook *WebhookRepo
+	pool    *pgxpool.Pool
+	sender  *WhatsAppSender
 	logger  *slog.Logger
 	dbnc    *debouncer
+	burst   *burstBuffer
+	hub     *WSHub
+	logRepo *ProcessingLogRepo
+	// Captura de leads + resposta da Evolution (webhook + segundo engine).
+	contacts   *ContactRepo
+	leads      *LeadRepo
+	withTenant func(ctx context.Context, fn func(pgx.Tx) error) error
+	evoEngine  *ConversationEngine
+	evoClient  *EvolutionClient
 }
 
 // NewServer cria um Server com as dependências fornecidas.
-func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, logger *slog.Logger) *Server {
+func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, pool *pgxpool.Pool, sender *WhatsAppSender, logger *slog.Logger, hub *WSHub, logRepo *ProcessingLogRepo, evoEngine *ConversationEngine, evoClient *EvolutionClient) *Server {
 	return &Server{
-		cfg:     cfg,
-		engine:  engine,
-		webhook: webhook,
-		logger:  logger,
-		dbnc:    newDebouncer(),
+		cfg:        cfg,
+		engine:     engine,
+		webhook:    webhook,
+		pool:       pool,
+		sender:     sender,
+		logger:     logger,
+		dbnc:       newDebouncer(),
+		burst:      newBurstBuffer(),
+		hub:        hub,
+		logRepo:    logRepo,
+		contacts:   NewContactRepo(pool),
+		leads:      NewLeadRepo(pool),
+		withTenant: withTenant(pool, cfg.TenantID),
+		evoEngine:  evoEngine,
+		evoClient:  evoClient,
 	}
 }
 
@@ -69,10 +159,68 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, log
 func (s *Server) Handler() http.Handler {
 	bp := s.cfg.BasePath
 	mux := http.NewServeMux()
+
+	// Webhook + health
 	mux.HandleFunc("GET "+bp+"/webhooks/whatsapp", s.handleVerify)
 	mux.HandleFunc("POST "+bp+"/webhooks/whatsapp", s.handleInbound)
+	mux.HandleFunc("POST "+bp+"/webhooks/evolution", s.handleEvolutionWebhook)
 	mux.HandleFunc("GET "+bp+"/health", s.handleHealth)
+
+	// Dashboard API
+	da := s.dashMiddleware
+	mux.Handle("GET /api/conversations", da(s.handleDashConversations))
+	mux.Handle("GET /api/conversations/{id}", da(s.handleDashGetConversation))
+	mux.Handle("GET /api/conversations/{id}/messages", da(s.handleDashMessages))
+	mux.Handle("PATCH /api/conversations/{id}", da(s.handleDashPatchConversation))
+	mux.Handle("DELETE /api/conversations/{id}", da(s.handleDashDeleteConversation))
+	mux.Handle("POST /api/conversations/{id}/messages", da(s.handleDashSendMessage))
+	mux.Handle("GET /api/config", da(s.handleDashGetConfig))
+	mux.Handle("GET /api/config/default-prompt", da(s.handleDashDefaultPrompt))
+	mux.Handle("GET /api/config/default-admin-prompt", da(s.handleDashDefaultAdminPrompt))
+	mux.Handle("PATCH /api/config", da(s.handleDashPatchConfig))
+	mux.Handle("GET /api/logs", da(s.handleDashLogs))
+	mux.Handle("GET /api/leads", da(s.handleDashLeads))
+	mux.Handle("PATCH /api/leads/{id}", da(s.handleDashPatchLead))
+	mux.Handle("GET /api/evolution/instances", da(s.handleDashEvolutionInstances))
+	mux.HandleFunc("GET /api/ws", s.handleDashWS)
+	// OPTIONS preflight (sem auth)
+	mux.HandleFunc("OPTIONS /api/", func(w http.ResponseWriter, r *http.Request) {
+		s.setCORSHeaders(w)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	return mux
+}
+
+// dashMiddleware adiciona CORS e verifica X-Dash-Key.
+func (s *Server) dashMiddleware(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.setCORSHeaders(w)
+		if s.cfg.DashAPIKey == "" {
+			http.NotFound(w, r)
+			return
+		}
+		key := r.Header.Get("X-Dash-Key")
+		if key == "" {
+			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+				key = strings.TrimPrefix(auth, "Bearer ")
+			}
+		}
+		if subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) != 1 {
+			w.Header().Set("Content-Type", "application/json")
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	})
+}
+
+func (s *Server) setCORSHeaders(w http.ResponseWriter) {
+	if origin := s.cfg.DashCORSOrigin; origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dash-Key, Authorization")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -80,8 +228,8 @@ func (s *Server) Handler() http.Handler {
 // ---------------------------------------------------------------------------
 
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
-	mode      := r.URL.Query().Get("hub.mode")
-	token     := r.URL.Query().Get("hub.verify_token")
+	mode := r.URL.Query().Get("hub.mode")
+	token := r.URL.Query().Get("hub.verify_token")
 	challenge := r.URL.Query().Get("hub.challenge")
 
 	if mode == "subscribe" && token == s.cfg.MetaWebhookVerifyToken {
@@ -132,6 +280,9 @@ func (s *Server) processInbound(body []byte) {
 		return
 	}
 
+	// Janela de debounce configurável (tenant_config.debounce_ms).
+	window := s.debounceWindow(ctx)
+
 	for _, msg := range msgs {
 		msg.TenantID = s.cfg.TenantID
 
@@ -146,24 +297,101 @@ func (s *Server) processInbound(body []byte) {
 			continue
 		}
 
-		// Captura para o closure
-		eventID := id
-		captured := msg
+		// Acumula na rajada do número e agenda o flush (agrupa a rajada).
+		key := msg.ExternalID
+		s.burst.add(key, burstItem{msg: msg, eventID: id})
 
-		// Debounce de 1s por ExternalID (agrupa rajada do mesmo número)
-		s.dbnc.debounce(msg.ExternalID, time.Second, func() {
-			if err := s.engine.Handle(ctx, captured); err != nil {
-				s.logger.Error("engine.Handle falhou", "wamid", captured.ProviderMessageID, "err", err)
-				if markErr := s.webhook.MarkFailed(ctx, eventID, err.Error()); markErr != nil {
-					s.logger.Error("webhook.MarkFailed falhou", "id", eventID, "err", markErr)
-				}
-				return
-			}
-			if markErr := s.webhook.MarkDone(ctx, eventID); markErr != nil {
-				s.logger.Error("webhook.MarkDone falhou", "id", eventID, "err", markErr)
-			}
+		if window <= 0 {
+			// Sem agrupamento: processa imediatamente o que estiver acumulado.
+			s.flushBurst(ctx, key)
+			continue
+		}
+		s.dbnc.debounce(key, window, func() {
+			s.flushBurst(ctx, key)
 		})
 	}
+}
+
+// flushBurst processa a rajada acumulada serializando por conversa. Enquanto um
+// Handle roda (~LLM), novas mensagens da mesma conversa ficam no buffer e são
+// processadas numa única continuação ao final — sem respostas concorrentes.
+func (s *Server) flushBurst(ctx context.Context, key string) {
+	items := s.burst.beginOrQueue(key)
+	if items == nil {
+		// Nada a fazer agora: ou já está sendo processado (as mensagens ficam
+		// no buffer para o loop atual pegar), ou não há itens.
+		return
+	}
+
+	for items != nil {
+		combined := combineInbound(items)
+		if err := s.engine.Handle(ctx, combined); err != nil {
+			s.logger.Error("engine.Handle falhou", "wamid", combined.ProviderMessageID, "err", err)
+			for _, it := range items {
+				if markErr := s.webhook.MarkFailed(ctx, it.eventID, err.Error()); markErr != nil {
+					s.logger.Error("webhook.MarkFailed falhou", "id", it.eventID, "err", markErr)
+				}
+			}
+		} else {
+			for _, it := range items {
+				if markErr := s.webhook.MarkDone(ctx, it.eventID); markErr != nil {
+					s.logger.Error("webhook.MarkDone falhou", "id", it.eventID, "err", markErr)
+				}
+			}
+		}
+		// Pega mensagens que chegaram durante o Handle (continua) ou libera a chave.
+		items = s.burst.next(key)
+	}
+}
+
+// combineInbound junta os textos das mensagens da rajada numa única inbound.
+// Usa a última mensagem como base (wamid/timestamp). Se não houver texto em
+// nenhuma (só mídia), mantém a última mensagem como está.
+func combineInbound(items []burstItem) InboundMessage {
+	base := items[len(items)-1].msg
+
+	var parts []string
+	for _, it := range items {
+		if t := bestText(it.msg.Content); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	if len(parts) > 0 {
+		base.Content = MessageContent{Type: "text", Text: strings.Join(parts, "\n")}
+	}
+	return base
+}
+
+// bestText extrai o melhor texto de um conteúdo (texto, transcrição ou legenda).
+func bestText(c MessageContent) string {
+	switch c.Type {
+	case "text":
+		return c.Text
+	case "audio":
+		if c.Transcript != nil {
+			return *c.Transcript
+		}
+	default:
+		if c.Caption != nil {
+			return *c.Caption
+		}
+	}
+	return ""
+}
+
+// debounceWindow lê a janela de agrupamento configurada (tenant_config.debounce_ms).
+// Fallback de 1,5 s em erro; 0 desliga o agrupamento.
+func (s *Server) debounceWindow(ctx context.Context) time.Duration {
+	var ms int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT debounce_ms FROM tenant_config WHERE tenant_id = $1`, s.cfg.TenantID,
+	).Scan(&ms); err != nil {
+		return 1500 * time.Millisecond
+	}
+	if ms < 0 {
+		ms = 0
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 // ---------------------------------------------------------------------------
@@ -173,4 +401,124 @@ func (s *Server) processInbound(body []byte) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+// ---------------------------------------------------------------------------
+// Evolution API — captura de leads do número não-oficial (só captura, sem responder)
+// ---------------------------------------------------------------------------
+
+type evolutionWebhook struct {
+	Event    string `json:"event"`
+	Instance string `json:"instance"`
+	Data     struct {
+		Key struct {
+			RemoteJid string `json:"remoteJid"`
+			FromMe    bool   `json:"fromMe"`
+			ID        string `json:"id"`
+		} `json:"key"`
+		PushName string `json:"pushName"`
+		Message  struct {
+			Conversation        string `json:"conversation"`
+			ExtendedTextMessage struct {
+				Text string `json:"text"`
+			} `json:"extendedTextMessage"`
+		} `json:"message"`
+	} `json:"data"`
+}
+
+// evolutionBotReplyEnabled lê o toggle "bot responde" (default false).
+func (s *Server) evolutionBotReplyEnabled(ctx context.Context) bool {
+	var on bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT evolution_bot_reply_enabled FROM tenant_config WHERE tenant_id = $1`, s.cfg.TenantID,
+	).Scan(&on); err != nil {
+		return false
+	}
+	return on
+}
+
+// handleEvolutionWebhook recebe eventos da Evolution e captura leads (origin=evolution).
+// Autenticado por segredo em ?secret=. ACK imediato; processa em background.
+func (s *Server) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request) {
+	secret := s.cfg.EvolutionWebhookSecret
+	if secret == "" || subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("secret")), []byte(secret)) != 1 {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+	if err != nil {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusOK) // ACK rápido para a Evolution
+
+	var ev evolutionWebhook
+	if err := json.Unmarshal(body, &ev); err != nil {
+		s.logger.Debug("evolution: payload inválido", "err", err)
+		return
+	}
+	go s.captureEvolutionLead(ev)
+}
+
+// captureEvolutionLead cria/atualiza um lead a partir de uma mensagem recebida na
+// Evolution. Ignora grupos, status e mensagens próprias. Não responde nada.
+func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
+	if !strings.Contains(strings.ToLower(ev.Event), "upsert") || ev.Data.Key.FromMe {
+		return
+	}
+	jid := ev.Data.Key.RemoteJid
+	if jid == "" || strings.HasSuffix(jid, "@g.us") || strings.HasPrefix(jid, "status@") {
+		return
+	}
+	phone := jid
+	if i := strings.IndexAny(phone, "@:"); i > 0 {
+		phone = phone[:i]
+	}
+	if phone == "" {
+		return
+	}
+	name := ev.Data.PushName
+	text := ev.Data.Message.Conversation
+	if text == "" {
+		text = ev.Data.Message.ExtendedTextMessage.Text
+	}
+
+	ctx := context.Background()
+	err := s.withTenant(ctx, func(tx pgx.Tx) error {
+		contact, _, err := s.contacts.FindByChannelIdentity(ctx, tx, "evolution", phone)
+		if err != nil {
+			return err
+		}
+		if contact == nil {
+			contact, _, err = s.contacts.CreateWithChannelIdentity(ctx, tx, s.cfg.TenantID, "evolution", phone, name)
+			if err != nil {
+				return err
+			}
+		}
+		return s.leads.CreateWithOrigin(ctx, tx, s.cfg.TenantID, contact.ID, "evolution")
+	})
+	if err != nil {
+		s.logger.Error("evolution: falha ao capturar lead", "phone", phone, "err", err)
+		return
+	}
+	if s.hub != nil {
+		s.hub.Broadcast(WSEvent{Type: "lead.new"})
+	}
+
+	// Bot responde via Evolution SOMENTE se o toggle estiver ligado e houver texto.
+	if text != "" && s.evoEngine != nil && s.evolutionBotReplyEnabled(ctx) {
+		inbound := InboundMessage{
+			TenantID:          s.cfg.TenantID,
+			Channel:           "evolution",
+			ExternalID:        phone,
+			DisplayHandle:     name,
+			ProviderMessageID: ev.Data.Key.ID,
+			Content:           MessageContent{Type: "text", Text: text},
+			ReceivedAt:        time.Now(),
+		}
+		if err := s.evoEngine.Handle(ctx, inbound); err != nil {
+			s.logger.Error("evolution: engine.Handle", "phone", phone, "err", err)
+		}
+	}
 }

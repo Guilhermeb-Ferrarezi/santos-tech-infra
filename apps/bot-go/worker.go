@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +34,7 @@ type WorkerDeps struct {
 	Convs     *ConversationRepo
 	Contacts  *ContactRepo
 	AgentGo   *AgentGoClient
+	TenantCfg *TenantConfigRepo
 	Sender    ChatSender
 }
 
@@ -69,6 +72,9 @@ func NewWorker(deps WorkerDeps) *Worker {
 		}
 		if deps.Outbox == nil {
 			deps.Outbox = NewOutboxRepo(deps.Pool)
+		}
+		if deps.TenantCfg == nil {
+			deps.TenantCfg = NewTenantConfigRepo(deps.Pool)
 		}
 	}
 
@@ -178,14 +184,17 @@ func (w *Worker) processEvent(ctx context.Context, ev DomainEvent) {
 		processingErr = w.handleMessageSent(ctx, ev)
 
 	case "kb.gap_detected":
-		if w.deps.Config.AdminWhatsAppNumber != "" {
-			processingErr = w.notificaAdmin(ctx, ev)
+		// Gaps de KB são salvos silenciosamente — sem notificar o admin aqui.
+		// O admin só é avisado quando há cliente esperando de verdade (handoff,
+		// via notification.requested), que tem o fluxo de rascunho + confirmação.
+		if w.deps.AgentGo != nil && w.deps.TenantCfg != nil {
+			if err := w.handleKBGap(ctx, ev); err != nil {
+				w.deps.Logger.Warn("handleKBGap: falha ao persistir entrada KB", "err", err)
+			}
 		}
 
 	case "notification.requested":
-		if w.deps.Config.AdminWhatsAppNumber != "" {
-			processingErr = w.notificaAdmin(ctx, ev)
-		}
+		processingErr = w.notificaAdmin(ctx, ev)
 
 	default:
 		w.deps.Logger.Debug("processEvent: tipo de evento ignorado", "type", ev.Type, "eventID", ev.ID)
@@ -237,23 +246,119 @@ func (w *Worker) handleMessageSent(ctx context.Context, ev DomainEvent) error {
 
 // notificaAdmin envia uma notificação para o número de WhatsApp do admin.
 func (w *Worker) notificaAdmin(ctx context.Context, ev DomainEvent) error {
+	if w.deps.TenantCfg == nil {
+		return nil
+	}
+	cfg, err := w.deps.TenantCfg.Get(ctx, nil, ev.TenantID)
+	if err != nil {
+		return nil
+	}
+	admins := cfg.AdminNumbers()
+	if len(admins) == 0 {
+		return nil
+	}
+
 	question, _ := ev.Payload["question"].(string)
 	if question == "" {
 		question, _ = ev.Payload["message"].(string)
 	}
+	if question == "" {
+		question, _ = ev.Payload["inbound_text"].(string)
+	}
 
 	var texto string
-	if ev.Type == "kb.gap_detected" {
-		texto = fmt.Sprintf("⚠️ Lacuna de conhecimento detectada. Pergunta: %s", question)
-	} else {
-		texto = fmt.Sprintf("⚠️ Notificação: %s", question)
+	switch {
+	case ev.Type == "kb.gap_detected":
+		texto = fmt.Sprintf(
+			"📚 *Pergunta sem resposta na base de conhecimento:*\n\n_%s_\n\nResponda esta mensagem com a informação correta e eu salvo na KB automaticamente.",
+			question,
+		)
+	default:
+		if ntype, _ := ev.Payload["type"].(string); ntype == "BOOKING" {
+			texto = "📅 *Novo pedido de agendamento:*\n\n" + question
+		} else {
+			texto = fmt.Sprintf("🔔 *Cliente aguardando atendimento humano:*\n\n_%s_", question)
+		}
 	}
 
-	if err := w.deps.Sender.SendText(ctx, w.deps.Config.AdminWhatsAppNumber, texto); err != nil {
-		return fmt.Errorf("notificaAdmin: SendText: %w", err)
+	var firstErr error
+	sent := 0
+	for _, admin := range admins {
+		if err := w.deps.Sender.SendText(ctx, admin, texto); err != nil {
+			w.deps.Logger.Error("notificaAdmin: falha ao enviar a um admin", "admin", admin, "err", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		sent++
+	}
+	// Só falha (para retry) se NENHUM admin recebeu; sucesso parcial não reprocessa.
+	if sent == 0 && firstErr != nil {
+		return fmt.Errorf("notificaAdmin: SendText: %w", firstErr)
 	}
 
-	w.deps.Logger.Info("notificaAdmin: notificação enviada ao admin", "eventType", ev.Type)
+	w.deps.Logger.Info("notificaAdmin: notificação enviada", "eventType", ev.Type, "admins", sent)
+	return nil
+}
+
+// handleKBGap gera uma entrada de KB a partir da pergunta e resposta do bot e a persiste.
+func (w *Worker) handleKBGap(ctx context.Context, ev DomainEvent) error {
+	question, _ := ev.Payload["inbound_text"].(string)
+	if question == "" {
+		return nil
+	}
+
+	// Montar texto da resposta a partir dos bubbles
+	var answerParts []string
+	if bubblesRaw, ok := ev.Payload["answer_bubbles"].([]any); ok {
+		for _, b := range bubblesRaw {
+			if s, ok := b.(string); ok {
+				answerParts = append(answerParts, s)
+			}
+		}
+	}
+	if len(answerParts) == 0 {
+		return nil
+	}
+	answer := strings.Join(answerParts, " ")
+
+	prompt := fmt.Sprintf(
+		"Você é um sistema de extração de conhecimento. A partir de uma pergunta e sua resposta, "+
+			"gere uma entrada para uma base de conhecimento empresarial.\n\n"+
+			"Pergunta: %s\nResposta do assistente: %s\n\n"+
+			"Retorne SOMENTE JSON válido, sem texto adicional:\n"+
+			`{"title":"<título conciso, máximo 60 chars>","content":"<fato factual completo, prosa clara, reutilizável>"}`,
+		question, answer,
+	)
+
+	raw, err := w.deps.AgentGo.RespondWithModel(ctx, prompt, "haiku", false)
+	if err != nil {
+		return fmt.Errorf("handleKBGap: gerar entrada: %w", err)
+	}
+
+	// Extrair JSON da resposta (pode ter texto extra)
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start == -1 || end == -1 || end <= start {
+		return fmt.Errorf("handleKBGap: JSON não encontrado na resposta do modelo")
+	}
+	raw = raw[start : end+1]
+
+	var entry KBEntry
+	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+		return fmt.Errorf("handleKBGap: parse entry: %w", err)
+	}
+	if entry.Title == "" || entry.Content == "" {
+		return nil
+	}
+	entry.ID = fmt.Sprintf("auto-%d", time.Now().UnixMilli())
+
+	if err := w.deps.TenantCfg.AppendKBEntry(ctx, ev.TenantID, entry); err != nil {
+		return fmt.Errorf("handleKBGap: persistir: %w", err)
+	}
+
+	w.deps.Logger.Info("handleKBGap: entrada KB criada", "title", entry.Title)
 	return nil
 }
 
@@ -373,7 +478,7 @@ func (w *Worker) processFollowUp(ctx context.Context, row ScheduledContactRow) {
 			summaryCtx,
 		)
 
-		text, err := w.deps.AgentGo.RespondWithModel(ctx, prompt, "claude-haiku-4-5")
+		text, err := w.deps.AgentGo.RespondWithModel(ctx, prompt, "haiku", false)
 		if err != nil {
 			handleErr(fmt.Errorf("RespondWithModel: %w", err))
 			return

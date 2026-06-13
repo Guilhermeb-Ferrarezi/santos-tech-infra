@@ -64,37 +64,76 @@ func main() {
 	logger.Info("Redis conectado")
 
 	// 7. Instancia repos
-	contacts  := NewContactRepo(pool)
-	convs     := NewConversationRepo(pool)
-	messages  := NewMessageRepo(pool)
-	leads     := NewLeadRepo(pool)
-	outbox    := NewOutboxRepo(pool)
-	webhooks  := NewWebhookRepo(pool)
+	contacts := NewContactRepo(pool)
+	convs := NewConversationRepo(pool)
+	messages := NewMessageRepo(pool)
+	leads := NewLeadRepo(pool)
+	outbox := NewOutboxRepo(pool)
+	webhooks := NewWebhookRepo(pool)
 	tenantCfg := NewTenantConfigRepo(pool)
 	scheduled := NewScheduledContactRepo(pool)
+	logRepo := NewProcessingLogRepo(pool)
+	pending := NewPendingQuestionRepo(pool)
+	bookings := NewPendingBookingRepo(pool)
+	notionClient := NewNotionClient(cfg.NotionToken, cfg.NotionAgendaDBID)
 
 	// 8. Instancia AgentGoClient (Responder)
-	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret)
+	sitemapCache := NewSitemapCache(cfg.SiteURL)
+	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret, sitemapCache, notionClient)
 
-	// 9. Instancia WhatsAppSender
+	// 9. Instancia WhatsAppSender + cliente Evolution (canal não-oficial)
 	sender := NewWhatsAppSender(cfg.MetaAccessToken, cfg.MetaPhoneNumberID)
+	evolutionClient := NewEvolutionClient(cfg.EvolutionAPIURL, cfg.EvolutionAPIKey, cfg.EvolutionInstance)
 
-	// 10. Instancia ConversationEngine
+	// 10. Instancia WSHub e inicia loop em background
+	hub := NewWSHub(logger, cfg.DashCORSOrigin)
+	go hub.Run(ctx)
+
+	// 11. Instancia ConversationEngine
 	engine := NewConversationEngine(EngineDeps{
-		TenantID:  cfg.TenantID,
-		DB:        pool,
-		Contacts:  contacts,
-		Convs:     convs,
-		Messages:  messages,
-		Leads:     leads,
-		Config:    tenantCfg,
-		Responder: agentClient,
-		Sender:    sender,
-		Emitter:   outbox,
-		Logger:    logger,
+		TenantID:      cfg.TenantID,
+		DB:            pool,
+		Contacts:      contacts,
+		Convs:         convs,
+		Messages:      messages,
+		Leads:         leads,
+		Config:        tenantCfg,
+		Responder:     agentClient,
+		Sender:        sender,
+		Emitter:       outbox,
+		Logger:        logger,
+		Broadcast:     hub.Broadcast,
+		LogRepo:       logRepo,
+		TenantCfgRepo: tenantCfg,
+		Pending:       pending,
+		Bookings:      bookings,
+		Notion:        notionClient,
 	})
 
-	// 11. Instancia Worker
+	// 11b. Engine para o canal Evolution: mesmos repos, mas responde via Evolution.
+	// ForceBotEnabled — o gate é o toggle (evolution_bot_reply_enabled), não o whitelist.
+	evoEngine := NewConversationEngine(EngineDeps{
+		TenantID:        cfg.TenantID,
+		DB:              pool,
+		Contacts:        contacts,
+		Convs:           convs,
+		Messages:        messages,
+		Leads:           leads,
+		Config:          tenantCfg,
+		Responder:       agentClient,
+		Sender:          evolutionClient,
+		Emitter:         outbox,
+		Logger:          logger,
+		Broadcast:       hub.Broadcast,
+		LogRepo:         logRepo,
+		TenantCfgRepo:   tenantCfg,
+		Pending:         pending,
+		Bookings:        bookings,
+		Notion:          notionClient,
+		ForceBotEnabled: true,
+	})
+
+	// 12. Instancia Worker
 	worker := NewWorker(WorkerDeps{
 		Config:            cfg,
 		DB:                pool,
@@ -104,21 +143,22 @@ func main() {
 		ScheduledContacts: scheduled,
 		Sender:            sender,
 		Logger:            logger,
+		AgentGo:           agentClient,
 	})
 
-	// 12. Instancia Server
-	server := NewServer(cfg, engine, webhooks, logger)
+	// 13. Instancia Server
+	server := NewServer(cfg, engine, webhooks, pool, sender, logger, hub, logRepo, evoEngine, evolutionClient)
 
-	// 13. Inicia worker em background
+	// 14. Inicia worker em background
 	go worker.Start(ctx)
 
-	// 14. Configura servidor HTTP
+	// 15. Configura servidor HTTP
 	httpServer := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: server.Handler(),
 	}
 
-	// 15. Inicia servidor HTTP em goroutine separada
+	// 16. Inicia servidor HTTP em goroutine separada
 	go func() {
 		logger.Info("servidor HTTP iniciado", "addr", httpServer.Addr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -127,11 +167,11 @@ func main() {
 		}
 	}()
 
-	// 16. Aguarda sinal de shutdown
+	// 17. Aguarda sinal de shutdown
 	<-ctx.Done()
 	logger.Info("sinal de encerramento recebido, iniciando graceful shutdown...")
 
-	// 17. Graceful shutdown com timeout de 10s
+	// 18. Graceful shutdown com timeout de 10s
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

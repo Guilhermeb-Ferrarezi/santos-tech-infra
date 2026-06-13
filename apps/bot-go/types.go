@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // IDs de domínio — strings UUID tipadas por alias para evitar troca acidental.
 type TenantID = string
@@ -17,16 +20,16 @@ type ScheduledContactID = string
 type ConversationState string
 
 const (
-	StateNew                    ConversationState = "NEW"
-	StateEngaged                ConversationState = "ENGAGED"
-	StateAwaitingReply          ConversationState = "AWAITING_REPLY"
-	StateFollowupPending        ConversationState = "FOLLOWUP_PENDING"
-	StateConcludedPositive      ConversationState = "CONCLUDED_POSITIVE"
-	StateConcludedNegative      ConversationState = "CONCLUDED_NEGATIVE"
-	StateConcludedNoAnswer      ConversationState = "CONCLUDED_NO_ANSWER"
-	StateHandoff                ConversationState = "HANDOFF"
-	StateDormant                ConversationState = "DORMANT"
-	StateReactivationScheduled  ConversationState = "REACTIVATION_SCHEDULED"
+	StateNew                   ConversationState = "NEW"
+	StateEngaged               ConversationState = "ENGAGED"
+	StateAwaitingReply         ConversationState = "AWAITING_REPLY"
+	StateFollowupPending       ConversationState = "FOLLOWUP_PENDING"
+	StateConcludedPositive     ConversationState = "CONCLUDED_POSITIVE"
+	StateConcludedNegative     ConversationState = "CONCLUDED_NEGATIVE"
+	StateConcludedNoAnswer     ConversationState = "CONCLUDED_NO_ANSWER"
+	StateHandoff               ConversationState = "HANDOFF"
+	StateDormant               ConversationState = "DORMANT"
+	StateReactivationScheduled ConversationState = "REACTIVATION_SCHEDULED"
 )
 
 // CommunicationStyle — estilo detectado do cliente para espelhamento.
@@ -43,9 +46,9 @@ const (
 type OutboundIntent string
 
 const (
-	IntentFreeForm              OutboundIntent = "FREE_FORM"
+	IntentFreeForm               OutboundIntent = "FREE_FORM"
 	IntentStructuredReengagement OutboundIntent = "STRUCTURED_REENGAGEMENT"
-	IntentTransactionalUpdate   OutboundIntent = "TRANSACTIONAL_UPDATE"
+	IntentTransactionalUpdate    OutboundIntent = "TRANSACTIONAL_UPDATE"
 )
 
 // Contact — entidade raiz de identidade (desacoplada de canal).
@@ -71,20 +74,20 @@ type ChannelIdentity struct {
 
 // Conversation — thread de conversa por canal.
 type Conversation struct {
-	ID                      ConversationID
-	TenantID                TenantID
-	ContactID               ContactID
-	ChannelIdentityID       ChannelIdentityID
-	Channel                 string
-	State                   ConversationState
-	BotEnabled              bool
-	LastInboundAt           *time.Time
-	LastOutboundAt          *time.Time
-	LastInboundModality     string
-	Summary                 *string
-	StructuredFacts         map[string]any
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
+	ID                  ConversationID
+	TenantID            TenantID
+	ContactID           ContactID
+	ChannelIdentityID   ChannelIdentityID
+	Channel             string
+	State               ConversationState
+	BotEnabled          bool
+	LastInboundAt       *time.Time
+	LastOutboundAt      *time.Time
+	LastInboundModality string
+	Summary             *string
+	StructuredFacts     map[string]any
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // Lead — oportunidade de negócio gerada pela conversa.
@@ -104,11 +107,116 @@ type TenantConfig struct {
 	BotGender            string
 	RevealAIIfAsked      bool
 	KBContent            *string
+	SystemPrompt         string
+	AdminSystemPrompt    string
 	Timezone             string
 	QuietHoursStart      *string
 	QuietHoursEnd        *string
 	BotEnabledByDefault  bool
 	BotAllowedNumbers    []string
+	AdminWhatsAppNumber  string   // legado (0014) — mantido por compatibilidade
+	AdminWhatsAppNumbers []string // múltiplos admins (0016) — fonte de verdade
+
+	// Transient — não vem do banco; setado pelo engine antes de chamar o Responder.
+	IsAdminConversation bool
+	// AllowedWebURLs — páginas (do sitemap) que o bot pode consultar via WebFetch.
+	AllowedWebURLs []string
+	// Schedule — aulas já agendadas (do Notion), injetadas no prompt do cliente
+	// para o bot propor horários livres. Vazio = agendamento desabilitado/sem dados.
+	Schedule []ScheduleEntry
+}
+
+// ScheduleEntry — uma aula já agendada lida da base "Agenda de Aulas" do Notion.
+type ScheduleEntry struct {
+	Aula      string
+	Dia       string
+	Horario   string
+	Periodo   string
+	Professor string
+	Conteudo  string
+	Aluno     string
+}
+
+// Booking — dados para gravar uma nova aula na agenda do Notion.
+type Booking struct {
+	Title    string // ex.: "Aula experimental — João"
+	Dia      string
+	Horario  string
+	Periodo  string
+	Data     string // YYYY-MM-DD, opcional
+	Conteudo string // opcional
+}
+
+// SchedulingRequest — pedido de agendamento detectado pelo LLM na conversa do cliente.
+type SchedulingRequest struct {
+	Kind           string // "experimental" | "individual"
+	StudentName    string
+	Age            int
+	Course         string
+	ProposedDay    string
+	ProposedTime   string
+	ProposedPeriod string
+	Notes          string
+}
+
+// BookingAction — ação do admin sobre um agendamento pendente.
+type BookingAction struct {
+	BookingID string
+	Action    string // "confirm" | "adjust" | "reject"
+	Day       string
+	Time      string
+	Period    string
+}
+
+// PendingBooking — agendamento aguardando confirmação do admin. Ver migration 0018.
+type PendingBooking struct {
+	ID             string
+	TenantID       TenantID
+	ConversationID ConversationID
+	ClientPhone    string
+	ClientName     string
+	Kind           string
+	Course         string
+	ProposedDay    string
+	ProposedTime   string
+	ProposedPeriod string
+	Age            int
+	Notes          string
+	Status         string // open | confirmed | rejected
+	CreatedAt      time.Time
+}
+
+// IsAdminNumber retorna true se o telefone for de um administrador (lista 0016,
+// com fallback ao número único legado).
+func (c TenantConfig) IsAdminNumber(phone string) bool {
+	if phone == "" {
+		return false
+	}
+	for _, n := range c.AdminWhatsAppNumbers {
+		if n == phone {
+			return true
+		}
+	}
+	return c.AdminWhatsAppNumber != "" && c.AdminWhatsAppNumber == phone
+}
+
+// AdminNumbers retorna a lista efetiva de números de admin (lista 0016 ou, se
+// vazia, o número único legado).
+func (c TenantConfig) AdminNumbers() []string {
+	if len(c.AdminWhatsAppNumbers) > 0 {
+		return c.AdminWhatsAppNumbers
+	}
+	if c.AdminWhatsAppNumber != "" {
+		return []string{c.AdminWhatsAppNumber}
+	}
+	return nil
+}
+
+// KBEntry — entrada de base de conhecimento usada para extração e persistência.
+type KBEntry struct {
+	ID      string `json:"id"`
+	Title   string `json:"title,omitempty"`
+	Content string `json:"content"`
 }
 
 // KnowledgeBaseEntry — entrada da base de conhecimento para o prompt.
@@ -141,14 +249,14 @@ type MessageContent struct {
 
 // OutboundMessage — mensagem a enviar (formato canônico, exactly-once via chave).
 type OutboundMessage struct {
-	TenantID          TenantID
-	ConversationID    ConversationID
-	Channel           string
-	To                string // telefone E.164 de destino
-	Intent            OutboundIntent
-	Content           MessageContent
-	IdempotencyKey    string
-	TemplatePayload   *TemplatePayload
+	TenantID        TenantID
+	ConversationID  ConversationID
+	Channel         string
+	To              string // telefone E.164 de destino
+	Intent          OutboundIntent
+	Content         MessageContent
+	IdempotencyKey  string
+	TemplatePayload *TemplatePayload
 }
 
 // TemplatePayload — template Meta para reengajamento fora da janela 24h.
@@ -166,26 +274,66 @@ type ConversationTurn struct {
 
 // ConversationContext — contexto montado para o prompt do LLM.
 type ConversationContext struct {
-	RecentTurns    []ConversationTurn
-	Summary        string
+	RecentTurns     []ConversationTurn
+	Summary         string
 	StructuredFacts map[string]any
+	// PendingQuestions — dúvidas de clientes aguardando resposta. Injetadas
+	// SOMENTE em conversas admin, para o LLM casar a info fornecida e rascunhar.
+	PendingQuestions []PendingQuestion
+	// PendingBookings — agendamentos aguardando confirmação. Injetados SOMENTE
+	// em conversas admin, para o LLM confirmar/ajustar/rejeitar.
+	PendingBookings []PendingBooking
+}
+
+// PendingQuestion — dúvida de um cliente que o bot não soube responder (handoff),
+// aguardando o admin fornecer a informação. Ver migration 0015.
+type PendingQuestion struct {
+	ID             string
+	TenantID       TenantID
+	ConversationID ConversationID
+	ClientPhone    string
+	ClientName     string
+	Question       string
+	Status         string // open | drafted | resolved
+	Draft          string
+	CreatedAt      time.Time
+}
+
+// ClientAction — ação proposta pelo LLM (modo admin) sobre uma dúvida pendente:
+// rascunhar (Send=false) ou enviar de fato ao cliente (Send=true).
+type ClientAction struct {
+	PendingID string
+	Draft     string
+	Send      bool
+}
+
+// ToolCall — uso de ferramenta capturado durante geração do LLM.
+type ToolCall struct {
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 // ResponderOutput — saída parseada do LLM (contrato JSON do prompt).
 type ResponderOutput struct {
-	Bubbles          []string
-	Answered         bool
-	AnsweredFromKb   bool
-	CitedEntryIDs    []string
-	Handoff          bool
-	ScheduledContact *ScheduledContact
-	QuotedReplies    []QuotedReply
+	Bubbles           []string
+	Answered          bool
+	AnsweredFromKb    bool
+	CitedEntryIDs     []string
+	Handoff           bool
+	Smalltalk         bool // saudação/agradecimento/conversa fiada — não conta como gap de KB
+	ScheduledContact  *ScheduledContact
+	QuotedReplies     []QuotedReply
+	ToolCalls         []ToolCall
+	KBEntry           *KBEntry           // presente quando admin fornece info para salvar na KB
+	ClientActions     []ClientAction     // modo admin: rascunhos/envios para clientes pendentes
+	SchedulingRequest *SchedulingRequest // cliente: pedido de agendamento detectado
+	BookingActions    []BookingAction    // modo admin: confirmar/ajustar/rejeitar agendamentos
 }
 
 // ScheduledContact — reativação pedida pelo cliente ("me chama em julho").
 type ScheduledContact struct {
 	RawPhrase    string
-	ResolvedDate string  // YYYY-MM-DD
+	ResolvedDate string // YYYY-MM-DD
 	Confidence   float64
 }
 
@@ -236,7 +384,7 @@ type ScheduledContactRow struct {
 
 // Persona — identidade do bot configurada pelo tenant.
 type Persona struct {
-	BotName        string
-	BotGender      string
+	BotName         string
+	BotGender       string
 	RevealAIIfAsked bool
 }

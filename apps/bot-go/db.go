@@ -151,7 +151,7 @@ func withTenant(pool *pgxpool.Pool, tenantID TenantID) func(ctx context.Context,
 		}
 
 		// SET LOCAL aplica apenas a esta transação.
-		if _, err := tx.Exec(ctx, `SET LOCAL app.tenant_id = $1`, tenantID); err != nil {
+		if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, string(tenantID)); err != nil {
 			_ = tx.Rollback(ctx)
 			return fmt.Errorf("withTenant SET LOCAL: %w", err)
 		}

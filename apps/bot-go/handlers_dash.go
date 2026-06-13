@@ -1,0 +1,756 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// ── tipos de resposta/request ────────────────────────────────────────────────
+
+type dashProcessingLog struct {
+	ID             string          `json:"id"`
+	ConversationID string          `json:"conversationId"`
+	ContactPhone   string          `json:"contactPhone"`
+	ContactName    string          `json:"contactName"`
+	InboundText    string          `json:"inboundText"`
+	Answered       *bool           `json:"answered"`
+	AnsweredFromKb *bool           `json:"answeredFromKb"`
+	Handoff        *bool           `json:"handoff"`
+	CitedEntryIDs  []string        `json:"citedEntryIds"`
+	Bubbles        []string        `json:"bubbles"`
+	ToolCalls      json.RawMessage `json:"toolCalls,omitempty"`
+	ProcessingMs   int             `json:"processingMs"`
+	Error          string          `json:"error,omitempty"`
+	CreatedAt      time.Time       `json:"createdAt"`
+}
+
+type dashConv struct {
+	ID           string     `json:"id"`
+	ContactName  string     `json:"contactName"`
+	Phone        string     `json:"phone"`
+	State        string     `json:"state"`
+	BotEnabled   bool       `json:"botEnabled"`
+	LastActivity *time.Time `json:"lastActivity"`
+	Preview      string     `json:"preview"`
+}
+
+type dashMessage struct {
+	ID        string           `json:"id"`
+	Direction string           `json:"direction"` // "in" | "out"
+	Text      string           `json:"text"`
+	Ts        time.Time        `json:"ts"`
+	Reasoning *json.RawMessage `json:"reasoning,omitempty"`
+}
+
+type dashConfig struct {
+	BotName                  string    `json:"botName"`
+	BotGender                string    `json:"botGender"`
+	BotEnabledByDefault      bool      `json:"botEnabledByDefault"`
+	BotAllowedNumbers        []string  `json:"botAllowedNumbers"`
+	QuietHoursStart          *string   `json:"quietHoursStart"`
+	QuietHoursEnd            *string   `json:"quietHoursEnd"`
+	KBContent                []KBEntry `json:"kbContent"`
+	SystemPrompt             string    `json:"systemPrompt"`
+	AdminSystemPrompt        string    `json:"adminSystemPrompt"`
+	AdminWhatsAppNumbers     []string  `json:"adminWhatsAppNumbers"`
+	DebounceMs               int       `json:"debounceMs"`
+	EvolutionBotReplyEnabled bool      `json:"evolutionBotReplyEnabled"`
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+func jsonOK(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func jsonErr(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func newHexID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// ── GET /api/conversations ───────────────────────────────────────────────────
+
+func (s *Server) handleDashConversations(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			conv.id::text,
+			COALESCE(c.display_name, ci.external_id) AS contact_name,
+			ci.external_id AS phone,
+			conv.state::text,
+			conv.bot_enabled,
+			GREATEST(conv.last_inbound_at, conv.last_outbound_at) AS last_activity,
+			COALESCE(
+				(SELECT im.content->>'Text'
+				 FROM inbound_message im
+				 WHERE im.conversation_id = conv.id
+				 ORDER BY im.received_at DESC
+				 LIMIT 1),
+				''
+			) AS preview
+		FROM conversation conv
+		JOIN channel_identity ci ON ci.id = conv.channel_identity_id
+		JOIN contact c ON c.id = ci.contact_id
+		WHERE conv.tenant_id = $1
+		ORDER BY GREATEST(conv.last_inbound_at, conv.last_outbound_at) DESC NULLS LAST
+		LIMIT 100
+	`, tenantID)
+	if err != nil {
+		s.logger.Error("dash: list conversations", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	convs := []dashConv{}
+	for rows.Next() {
+		var c dashConv
+		if err := rows.Scan(&c.ID, &c.ContactName, &c.Phone, &c.State, &c.BotEnabled, &c.LastActivity, &c.Preview); err != nil {
+			s.logger.Error("dash: scan conversation", "err", err)
+			continue
+		}
+		convs = append(convs, c)
+	}
+	if err := rows.Err(); err != nil {
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, convs)
+}
+
+// ── GET /api/conversations/{id}/messages ────────────────────────────────────
+
+func (s *Server) handleDashMessages(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+	convID := r.PathValue("id")
+	if convID == "" {
+		jsonErr(w, "missing id", http.StatusBadRequest)
+		return
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT 'in' AS direction, id::text, COALESCE(content->>'Text', '') AS text, received_at AS ts, NULL::jsonb AS reasoning
+		FROM inbound_message
+		WHERE tenant_id = $1 AND conversation_id = $2::uuid
+
+		UNION ALL
+
+		SELECT 'out', id::text, COALESCE(content->>'Text', ''), sent_at, reasoning
+		FROM outbound_message
+		WHERE tenant_id = $1 AND conversation_id = $2::uuid AND status = 'sent'
+
+		ORDER BY ts ASC
+		LIMIT 200
+	`, tenantID, convID)
+	if err != nil {
+		s.logger.Error("dash: list messages", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	msgs := []dashMessage{}
+	for rows.Next() {
+		var m dashMessage
+		var rawReasoning []byte
+		if err := rows.Scan(&m.Direction, &m.ID, &m.Text, &m.Ts, &rawReasoning); err != nil {
+			s.logger.Error("dash: scan message", "err", err)
+			continue
+		}
+		if len(rawReasoning) > 0 {
+			r := json.RawMessage(rawReasoning)
+			m.Reasoning = &r
+		}
+		msgs = append(msgs, m)
+	}
+	if err := rows.Err(); err != nil {
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, msgs)
+}
+
+// ── PATCH /api/conversations/{id} ───────────────────────────────────────────
+
+func (s *Server) handleDashPatchConversation(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+	convID := r.PathValue("id")
+	if convID == "" {
+		jsonErr(w, "missing id", http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		BotEnabled *bool `json:"botEnabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.BotEnabled == nil {
+		jsonErr(w, "botEnabled required", http.StatusBadRequest)
+		return
+	}
+
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE conversation SET bot_enabled = $1, updated_at = now()
+		WHERE tenant_id = $2 AND id = $3::uuid
+	`, *body.BotEnabled, tenantID, convID)
+	if err != nil {
+		s.logger.Error("dash: patch conversation", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		jsonErr(w, "not found", http.StatusNotFound)
+		return
+	}
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
+// ── POST /api/conversations/{id}/messages ───────────────────────────────────
+
+func (s *Server) handleDashSendMessage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+	convID := r.PathValue("id")
+	if convID == "" {
+		jsonErr(w, "missing id", http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Text == "" {
+		jsonErr(w, "text required", http.StatusBadRequest)
+		return
+	}
+
+	if s.sender.accessToken == "" || s.sender.phoneNumberID == "" {
+		jsonErr(w, "Meta API não configurada", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Encontra o número do destinatário
+	var phone string
+	err := s.pool.QueryRow(ctx, `
+		SELECT ci.external_id
+		FROM conversation conv
+		JOIN channel_identity ci ON ci.id = conv.channel_identity_id
+		WHERE conv.tenant_id = $1 AND conv.id = $2::uuid
+	`, tenantID, convID).Scan(&phone)
+	if err != nil {
+		jsonErr(w, "conversation not found", http.StatusNotFound)
+		return
+	}
+
+	content := MessageContent{Type: "text", Text: body.Text}
+	idemKey := newHexID()
+
+	outMsg := OutboundMessage{
+		TenantID:       tenantID,
+		ConversationID: ConversationID(convID),
+		Channel:        "whatsapp",
+		To:             phone,
+		Intent:         IntentFreeForm,
+		Content:        content,
+		IdempotencyKey: idemKey,
+	}
+
+	wamid, err := s.sender.SendMessage(ctx, outMsg)
+	if err != nil {
+		s.logger.Error("dash: send message", "err", err)
+		jsonErr(w, "falha ao enviar mensagem", http.StatusInternalServerError)
+		return
+	}
+
+	contentJSON, _ := json.Marshal(content)
+	_, _ = s.pool.Exec(ctx, `
+		INSERT INTO outbound_message
+			(tenant_id, conversation_id, provider_message_id, idempotency_key, intent_category, content, status, sent_at)
+		VALUES ($1, $2::uuid, $3, $4, 'FREE_FORM'::outbound_intent, $5, 'sent', now())
+		ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+	`, tenantID, convID, wamid, idemKey, contentJSON)
+
+	jsonOK(w, map[string]string{"wamid": wamid})
+}
+
+// ── GET /api/config ──────────────────────────────────────────────────────────
+
+func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+
+	var cfg dashConfig
+	var allowedRaw []byte
+	var adminNumbersRaw []byte
+	var qhStart, qhEnd *string
+	var kbRaw *string
+
+	err := s.pool.QueryRow(ctx, `
+		SELECT tc.bot_name, tc.bot_gender, tc.bot_enabled_by_default,
+		       tc.bot_allowed_numbers,
+		       tc.quiet_hours->>'start', tc.quiet_hours->>'end',
+		       tc.kb_content::text,
+		       tc.system_prompt,
+		       tc.admin_system_prompt,
+		       tc.admin_whatsapp_numbers,
+		       tc.debounce_ms,
+		       tc.evolution_bot_reply_enabled
+		FROM tenant_config tc
+		WHERE tc.tenant_id = $1
+	`, tenantID).Scan(
+		&cfg.BotName, &cfg.BotGender, &cfg.BotEnabledByDefault,
+		&allowedRaw, &qhStart, &qhEnd, &kbRaw, &cfg.SystemPrompt,
+		&cfg.AdminSystemPrompt,
+		&adminNumbersRaw, &cfg.DebounceMs, &cfg.EvolutionBotReplyEnabled,
+	)
+	if err != nil {
+		s.logger.Error("dash: get config", "err", err)
+		jsonErr(w, "config not found", http.StatusNotFound)
+		return
+	}
+
+	if len(allowedRaw) > 0 {
+		_ = json.Unmarshal(allowedRaw, &cfg.BotAllowedNumbers)
+	}
+	if cfg.BotAllowedNumbers == nil {
+		cfg.BotAllowedNumbers = []string{}
+	}
+	if len(adminNumbersRaw) > 0 {
+		_ = json.Unmarshal(adminNumbersRaw, &cfg.AdminWhatsAppNumbers)
+	}
+	if cfg.AdminWhatsAppNumbers == nil {
+		cfg.AdminWhatsAppNumbers = []string{}
+	}
+	cfg.QuietHoursStart = qhStart
+	cfg.QuietHoursEnd = qhEnd
+
+	if kbRaw != nil && *kbRaw != "" && *kbRaw != "null" {
+		_ = json.Unmarshal([]byte(*kbRaw), &cfg.KBContent)
+	}
+	if cfg.KBContent == nil {
+		cfg.KBContent = []KBEntry{}
+	}
+
+	// Se ainda não houver prompt customizado, mostra o prompt padrão (do código)
+	// já preenchido e editável no dashboard. O bot continua usando esse mesmo
+	// texto por padrão, então preencher não muda o comportamento.
+	if cfg.SystemPrompt == "" {
+		cfg.SystemPrompt = DefaultPersonaPrompt(
+			TenantConfig{BotName: cfg.BotName, BotGender: cfg.BotGender},
+			ConversationContext{},
+		)
+	}
+	if cfg.AdminSystemPrompt == "" {
+		cfg.AdminSystemPrompt = DefaultAdminPrompt()
+	}
+
+	jsonOK(w, cfg)
+}
+
+// ── GET /api/config/default-prompt ───────────────────────────────────────────
+// Retorna o prompt de identidade+estilo padrão (que está no código) para o
+// dashboard importar no campo editável "Prompt do sistema".
+
+func (s *Server) handleDashDefaultPrompt(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+
+	var botName, botGender string
+	if err := s.pool.QueryRow(ctx,
+		`SELECT bot_name, bot_gender FROM tenant_config WHERE tenant_id = $1`, tenantID,
+	).Scan(&botName, &botGender); err != nil {
+		s.logger.Error("dash: default-prompt", "err", err)
+		jsonErr(w, "config not found", http.StatusNotFound)
+		return
+	}
+
+	cfg := TenantConfig{BotName: botName, BotGender: botGender}
+	jsonOK(w, map[string]string{"prompt": DefaultPersonaPrompt(cfg, ConversationContext{})})
+}
+
+// ── GET /api/config/default-admin-prompt ─────────────────────────────────────
+// Retorna a parte editável padrão (do código) do prompt do admin.
+
+func (s *Server) handleDashDefaultAdminPrompt(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"prompt": DefaultAdminPrompt()})
+}
+
+// ── PATCH /api/config ────────────────────────────────────────────────────────
+
+func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+
+	var body dashConfig
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+
+	allowedJSON, _ := json.Marshal(body.BotAllowedNumbers)
+	if body.BotAllowedNumbers == nil {
+		allowedJSON = []byte("[]")
+	}
+
+	adminNumbersJSON, _ := json.Marshal(body.AdminWhatsAppNumbers)
+	if body.AdminWhatsAppNumbers == nil {
+		adminNumbersJSON = []byte("[]")
+	}
+	// Mantém a coluna legada em sincronia (primeiro número da lista).
+	legacyAdmin := ""
+	if len(body.AdminWhatsAppNumbers) > 0 {
+		legacyAdmin = body.AdminWhatsAppNumbers[0]
+	}
+
+	// debounce_ms: clamp defensivo (0–15s; 0 = sem agrupamento).
+	debounceMs := body.DebounceMs
+	if debounceMs < 0 {
+		debounceMs = 0
+	}
+	if debounceMs > 15000 {
+		debounceMs = 15000
+	}
+
+	kbJSON, _ := json.Marshal(body.KBContent)
+	if body.KBContent == nil {
+		kbJSON = []byte("[]")
+	}
+
+	var quietHoursJSON *string
+	if body.QuietHoursStart != nil && body.QuietHoursEnd != nil &&
+		*body.QuietHoursStart != "" && *body.QuietHoursEnd != "" {
+		v := fmt.Sprintf(`{"start":%q,"end":%q}`, *body.QuietHoursStart, *body.QuietHoursEnd)
+		quietHoursJSON = &v
+	}
+
+	_, err := s.pool.Exec(ctx, `
+		UPDATE tenant_config
+		SET bot_name               = $1,
+		    bot_gender             = $2,
+		    bot_enabled_by_default = $3,
+		    bot_allowed_numbers    = $4::jsonb,
+		    quiet_hours            = CASE WHEN $5::text IS NULL THEN '{}'::jsonb ELSE $5::jsonb END,
+		    kb_content             = $6::jsonb,
+		    system_prompt          = $8,
+		    admin_whatsapp_number  = $9,
+		    admin_whatsapp_numbers = $10::jsonb,
+		    debounce_ms            = $11,
+		    admin_system_prompt    = $12,
+		    evolution_bot_reply_enabled = $13
+		WHERE tenant_id = $7
+	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
+		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt,
+		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt, body.EvolutionBotReplyEnabled)
+	if err != nil {
+		s.logger.Error("dash: patch config", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
+// ── DELETE /api/conversations/{id} ──────────────────────────────────────────
+
+func (s *Server) handleDashDeleteConversation(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+	convID := r.PathValue("id")
+	if convID == "" {
+		jsonErr(w, "missing id", http.StatusBadRequest)
+		return
+	}
+
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM conversation
+		WHERE tenant_id = $1 AND id = $2::uuid
+	`, tenantID, convID)
+	if err != nil {
+		s.logger.Error("dash: delete conversation", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
+// handleDashGetConversationDetail returns the contact info + bot_enabled for a conversation.
+func (s *Server) handleDashGetConversation(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+	convID := r.PathValue("id")
+	if convID == "" {
+		jsonErr(w, "missing id", http.StatusBadRequest)
+		return
+	}
+
+	var c dashConv
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			conv.id::text,
+			COALESCE(c.display_name, ci.external_id) AS contact_name,
+			ci.external_id AS phone,
+			conv.state::text,
+			conv.bot_enabled,
+			GREATEST(conv.last_inbound_at, conv.last_outbound_at) AS last_activity,
+			''
+		FROM conversation conv
+		JOIN channel_identity ci ON ci.id = conv.channel_identity_id
+		JOIN contact c ON c.id = ci.contact_id
+		WHERE conv.tenant_id = $1 AND conv.id = $2::uuid
+	`, tenantID, convID).Scan(
+		&c.ID, &c.ContactName, &c.Phone, &c.State, &c.BotEnabled, &c.LastActivity, &c.Preview,
+	)
+	if err != nil {
+		jsonErr(w, "not found", http.StatusNotFound)
+		return
+	}
+	jsonOK(w, c)
+}
+
+// ── GET /api/logs ─────────────────────────────────────────────────────────────
+
+func (s *Server) handleDashLogs(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+	q := r.URL.Query()
+
+	page := atoiDefault(q.Get("page"), 1)
+	pageSize := atoiDefault(q.Get("pageSize"), 50)
+
+	filters := LogFilters{
+		Answered:       triBool(q.Get("answered")),
+		AnsweredFromKb: triBool(q.Get("kb")),
+		Handoff:        triBool(q.Get("handoff")),
+		ErrorsOnly:     q.Get("errors") == "true",
+		Search:         strings.TrimSpace(q.Get("q")),
+	}
+
+	entries, total, err := s.logRepo.ListPaged(ctx, tenantID, filters, page, pageSize)
+	if err != nil {
+		s.logger.Error("dash: list logs", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	logs := make([]dashProcessingLog, 0, len(entries))
+	for _, e := range entries {
+		logs = append(logs, toDashLog(e))
+	}
+	jsonOK(w, map[string]any{
+		"logs":     logs,
+		"total":    total,
+		"page":     page,
+		"pageSize": pageSize,
+	})
+}
+
+// triBool converte "true"/"false" em *bool; qualquer outra coisa → nil (sem filtro).
+func triBool(v string) *bool {
+	switch v {
+	case "true":
+		t := true
+		return &t
+	case "false":
+		f := false
+		return &f
+	default:
+		return nil
+	}
+}
+
+// atoiDefault converte uma string para int, retornando def em caso de erro.
+func atoiDefault(v string, def int) int {
+	if n, err := strconv.Atoi(v); err == nil {
+		return n
+	}
+	return def
+}
+
+// ── CRM: leads ────────────────────────────────────────────────────────────────
+
+type dashLead struct {
+	ID             string     `json:"id"`
+	ContactName    string     `json:"contactName"`
+	Phone          string     `json:"phone"`
+	Status         string     `json:"status"`
+	Interest       string     `json:"interest"`
+	Owner          string     `json:"owner"`
+	Origin         string     `json:"origin"`
+	ConversationID string     `json:"conversationId"`
+	LastActivity   *time.Time `json:"lastActivity"`
+	CreatedAt      time.Time  `json:"createdAt"`
+}
+
+// leadFunnelStatuses — estágios válidos do funil do CRM.
+var leadFunnelStatuses = map[string]bool{
+	"novo": true, "em_atendimento": true, "aula_marcada": true,
+	"matriculado": true, "perdido": true,
+}
+
+// GET /api/leads — lista o funil de leads do WhatsApp.
+func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT l.id::text, COALESCE(ct.display_name, ''), COALESCE(ci.external_id, ''),
+		       l.status, COALESCE(l.interest, ''), COALESCE(l.owner, ''), COALESCE(l.origin, 'oficial'),
+		       COALESCE(cv.id::text, ''), cv.last_inbound_at, l.created_at
+		FROM lead l
+		JOIN contact ct ON ct.tenant_id = l.tenant_id AND ct.id = l.contact_id
+		LEFT JOIN LATERAL (
+			SELECT external_id FROM channel_identity
+			WHERE tenant_id = l.tenant_id AND contact_id = l.contact_id LIMIT 1
+		) ci ON true
+		LEFT JOIN LATERAL (
+			SELECT id, last_inbound_at FROM conversation
+			WHERE tenant_id = l.tenant_id AND contact_id = l.contact_id
+			ORDER BY last_inbound_at DESC NULLS LAST LIMIT 1
+		) cv ON true
+		WHERE l.tenant_id = $1
+		ORDER BY cv.last_inbound_at DESC NULLS LAST, l.created_at DESC
+	`, tenantID)
+	if err != nil {
+		s.logger.Error("dash: list leads", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	out := make([]dashLead, 0)
+	for rows.Next() {
+		var l dashLead
+		if err := rows.Scan(&l.ID, &l.ContactName, &l.Phone, &l.Status,
+			&l.Interest, &l.Owner, &l.Origin, &l.ConversationID, &l.LastActivity, &l.CreatedAt); err != nil {
+			s.logger.Error("dash: scan lead", "err", err)
+			jsonErr(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		// Normaliza status legado para o funil.
+		if !leadFunnelStatuses[l.Status] {
+			l.Status = "novo"
+		}
+		out = append(out, l)
+	}
+	jsonOK(w, out)
+}
+
+// GET /api/evolution/instances — status dos números conectados na Evolution.
+func (s *Server) handleDashEvolutionInstances(w http.ResponseWriter, r *http.Request) {
+	if s.evoClient == nil {
+		jsonOK(w, []EvolutionInstance{})
+		return
+	}
+	insts, err := s.evoClient.Instances(r.Context())
+	if err != nil {
+		s.logger.Error("dash: evolution instances", "err", err)
+		jsonOK(w, []EvolutionInstance{})
+		return
+	}
+	jsonOK(w, insts)
+}
+
+// PATCH /api/leads/{id} — atualiza status (e opcional owner/interest) de um lead.
+func (s *Server) handleDashPatchLead(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+	id := r.PathValue("id")
+
+	var body struct {
+		Status   *string `json:"status"`
+		Owner    *string `json:"owner"`
+		Interest *string `json:"interest"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if body.Status != nil && !leadFunnelStatuses[*body.Status] {
+		jsonErr(w, "invalid status", http.StatusBadRequest)
+		return
+	}
+
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE lead SET
+		  status   = COALESCE($3, status),
+		  owner    = COALESCE($4, owner),
+		  interest = COALESCE($5, interest),
+		  updated_at = now()
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantID, id, body.Status, body.Owner, body.Interest)
+	if err != nil {
+		s.logger.Error("dash: patch lead", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		jsonErr(w, "lead not found", http.StatusNotFound)
+		return
+	}
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
+func toDashLog(e ProcessingLogEntry) dashProcessingLog {
+	cited := e.CitedEntryIDs
+	if cited == nil {
+		cited = []string{}
+	}
+	bubbles := e.Bubbles
+	if bubbles == nil {
+		bubbles = []string{}
+	}
+	return dashProcessingLog{
+		ID:             e.ID,
+		ConversationID: e.ConversationID,
+		ContactPhone:   e.ContactPhone,
+		ContactName:    e.ContactName,
+		InboundText:    e.InboundText,
+		Answered:       e.Answered,
+		AnsweredFromKb: e.AnsweredFromKb,
+		Handoff:        e.Handoff,
+		CitedEntryIDs:  cited,
+		Bubbles:        bubbles,
+		ToolCalls:      e.ToolCalls,
+		ProcessingMs:   e.ProcessingMs,
+		Error:          e.Error,
+		CreatedAt:      e.CreatedAt,
+	}
+}
+
+// ── GET /api/ws ───────────────────────────────────────────────────────────────
+// Upgrade para WebSocket. Auth via query param ?key= (browser JS não suporta
+// headers customizados em WebSocket nativamente).
+
+func (s *Server) handleDashWS(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.DashAPIKey == "" || s.hub == nil {
+		http.NotFound(w, r)
+		return
+	}
+	key := r.URL.Query().Get("key")
+	if subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) != 1 {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	s.hub.Upgrade(w, r)
+}
+
+// Garante que context é usado (lint).
+var _ = context.Background

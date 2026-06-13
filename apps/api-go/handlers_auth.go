@@ -77,6 +77,7 @@ const (
 )
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Identifier string `json:"identifier"`
@@ -98,9 +99,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if u == nil || u.LoginDisabled || u.PasswordHash == nil || !verifyPassword(body.Password, *u.PasswordHash) {
-		if cnt, _ := s.rdb.Incr(r.Context(), lockKey).Result(); cnt == 1 {
-			s.rdb.Expire(r.Context(), lockKey, loginFailWindow)
-		}
+		s.rdb.Incr(r.Context(), lockKey)
+		s.rdb.ExpireNX(r.Context(), lockKey, loginFailWindow)
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_CREDENTIALS", "Email ou senha inválidos"))
 		return
 	}
@@ -181,6 +181,7 @@ func (s *Server) allowedRedirect(raw string) bool {
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	token := ""
 	if c, err := r.Cookie("access_token"); err == nil {
 		token = c.Value
@@ -219,6 +220,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	c, err := r.Cookie("refresh_token")
 	if err != nil || c.Value == "" {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Refresh token ausente"))

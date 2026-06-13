@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,6 +26,8 @@ type Responder interface {
 type ChatSender interface {
 	SendMessage(ctx context.Context, msg OutboundMessage) (providerMessageID string, err error)
 	SendText(ctx context.Context, to, text string) error
+	// SendTypingIndicator exibe "digitando…" para a mensagem inbound informada.
+	SendTypingIndicator(ctx context.Context, messageID string) error
 }
 
 // EventEmitter grava domain events no outbox (dentro da transação corrente).
@@ -47,8 +52,23 @@ type EngineDeps struct {
 	Sender    ChatSender
 	Emitter   EventEmitter
 	Logger    *slog.Logger
+	// Broadcast envia um evento WebSocket a todos os clientes do dashboard (opcional).
+	Broadcast func(ev WSEvent)
+	// LogRepo persiste logs de processamento para o painel de logs (opcional).
+	LogRepo *ProcessingLogRepo
 	// Sleep é injetável para testes (padrão: time.Sleep).
 	Sleep func(time.Duration)
+	// TenantCfgRepo permite ao engine persistir entradas de KB (opcional).
+	TenantCfgRepo *TenantConfigRepo
+	// Pending — fila de dúvidas de clientes aguardando o admin (ciclo admin→cliente).
+	Pending *PendingQuestionRepo
+	// Bookings — agendamentos aguardando confirmação do admin.
+	Bookings *PendingBookingRepo
+	// Notion — cliente para ler/gravar a agenda de aulas (agendamento).
+	Notion *NotionClient
+	// ForceBotEnabled — força o bot ativo nas conversas deste engine (ex.: canal
+	// Evolution, cujo gate é o toggle externo, não o whitelist do tenant).
+	ForceBotEnabled bool
 }
 
 // ---------------------------------------------------------------------------
@@ -100,12 +120,18 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	// Fase 1: dentro de uma única transação — resolução, dedup, LLM
 	// -----------------------------------------------------------------------
 
+	handleStart := time.Now()
+
 	var (
 		conv          Conversation
 		cfg           TenantConfig
 		output        ResponderOutput
 		inboundText   string
 		mediaFallback bool
+		contactPhone  = inbound.ExternalID
+		contactName   string
+		convCtx       ConversationContext
+		llmReady      bool
 	)
 
 	err := e.withTenant(ctx, func(tx pgx.Tx) error {
@@ -127,6 +153,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 				return fmt.Errorf("CreateWithChannelIdentity: %w", err)
 			}
 		}
+		contactName = contact.DisplayName
 
 		// c) Resolve conversa
 		convPtr, err := e.deps.Convs.FindByChannelIdentity(ctx, tx, chIdentity.ID)
@@ -134,15 +161,23 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			return fmt.Errorf("FindByChannelIdentity (conv): %w", err)
 		}
 		if convPtr == nil {
-			convPtr, err = e.deps.Convs.Create(ctx, tx, inbound.TenantID, contact.ID, chIdentity.ID, inbound.Channel, isBotEnabledFor(cfg, inbound.ExternalID))
+			convPtr, err = e.deps.Convs.Create(ctx, tx, inbound.TenantID, contact.ID, chIdentity.ID, inbound.Channel, isBotEnabledFor(cfg, inbound.ExternalID) || e.deps.ForceBotEnabled)
 			if err != nil {
 				return fmt.Errorf("Create conversation: %w", err)
 			}
 		}
 		conv = *convPtr
 
-		// d) Humano no controle → ignora
-		if !conv.BotEnabled {
+		// c2) Captura de lead (CRM): todo cliente (não-admin) que escreve vira lead.
+		// Idempotente — não rebaixa um lead que já avançou no funil.
+		if e.deps.Leads != nil && !cfg.IsAdminNumber(contactPhone) {
+			if _, err := e.deps.Leads.Create(ctx, tx, inbound.TenantID, contact.ID, conv.ID); err != nil {
+				return fmt.Errorf("Leads.Create: %w", err)
+			}
+		}
+
+		// d) Humano no controle → ignora (a menos que o engine force o bot, ex.: Evolution)
+		if !conv.BotEnabled && !e.deps.ForceBotEnabled {
 			log.Info("bot desabilitado para esta conversa, ignorando mensagem")
 			return nil
 		}
@@ -205,7 +240,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		if conv.Summary != nil {
 			summary = *conv.Summary
 		}
-		convCtx := ConversationContext{
+		convCtx = ConversationContext{
 			RecentTurns:     recentTurns,
 			Summary:         summary,
 			StructuredFacts: conv.StructuredFacts,
@@ -224,17 +259,63 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 		}
 
-		// l) Chama o Responder (LLM)
-		respOut, err := e.deps.Responder.Respond(ctx, conv, convCtx, cfg, inboundText)
-		if err != nil {
-			return fmt.Errorf("Responder.Respond: %w", err)
+		// l) Detecta conversa admin e sinaliza no cfg (transient). Em modo admin,
+		// injeta as dúvidas pendentes para o LLM casar a info e rascunhar respostas.
+		if cfg.IsAdminNumber(contactPhone) {
+			cfg.IsAdminConversation = true
+			if e.deps.Pending != nil {
+				pendings, err := e.deps.Pending.ListOpen(ctx, tx, inbound.TenantID)
+				if err != nil {
+					return fmt.Errorf("Pending.ListOpen: %w", err)
+				}
+				convCtx.PendingQuestions = pendings
+			}
+			if e.deps.Bookings != nil {
+				bks, err := e.deps.Bookings.ListOpen(ctx, tx, inbound.TenantID)
+				if err != nil {
+					return fmt.Errorf("Bookings.ListOpen: %w", err)
+				}
+				convCtx.PendingBookings = bks
+			}
 		}
-		output = respOut
 
+		// Sinaliza para chamar o LLM fora da transação.
+		llmReady = true
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("engine.Handle (fase 1): %w", err)
+	}
+
+	// Broadcast da mensagem inbound logo após o commit — antes do LLM.
+	// O dashboard recebe a mensagem imediatamente sem esperar a resposta.
+	if err == nil && inboundText != "" && e.deps.Broadcast != nil {
+		e.deps.Broadcast(WSEvent{Type: "message.inbound", ConversationID: conv.ID})
+	}
+
+	// Chama o LLM fora da transação (assíncrono ao commit da inbound).
+	if llmReady {
+		if e.deps.Broadcast != nil {
+			e.deps.Broadcast(WSEvent{Type: "conversation.processing", ConversationID: conv.ID})
+		}
+		// Mostra "digitando…" no WhatsApp enquanto o LLM pensa.
+		stopTyping := e.startTypingIndicator(ctx, inbound.ProviderMessageID)
+		respOut, llmErr := e.deps.Responder.Respond(ctx, conv, convCtx, cfg, inboundText)
+		stopTyping()
+		if llmErr != nil {
+			return fmt.Errorf("engine.Handle (responder): %w", llmErr)
+		}
+		output = respOut
+	}
+
+	// Persiste entrada de KB quando admin forneceu informação (após commit).
+	if output.KBEntry != nil && output.KBEntry.Content != "" && e.deps.TenantCfgRepo != nil {
+		output.KBEntry.ID = fmt.Sprintf("admin-%d", time.Now().UnixMilli())
+		if kbErr := e.deps.TenantCfgRepo.AppendKBEntry(ctx, inbound.TenantID, *output.KBEntry); kbErr != nil {
+			log.Warn("engine: falha ao persistir kbEntry do admin", "err", kbErr)
+		} else {
+			log.Info("engine: entrada KB salva via admin", "title", output.KBEntry.Title)
+		}
 	}
 
 	// Se não há output (bot desabilitado, dedup, quiet hours, mídia sem texto),
@@ -256,6 +337,18 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 
 	wamid := inbound.ProviderMessageID
 	prevText := ""
+
+	// Serializa o output do LLM para armazenar como reasoning no primeiro balão.
+	var reasoningJSON *string
+	if rb, err := json.Marshal(map[string]any{
+		"answered":       output.Answered,
+		"answeredFromKb": output.AnsweredFromKb,
+		"citedEntryIds":  output.CitedEntryIDs,
+		"handoff":        output.Handoff,
+	}); err == nil {
+		s := string(rb)
+		reasoningJSON = &s
+	}
 
 	for i, bubble := range output.Bubbles {
 		// Calcula delay de humanização
@@ -281,6 +374,12 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			IdempotencyKey: idempotencyKey,
 		}
 
+		// Apenas o primeiro balão carrega o reasoning.
+		var bubbleReasoning *string
+		if i == 0 {
+			bubbleReasoning = reasoningJSON
+		}
+
 		// Envia e persiste dentro de uma transação individual por balão
 		txErr := e.withTenant(ctx, func(tx pgx.Tx) error {
 			providerMsgID, err := e.deps.Sender.SendMessage(ctx, outboundMsg)
@@ -289,7 +388,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 
 			// Persiste com ON CONFLICT DO NOTHING para exactly-once
-			if err := e.deps.Messages.RecordOutbound(ctx, tx, idempotencyKey, inbound.TenantID, conv.ID, providerMsgID, bubble); err != nil {
+			if err := e.deps.Messages.RecordOutbound(ctx, tx, idempotencyKey, inbound.TenantID, conv.ID, providerMsgID, bubble, bubbleReasoning); err != nil {
 				return fmt.Errorf("RecordOutbound bubble %d: %w", i, err)
 			}
 
@@ -300,14 +399,29 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			return fmt.Errorf("engine.Handle (balão %d): %w", i, txErr)
 		}
 
+		// Broadcast do balão enviado (após commit da transação individual).
+		if e.deps.Broadcast != nil {
+			e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: conv.ID})
+		}
+
 		prevText = bubble
+	}
+
+	// -----------------------------------------------------------------------
+	// Fase 2.5: modo admin — rascunha/envia respostas a clientes pendentes
+	// -----------------------------------------------------------------------
+	if len(output.ClientActions) > 0 {
+		e.executeClientActions(ctx, inbound, output.ClientActions)
+	}
+	if len(output.BookingActions) > 0 {
+		e.executeBookingActions(ctx, inbound, output.BookingActions)
 	}
 
 	// -----------------------------------------------------------------------
 	// Fase 3: atualiza estado do FSM e emite eventos pós-envio
 	// -----------------------------------------------------------------------
 
-	return e.withTenant(ctx, func(tx pgx.Tx) error {
+	err = e.withTenant(ctx, func(tx pgx.Tx) error {
 		// Recarrega conversa para ter estado atual
 		convPtr, err := e.deps.Convs.FindByChannelIdentity(ctx, tx, conv.ChannelIdentityID)
 		if err != nil {
@@ -339,6 +453,14 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			if err := e.deps.Emitter.Emit(ctx, tx, handoffEvent); err != nil {
 				return fmt.Errorf("Emit notification.requested (handoff): %w", err)
 			}
+
+			// Registra a dúvida do cliente na fila para o admin responder depois.
+			// Não aplica a conversas admin (admin não é um cliente esperando).
+			if !cfg.IsAdminConversation && inboundText != "" && e.deps.Pending != nil {
+				if err := e.deps.Pending.Insert(ctx, tx, inbound.TenantID, conv.ID, contactPhone, contactName, inboundText); err != nil {
+					return fmt.Errorf("Pending.Insert: %w", err)
+				}
+			}
 		}
 
 		// p) Reativação agendada
@@ -348,8 +470,9 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 		}
 
-		// q) Gap na KB detectado
-		if !output.AnsweredFromKb && output.Answered {
+		// q) Gap na KB detectado: cliente fez uma pergunta factual respondida fora da
+		// KB. Exclui conversa fiada (saudações) e handoff (que tem fluxo próprio).
+		if !output.AnsweredFromKb && output.Answered && !output.Handoff && !output.Smalltalk {
 			kbGapEvent := DomainEvent{
 				TenantID:    inbound.TenantID,
 				AggregateID: conv.ID,
@@ -357,11 +480,52 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 				Payload: map[string]any{
 					"conversation_id": conv.ID,
 					"inbound_text":    inboundText,
+					"answer_bubbles":  output.Bubbles,
 				},
 				OccurredAt: time.Now(),
 			}
 			if err := e.deps.Emitter.Emit(ctx, tx, kbGapEvent); err != nil {
 				return fmt.Errorf("Emit kb.gap_detected: %w", err)
+			}
+		}
+
+		// q2) Pedido de agendamento do cliente → grava pendência + notifica admin.
+		if !cfg.IsAdminConversation && output.SchedulingRequest != nil && e.deps.Bookings != nil {
+			sr := output.SchedulingRequest
+			pb := PendingBooking{
+				TenantID:       inbound.TenantID,
+				ConversationID: conv.ID,
+				ClientPhone:    contactPhone,
+				ClientName:     contactName,
+				Kind:           sr.Kind,
+				Course:         sr.Course,
+				ProposedDay:    sr.ProposedDay,
+				ProposedTime:   sr.ProposedTime,
+				ProposedPeriod: sr.ProposedPeriod,
+				Age:            sr.Age,
+				Notes:          sr.Notes,
+			}
+			if err := e.deps.Bookings.Insert(ctx, tx, pb); err != nil {
+				return fmt.Errorf("Bookings.Insert: %w", err)
+			}
+			name := sr.StudentName
+			if name == "" {
+				name = contactName
+			}
+			bookingEvent := DomainEvent{
+				TenantID:    inbound.TenantID,
+				AggregateID: conv.ID,
+				Type:        "notification.requested",
+				Payload: map[string]any{
+					"type":            "BOOKING",
+					"conversation_id": conv.ID,
+					"message": fmt.Sprintf("%s — %s%s, proposto: %s %s %s. Responda aqui para confirmar, ajustar o horário ou recusar.",
+						sr.Kind, name, courseSuffix(sr.Course), sr.ProposedDay, sr.ProposedTime, sr.ProposedPeriod),
+				},
+				OccurredAt: time.Now(),
+			}
+			if err := e.deps.Emitter.Emit(ctx, tx, bookingEvent); err != nil {
+				return fmt.Errorf("Emit notification.requested (booking): %w", err)
 			}
 		}
 
@@ -393,6 +557,50 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 
 		return nil
 	})
+	if err == nil && e.deps.Broadcast != nil {
+		e.deps.Broadcast(WSEvent{Type: "conversation.updated", ConversationID: conv.ID})
+	}
+
+	// Grava log de processamento (assíncrono para não bloquear o fluxo).
+	if inboundText != "" && e.deps.LogRepo != nil {
+		answered := output.Answered
+		answeredFromKb := output.AnsweredFromKb
+		handoff := output.Handoff
+		var toolCallsJSON json.RawMessage
+		if len(output.ToolCalls) > 0 {
+			toolCallsJSON, _ = json.Marshal(output.ToolCalls)
+		}
+		entry := ProcessingLogEntry{
+			TenantID:       inbound.TenantID,
+			ConversationID: conv.ID,
+			ContactPhone:   contactPhone,
+			ContactName:    contactName,
+			InboundText:    inboundText,
+			Answered:       &answered,
+			AnsweredFromKb: &answeredFromKb,
+			Handoff:        &handoff,
+			CitedEntryIDs:  output.CitedEntryIDs,
+			Bubbles:        output.Bubbles,
+			ToolCalls:      toolCallsJSON,
+			ProcessingMs:   int(time.Since(handleStart).Milliseconds()),
+		}
+		if err != nil {
+			msg := err.Error()
+			entry.Error = msg
+		}
+		go func() {
+			if insertErr := e.deps.LogRepo.Insert(context.Background(), entry); insertErr != nil {
+				e.deps.Logger.Error("engine: falha ao gravar log de processamento", "err", insertErr)
+				return
+			}
+			if e.deps.Broadcast != nil {
+				dl := toDashLog(entry)
+				e.deps.Broadcast(WSEvent{Type: "log.new", Log: &dl})
+			}
+		}()
+	}
+
+	return err
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +624,278 @@ func isBotEnabledFor(cfg TenantConfig, externalID string) bool {
 
 // applyTransition calcula o próximo estado da conversa dado o estado atual
 // e a saída do Responder.
+// executeClientActions processa as ações propostas pelo LLM no modo admin sobre
+// dúvidas pendentes: grava rascunho (Send=false) ou envia ao cliente (Send=true),
+// reengaja a conversa do cliente e resolve a pendência. Cada ação roda numa
+// transação própria, fora da conversa do admin.
+func (e *ConversationEngine) executeClientActions(ctx context.Context, inbound InboundMessage, actions []ClientAction) {
+	log := e.deps.Logger
+	if e.deps.Pending == nil || e.deps.Sender == nil {
+		return
+	}
+
+	for _, act := range actions {
+		if act.PendingID == "" {
+			continue
+		}
+
+		// Carrega a pendência ainda aberta — guarda de idempotência.
+		var pq *PendingQuestion
+		if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+			loaded, e2 := e.deps.Pending.Get(ctx, tx, inbound.TenantID, act.PendingID)
+			pq = loaded
+			return e2
+		}); err != nil {
+			log.Error("clientAction: falha ao carregar pendência", "id", act.PendingID, "err", err)
+			continue
+		}
+		if pq == nil {
+			continue // já resolvida ou inexistente
+		}
+
+		draft := strings.TrimSpace(act.Draft)
+		if draft == "" {
+			draft = pq.Draft // reaproveita rascunho anterior se o envio veio sem texto
+		}
+		if draft == "" {
+			continue
+		}
+
+		// Apenas rascunho: guarda e aguarda a confirmação do admin.
+		if !act.Send {
+			if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+				return e.deps.Pending.StoreDraft(ctx, tx, inbound.TenantID, pq.ID, draft)
+			}); err != nil {
+				log.Error("clientAction: falha ao guardar rascunho", "id", pq.ID, "err", err)
+			}
+			continue
+		}
+
+		// Envio confirmado: manda ao cliente, persiste, reengaja e resolve.
+		idemKey := fmt.Sprintf("pending:%s:reply", pq.ID)
+		outboundMsg := OutboundMessage{
+			TenantID:       inbound.TenantID,
+			ConversationID: pq.ConversationID,
+			Channel:        inbound.Channel,
+			To:             pq.ClientPhone,
+			Intent:         IntentFreeForm,
+			Content:        MessageContent{Type: "text", Text: draft},
+			IdempotencyKey: idemKey,
+		}
+		sendErr := e.withTenant(ctx, func(tx pgx.Tx) error {
+			providerMsgID, err := e.deps.Sender.SendMessage(ctx, outboundMsg)
+			if err != nil {
+				return fmt.Errorf("SendMessage: %w", err)
+			}
+			if err := e.deps.Messages.RecordOutbound(ctx, tx, idemKey, inbound.TenantID, pq.ConversationID, providerMsgID, draft, nil); err != nil {
+				return fmt.Errorf("RecordOutbound: %w", err)
+			}
+			if err := e.deps.Convs.SetState(ctx, tx, inbound.TenantID, pq.ConversationID, StateEngaged); err != nil {
+				return fmt.Errorf("SetState: %w", err)
+			}
+			if err := e.deps.Pending.MarkResolved(ctx, tx, inbound.TenantID, pq.ID); err != nil {
+				return fmt.Errorf("MarkResolved: %w", err)
+			}
+			return nil
+		})
+		if sendErr != nil {
+			log.Error("clientAction: falha ao enviar ao cliente", "id", pq.ID, "err", sendErr)
+			who := pq.ClientName
+			if who == "" {
+				who = pq.ClientPhone
+			}
+			_ = e.deps.Sender.SendText(ctx, inbound.ExternalID,
+				fmt.Sprintf("⚠️ Não consegui enviar a resposta para %s agora. Tenta de novo daqui a pouco.", who))
+			continue
+		}
+
+		if e.deps.Broadcast != nil {
+			e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: pq.ConversationID})
+		}
+		log.Info("clientAction: resposta enviada ao cliente", "pendingID", pq.ID, "conv", pq.ConversationID)
+	}
+}
+
+// startTypingIndicator exibe "digitando…" no WhatsApp e o mantém vivo (a API
+// expira em ~25s) reenviando a cada 20s, até a função de parada ser chamada.
+// Retorna uma função idempotente para encerrar o indicador.
+func (e *ConversationEngine) startTypingIndicator(ctx context.Context, messageID string) func() {
+	if e.deps.Sender == nil || messageID == "" {
+		return func() {}
+	}
+
+	send := func() {
+		if err := e.deps.Sender.SendTypingIndicator(ctx, messageID); err != nil {
+			e.deps.Logger.Debug("typing indicator falhou", "err", err)
+		}
+	}
+	send() // imediato
+
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				send()
+			}
+		}
+	}()
+
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }) }
+}
+
+// executeBookingActions processa as decisões do admin sobre agendamentos: confirma
+// (grava a aula no Notion + avisa o cliente), ajusta (re-propõe ao cliente) ou recusa.
+func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound InboundMessage, actions []BookingAction) {
+	log := e.deps.Logger
+	if e.deps.Bookings == nil || e.deps.Sender == nil {
+		return
+	}
+
+	for _, act := range actions {
+		if act.BookingID == "" {
+			continue
+		}
+
+		var pb *PendingBooking
+		if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+			loaded, e2 := e.deps.Bookings.Get(ctx, tx, inbound.TenantID, act.BookingID)
+			pb = loaded
+			return e2
+		}); err != nil {
+			log.Error("bookingAction: falha ao carregar agendamento", "id", act.BookingID, "err", err)
+			continue
+		}
+		if pb == nil {
+			continue // já decidido ou inexistente
+		}
+
+		day := firstNonEmpty(act.Day, pb.ProposedDay)
+		tm := firstNonEmpty(act.Time, pb.ProposedTime)
+		period := firstNonEmpty(act.Period, pb.ProposedPeriod)
+
+		switch act.Action {
+		case "confirm":
+			// Grava no Notion (se configurado).
+			var notionErr error
+			if e.deps.Notion != nil && e.deps.Notion.Enabled() {
+				notionErr = e.deps.Notion.CreateBooking(ctx, Booking{
+					Title:    bookingTitle(*pb),
+					Dia:      day,
+					Horario:  tm,
+					Periodo:  period,
+					Conteudo: pb.Course,
+				})
+				if notionErr != nil {
+					log.Error("bookingAction: falha ao gravar no Notion", "id", pb.ID, "err", notionErr)
+				}
+			}
+			// Marca confirmado e avisa o cliente.
+			if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+				return e.deps.Bookings.MarkStatus(ctx, tx, inbound.TenantID, pb.ID, "confirmed")
+			}); err != nil {
+				log.Error("bookingAction: falha ao marcar confirmado", "id", pb.ID, "err", err)
+			}
+			// Tie-in CRM: avança o lead para 'aula_marcada'.
+			if e.deps.Leads != nil {
+				if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+					return e.deps.Leads.SetStatusByConversation(ctx, tx, inbound.TenantID, pb.ConversationID, "aula_marcada")
+				}); err != nil {
+					log.Error("bookingAction: falha ao avançar lead", "id", pb.ID, "err", err)
+				}
+			}
+			msg := fmt.Sprintf("Prontinho! Sua aula ficou marcada para %s às %s. Qualquer coisa, é só me chamar. 😊", day, tm)
+			if err := e.sendClientReply(ctx, inbound, pb.ConversationID, pb.ClientPhone, "booking:"+pb.ID+":confirm", msg); err != nil {
+				log.Error("bookingAction: falha ao avisar cliente", "id", pb.ID, "err", err)
+			}
+			if notionErr != nil {
+				who := firstNonEmpty(pb.ClientName, pb.ClientPhone)
+				_ = e.deps.Sender.SendText(ctx, inbound.ExternalID,
+					fmt.Sprintf("⚠️ Confirmei com %s, mas não consegui gravar no Notion. Lance manualmente: %s %s.", who, day, tm))
+			}
+
+		case "adjust":
+			msg := fmt.Sprintf("Consegui um horário: %s às %s. Pode ser pra você?", day, tm)
+			if err := e.sendClientReply(ctx, inbound, pb.ConversationID, pb.ClientPhone, fmt.Sprintf("booking:%s:adjust:%s%s", pb.ID, day, tm), msg); err != nil {
+				log.Error("bookingAction: falha ao re-propor ao cliente", "id", pb.ID, "err", err)
+			}
+
+		case "reject":
+			if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+				return e.deps.Bookings.MarkStatus(ctx, tx, inbound.TenantID, pb.ID, "rejected")
+			}); err != nil {
+				log.Error("bookingAction: falha ao marcar recusado", "id", pb.ID, "err", err)
+			}
+		}
+	}
+}
+
+// sendClientReply envia uma mensagem ao cliente numa conversa específica (cross-conversa),
+// persiste o balão, reengaja a conversa e faz broadcast. Usado por agendamentos.
+func (e *ConversationEngine) sendClientReply(ctx context.Context, inbound InboundMessage, convID ConversationID, toPhone, idemKey, text string) error {
+	outboundMsg := OutboundMessage{
+		TenantID:       inbound.TenantID,
+		ConversationID: convID,
+		Channel:        inbound.Channel,
+		To:             toPhone,
+		Intent:         IntentFreeForm,
+		Content:        MessageContent{Type: "text", Text: text},
+		IdempotencyKey: idemKey,
+	}
+	err := e.withTenant(ctx, func(tx pgx.Tx) error {
+		providerMsgID, err := e.deps.Sender.SendMessage(ctx, outboundMsg)
+		if err != nil {
+			return fmt.Errorf("SendMessage: %w", err)
+		}
+		if err := e.deps.Messages.RecordOutbound(ctx, tx, idemKey, inbound.TenantID, convID, providerMsgID, text, nil); err != nil {
+			return fmt.Errorf("RecordOutbound: %w", err)
+		}
+		if err := e.deps.Convs.SetState(ctx, tx, inbound.TenantID, convID, StateEngaged); err != nil {
+			return fmt.Errorf("SetState: %w", err)
+		}
+		return nil
+	})
+	if err == nil && e.deps.Broadcast != nil {
+		e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: convID})
+	}
+	return err
+}
+
+// bookingTitle monta o título da aula gravada no Notion.
+func bookingTitle(pb PendingBooking) string {
+	who := firstNonEmpty(pb.ClientName, pb.ClientPhone)
+	label := "Aula experimental"
+	if pb.Kind == "individual" {
+		label = "Aula individual"
+	}
+	return label + " — " + who
+}
+
+// courseSuffix devolve ", curso X" quando há curso, ou string vazia.
+func courseSuffix(course string) string {
+	if course == "" {
+		return ""
+	}
+	return ", " + course
+}
+
+// firstNonEmpty retorna o primeiro valor não-vazio.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func applyTransition(current ConversationState, output ResponderOutput) ConversationState {
 	switch current {
 	case StateNew:

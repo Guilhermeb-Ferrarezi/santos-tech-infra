@@ -277,6 +277,18 @@ func (r *ConversationRepo) SetBotEnabled(ctx context.Context, tx pgx.Tx, tenantI
 	return nil
 }
 
+// SetState atualiza apenas o estado do FSM de uma conversa.
+func (r *ConversationRepo) SetState(ctx context.Context, tx pgx.Tx, tenantID TenantID, convID ConversationID, state ConversationState) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE conversation SET state = $1::conversation_state, updated_at = now()
+		WHERE tenant_id = $2 AND id = $3
+	`, string(state), tenantID, convID)
+	if err != nil {
+		return fmt.Errorf("ConversationRepo.SetState: %w", err)
+	}
+	return nil
+}
+
 // ============================================================================
 // MessageRepo — gravação de inbound + histórico de turnos
 // ============================================================================
@@ -304,8 +316,8 @@ func (r *MessageRepo) RecordInbound(ctx context.Context, tx pgx.Tx, wamid string
 }
 
 // RecordOutbound persiste um balão de saída em outbound_message.
-// Retorna erro se o insert falhar (ON CONFLICT DO NOTHING — exactly-once).
-func (r *MessageRepo) RecordOutbound(ctx context.Context, tx pgx.Tx, idempotencyKey string, tenantID TenantID, convID ConversationID, providerMessageID string, text string) error {
+// reasoning é o JSON do ResponderOutput, armazenado apenas no primeiro balão (nil para os demais).
+func (r *MessageRepo) RecordOutbound(ctx context.Context, tx pgx.Tx, idempotencyKey string, tenantID TenantID, convID ConversationID, providerMessageID string, text string, reasoning *string) error {
 	content := MessageContent{Type: "text", Text: text}
 	contentJSON, err := json.Marshal(content)
 	if err != nil {
@@ -314,10 +326,10 @@ func (r *MessageRepo) RecordOutbound(ctx context.Context, tx pgx.Tx, idempotency
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO outbound_message
-		  (tenant_id, conversation_id, provider_message_id, idempotency_key, intent_category, content, status, sent_at)
-		VALUES ($1, $2, $3, $4, 'FREE_FORM'::outbound_intent, $5, 'sent', now())
+		  (tenant_id, conversation_id, provider_message_id, idempotency_key, intent_category, content, status, sent_at, reasoning)
+		VALUES ($1, $2, $3, $4, 'FREE_FORM'::outbound_intent, $5, 'sent', now(), $6)
 		ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
-	`, tenantID, convID, nullableString(providerMessageID), idempotencyKey, contentJSON)
+	`, tenantID, convID, nullableString(providerMessageID), idempotencyKey, contentJSON, reasoning)
 	if err != nil {
 		return fmt.Errorf("MessageRepo.RecordOutbound: %w", err)
 	}
@@ -345,20 +357,20 @@ func (r *MessageRepo) GetRecentTurns(ctx context.Context, tx pgx.Tx, convID Conv
 	const limit = 20
 	rows, err := tx.Query(ctx, `
 		SELECT role, text FROM (
-			SELECT 'user'              AS role,
-			       content->>'text'    AS text,
-			       received_at         AS ts
+			SELECT 'user'                                    AS role,
+			       COALESCE(content->>'Text', '[mídia]')     AS text,
+			       received_at                               AS ts
 			FROM inbound_message
 			WHERE conversation_id = $1
 
 			UNION ALL
 
 			SELECT 'assistant'         AS role,
-			       content->>'text'    AS text,
+			       content->>'Text'    AS text,
 			       created_at          AS ts
 			FROM outbound_message
 			WHERE conversation_id = $1
-			  AND content->>'text' IS NOT NULL
+			  AND content->>'Text' IS NOT NULL
 		) sub
 		ORDER BY ts DESC
 		LIMIT $2
@@ -413,17 +425,18 @@ func (r *LeadRepo) FindByConversation(ctx context.Context, tenantID TenantID, co
 	return &l, nil
 }
 
-// Create cria um lead com status='open'. Usa ON CONFLICT para idempotência.
+// Create cria um lead com status='novo' (CRM). ON CONFLICT mantém o status atual
+// (idempotente — não rebaixa um lead que já avançou no funil).
 func (r *LeadRepo) Create(ctx context.Context, tx pgx.Tx, tenantID TenantID, contactID ContactID, convID ConversationID) (*Lead, error) {
 	var l Lead
 	l.TenantID = tenantID
 	l.ContactID = contactID
 	l.ConversationID = convID
-	l.Status = "open"
+	l.Status = "novo"
 
 	err := tx.QueryRow(ctx, `
 		INSERT INTO lead (tenant_id, contact_id, status)
-		VALUES ($1, $2, 'open')
+		VALUES ($1, $2, 'novo')
 		ON CONFLICT (tenant_id, contact_id) DO UPDATE SET status = lead.status
 		RETURNING id, created_at
 	`, tenantID, contactID).Scan(&l.ID, &l.CreatedAt)
@@ -431,6 +444,39 @@ func (r *LeadRepo) Create(ctx context.Context, tx pgx.Tx, tenantID TenantID, con
 		return nil, fmt.Errorf("LeadRepo.Create: %w", err)
 	}
 	return &l, nil
+}
+
+// CreateWithOrigin cria um lead (status 'novo') com a origem informada. ON CONFLICT
+// mantém o lead existente (não rebaixa nem troca a origem). Usado pela captura
+// de leads da Evolution (origin='evolution').
+func (r *LeadRepo) CreateWithOrigin(ctx context.Context, tx pgx.Tx, tenantID TenantID, contactID ContactID, origin string) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO lead (tenant_id, contact_id, status, origin)
+		VALUES ($1, $2, 'novo', $3)
+		ON CONFLICT (tenant_id, contact_id) DO NOTHING
+	`, tenantID, contactID, origin)
+	if err != nil {
+		return fmt.Errorf("LeadRepo.CreateWithOrigin: %w", err)
+	}
+	return nil
+}
+
+// SetStatusByConversation avança o status do lead vinculado a uma conversa (via
+// contact). Não rebaixa leads já em 'matriculado'/'perdido'. Usado pelo tie-in
+// de agendamento (confirmar aula → 'aula_marcada').
+func (r *LeadRepo) SetStatusByConversation(ctx context.Context, tx pgx.Tx, tenantID TenantID, convID ConversationID, status string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE lead l
+		SET status = $3, updated_at = now()
+		FROM conversation c
+		WHERE c.id = $2 AND c.tenant_id = $1
+		  AND l.tenant_id = $1 AND l.contact_id = c.contact_id
+		  AND l.status NOT IN ('matriculado', 'perdido')
+	`, tenantID, convID, status)
+	if err != nil {
+		return fmt.Errorf("LeadRepo.SetStatusByConversation: %w", err)
+	}
+	return nil
 }
 
 // ============================================================================
@@ -671,19 +717,32 @@ type TenantConfigRepo struct{ pool *pgxpool.Pool }
 // Get retorna a configuração do tenant. Aceita tx para uso dentro de withTenant.
 // Assinatura alinhada com engine.go: (ctx, tx, tenantID).
 func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID) (*TenantConfig, error) {
-	row := tx.QueryRow(ctx, `
+	const query = `
 		SELECT tc.bot_name, tc.bot_gender,
 		       false AS reveal_ai_if_asked,
 		       tc.kb_content::text,
+		       tc.system_prompt,
+		       tc.admin_system_prompt,
 		       t.timezone,
 		       tc.quiet_hours->>'start' AS quiet_hours_start,
 		       tc.quiet_hours->>'end'   AS quiet_hours_end,
 		       tc.bot_enabled_by_default,
-		       tc.bot_allowed_numbers
+		       tc.bot_allowed_numbers,
+		       tc.admin_whatsapp_number,
+		       tc.admin_whatsapp_numbers
 		FROM tenant_config tc
 		JOIN tenants t ON t.id = tc.tenant_id
 		WHERE tc.tenant_id = $1
-	`, tenantID)
+	`
+
+	// tx é opcional: quando nil (ex.: chamadas do worker fora de transação),
+	// usa o pool diretamente. Chamar tx.QueryRow num pgx.Tx nil causaria panic.
+	var row pgx.Row
+	if tx != nil {
+		row = tx.QueryRow(ctx, query, tenantID)
+	} else {
+		row = r.pool.QueryRow(ctx, query, tenantID)
+	}
 
 	var cfg TenantConfig
 	cfg.TenantID = tenantID
@@ -691,15 +750,20 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 	var kbJSON *string
 	var quietStart, quietEnd *string
 	var allowedRaw []byte
+	var adminNumbersRaw []byte
 
 	err := row.Scan(
 		&cfg.BotName, &cfg.BotGender,
 		&cfg.RevealAIIfAsked,
 		&kbJSON,
+		&cfg.SystemPrompt,
+		&cfg.AdminSystemPrompt,
 		&cfg.Timezone,
 		&quietStart, &quietEnd,
 		&cfg.BotEnabledByDefault,
 		&allowedRaw,
+		&cfg.AdminWhatsAppNumber,
+		&adminNumbersRaw,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("TenantConfigRepo.Get: tenant %s não encontrado", tenantID)
@@ -714,8 +778,209 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 	if len(allowedRaw) > 0 {
 		_ = json.Unmarshal(allowedRaw, &cfg.BotAllowedNumbers)
 	}
+	if len(adminNumbersRaw) > 0 {
+		_ = json.Unmarshal(adminNumbersRaw, &cfg.AdminWhatsAppNumbers)
+	}
 
 	return &cfg, nil
+}
+
+// AppendKBEntry adiciona uma entrada à base de conhecimento do tenant via jsonb append.
+func (r *TenantConfigRepo) AppendKBEntry(ctx context.Context, tenantID TenantID, entry KBEntry) error {
+	entryJSON, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("AppendKBEntry: marshal: %w", err)
+	}
+	_, err = r.pool.Exec(ctx, `
+		UPDATE tenant_config
+		SET kb_content = COALESCE(kb_content, '[]'::jsonb) || $2::jsonb
+		WHERE tenant_id = $1
+	`, tenantID, "["+string(entryJSON)+"]")
+	if err != nil {
+		return fmt.Errorf("AppendKBEntry: exec: %w", err)
+	}
+	return nil
+}
+
+// ============================================================================
+// PendingQuestionRepo — fila de dúvidas de clientes aguardando o admin (0015)
+// ============================================================================
+
+type PendingQuestionRepo struct{ pool *pgxpool.Pool }
+
+func NewPendingQuestionRepo(pool *pgxpool.Pool) *PendingQuestionRepo {
+	return &PendingQuestionRepo{pool: pool}
+}
+
+// Insert grava uma dúvida pendente quando o bot dá handoff. Idempotente por
+// conversa+pergunta abertas para não duplicar se o cliente reenviar.
+func (r *PendingQuestionRepo) Insert(ctx context.Context, tx pgx.Tx, tenantID TenantID, convID ConversationID, clientPhone, clientName, question string) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO pending_question (tenant_id, conversation_id, client_phone, client_name, question, status)
+		SELECT $1, $2, $3, $4, $5, 'open'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM pending_question
+			WHERE tenant_id = $1 AND conversation_id = $2 AND status IN ('open', 'drafted')
+		)
+	`, tenantID, convID, clientPhone, clientName, question)
+	if err != nil {
+		return fmt.Errorf("PendingQuestionRepo.Insert: %w", err)
+	}
+	return nil
+}
+
+// ListOpen retorna as pendências abertas/rascunhadas do tenant (para casamento).
+func (r *PendingQuestionRepo) ListOpen(ctx context.Context, tx pgx.Tx, tenantID TenantID) ([]PendingQuestion, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, conversation_id, client_phone, client_name, question, status, COALESCE(draft, ''), created_at
+		FROM pending_question
+		WHERE tenant_id = $1 AND status IN ('open', 'drafted')
+		ORDER BY created_at
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("PendingQuestionRepo.ListOpen: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PendingQuestion
+	for rows.Next() {
+		pq := PendingQuestion{TenantID: tenantID}
+		if err := rows.Scan(&pq.ID, &pq.ConversationID, &pq.ClientPhone, &pq.ClientName,
+			&pq.Question, &pq.Status, &pq.Draft, &pq.CreatedAt); err != nil {
+			return nil, fmt.Errorf("PendingQuestionRepo.ListOpen scan: %w", err)
+		}
+		out = append(out, pq)
+	}
+	return out, rows.Err()
+}
+
+// Get carrega uma pendência por id (escopada ao tenant). Retorna nil se ausente
+// ou já resolvida — usado como guarda de idempotência antes de enviar ao cliente.
+func (r *PendingQuestionRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID, id string) (*PendingQuestion, error) {
+	pq := PendingQuestion{TenantID: tenantID, ID: id}
+	err := tx.QueryRow(ctx, `
+		SELECT conversation_id, client_phone, client_name, question, status, COALESCE(draft, ''), created_at
+		FROM pending_question
+		WHERE tenant_id = $1 AND id = $2 AND status IN ('open', 'drafted')
+	`, tenantID, id).Scan(&pq.ConversationID, &pq.ClientPhone, &pq.ClientName,
+		&pq.Question, &pq.Status, &pq.Draft, &pq.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("PendingQuestionRepo.Get: %w", err)
+	}
+	return &pq, nil
+}
+
+// StoreDraft grava o rascunho proposto e move a pendência para 'drafted'.
+func (r *PendingQuestionRepo) StoreDraft(ctx context.Context, tx pgx.Tx, tenantID TenantID, id, draft string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE pending_question SET draft = $3, status = 'drafted', updated_at = now()
+		WHERE tenant_id = $1 AND id = $2 AND status IN ('open', 'drafted')
+	`, tenantID, id, draft)
+	if err != nil {
+		return fmt.Errorf("PendingQuestionRepo.StoreDraft: %w", err)
+	}
+	return nil
+}
+
+// MarkResolved marca a pendência como resolvida (após enviar ao cliente).
+func (r *PendingQuestionRepo) MarkResolved(ctx context.Context, tx pgx.Tx, tenantID TenantID, id string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE pending_question SET status = 'resolved', updated_at = now()
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantID, id)
+	if err != nil {
+		return fmt.Errorf("PendingQuestionRepo.MarkResolved: %w", err)
+	}
+	return nil
+}
+
+// ============================================================================
+// PendingBookingRepo — agendamentos aguardando confirmação do admin (0018)
+// ============================================================================
+
+type PendingBookingRepo struct{ pool *pgxpool.Pool }
+
+func NewPendingBookingRepo(pool *pgxpool.Pool) *PendingBookingRepo {
+	return &PendingBookingRepo{pool: pool}
+}
+
+// Insert grava um agendamento proposto (status 'open').
+func (r *PendingBookingRepo) Insert(ctx context.Context, tx pgx.Tx, b PendingBooking) error {
+	var agePtr *int
+	if b.Age > 0 {
+		agePtr = &b.Age
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO pending_booking
+		  (tenant_id, conversation_id, client_phone, client_name, kind, course,
+		   proposed_day, proposed_time, proposed_period, age, notes, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'open')
+	`, b.TenantID, b.ConversationID, b.ClientPhone, b.ClientName, b.Kind, b.Course,
+		b.ProposedDay, b.ProposedTime, b.ProposedPeriod, agePtr, b.Notes)
+	if err != nil {
+		return fmt.Errorf("PendingBookingRepo.Insert: %w", err)
+	}
+	return nil
+}
+
+// ListOpen retorna os agendamentos abertos do tenant (para o prompt do admin).
+func (r *PendingBookingRepo) ListOpen(ctx context.Context, tx pgx.Tx, tenantID TenantID) ([]PendingBooking, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, conversation_id, client_phone, client_name, kind, course,
+		       proposed_day, proposed_time, proposed_period, COALESCE(age, 0), notes, status, created_at
+		FROM pending_booking
+		WHERE tenant_id = $1 AND status = 'open'
+		ORDER BY created_at
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("PendingBookingRepo.ListOpen: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PendingBooking
+	for rows.Next() {
+		b := PendingBooking{TenantID: tenantID}
+		if err := rows.Scan(&b.ID, &b.ConversationID, &b.ClientPhone, &b.ClientName, &b.Kind, &b.Course,
+			&b.ProposedDay, &b.ProposedTime, &b.ProposedPeriod, &b.Age, &b.Notes, &b.Status, &b.CreatedAt); err != nil {
+			return nil, fmt.Errorf("PendingBookingRepo.ListOpen scan: %w", err)
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// Get carrega um agendamento aberto por id (guarda de idempotência).
+func (r *PendingBookingRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID, id string) (*PendingBooking, error) {
+	b := PendingBooking{TenantID: tenantID, ID: id}
+	err := tx.QueryRow(ctx, `
+		SELECT conversation_id, client_phone, client_name, kind, course,
+		       proposed_day, proposed_time, proposed_period, COALESCE(age, 0), notes, status, created_at
+		FROM pending_booking
+		WHERE tenant_id = $1 AND id = $2 AND status = 'open'
+	`, tenantID, id).Scan(&b.ConversationID, &b.ClientPhone, &b.ClientName, &b.Kind, &b.Course,
+		&b.ProposedDay, &b.ProposedTime, &b.ProposedPeriod, &b.Age, &b.Notes, &b.Status, &b.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("PendingBookingRepo.Get: %w", err)
+	}
+	return &b, nil
+}
+
+// MarkStatus atualiza o status (confirmed | rejected) de um agendamento.
+func (r *PendingBookingRepo) MarkStatus(ctx context.Context, tx pgx.Tx, tenantID TenantID, id, status string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE pending_booking SET status = $3, updated_at = now()
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantID, id, status)
+	if err != nil {
+		return fmt.Errorf("PendingBookingRepo.MarkStatus: %w", err)
+	}
+	return nil
 }
 
 // ============================================================================

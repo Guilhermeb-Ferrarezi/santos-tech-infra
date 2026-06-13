@@ -8,8 +8,21 @@ import (
 
 func randomToken(nbytes int) string {
 	b := make([]byte, nbytes)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
 	return hex.EncodeToString(b)
+}
+
+// isValidChallenge reports whether s is a well-formed MFA challenge token —
+// the exact output of randomToken(24): 48 lowercase hex characters.
+// Validates input before it reaches Redis key construction.
+func isValidChallenge(s string) bool {
+	if len(s) != 48 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
 
 func sha256Hex(s string) string {

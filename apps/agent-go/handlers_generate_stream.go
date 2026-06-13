@@ -135,6 +135,10 @@ func normalizeGenerate(req *generateRequest) error {
 		if strings.TrimSpace(req.Brief) == "" {
 			return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "informe um brief")
 		}
+	case "raw":
+		if strings.TrimSpace(req.Brief) == "" {
+			return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "brief obrigatório para task raw")
+		}
 	default:
 		return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "task inválida (use email, rewrite, subjects, spamcheck, insights, command ou diagram)")
 	}
