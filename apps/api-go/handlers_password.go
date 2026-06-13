@@ -51,6 +51,7 @@ func (s *Server) sendResetEmail(to, url string) {
 }
 
 func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Token       string `json:"token"`
 		NewPassword string `json:"newPassword"`
