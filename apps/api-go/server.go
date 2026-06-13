@@ -147,6 +147,21 @@ func (s *Server) resolveToken(ctx context.Context, token string) (int64, error) 
 	if err != nil {
 		return 0, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
 	}
+	// O access-token JWT é curto mas sobrevive à suspensão (a sessão/refresh é
+	// apagada, mas o JWT já emitido continua válido até expirar). Conferimos o
+	// estado atual do dono no banco para que suspender/desabilitar corte o acesso
+	// de imediato, sem esperar o JWT vencer. Sem banco (modo degradado/teste) não
+	// há como checar suspensão: o JWT já é criptograficamente válido, então segue.
+	if s.db == nil {
+		return uid, nil
+	}
+	u, err := s.userByID(ctx, uid)
+	if err != nil {
+		return 0, err
+	}
+	if u == nil || u.SuspendedAt != nil || u.LoginDisabled {
+		return 0, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
+	}
 	return uid, nil
 }
 

@@ -46,7 +46,7 @@ func TestOAuthConfirmMissingBody(t *testing.T) {
 }
 
 func TestGoogleStartStoresReturnTo(t *testing.T) {
-	s := testServer(Config{GoogleClientID: "x"})
+	s := testServerWithRedis(t, Config{GoogleClientID: "x"})
 	s.google = &oauth2.Config{ClientID: "x"}
 	r := httptest.NewRequest("GET", "/auth/google?return_to=/oauth/choose%3Frequest_id%3Dabc", nil)
 	w := httptest.NewRecorder()
@@ -63,7 +63,7 @@ func TestGoogleStartStoresReturnTo(t *testing.T) {
 }
 
 func TestGoogleStartRejectsExternalReturnTo(t *testing.T) {
-	s := testServer(Config{GoogleClientID: "x"})
+	s := testServerWithRedis(t, Config{GoogleClientID: "x"})
 	s.google = &oauth2.Config{ClientID: "x"}
 	r := httptest.NewRequest("GET", "/auth/google?return_to=//evil.com/x", nil)
 	w := httptest.NewRecorder()

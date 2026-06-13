@@ -63,6 +63,8 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// MFA — gestão (precisa de sessão)
 	mux.HandleFunc("POST /auth/mfa/setup", s.rateLimit(10, min, s.authGuard(s.handleMFASetup)))
 	mux.HandleFunc("POST /auth/mfa/enable", s.rateLimit(10, min, s.authGuard(s.handleMFAEnable)))
+	// Desabilitar MFA é sensível (remove o 2º fator) e checa TOTP/recovery/OTP:
+	// rate-limit por IP na rota, além do teto por usuário dentro do handler.
 	mux.HandleFunc("POST /auth/mfa/disable", s.rateLimit(10, min, s.authGuard(s.handleMFADisable)))
 	// MFA por email — código pra conta logada (ativar/desativar/sudo) e ativação
 	mux.HandleFunc("POST /auth/mfa/email-code", s.rateLimit(3, 5*min, s.authGuard(s.handleMFAEmailCode)))

@@ -103,7 +103,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ident := strings.TrimSpace(body.Identifier)
-	lockKey := "login_fail:" + strings.ToLower(ident)
+	// Lockout chaveado por (IP + identifier), NÃO só pelo identifier: senão
+	// qualquer um trancaria a vítima sabendo apenas o email (DoS de conta).
+	// Com o IP na chave, o atacante só "tranca" a si mesmo contra aquela conta;
+	// a proteção contra credential-stuffing distribuído continua vindo do
+	// rate-limit por IP da rota (routes.go) + do limite global.
+	lockKey := "login_fail:" + clientIP(r) + ":" + strings.ToLower(ident)
 	if n, _ := s.rdb.Get(r.Context(), lockKey).Int(); n >= maxLoginFails {
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
 		return

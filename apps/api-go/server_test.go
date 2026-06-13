@@ -4,9 +4,24 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 func testServer(cfg Config) *Server { return &Server{cfg: cfg} }
+
+// testServerWithRedis devolve um Server com um Redis fake (miniredis) para os
+// testes de handlers que dependem do rdb (ex.: state do OAuth). O miniredis é
+// encerrado via t.Cleanup.
+func testServerWithRedis(t *testing.T, cfg Config) *Server {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	s := testServer(cfg)
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+	return s
+}
 
 func TestClearAuthCookies(t *testing.T) {
 	s := testServer(Config{CookieDomain: "santos-tech.com"})

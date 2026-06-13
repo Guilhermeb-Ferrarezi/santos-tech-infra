@@ -14,7 +14,16 @@ import (
 )
 
 func newDB(ctx context.Context, url string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, url)
+	// Configura o pool explicitamente (em vez de pgxpool.New) para limitar conexões
+	// e reciclar as antigas. Sem isso o default é ilimitado/quase-eterno, o que sob
+	// carga abre conexões demais no Postgres e mantém sockets velhos vivos.
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxConns = 10                      // teto de conexões simultâneas do pool
+	cfg.MaxConnLifetime = 30 * time.Minute // recicla conexões periodicamente
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -207,11 +216,38 @@ func (s *Server) updateUserAdmin(ctx context.Context, id int64, name *string, ro
 }
 
 // setUserSuspended seta (now()) ou limpa (NULL) o suspended_at.
+//
+// Ao SUSPENDER, também revoga as credenciais em vigor para que a suspensão tenha
+// efeito imediato (antes só gravava a coluna e o usuário seguia com acesso):
+//   - apaga todas as sessões (refresh tokens) do usuário;
+//   - expira todas as api_keys (PATs) ainda válidas — incluindo as eternas
+//     (expires_at NULL) — setando expires_at=now(). Não usamos DELETE para
+//     preservar o histórico/auditoria; userIDByAPIKeyHash passa a recusá-las.
+//
+// Tudo numa transação para não deixar estado meio-revogado. Ao DESUSPENDER, só
+// limpa a coluna (as credenciais antigas continuam revogadas; o usuário gera novas).
 func (s *Server) setUserSuspended(ctx context.Context, id int64, suspended bool) error {
-	_, err := s.db.Exec(ctx,
-		`UPDATE users SET suspended_at = CASE WHEN $2 THEN now() ELSE NULL END WHERE id = $1`,
-		id, suspended)
-	return err
+	if !suspended {
+		_, err := s.db.Exec(ctx, `UPDATE users SET suspended_at = NULL WHERE id = $1`, id)
+		return err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) // no-op após Commit; garante rollback em qualquer erro
+	if _, err := tx.Exec(ctx, `UPDATE users SET suspended_at = now() WHERE id = $1`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE api_keys SET expires_at = now()
+		 WHERE user_id = $1 AND (expires_at IS NULL OR expires_at > now())`, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // deleteUser remove o usuário (cascata em recovery_codes/api_keys via FK).
@@ -409,13 +445,24 @@ func (s *Server) deleteAPIKey(ctx context.Context, userID, id int64) (bool, erro
 	return tag.RowsAffected() > 0, nil
 }
 
-// userIDByAPIKeyHash valida um PAT pelo hash: devolve o user_id se o token existe e
-// não expirou, marcando o último uso. (0, nil) significa token inválido/expirado.
+// userIDByAPIKeyHash valida um PAT pelo hash: devolve o user_id se o token existe,
+// não expirou E o dono está ativo (não suspenso, login habilitado), marcando o
+// último uso. (0, nil) significa token inválido/expirado/dono inativo.
+//
+// O EXISTS contra users garante que suspender a conta (suspended_at) ou desabilitar
+// o login (login_disabled) corta IMEDIATAMENTE o acesso via PAT, mesmo que o token
+// tenha expires_at NULL (eterno). Sem isso um usuário suspenso seguiria autenticado.
 func (s *Server) userIDByAPIKeyHash(ctx context.Context, hash string) (int64, error) {
 	var userID int64
 	err := s.db.QueryRow(ctx,
 		`UPDATE api_keys SET last_used_at=now()
 		 WHERE key_hash=$1 AND (expires_at IS NULL OR expires_at > now())
+		   AND EXISTS (
+		     SELECT 1 FROM users u
+		     WHERE u.id = api_keys.user_id
+		       AND u.suspended_at IS NULL
+		       AND NOT u.login_disabled
+		   )
 		 RETURNING user_id`, hash).Scan(&userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil

@@ -95,6 +95,19 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"disabled": true})
 		return
 	}
+	// Teto de tentativas por usuário (≤5 numa janela), espelhando o handleMFAVerify:
+	// sem isso, desabilitar o MFA viraria um ponto de brute-force do 2º fator
+	// (TOTP/recovery/OTP de email) limitado só pelo rate-limit por IP. Conta a
+	// tentativa ANTES de validar; zera ao desativar com sucesso (mais abaixo).
+	attemptKey := "mfa_disable_attempts:" + strconv.FormatInt(uid, 10)
+	attempts, _ := s.rdb.Incr(r.Context(), attemptKey).Result()
+	if attempts == 1 {
+		s.rdb.Expire(r.Context(), attemptKey, 15*time.Minute)
+	}
+	if attempts > 5 {
+		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
+		return
+	}
 	// Aceita qualquer fator válido da conta: TOTP, código de recuperação ou o código
 	// enviado pro email (/auth/mfa/email-code) — necessário p/ contas só com email-2FA.
 	code := strings.TrimSpace(body.Code)
@@ -113,6 +126,7 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	s.rdb.Del(r.Context(), attemptKey) // fator válido → zera o contador
 	if err := s.deleteRecoveryCodes(r.Context(), uid); err != nil {
 		slog.Warn("falha ao remover recovery codes ao desativar MFA", "uid", uid, "err", err)
 	}
@@ -230,11 +244,13 @@ func genRecoveryCodes(n int) []string {
 	codes := make([]string, n)
 	enc := base32.StdEncoding.WithPadding(base32.NoPadding)
 	for i := range codes {
-		b := make([]byte, 5)
+		// 8 bytes => 64 bits de entropia (antes eram 5 bytes / 40 bits, fracos
+		// para um código que dispensa o 2º fator). base32 sem padding → 13 chars.
+		b := make([]byte, 8)
 		if _, err := rand.Read(b); err != nil {
 			panic("crypto/rand unavailable: " + err.Error())
 		}
-		codes[i] = enc.EncodeToString(b) // 8 chars A-Z2-7
+		codes[i] = enc.EncodeToString(b) // 13 chars A-Z2-7
 	}
 	return codes
 }

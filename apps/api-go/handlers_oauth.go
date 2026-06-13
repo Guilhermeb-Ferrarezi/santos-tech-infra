@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// oauthStateKey é a chave Redis onde guardamos o state do fluxo Google OAuth
+// (lado servidor), validado e consumido no callback.
+func oauthStateKey(state string) string { return "oauth_state:" + state }
+
 // GET /auth/google?return_to=/caminho — redireciona pro consentimento do Google.
 // return_to (opcional, só caminho relativo) é devolvido pelo callback — usado
 // pelo fluxo OAuth provider pra voltar ao chooser com o request_id.
@@ -23,6 +27,13 @@ func (s *Server) handleGoogleStart(w http.ResponseWriter, r *http.Request) {
 	// Só caminho relativo ("/x"), nunca "//host" — evita open-redirect.
 	if rt := r.URL.Query().Get("return_to"); strings.HasPrefix(rt, "/") && !strings.HasPrefix(rt, "//") {
 		cookieVal = state + "|" + rt
+	}
+	// Guarda o state no servidor (Redis, TTL curto) além do cookie. O callback
+	// exige que o state exista aqui e o consome (one-time), então não confiamos
+	// só num cookie que o cliente controla — fecha CSRF/replay no fluxo OAuth.
+	if err := s.rdb.Set(r.Context(), oauthStateKey(state), "1", 10*time.Minute).Err(); err != nil {
+		writeErr(w, appErr(http.StatusInternalServerError, "OAUTH_FAILED", "falha ao iniciar OAuth"))
+		return
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: "oauth_state", Value: cookieVal, Path: "/",
@@ -55,7 +66,14 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state, returnTo, _ := strings.Cut(sc.Value, "|")
-	if subtle.ConstantTimeCompare([]byte(state), []byte(q.Get("state"))) != 1 {
+	if state == "" || subtle.ConstantTimeCompare([]byte(state), []byte(q.Get("state"))) != 1 {
+		fail("oauth_failed")
+		return
+	}
+	// Valida o state contra o que guardamos no servidor e o consome (one-time).
+	// Del devolve 0 se a chave não existe (expirou ou já foi usada): nesses casos
+	// recusamos, mesmo que o cookie "bata" — não confiamos só no cookie.
+	if n, err := s.rdb.Del(r.Context(), oauthStateKey(state)).Result(); err != nil || n == 0 {
 		fail("oauth_failed")
 		return
 	}
@@ -83,12 +101,20 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var profile struct {
-		ID    string `json:"id"`
-		Email string `json:"email"`
-		Name  string `json:"name"`
+		ID            string `json:"id"`
+		Email         string `json:"email"`
+		VerifiedEmail bool   `json:"verified_email"`
+		Name          string `json:"name"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&profile); err != nil {
 		fail("oauth_failed")
+		return
+	}
+	// Só seguimos com email comprovadamente verificado pelo Google. Sem isso, uma
+	// conta Google com email não-verificado poderia ser usada para "provar" um
+	// endereço que não é dela e assumir a conta local correspondente.
+	if !profile.VerifiedEmail {
+		fail("account_not_found")
 		return
 	}
 
@@ -101,6 +127,8 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		fail("account_not_found")
 		return
 	}
+	// Auto-vincula a identidade Google à conta local apenas com email verificado
+	// (já garantido acima) — evita vincular por email forjado.
 	_ = s.linkOAuth(r.Context(), u.ID, "google", profile.ID)
 
 	// MFA ativo: OAuth não pode contornar o 2º fator. Não emite sessão — cria o

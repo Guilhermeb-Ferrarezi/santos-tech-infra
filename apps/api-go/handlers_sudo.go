@@ -94,6 +94,20 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Teto de tentativas por usuário (≤5 numa janela), espelhando o handleMFAVerify:
+	// a verificação de sudo checa TOTP/recovery/OTP de email (ou senha) sem teto
+	// próprio, o que permitiria brute-force do 2º fator limitado só pelo IP. Conta
+	// a tentativa ANTES de validar; zera ao confirmar com sucesso (mais abaixo).
+	attemptKey := "sudo_attempts:" + strconv.FormatInt(uid, 10)
+	attempts, _ := s.rdb.Incr(r.Context(), attemptKey).Result()
+	if attempts == 1 {
+		s.rdb.Expire(r.Context(), attemptKey, 15*time.Minute)
+	}
+	if attempts > 5 {
+		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
+		return
+	}
+
 	valid := false
 	if u.MFAEnabled {
 		code := strings.TrimSpace(body.Code)
@@ -115,6 +129,7 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Confirmação inválida"))
 		return
 	}
+	s.rdb.Del(r.Context(), attemptKey) // fator válido → zera o contador
 
 	sudoExp := time.Now().Add(sudoTTL)
 	access, err := generateSudoAccess(s.cfg.JWTSecret, u.ID, u.Email, sudoExp)
