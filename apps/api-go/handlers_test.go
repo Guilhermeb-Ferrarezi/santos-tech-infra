@@ -27,6 +27,14 @@ func TestHandleRegisterValidation(t *testing.T) {
 	if w2.Code != http.StatusBadRequest {
 		t.Fatalf("senha curta: code=%d", w2.Code)
 	}
+
+	// senha longa (> 128) → 400 antes do banco (evita argon2 DoS)
+	w3 := httptest.NewRecorder()
+	s.handleRegister(w3, httptest.NewRequest("POST", "/auth/register",
+		strings.NewReader(`{"email":"a@b.com","name":"X","password":"`+strings.Repeat("a", 129)+`"}`)))
+	if w3.Code != http.StatusBadRequest {
+		t.Fatalf("senha longa: code=%d", w3.Code)
+	}
 }
 
 func TestHandleLoginBadBody(t *testing.T) {

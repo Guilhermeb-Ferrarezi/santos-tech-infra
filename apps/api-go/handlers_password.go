@@ -59,8 +59,8 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
-	if len(body.NewPassword) < 8 {
-		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "senha mínima de 8 caracteres"))
+	if len(body.NewPassword) < 8 || len(body.NewPassword) > 128 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "senha deve ter entre 8 e 128 caracteres"))
 		return
 	}
 	hash := sha256Hex(body.Token)
