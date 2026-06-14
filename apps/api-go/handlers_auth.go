@@ -279,9 +279,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado"))
 		return
 	}
-	// Revoga a sessão antiga ANTES de emitir a nova: se não conseguirmos apagar,
-	// não emitimos token novo — dois refresh tokens válidos simultaneamente quebram
-	// a garantia de rotação e permitem que um token vazado continue funcionando.
+	// fail-closed: não emitir token novo se não conseguir revogar o anterior (evita dois refresh tokens simultâneos)
 	if err := s.deleteSession(r.Context(), sid); err != nil {
 		slog.Error("refresh: falha ao revogar sessão anterior", "sid", sid, "err", err)
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao renovar sessão"))
