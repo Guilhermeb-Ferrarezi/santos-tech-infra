@@ -97,7 +97,9 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	_ = s.deleteUserSessions(r.Context(), uid)
+	if err := s.deleteUserSessions(r.Context(), uid); err != nil {
+		slog.Error("falha ao revogar sessões após reset de senha", "uid", uid, "err", err)
+	}
 	if err := s.rdb.Del(r.Context(), "pwd_reset:"+hash).Err(); err != nil {
 		slog.Error("falha ao remover token de reset de senha do Redis", "err", err)
 	}
