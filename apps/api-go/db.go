@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -300,7 +301,9 @@ func (s *Server) buildProfile(ctx context.Context, u *User) *UserProfile {
 	if u.Role == RoleCustom && u.CustomRoleID != nil {
 		var raw []byte
 		if err := s.db.QueryRow(ctx, `SELECT permissions FROM custom_roles WHERE id=$1`, *u.CustomRoleID).Scan(&raw); err == nil && len(raw) > 0 {
-			_ = json.Unmarshal(raw, &p.Permissions)
+			if err := json.Unmarshal(raw, &p.Permissions); err != nil {
+				slog.Error("falha ao deserializar permissões do cargo customizado", "customRoleID", *u.CustomRoleID, "err", err)
+			}
 		}
 	}
 	return p
@@ -570,7 +573,9 @@ func (s *Server) listCustomRoles(ctx context.Context) ([]CustomRole, error) {
 			return nil, err
 		}
 		cr.Permissions = map[string][]string{}
-		_ = json.Unmarshal(raw, &cr.Permissions)
+		if err := json.Unmarshal(raw, &cr.Permissions); err != nil {
+			return nil, fmt.Errorf("unmarshal permissions for role %s: %w", cr.ID, err)
+		}
 		out = append(out, cr)
 	}
 	return out, rows.Err()
@@ -592,7 +597,9 @@ func (s *Server) createCustomRole(ctx context.Context, name string, description 
 		return nil, err
 	}
 	cr.Permissions = map[string][]string{}
-	_ = json.Unmarshal(rawOut, &cr.Permissions)
+	if err := json.Unmarshal(rawOut, &cr.Permissions); err != nil {
+		return nil, fmt.Errorf("unmarshal permissions: %w", err)
+	}
 	return &cr, nil
 }
 
@@ -610,7 +617,9 @@ func (s *Server) getCustomRole(ctx context.Context, id string) (*CustomRole, err
 		return nil, err
 	}
 	cr.Permissions = map[string][]string{}
-	_ = json.Unmarshal(raw, &cr.Permissions)
+	if err := json.Unmarshal(raw, &cr.Permissions); err != nil {
+		return nil, fmt.Errorf("unmarshal permissions: %w", err)
+	}
 	return &cr, nil
 }
 
@@ -633,7 +642,9 @@ func (s *Server) updateCustomRole(ctx context.Context, id, name string, descript
 		return nil, err
 	}
 	cr.Permissions = map[string][]string{}
-	_ = json.Unmarshal(rawOut, &cr.Permissions)
+	if err := json.Unmarshal(rawOut, &cr.Permissions); err != nil {
+		return nil, fmt.Errorf("unmarshal permissions: %w", err)
+	}
 	return &cr, nil
 }
 
