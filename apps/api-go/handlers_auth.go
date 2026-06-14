@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -127,7 +128,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if u == nil || u.LoginDisabled || u.PasswordHash == nil || !verifyPassword(body.Password, hash) {
 		s.rdb.Incr(r.Context(), lockKey)
-		s.rdb.ExpireNX(r.Context(), lockKey, loginFailWindow)
+		if err := s.rdb.ExpireNX(r.Context(), lockKey, loginFailWindow).Err(); err != nil {
+			slog.Warn("login_fail: ExpireNX falhou; contador de lockout pode não expirar", "key", lockKey, "err", err)
+		}
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_CREDENTIALS", "Email ou senha inválidos"))
 		return
 	}

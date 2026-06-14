@@ -107,7 +107,9 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	attempts := sudoAttemptsCmd.Val()
-	s.rdb.ExpireNX(r.Context(), attemptKey, 15*time.Minute)
+	if err := s.rdb.ExpireNX(r.Context(), attemptKey, 15*time.Minute).Err(); err != nil {
+		slog.Warn("sudo_attempts: ExpireNX falhou; contador pode não expirar", "uid", uid, "err", err)
+	}
 	if attempts > 5 {
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
 		return

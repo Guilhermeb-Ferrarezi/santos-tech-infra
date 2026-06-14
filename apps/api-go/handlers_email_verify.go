@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -46,7 +47,9 @@ func (s *Server) handleEmailVerifySend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.rdb.Del(r.Context(), emailVerifyAttKey(uid))
-	s.rdb.Set(r.Context(), emailVerifyCDKey(uid), "1", emailVerifyCooldown)
+	if err := s.rdb.Set(r.Context(), emailVerifyCDKey(uid), "1", emailVerifyCooldown).Err(); err != nil {
+		slog.Warn("email_verify_send: falha ao gravar cooldown", "uid", uid, "err", err)
+	}
 	html := emailCodeHTML(code, "Use o código abaixo para verificar o seu email:")
 	go func(to string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -79,7 +82,9 @@ func (s *Server) handleEmailVerifyConfirm(w http.ResponseWriter, r *http.Request
 	}
 	// Teto de tentativas: o código de 6 dígitos não pode ser brute-forçável na janela.
 	attempts, _ := s.rdb.Incr(r.Context(), emailVerifyAttKey(uid)).Result()
-	s.rdb.ExpireNX(r.Context(), emailVerifyAttKey(uid), emailVerifyTTL)
+	if err := s.rdb.ExpireNX(r.Context(), emailVerifyAttKey(uid), emailVerifyTTL).Err(); err != nil {
+		slog.Warn("email_verify_confirm: ExpireNX falhou; contador de tentativas pode não expirar", "uid", uid, "err", err)
+	}
 	if attempts > emailVerifyMaxAttempts {
 		s.rdb.Del(r.Context(), emailVerifyKey(uid), emailVerifyAttKey(uid))
 		writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Muitas tentativas; envie outro código"))
