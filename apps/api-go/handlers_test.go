@@ -105,3 +105,24 @@ func TestHandleMeNoToken(t *testing.T) {
 		t.Fatalf("code=%d", w.Code)
 	}
 }
+
+func TestHandleForgotPasswordValidation(t *testing.T) {
+	s := testServer(Config{})
+
+	// corpo inválido → 400 antes de qualquer I/O
+	w := httptest.NewRecorder()
+	s.handleForgotPassword(w, httptest.NewRequest("POST", "/auth/forgot-password", strings.NewReader("não-é-json")))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("corpo inválido: code=%d", w.Code)
+	}
+
+	// email malformado → 200 "ok" sem tocar no banco
+	for _, bad := range []string{"", "notanemail", "@nodomain.com", "missing@tld", "spaces in@email.com"} {
+		w2 := httptest.NewRecorder()
+		s.handleForgotPassword(w2, httptest.NewRequest("POST", "/auth/forgot-password",
+			strings.NewReader(`{"email":"`+bad+`"}`)))
+		if w2.Code != http.StatusOK {
+			t.Errorf("email inválido %q: code=%d (queria 200)", bad, w2.Code)
+		}
+	}
+}
