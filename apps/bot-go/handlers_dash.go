@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // ── tipos de resposta/request ────────────────────────────────────────────────
@@ -680,6 +682,77 @@ func (s *Server) handleDashEvolutionInstances(w http.ResponseWriter, r *http.Req
 		return
 	}
 	jsonOK(w, insts)
+}
+
+// ── Agendamentos (aula experimental) ────────────────────────────────────────
+
+type dashAgenda struct {
+	Upcoming []dashUpcoming `json:"upcoming"`
+	Pending  []dashPending  `json:"pending"`
+}
+
+// dashUpcoming — aula experimental já agendada no Notion.
+type dashUpcoming struct {
+	Aluno     string `json:"aluno"`
+	DataHora  string `json:"dataHora"`
+	Display   string `json:"display"`
+	Status    string `json:"status"`
+	Professor string `json:"professor"`
+	WhatsApp  string `json:"whatsapp"`
+}
+
+// dashPending — agendamento aguardando confirmação do admin (ainda não no Notion).
+type dashPending struct {
+	ID           string    `json:"id"`
+	Aluno        string    `json:"aluno"`
+	Phone        string    `json:"phone"`
+	Kind         string    `json:"kind"`
+	Course       string    `json:"course"`
+	ProposedDay  string    `json:"proposedDay"`
+	ProposedDate string    `json:"proposedDate"`
+	ProposedTime string    `json:"proposedTime"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// GET /api/bookings — agenda de aulas experimentais (Notion) + pendências.
+func (s *Server) handleDashBookings(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+
+	out := dashAgenda{Upcoming: []dashUpcoming{}, Pending: []dashPending{}}
+
+	if n := s.engine.deps.Notion; n != nil && n.Enabled() {
+		for _, e := range n.Schedule(ctx) {
+			out.Upcoming = append(out.Upcoming, dashUpcoming{
+				Aluno: e.Aluno, DataHora: e.DataHora, Display: e.Display,
+				Status: e.Status, Professor: e.Professor, WhatsApp: e.WhatsApp,
+			})
+		}
+	}
+
+	if s.engine.deps.Bookings != nil {
+		var pend []PendingBooking
+		if err := s.withTenant(ctx, func(tx pgx.Tx) error {
+			p, err := s.engine.deps.Bookings.ListOpen(ctx, tx, tenantID)
+			if err != nil {
+				return err
+			}
+			pend = p
+			return nil
+		}); err != nil {
+			s.logger.Error("dash: list pending bookings", "err", err)
+		}
+		for _, b := range pend {
+			out.Pending = append(out.Pending, dashPending{
+				ID: b.ID, Aluno: bookingAluno(b), Phone: b.ClientPhone,
+				Kind: b.Kind, Course: b.Course,
+				ProposedDay: b.ProposedDay, ProposedDate: b.ProposedDate, ProposedTime: b.ProposedTime,
+				CreatedAt: b.CreatedAt,
+			})
+		}
+	}
+
+	jsonOK(w, out)
 }
 
 // PATCH /api/leads/{id} — atualiza status (e opcional owner/interest) de um lead.
