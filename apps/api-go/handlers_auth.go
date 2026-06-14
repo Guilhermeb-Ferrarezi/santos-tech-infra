@@ -279,7 +279,12 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado"))
 		return
 	}
-	_ = s.deleteSession(r.Context(), sid) // rotaciona
+	// fail-closed: não emitir token novo se não conseguir revogar o anterior (evita dois refresh tokens simultâneos)
+	if err := s.deleteSession(r.Context(), sid); err != nil {
+		slog.Error("refresh: falha ao revogar sessão anterior", "sid", sid, "err", err)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao renovar sessão"))
+		return
+	}
 	if err := s.issueSession(r.Context(), w, r, u, sid); err != nil {
 		writeErr(w, err)
 		return
