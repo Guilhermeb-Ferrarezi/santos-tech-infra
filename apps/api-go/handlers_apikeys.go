@@ -24,7 +24,8 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(name) > 100 {
-		name = name[:100]
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome é muito longo (máx. 100 caracteres)"))
+		return
 	}
 
 	var expires *time.Time
