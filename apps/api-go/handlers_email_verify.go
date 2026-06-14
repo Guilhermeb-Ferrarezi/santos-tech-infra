@@ -69,6 +69,7 @@ func (s *Server) handleEmailVerifySend(w http.ResponseWriter, r *http.Request) {
 // POST /auth/email-verify/confirm {code} — compara o código com o guardado no Redis
 // (tempo constante, com teto de tentativas) e marca users.email_verified_at.
 func (s *Server) handleEmailVerifyConfirm(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	uid := userIDFrom(r)
 	var body struct {
 		Code string `json:"code"`

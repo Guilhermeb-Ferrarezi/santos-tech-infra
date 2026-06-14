@@ -68,6 +68,7 @@ func (s *Server) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 // A requisição só é consumida APÓS sucesso: se a sessão escolhida morreu, o
 // usuário volta ao chooser com o MESMO request_id (UX aprovada no spec).
 func (s *Server) handleOAuthConfirm(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		RequestID string `json:"requestId"`
 		SessionID string `json:"sessionId"`

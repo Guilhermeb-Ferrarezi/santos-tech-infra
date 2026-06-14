@@ -65,6 +65,7 @@ func dcrError(w http.ResponseWriter, code, desc string) {
 // rate limit. Só clients públicos (PKCE, sem secret): registrar um client não
 // dá acesso a nada — o usuário ainda precisa autorizar no chooser.
 func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		RedirectURIs []string `json:"redirect_uris"`
 		ClientName   string   `json:"client_name"`
