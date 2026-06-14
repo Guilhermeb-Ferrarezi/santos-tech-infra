@@ -54,7 +54,9 @@ func (s *Server) handleEmailVerifySend(w http.ResponseWriter, r *http.Request) {
 	go func(to string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
-		_ = s.email.send(ctx, to, "Verifique seu email — Santos Tech", html)
+		if err := s.email.send(ctx, to, "Verifique seu email — Santos Tech", html); err != nil {
+			slog.Error("falha ao enviar email de verificação", "uid", uid, "err", err)
+		}
 	}(u.Email)
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
