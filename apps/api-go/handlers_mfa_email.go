@@ -32,7 +32,9 @@ func (s *Server) sendChallengeEmailCode(ctx context.Context, challenge, email st
 	go func(to string) {
 		c, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
-		_ = s.email.send(c, to, "Seu código de verificação — Santos Tech", html)
+		if err := s.email.send(c, to, "Seu código de verificação — Santos Tech", html); err != nil {
+			slog.Error("falha ao enviar código MFA por email (challenge)", "err", err)
+		}
 	}(email)
 	return nil
 }
@@ -83,7 +85,9 @@ func (s *Server) handleMFAEmailCode(w http.ResponseWriter, r *http.Request) {
 	go func(to string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
-		_ = s.email.send(ctx, to, "Seu código de verificação — Santos Tech", html)
+		if err := s.email.send(ctx, to, "Seu código de verificação — Santos Tech", html); err != nil {
+			slog.Error("falha ao enviar código MFA por email (conta)", "uid", uid, "err", err)
+		}
 	}(u.Email)
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
