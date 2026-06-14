@@ -46,20 +46,29 @@ func TestHandleRegisterValidation(t *testing.T) {
 		}
 	}
 
-	// nome só com espaços → 400 após trim (bug: sem TrimSpace passaria como não-vazio)
+	// email longo (> 254 chars, RFC 5321) → 400 antes do banco
+	// 249 'a' + "@b.com" = 255 chars > 254
 	w5 := httptest.NewRecorder()
 	s.handleRegister(w5, httptest.NewRequest("POST", "/auth/register",
-		strings.NewReader(`{"email":"a@b.com","name":"   ","password":"12345678"}`)))
+		strings.NewReader(`{"email":"`+strings.Repeat("a", 249)+"@b.com"+`","name":"X","password":"12345678"}`)))
 	if w5.Code != http.StatusBadRequest {
-		t.Fatalf("nome só espaços: code=%d (queria 400)", w5.Code)
+		t.Fatalf("email longo: code=%d (queria 400)", w5.Code)
+	}
+
+	// nome só com espaços → 400 após trim (bug: sem TrimSpace passaria como não-vazio)
+	w6 := httptest.NewRecorder()
+	s.handleRegister(w6, httptest.NewRequest("POST", "/auth/register",
+		strings.NewReader(`{"email":"a@b.com","name":"   ","password":"12345678"}`)))
+	if w6.Code != http.StatusBadRequest {
+		t.Fatalf("nome só espaços: code=%d (queria 400)", w6.Code)
 	}
 
 	// nome longo (> 128 chars) → 400 antes do banco
-	w6 := httptest.NewRecorder()
-	s.handleRegister(w6, httptest.NewRequest("POST", "/auth/register",
+	w7 := httptest.NewRecorder()
+	s.handleRegister(w7, httptest.NewRequest("POST", "/auth/register",
 		strings.NewReader(`{"email":"a@b.com","name":"`+strings.Repeat("a", 129)+`","password":"12345678"}`)))
-	if w6.Code != http.StatusBadRequest {
-		t.Fatalf("nome longo: code=%d (queria 400)", w6.Code)
+	if w7.Code != http.StatusBadRequest {
+		t.Fatalf("nome longo: code=%d (queria 400)", w7.Code)
 	}
 }
 

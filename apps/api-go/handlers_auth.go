@@ -40,7 +40,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
 	body.Name = strings.TrimSpace(body.Name)
-	if body.Email == "" || body.Name == "" || len(body.Name) > 128 || len(body.Password) < 8 || len(body.Password) > 128 {
+	if body.Email == "" || body.Name == "" || len(body.Email) > 254 || len(body.Name) > 128 || len(body.Password) < 8 || len(body.Password) > 128 {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "email, nome e senha (entre 8 e 128 caracteres) são obrigatórios"))
 		return
 	}
