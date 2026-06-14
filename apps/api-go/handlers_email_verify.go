@@ -37,7 +37,12 @@ func (s *Server) handleEmailVerifySend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusConflict, "ALREADY_VERIFIED", "Este email já foi verificado"))
 		return
 	}
-	if n, _ := s.rdb.Exists(r.Context(), emailVerifyCDKey(uid)).Result(); n == 1 {
+	nCD, errCD := s.rdb.Exists(r.Context(), emailVerifyCDKey(uid)).Result()
+	if errCD != nil {
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao verificar cooldown"))
+		return
+	}
+	if nCD == 1 {
 		writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Aguarde um pouco antes de reenviar"))
 		return
 	}
@@ -83,7 +88,13 @@ func (s *Server) handleEmailVerifyConfirm(w http.ResponseWriter, r *http.Request
 		return
 	}
 	// Teto de tentativas: o código de 6 dígitos não pode ser brute-forçável na janela.
-	attempts, _ := s.rdb.Incr(r.Context(), emailVerifyAttKey(uid)).Result()
+	attemptsCmd := s.rdb.Incr(r.Context(), emailVerifyAttKey(uid))
+	if attemptsCmd.Err() != nil {
+		slog.Warn("email_verify_confirm: redis error; rejecting to fail closed", "uid", uid, "err", attemptsCmd.Err())
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro interno. Tente novamente."))
+		return
+	}
+	attempts := attemptsCmd.Val()
 	if err := s.rdb.ExpireNX(r.Context(), emailVerifyAttKey(uid), emailVerifyTTL).Err(); err != nil {
 		slog.Warn("email_verify_confirm: ExpireNX falhou; contador de tentativas pode não expirar", "uid", uid, "err", err)
 	}
