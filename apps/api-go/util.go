@@ -25,6 +25,10 @@ func isValidChallenge(s string) bool {
 	return err == nil
 }
 
+// recoveryCodeLen é o comprimento esperado de um código de recuperação MFA:
+// base32 sem padding de 8 bytes aleatórios = exatamente 13 caracteres A-Z2-7.
+const recoveryCodeLen = 13
+
 func sha256Hex(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
