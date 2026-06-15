@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -141,6 +142,102 @@ func (s *WhatsAppSender) post(ctx context.Context, body map[string]any) (string,
 	return result.Messages[0].ID, nil
 }
 
+// DownloadMedia baixa o conteúdo de uma mídia do WhatsApp pelo media id (lookup→bytes).
+func (s *WhatsAppSender) DownloadMedia(ctx context.Context, mediaID string) ([]byte, string, error) {
+	return s.downloadMediaFrom(ctx, fmt.Sprintf("https://graph.facebook.com/v21.0/%s", mediaID))
+}
+
+func (s *WhatsAppSender) downloadMediaFrom(ctx context.Context, lookupURL string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, lookupURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.accessToken)
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("whatsapp: media lookup: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return nil, "", fmt.Errorf("whatsapp: media lookup status %d: %s", resp.StatusCode, string(raw))
+	}
+	var meta struct {
+		URL      string `json:"url"`
+		MimeType string `json:"mime_type"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+		return nil, "", fmt.Errorf("whatsapp: media lookup decode: %w", err)
+	}
+	if meta.URL == "" {
+		return nil, "", fmt.Errorf("whatsapp: media sem url")
+	}
+	dreq, err := http.NewRequestWithContext(ctx, http.MethodGet, meta.URL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	dreq.Header.Set("Authorization", "Bearer "+s.accessToken)
+	dresp, err := s.http.Do(dreq)
+	if err != nil {
+		return nil, "", fmt.Errorf("whatsapp: media download: %w", err)
+	}
+	defer dresp.Body.Close()
+	if dresp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(dresp.Body, 4<<10))
+		return nil, "", fmt.Errorf("whatsapp: media download status %d: %s", dresp.StatusCode, string(raw))
+	}
+	data, err := io.ReadAll(io.LimitReader(dresp.Body, 16<<20))
+	if err != nil {
+		return nil, "", fmt.Errorf("whatsapp: media read: %w", err)
+	}
+	return data, meta.MimeType, nil
+}
+
+// UploadAudio envia bytes OGG/Opus ao endpoint de mídia do Meta e devolve o media id.
+func (s *WhatsAppSender) UploadAudio(ctx context.Context, ogg []byte) (string, error) {
+	return s.uploadAudioTo(ctx, fmt.Sprintf("https://graph.facebook.com/v21.0/%s/media", s.phoneNumberID), ogg)
+}
+
+func (s *WhatsAppSender) uploadAudioTo(ctx context.Context, url string, ogg []byte) (string, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("messaging_product", "whatsapp")
+	_ = mw.WriteField("type", "audio/ogg")
+	fw, err := mw.CreateFormFile("file", "voice.ogg")
+	if err != nil {
+		return "", fmt.Errorf("whatsapp: upload form: %w", err)
+	}
+	if _, err := fw.Write(ogg); err != nil {
+		return "", fmt.Errorf("whatsapp: upload write: %w", err)
+	}
+	if err := mw.Close(); err != nil {
+		return "", fmt.Errorf("whatsapp: upload close: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.accessToken)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("whatsapp: upload do: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("whatsapp: upload status %d: %s", resp.StatusCode, string(raw))
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil || out.ID == "" {
+		return "", fmt.Errorf("whatsapp: upload sem id: %s", string(raw))
+	}
+	return out.ID, nil
+}
+
 // contentToBody converte MessageContent no formato de body da Meta API.
 func contentToBody(content MessageContent) map[string]any {
 	switch content.Type {
@@ -164,7 +261,11 @@ func contentToBody(content MessageContent) map[string]any {
 	case "audio":
 		audio := map[string]any{}
 		if content.MediaURL != nil {
-			audio["link"] = *content.MediaURL
+			if id, ok := strings.CutPrefix(*content.MediaURL, "wa_media_id:"); ok {
+				audio["id"] = id
+			} else {
+				audio["link"] = *content.MediaURL
+			}
 		}
 		return map[string]any{"type": "audio", "audio": audio}
 	case "video":

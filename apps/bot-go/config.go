@@ -61,6 +61,14 @@ type Config struct {
 	// Dashboard
 	DashAPIKey     string
 	DashCORSOrigin string
+
+	// Voz (STT/TTS via OpenAI). VOICE_ENABLED liga a feature.
+	VoiceEnabled   bool
+	OpenAIKey      string
+	OpenAIBaseURL  string
+	OpenAITTSVoice string
+	OpenAITTSModel string
+	OpenAISTTModel string
 }
 
 func LoadConfig() Config {
@@ -105,6 +113,13 @@ func LoadConfig() Config {
 
 		DashAPIKey:     getEnv("DASH_API_KEY", ""),
 		DashCORSOrigin: getEnv("DASH_CORS_ORIGIN", "https://santos-tech.com"),
+
+		VoiceEnabled:   getEnv("VOICE_ENABLED", "false") == "true",
+		OpenAIKey:      getEnv("OPENAI_API_KEY", ""),
+		OpenAIBaseURL:  strings.TrimRight(getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "/"),
+		OpenAITTSVoice: getEnv("OPENAI_TTS_VOICE", "nova"),
+		OpenAITTSModel: getEnv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
+		OpenAISTTModel: getEnv("OPENAI_STT_MODEL", "whisper-1"),
 	}
 }
 

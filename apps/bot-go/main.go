@@ -83,6 +83,7 @@ func main() {
 
 	// 9. Instancia WhatsAppSender + cliente Evolution (canal não-oficial)
 	sender := NewWhatsAppSender(cfg.MetaAccessToken, cfg.MetaPhoneNumberID)
+	voiceClient := NewVoiceClient(cfg)
 	evolutionClient := NewEvolutionClient(cfg.EvolutionAPIURL, cfg.EvolutionAPIKey, cfg.EvolutionInstance)
 
 	// 10. Instancia WSHub e inicia loop em background
@@ -109,6 +110,7 @@ func main() {
 		Pending:         pending,
 		Bookings:        bookings,
 		Notion:          notionClient,
+		Voice:           voiceClient,
 	})
 
 	// 11b. Engine para o canal Evolution: mesmos repos, mas responde via Evolution.
@@ -153,7 +155,7 @@ func main() {
 	})
 
 	// 13. Instancia Server
-	server := NewServer(cfg, engine, webhooks, pool, sender, logger, hub, logRepo, evoEngine, evolutionClient)
+	server := NewServer(cfg, engine, webhooks, pool, sender, logger, hub, logRepo, evoEngine, evolutionClient, voiceClient)
 
 	// 14. Inicia worker em background
 	go worker.Start(ctx)
