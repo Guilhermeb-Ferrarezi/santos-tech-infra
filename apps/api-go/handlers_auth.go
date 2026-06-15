@@ -135,7 +135,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_CREDENTIALS", "Email ou senha inválidos"))
 		return
 	}
-	s.rdb.Del(r.Context(), lockKey) // credenciais válidas → zera o contador
+	if err := s.rdb.Del(r.Context(), lockKey).Err(); err != nil {
+		slog.Warn("login: falha ao limpar contador de lockout no Redis", "key", lockKey, "err", err)
+	}
 	if u.SuspendedAt != nil {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta suspensa"))
 		return
