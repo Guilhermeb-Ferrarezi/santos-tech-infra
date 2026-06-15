@@ -60,7 +60,9 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	s.rdb.Del(r.Context(), "mfa_setup:"+strconv.FormatInt(uid, 10))
+	if err := s.rdb.Del(r.Context(), "mfa_setup:"+strconv.FormatInt(uid, 10)).Err(); err != nil {
+		slog.Warn("mfa_enable: falha ao remover chave de setup do Redis", "uid", uid, "err", err)
+	}
 
 	codes := genRecoveryCodes(10)
 	hashes := make([]string, len(codes))
@@ -135,7 +137,10 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	s.rdb.Del(r.Context(), attemptKey) // fator válido → zera o contador
+	// fator válido → zera o contador de tentativas
+	if err := s.rdb.Del(r.Context(), attemptKey).Err(); err != nil {
+		slog.Warn("mfa_disable: falha ao remover contador de tentativas do Redis", "uid", uid, "err", err)
+	}
 	if err := s.deleteRecoveryCodes(r.Context(), uid); err != nil {
 		slog.Warn("falha ao remover recovery codes ao desativar MFA", "uid", uid, "err", err)
 	}
@@ -218,7 +223,9 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("mfa_attempts: ExpireNX falhou; contador pode não expirar", "challenge", body.Challenge, "err", err)
 	}
 	if attempts > 5 {
-		s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "mfa_attempts:"+body.Challenge)
+		if err := s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "mfa_attempts:"+body.Challenge).Err(); err != nil {
+			slog.Warn("mfa_verify: falha ao invalidar desafio após excesso de tentativas", "challenge", body.Challenge, "err", err)
+		}
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Faça login novamente."))
 		return
 	}
@@ -231,7 +238,9 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		if ec, e := s.rdb.Get(r.Context(), "mfa_email:"+body.Challenge).Result(); e == nil && ec != "" &&
 			subtle.ConstantTimeCompare([]byte(ec), []byte(code)) == 1 {
 			valid = true
-			s.rdb.Del(r.Context(), "mfa_email:"+body.Challenge)
+			if err := s.rdb.Del(r.Context(), "mfa_email:"+body.Challenge).Err(); err != nil {
+				slog.Warn("mfa_verify: falha ao remover OTP de email do Redis", "challenge", body.Challenge, "err", err)
+			}
 		}
 	}
 	if !valid && len(code) == recoveryCodeLen && s.consumeRecoveryCode(r.Context(), uid, sha256Hex(strings.ToUpper(code))) {
@@ -241,7 +250,9 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
 		return
 	}
-	s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "mfa_attempts:"+body.Challenge)
+	if err := s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "mfa_attempts:"+body.Challenge).Err(); err != nil {
+		slog.Warn("mfa_verify: falha ao limpar chaves do desafio após autenticação", "challenge", body.Challenge, "err", err)
+	}
 	if err := s.issueSession(r.Context(), w, r, u); err != nil {
 		writeErr(w, err)
 		return
