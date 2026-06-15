@@ -184,6 +184,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/bookings", da(s.handleDashBookings))
 	mux.Handle("POST /api/bookings/reschedule", da(s.handleDashReschedule))
 	mux.Handle("PATCH /api/leads/{id}", da(s.handleDashPatchLead))
+	mux.Handle("DELETE /api/leads/{id}", da(s.handleDashDeleteLead))
 	mux.Handle("GET /api/evolution/instances", da(s.handleDashEvolutionInstances))
 	mux.HandleFunc("GET /api/ws", s.handleDashWS)
 	// OPTIONS preflight (sem auth)
@@ -451,16 +452,28 @@ func (s *Server) evolutionBotReplyEnabled(ctx context.Context) bool {
 	return on
 }
 
-// evolutionLeadCaptureEnabled lê o toggle "captar leads do Evolution" (default true).
-// Desligado = ignorar por completo as mensagens da Evolution.
-func (s *Server) evolutionLeadCaptureEnabled(ctx context.Context) bool {
-	var on bool
-	if err := s.pool.QueryRow(ctx,
-		`SELECT evolution_lead_capture_enabled FROM tenant_config WHERE tenant_id = $1`, s.cfg.TenantID,
-	).Scan(&on); err != nil {
-		return true // fail-open: na dúvida, mantém o comportamento atual (captar)
+// evolutionCaptureDisabledFor diz se a captação está DESLIGADA para a instância
+// (número) que recebeu a mensagem. Lista vazia / erro = captando (fail-open).
+func (s *Server) evolutionCaptureDisabledFor(ctx context.Context, instance string) bool {
+	if instance == "" {
+		return false
 	}
-	return on
+	var raw []byte
+	if err := s.pool.QueryRow(ctx,
+		`SELECT evolution_capture_disabled FROM tenant_config WHERE tenant_id = $1`, s.cfg.TenantID,
+	).Scan(&raw); err != nil {
+		return false // fail-open: na dúvida, captura
+	}
+	var disabled []string
+	if err := json.Unmarshal(raw, &disabled); err != nil {
+		return false
+	}
+	for _, n := range disabled {
+		if n == instance {
+			return true
+		}
+	}
+	return false
 }
 
 // handleEvolutionWebhook recebe eventos da Evolution e captura leads (origin=evolution).
@@ -507,9 +520,9 @@ func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
 
 	ctx := context.Background()
 
-	// Toggle: se a captação estiver desligada, ignora a mensagem por completo
-	// (não cria lead nem deixa o bot responder).
-	if !s.evolutionLeadCaptureEnabled(ctx) {
+	// Captação por número: se a instância que recebeu a mensagem estiver desligada,
+	// ignora por completo (não cria lead nem deixa o bot responder).
+	if s.evolutionCaptureDisabledFor(ctx, ev.Instance) {
 		return
 	}
 
