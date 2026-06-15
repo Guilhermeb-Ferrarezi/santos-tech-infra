@@ -55,6 +55,11 @@ func NewWSHub(logger *slog.Logger, allowedOrigin string) *WSHub {
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
+			// Quando o cliente oferece "dash" como sub-protocol, o gorilla
+			// seleciona e ecoa "dash" no handshake (senão o browser derruba a
+			// conexão). Cliente só com ?key= não oferece sub-protocol e nada é
+			// ecoado — comportamento atual preservado.
+			Subprotocols: []string{"dash"},
 			CheckOrigin: func(r *http.Request) bool {
 				if allowedOrigin == "" {
 					return false

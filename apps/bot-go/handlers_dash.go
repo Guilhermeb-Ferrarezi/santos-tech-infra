@@ -828,8 +828,9 @@ func toDashLog(e ProcessingLogEntry) dashProcessingLog {
 }
 
 // ── GET /api/ws ───────────────────────────────────────────────────────────────
-// Upgrade para WebSocket. Auth via query param ?key= (browser JS não suporta
-// headers customizados em WebSocket nativamente).
+// Upgrade para WebSocket. Auth via sub-protocol "dash, <key>" (browser JS não
+// suporta headers customizados em WebSocket); cai no query param ?key= como
+// fallback de transição.
 
 func (s *Server) handleDashWS(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.DashAPIKey == "" || s.hub == nil {
@@ -837,6 +838,14 @@ func (s *Server) handleDashWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := r.URL.Query().Get("key")
+	if key == "" {
+		// Browser manda a chave como sub-protocol: "dash, <key>".
+		for _, p := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
+			if p = strings.TrimSpace(p); p != "" && p != "dash" {
+				key = p
+			}
+		}
+	}
 	if subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) != 1 {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
