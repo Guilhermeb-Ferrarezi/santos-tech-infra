@@ -364,6 +364,12 @@ func (s *Server) flushBurst(ctx context.Context, engine *ConversationEngine, key
 // nenhuma (só mídia), mantém a última mensagem como está.
 func combineInbound(items []burstItem) InboundMessage {
 	base := items[len(items)-1].msg
+	for _, it := range items {
+		if it.msg.WasVoice {
+			base.WasVoice = true
+			break
+		}
+	}
 
 	var parts []string
 	for _, it := range items {

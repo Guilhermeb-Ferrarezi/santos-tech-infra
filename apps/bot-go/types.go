@@ -240,6 +240,8 @@ type InboundMessage struct {
 	ProviderMessageID string // wamid da Meta
 	Content           MessageContent
 	ReceivedAt        time.Time
+	// WasVoice: a mensagem original do cliente era nota de voz (modo espelho).
+	WasVoice bool
 }
 
 // MessageContent — conteúdo de uma mensagem (texto, imagem, áudio...).
