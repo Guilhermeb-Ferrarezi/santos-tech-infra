@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -182,6 +183,51 @@ func (s *WhatsAppSender) downloadMediaFrom(ctx context.Context, lookupURL string
 		return nil, "", fmt.Errorf("whatsapp: media read: %w", err)
 	}
 	return data, meta.MimeType, nil
+}
+
+// UploadAudio envia bytes OGG/Opus ao endpoint de mídia do Meta e devolve o media id.
+func (s *WhatsAppSender) UploadAudio(ctx context.Context, ogg []byte) (string, error) {
+	return s.uploadAudioTo(ctx, fmt.Sprintf("https://graph.facebook.com/v21.0/%s/media", s.phoneNumberID), ogg)
+}
+
+func (s *WhatsAppSender) uploadAudioTo(ctx context.Context, url string, ogg []byte) (string, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("messaging_product", "whatsapp")
+	_ = mw.WriteField("type", "audio/ogg")
+	fw, err := mw.CreateFormFile("file", "voice.ogg")
+	if err != nil {
+		return "", fmt.Errorf("whatsapp: upload form: %w", err)
+	}
+	if _, err := fw.Write(ogg); err != nil {
+		return "", fmt.Errorf("whatsapp: upload write: %w", err)
+	}
+	if err := mw.Close(); err != nil {
+		return "", fmt.Errorf("whatsapp: upload close: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.accessToken)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("whatsapp: upload do: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("whatsapp: upload status %d: %s", resp.StatusCode, string(raw))
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil || out.ID == "" {
+		return "", fmt.Errorf("whatsapp: upload sem id: %s", string(raw))
+	}
+	return out.ID, nil
 }
 
 // contentToBody converte MessageContent no formato de body da Meta API.

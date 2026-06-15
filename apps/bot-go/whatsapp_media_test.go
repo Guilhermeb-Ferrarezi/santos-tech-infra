@@ -27,3 +27,20 @@ func TestDownloadMedia(t *testing.T) {
 		t.Fatalf("got %q %q", data, mime)
 	}
 }
+
+func TestUploadAudio(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"MEDIA123"}`))
+	}))
+	defer srv.Close()
+
+	s := &WhatsAppSender{accessToken: "tok", phoneNumberID: "PN", http: srv.Client()}
+	id, err := s.uploadAudioTo(context.Background(), srv.URL, []byte("OGG"))
+	if err != nil {
+		t.Fatalf("erro: %v", err)
+	}
+	if id != "MEDIA123" {
+		t.Fatalf("id = %q", id)
+	}
+}
