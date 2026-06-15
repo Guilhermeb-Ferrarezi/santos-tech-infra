@@ -7,10 +7,26 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// voiceHTTPClient é o http.Client das chamadas de voz (OpenAI). Bounded para nunca
+// pendurar: timeout de dial, de espera por headers e de conexão ociosa (evita
+// reusar uma conexão keep-alive morta e esperar 60s "awaiting headers").
+func voiceHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext:           (&net.Dialer{Timeout: 8 * time.Second}).DialContext,
+			ResponseHeaderTimeout: 20 * time.Second,
+			IdleConnTimeout:       30 * time.Second,
+			ForceAttemptHTTP2:     true,
+		},
+	}
+}
 
 // VoiceClient faz STT e TTS via OpenAI (HTTP). Sem binários locais.
 type VoiceClient struct {
@@ -31,7 +47,7 @@ func NewVoiceClient(cfg Config) *VoiceClient {
 		ttsVoice: cfg.OpenAITTSVoice,
 		ttsModel: cfg.OpenAITTSModel,
 		sttModel: cfg.OpenAISTTModel,
-		http:     &http.Client{Timeout: 60 * time.Second},
+		http:     voiceHTTPClient(),
 	}
 }
 
