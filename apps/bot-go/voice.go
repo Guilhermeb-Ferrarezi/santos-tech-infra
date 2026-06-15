@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -76,4 +77,39 @@ func (v *VoiceClient) Transcribe(ctx context.Context, audio []byte, mime string)
 		return "", fmt.Errorf("voice: stt decode: %w", err)
 	}
 	return out.Text, nil
+}
+
+// joinBubbles junta os balões num texto único (uma nota de voz por resposta).
+func joinBubbles(bubbles []string) string {
+	return strings.Join(bubbles, "\n")
+}
+
+// Synthesize gera a nota de voz (OGG/Opus) com a voz feminina configurada.
+func (v *VoiceClient) Synthesize(ctx context.Context, text string) ([]byte, error) {
+	body, err := json.Marshal(map[string]any{
+		"model":           v.ttsModel,
+		"voice":           v.ttsVoice,
+		"input":           text,
+		"response_format": "opus",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("voice: tts marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.baseURL+"/audio/speech", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+v.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := v.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("voice: tts do: %w", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("voice: tts status %d: %s", resp.StatusCode, string(data))
+	}
+	return data, nil
 }

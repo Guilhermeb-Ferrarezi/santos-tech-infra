@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,6 +35,35 @@ func TestTranscribe(t *testing.T) {
 		t.Fatalf("erro: %v", err)
 	}
 	if got != "olá tudo bem" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestJoinBubbles(t *testing.T) {
+	if got := joinBubbles([]string{"Oi!", "Tudo bem?"}); got != "Oi!\nTudo bem?" {
+		t.Fatalf("joinBubbles = %q", got)
+	}
+}
+
+func TestSynthesize(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/audio/speech" {
+			t.Errorf("path: %s", r.URL.Path)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["voice"] != "nova" || body["response_format"] != "opus" {
+			t.Errorf("body inesperado: %v", body)
+		}
+		_, _ = w.Write([]byte("OGGAUDIO"))
+	}))
+	defer srv.Close()
+
+	got, err := newTestVoice(srv.URL).Synthesize(context.Background(), "olá")
+	if err != nil {
+		t.Fatalf("erro: %v", err)
+	}
+	if string(got) != "OGGAUDIO" {
 		t.Fatalf("got %q", got)
 	}
 }
