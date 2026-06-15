@@ -54,18 +54,19 @@ type dashMessage struct {
 }
 
 type dashConfig struct {
-	BotName                  string    `json:"botName"`
-	BotGender                string    `json:"botGender"`
-	BotEnabledByDefault      bool      `json:"botEnabledByDefault"`
-	BotAllowedNumbers        []string  `json:"botAllowedNumbers"`
-	QuietHoursStart          *string   `json:"quietHoursStart"`
-	QuietHoursEnd            *string   `json:"quietHoursEnd"`
-	KBContent                []KBEntry `json:"kbContent"`
-	SystemPrompt             string    `json:"systemPrompt"`
-	AdminSystemPrompt        string    `json:"adminSystemPrompt"`
-	AdminWhatsAppNumbers     []string  `json:"adminWhatsAppNumbers"`
-	DebounceMs               int       `json:"debounceMs"`
-	EvolutionBotReplyEnabled bool      `json:"evolutionBotReplyEnabled"`
+	BotName                     string    `json:"botName"`
+	BotGender                   string    `json:"botGender"`
+	BotEnabledByDefault         bool      `json:"botEnabledByDefault"`
+	BotAllowedNumbers           []string  `json:"botAllowedNumbers"`
+	QuietHoursStart             *string   `json:"quietHoursStart"`
+	QuietHoursEnd               *string   `json:"quietHoursEnd"`
+	KBContent                   []KBEntry `json:"kbContent"`
+	SystemPrompt                string    `json:"systemPrompt"`
+	AdminSystemPrompt           string    `json:"adminSystemPrompt"`
+	AdminWhatsAppNumbers        []string  `json:"adminWhatsAppNumbers"`
+	DebounceMs                  int       `json:"debounceMs"`
+	EvolutionBotReplyEnabled    bool      `json:"evolutionBotReplyEnabled"`
+	EvolutionLeadCaptureEnabled bool      `json:"evolutionLeadCaptureEnabled"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -329,7 +330,8 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		       tc.admin_system_prompt,
 		       tc.admin_whatsapp_numbers,
 		       tc.debounce_ms,
-		       tc.evolution_bot_reply_enabled
+		       tc.evolution_bot_reply_enabled,
+		       tc.evolution_lead_capture_enabled
 		FROM tenant_config tc
 		WHERE tc.tenant_id = $1
 	`, tenantID).Scan(
@@ -337,6 +339,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		&allowedRaw, &qhStart, &qhEnd, &kbRaw, &cfg.SystemPrompt,
 		&cfg.AdminSystemPrompt,
 		&adminNumbersRaw, &cfg.DebounceMs, &cfg.EvolutionBotReplyEnabled,
+		&cfg.EvolutionLeadCaptureEnabled,
 	)
 	if err != nil {
 		s.logger.Error("dash: get config", "err", err)
@@ -471,11 +474,13 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		    admin_whatsapp_numbers = $10::jsonb,
 		    debounce_ms            = $11,
 		    admin_system_prompt    = $12,
-		    evolution_bot_reply_enabled = $13
+		    evolution_bot_reply_enabled = $13,
+		    evolution_lead_capture_enabled = $14
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
 		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt,
-		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt, body.EvolutionBotReplyEnabled)
+		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt, body.EvolutionBotReplyEnabled,
+		body.EvolutionLeadCaptureEnabled)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)

@@ -450,6 +450,18 @@ func (s *Server) evolutionBotReplyEnabled(ctx context.Context) bool {
 	return on
 }
 
+// evolutionLeadCaptureEnabled lê o toggle "captar leads do Evolution" (default true).
+// Desligado = ignorar por completo as mensagens da Evolution.
+func (s *Server) evolutionLeadCaptureEnabled(ctx context.Context) bool {
+	var on bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT evolution_lead_capture_enabled FROM tenant_config WHERE tenant_id = $1`, s.cfg.TenantID,
+	).Scan(&on); err != nil {
+		return true // fail-open: na dúvida, mantém o comportamento atual (captar)
+	}
+	return on
+}
+
 // handleEvolutionWebhook recebe eventos da Evolution e captura leads (origin=evolution).
 // Autenticado por segredo em ?secret=. ACK imediato; processa em background.
 func (s *Server) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request) {
