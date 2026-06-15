@@ -11,6 +11,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"time"
 )
@@ -203,7 +204,12 @@ func (s *WhatsAppSender) uploadAudioTo(ctx context.Context, url string, ogg []by
 	mw := multipart.NewWriter(&buf)
 	_ = mw.WriteField("messaging_product", "whatsapp")
 	_ = mw.WriteField("type", "audio/ogg")
-	fw, err := mw.CreateFormFile("file", "voice.ogg")
+	// CreateFormFile marcaria a parte como application/octet-stream e o Meta rejeita
+	// (precisa de um MIME de áudio). Montamos a parte com Content-Type audio/ogg.
+	partHeader := textproto.MIMEHeader{}
+	partHeader.Set("Content-Disposition", `form-data; name="file"; filename="voice.ogg"`)
+	partHeader.Set("Content-Type", "audio/ogg")
+	fw, err := mw.CreatePart(partHeader)
 	if err != nil {
 		return "", fmt.Errorf("whatsapp: upload form: %w", err)
 	}

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -30,6 +32,18 @@ func TestDownloadMedia(t *testing.T) {
 
 func TestUploadAudio(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// O Meta rejeita o arquivo se a parte não tiver Content-Type de áudio.
+		_, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		mr := multipart.NewReader(r.Body, params["boundary"])
+		for {
+			p, err := mr.NextPart()
+			if err != nil {
+				break
+			}
+			if p.FormName() == "file" && p.Header.Get("Content-Type") != "audio/ogg" {
+				t.Errorf("parte 'file' com Content-Type %q, esperava audio/ogg", p.Header.Get("Content-Type"))
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"MEDIA123"}`))
 	}))
