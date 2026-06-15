@@ -818,6 +818,11 @@ func (s *Server) handleDashReschedule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "data/hora inválida", http.StatusBadRequest)
 		return
 	}
+	// Normaliza date/time a partir do ISO resolvido — mesma fonte de verdade do
+	// caminho Notion (evita gravar string crua/livre em pending_booking).
+	resolved, _ := time.Parse(time.RFC3339, iso)
+	resolvedDate := resolved.In(brLocation).Format("2006-01-02")
+	resolvedTime := resolved.In(brLocation).Format("15:04")
 
 	// 1) Persistir a remarcação.
 	switch body.Source {
@@ -838,7 +843,7 @@ func (s *Server) handleDashReschedule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.withTenant(ctx, func(tx pgx.Tx) error {
-			return s.engine.deps.Bookings.UpdateProposed(ctx, tx, tenantID, body.ID, body.Date, body.Time)
+			return s.engine.deps.Bookings.UpdateProposed(ctx, tx, tenantID, body.ID, resolvedDate, resolvedTime)
 		}); err != nil {
 			s.logger.Error("dash: reschedule pending", "err", err)
 			jsonErr(w, "falha ao remarcar pendência", http.StatusInternalServerError)
@@ -851,6 +856,9 @@ func (s *Server) handleDashReschedule(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(body.Message) != "" {
 		convID, channel, err := s.convByPhone(ctx, tenantID, body.Phone)
 		if err != nil {
+			// Best-effort: a remarcação já foi persistida. Loga (inclui erro real de
+			// DB, não só "não encontrado") e responde sem derrubar a remarcação.
+			s.logger.Error("dash: reschedule notify lookup", "phone", body.Phone, "err", err)
 			resp["notifyError"] = "conversa não encontrada para o número"
 			jsonOK(w, resp)
 			return
@@ -861,9 +869,6 @@ func (s *Server) handleDashReschedule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resp["notified"] = true
-		if s.hub != nil {
-			s.hub.Broadcast(WSEvent{Type: "lead.new"})
-		}
 	}
 	jsonOK(w, resp)
 }
