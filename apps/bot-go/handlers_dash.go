@@ -770,6 +770,104 @@ func (s *Server) handleDashBookings(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, out)
 }
 
+// convByPhone acha a conversa mais recente de um telefone (qualquer canal), comparando
+// só os dígitos. Usado na remarcação de aulas vindas do Notion (sem conversationId).
+func (s *Server) convByPhone(ctx context.Context, tenantID TenantID, phone string) (convID, channel string, err error) {
+	digits := normalizePhone(phone)
+	if digits == "" {
+		return "", "", fmt.Errorf("telefone vazio")
+	}
+	err = s.pool.QueryRow(ctx, `
+		SELECT conv.id::text, conv.channel::text
+		FROM conversation conv
+		JOIN channel_identity ci ON ci.id = conv.channel_identity_id
+		WHERE conv.tenant_id = $1
+		  AND regexp_replace(ci.external_id, '\D', '', 'g') = $2
+		ORDER BY conv.last_inbound_at DESC NULLS LAST
+		LIMIT 1
+	`, tenantID, digits).Scan(&convID, &channel)
+	return convID, channel, err
+}
+
+// POST /api/bookings/reschedule — remarca uma aula (Notion ou pendência) e, se houver
+// message, avisa o aluno pelo WhatsApp (best-effort). Body:
+//
+//	{ source: "notion"|"pending", id, date: "YYYY-MM-DD", time: "HH:MM", phone, message }
+func (s *Server) handleDashReschedule(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+
+	var body struct {
+		Source  string `json:"source"`
+		ID      string `json:"id"`
+		Date    string `json:"date"`
+		Time    string `json:"time"`
+		Phone   string `json:"phone"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if !validRescheduleSource(body.Source) || body.ID == "" {
+		jsonErr(w, "invalid source/id", http.StatusBadRequest)
+		return
+	}
+	iso, ok := ResolveBookingDateTime(body.Date, body.Time, time.Now())
+	if !ok {
+		jsonErr(w, "data/hora inválida", http.StatusBadRequest)
+		return
+	}
+
+	// 1) Persistir a remarcação.
+	switch body.Source {
+	case "notion":
+		n := s.engine.deps.Notion
+		if n == nil || !n.Enabled() {
+			jsonErr(w, "Notion não configurado", http.StatusServiceUnavailable)
+			return
+		}
+		if err := n.UpdateBookingDateTime(ctx, body.ID, iso); err != nil {
+			s.logger.Error("dash: reschedule notion", "err", err)
+			jsonErr(w, "falha ao remarcar no Notion", http.StatusInternalServerError)
+			return
+		}
+	case "pending":
+		if s.engine.deps.Bookings == nil {
+			jsonErr(w, "pendências indisponíveis", http.StatusServiceUnavailable)
+			return
+		}
+		if err := s.withTenant(ctx, func(tx pgx.Tx) error {
+			return s.engine.deps.Bookings.UpdateProposed(ctx, tx, tenantID, body.ID, body.Date, body.Time)
+		}); err != nil {
+			s.logger.Error("dash: reschedule pending", "err", err)
+			jsonErr(w, "falha ao remarcar pendência", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// 2) Avisar o aluno (best-effort: não desfaz a remarcação se falhar).
+	resp := map[string]any{"ok": true, "notified": false}
+	if strings.TrimSpace(body.Message) != "" {
+		convID, channel, err := s.convByPhone(ctx, tenantID, body.Phone)
+		if err != nil {
+			resp["notifyError"] = "conversa não encontrada para o número"
+			jsonOK(w, resp)
+			return
+		}
+		if _, err := s.sendTextOutbound(ctx, tenantID, convID, channel, body.Phone, body.Message); err != nil {
+			resp["notifyError"] = err.Error()
+			jsonOK(w, resp)
+			return
+		}
+		resp["notified"] = true
+		if s.hub != nil {
+			s.hub.Broadcast(WSEvent{Type: "lead.new"})
+		}
+	}
+	jsonOK(w, resp)
+}
+
 // PATCH /api/leads/{id} — atualiza status (e opcional owner/interest) de um lead.
 func (s *Server) handleDashPatchLead(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

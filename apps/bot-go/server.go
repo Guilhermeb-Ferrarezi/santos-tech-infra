@@ -182,6 +182,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/logs", da(s.handleDashLogs))
 	mux.Handle("GET /api/leads", da(s.handleDashLeads))
 	mux.Handle("GET /api/bookings", da(s.handleDashBookings))
+	mux.Handle("POST /api/bookings/reschedule", da(s.handleDashReschedule))
 	mux.Handle("PATCH /api/leads/{id}", da(s.handleDashPatchLead))
 	mux.Handle("GET /api/evolution/instances", da(s.handleDashEvolutionInstances))
 	mux.HandleFunc("GET /api/ws", s.handleDashWS)
