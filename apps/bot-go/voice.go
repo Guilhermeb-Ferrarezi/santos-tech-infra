@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,9 +14,10 @@ import (
 	"time"
 )
 
-// voiceHTTPClient é o http.Client das chamadas de voz (OpenAI). Bounded para nunca
-// pendurar: timeout de dial, de espera por headers e de conexão ociosa (evita
-// reusar uma conexão keep-alive morta e esperar 60s "awaiting headers").
+// voiceHTTPClient é o http.Client das chamadas de voz (OpenAI). Bounded (dial/header/
+// idle timeouts) e **forçando HTTP/1.1**: dentro do container, o HTTP/2 pra OpenAI
+// (atrás do Cloudflare) pendurava esperando os headers ("http2: timeout awaiting
+// response headers") — stall de h2 por MTU/PMTUD. h1.1 não tem esse modo de falha.
 func voiceHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,
@@ -23,7 +25,9 @@ func voiceHTTPClient() *http.Client {
 			DialContext:           (&net.Dialer{Timeout: 8 * time.Second}).DialContext,
 			ResponseHeaderTimeout: 20 * time.Second,
 			IdleConnTimeout:       30 * time.Second,
-			ForceAttemptHTTP2:     true,
+			ForceAttemptHTTP2:     false,
+			// Mapa não-nulo desabilita o upgrade automático pra HTTP/2 → usa HTTP/1.1.
+			TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{},
 		},
 	}
 }
