@@ -35,7 +35,7 @@ func generateSudoAccess(secret string, userID int64, email string, sudoExp time.
 // tokenSudoUntil extrai o sudo_exp de um access token já confiável (zero se ausente).
 func tokenSudoUntil(token, secret string) time.Time {
 	t, err := jwt.Parse(token, func(t *jwt.Token) (any, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok || t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 			return nil, jwt.ErrSignatureInvalid
 		}
 		return []byte(secret), nil
