@@ -141,6 +141,49 @@ func (s *WhatsAppSender) post(ctx context.Context, body map[string]any) (string,
 	return result.Messages[0].ID, nil
 }
 
+// DownloadMedia baixa o conteúdo de uma mídia do WhatsApp pelo media id (lookup→bytes).
+func (s *WhatsAppSender) DownloadMedia(ctx context.Context, mediaID string) ([]byte, string, error) {
+	return s.downloadMediaFrom(ctx, fmt.Sprintf("https://graph.facebook.com/v21.0/%s", mediaID))
+}
+
+func (s *WhatsAppSender) downloadMediaFrom(ctx context.Context, lookupURL string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, lookupURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.accessToken)
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("whatsapp: media lookup: %w", err)
+	}
+	defer resp.Body.Close()
+	var meta struct {
+		URL      string `json:"url"`
+		MimeType string `json:"mime_type"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+		return nil, "", fmt.Errorf("whatsapp: media lookup decode: %w", err)
+	}
+	if meta.URL == "" {
+		return nil, "", fmt.Errorf("whatsapp: media sem url")
+	}
+	dreq, err := http.NewRequestWithContext(ctx, http.MethodGet, meta.URL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	dreq.Header.Set("Authorization", "Bearer "+s.accessToken)
+	dresp, err := s.http.Do(dreq)
+	if err != nil {
+		return nil, "", fmt.Errorf("whatsapp: media download: %w", err)
+	}
+	defer dresp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(dresp.Body, 16<<20))
+	if err != nil {
+		return nil, "", fmt.Errorf("whatsapp: media read: %w", err)
+	}
+	return data, meta.MimeType, nil
+}
+
 // contentToBody converte MessageContent no formato de body da Meta API.
 func contentToBody(content MessageContent) map[string]any {
 	switch content.Type {
