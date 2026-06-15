@@ -16,7 +16,11 @@ via **Stripe** entra na **Fase 2** sem tocar no núcleo.
 ## Decisões (alinhadas)
 
 - **Escopo Fase 1:** mensalidade recorrente (Pix) + matrícula/avulso (Pix). Cartão fica p/ Fase 2.
-- **Gateway:** Dotfy (Pix). Base `POST /api/charges`, webhooks `CHARGE_CREATED/PAID/EXPIRED`.
+- **Gateway:** Dotfy (Pix). Base URL **`https://app.dotfy.com.br`** · adquirente **TREEAL**.
+  Endpoint `POST /api/charges`, webhooks `CHARGE_CREATED/PAID/EXPIRED`. **Auth confirmada:**
+  `Authorization: Bearer <key>` (também aceita `x-api-key`); key prefixo `vk_live_`/`vk_test_`.
+  Conta tem `pixRecurrenceEnabled: false` → recorrência nativa indisponível, confirma a
+  recorrência do nosso lado.
 - **Alunos:** cadastro próprio neste serviço (independente do `portal-do-aluno`; sync depois).
 - **Notificação:** email pelo gateway existente (`POST {EMAIL_API_URL}/send`); API também
   devolve o QR/copia-e-cola no JSON da resposta.
@@ -102,8 +106,8 @@ via **Stripe** entra na **Fase 2** sem tocar no núcleo.
 |----------|-----------|
 | `DATABASE_URL` | Postgres do ecossistema (tabelas `pay_*`) |
 | `JWT_SECRET` | **igual** ao dos outros serviços (valida access token) |
-| `DOTFY_API_KEY` | chave da API Dotfy |
-| `DOTFY_BASE_URL` | base da API Dotfy (default oficial) |
+| `DOTFY_API_KEY` | chave da API Dotfy (`vk_live_*` / `vk_test_*`), header `Authorization: Bearer` |
+| `DOTFY_BASE_URL` | base da API Dotfy (default `https://app.dotfy.com.br`) |
 | `DOTFY_WEBHOOK_SECRET` | segredo de verificação do webhook (se o Dotfy oferecer) |
 | `EMAIL_API_URL` / `EMAIL_API_KEY` | API de emails (envio do Pix) |
 | `PORT` | porta do serviço (ex.: 3334) |
