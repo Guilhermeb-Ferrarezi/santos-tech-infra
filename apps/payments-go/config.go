@@ -16,6 +16,7 @@ type Config struct {
 	DotfyBaseURL       string
 	DotfyAPIKey        string
 	DotfyWebhookSecret string
+	DotfyWebhookSigHdr string // header HTTP que carrega a assinatura do webhook
 	Production         bool
 }
 
@@ -30,6 +31,7 @@ func LoadConfig() Config {
 		DotfyBaseURL:       strings.TrimRight(getEnv("DOTFY_BASE_URL", "https://app.dotfy.com.br"), "/"),
 		DotfyAPIKey:        mustEnv("DOTFY_API_KEY"),
 		DotfyWebhookSecret: getEnv("DOTFY_WEBHOOK_SECRET", ""),
+		DotfyWebhookSigHdr: getEnv("DOTFY_WEBHOOK_SIG_HEADER", "X-Signature"),
 		Production:         getEnv("NODE_ENV", "development") == "production",
 	}
 }

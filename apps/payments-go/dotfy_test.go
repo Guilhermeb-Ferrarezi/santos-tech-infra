@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -28,7 +31,8 @@ func TestDotfyCreateCharge(t *testing.T) {
 	}
 }
 
-func TestDotfyParseWebhook(t *testing.T) {
+func TestDotfyParseWebhook_SemSecret(t *testing.T) {
+	// Sem secret (dev), não verifica assinatura — apenas parseia.
 	p := &dotfyProvider{}
 	body := []byte(`{"event":"CHARGE_PAID","data":{"id":"ch_1","correlationID":"stpay_abc"}}`)
 	ev, err := p.ParseWebhook(nil, body)
@@ -37,5 +41,31 @@ func TestDotfyParseWebhook(t *testing.T) {
 	}
 	if ev.Type != "CHARGE_PAID" || ev.CorrelationID != "stpay_abc" || ev.ID == "" {
 		t.Fatalf("webhook mal parseado: %+v", ev)
+	}
+}
+
+func TestDotfyParseWebhook_AssinaturaHMAC(t *testing.T) {
+	secret := "whsec_test"
+	body := []byte(`{"event":"CHARGE_PAID","data":{"id":"ch_1","correlationID":"stpay_abc"}}`)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	sig := hex.EncodeToString(mac.Sum(nil))
+	p := &dotfyProvider{secret: secret, sigHeader: "X-Signature"}
+
+	// assinatura válida → passa (aceita também o prefixo "sha256=")
+	if _, err := p.ParseWebhook(map[string][]string{"X-Signature": {"sha256=" + sig}}, body); err != nil {
+		t.Fatalf("assinatura válida deveria passar: %v", err)
+	}
+	// ausente → rejeita
+	if _, err := p.ParseWebhook(map[string][]string{}, body); err == nil {
+		t.Fatal("assinatura ausente deveria falhar")
+	}
+	// inválida → rejeita
+	if _, err := p.ParseWebhook(map[string][]string{"X-Signature": {"deadbeef"}}, body); err == nil {
+		t.Fatal("assinatura inválida deveria falhar")
+	}
+	// corpo adulterado com assinatura do corpo original → rejeita
+	if _, err := p.ParseWebhook(map[string][]string{"X-Signature": {sig}}, []byte(`{"event":"CHARGE_PAID","data":{"id":"ch_1","correlationID":"OUTRO"}}`)); err == nil {
+		t.Fatal("corpo adulterado deveria falhar")
 	}
 }

@@ -7,6 +7,13 @@ import (
 )
 
 func (s *Server) handleDotfyWebhook(w http.ResponseWriter, r *http.Request) {
+	// Fail-closed: em produção, recusa eventos não autenticáveis (sem secret HMAC).
+	// Sem isso, qualquer um poderia forjar um CHARGE_PAID e quitar uma cobrança sem pagar.
+	if s.cfg.Production && s.cfg.DotfyWebhookSecret == "" {
+		slog.Error("webhook recusado: DOTFY_WEBHOOK_SECRET ausente em produção")
+		writeError(w, http.StatusServiceUnavailable, "webhook_unverifiable", "Webhook não verificável: secret não configurado")
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", "Corpo inválido")
@@ -14,7 +21,9 @@ func (s *Server) handleDotfyWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	ev, err := s.provider.ParseWebhook(r.Header, body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_webhook", "Webhook inválido")
+		// Assinatura ausente/inválida ou payload não confiável → rejeita como não autenticado.
+		slog.Warn("webhook dotfy rejeitado", "err", err)
+		writeError(w, http.StatusUnauthorized, "webhook_rejected", "Webhook não autenticado")
 		return
 	}
 	if s.store == nil { // guarda defensiva (testes)

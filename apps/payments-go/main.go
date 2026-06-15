@@ -21,6 +21,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	if cfg.Production && cfg.DotfyWebhookSecret == "" {
+		// Não trava o boot (as cobranças ainda funcionam), mas o webhook fica fail-closed:
+		// nenhum CHARGE_PAID/EXPIRED será processado até configurar o secret HMAC.
+		slog.Error("DOTFY_WEBHOOK_SECRET ausente em produção: webhooks serão RECUSADOS até configurar")
+	}
+
 	provider := newDotfyProvider(cfg)
 	srv := NewServer(cfg, db, provider)
 
