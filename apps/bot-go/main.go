@@ -110,6 +110,7 @@ func main() {
 		Pending:         pending,
 		Bookings:        bookings,
 		Notion:          notionClient,
+		Voice:           voiceClient,
 	})
 
 	// 11b. Engine para o canal Evolution: mesmos repos, mas responde via Evolution.

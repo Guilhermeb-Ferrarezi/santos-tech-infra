@@ -78,6 +78,8 @@ type EngineDeps struct {
 	Bookings *PendingBookingRepo
 	// Notion — cliente para ler/gravar a agenda de aulas (agendamento).
 	Notion *NotionClient
+	// Voice — STT/TTS via OpenAI (opcional). Habilitado → responde em áudio às mensagens de voz.
+	Voice *VoiceClient
 	// ForceBotEnabled — força o bot ativo nas conversas deste engine (ex.: canal
 	// Evolution, cujo gate é o toggle externo, não o whitelist do tenant).
 	ForceBotEnabled bool
@@ -383,61 +385,73 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		reasoningJSON = &s
 	}
 
-	for i, bubble := range output.Bubbles {
-		// Calcula delay de humanização
-		var delay time.Duration
-		if i == 0 {
-			delay = FirstBubbleDelayMs(bubble)
-		} else {
-			delay = BetweenBubblesDelayMs(prevText)
+	// Modo espelho: se o cliente mandou voz e o TTS está ligado, tenta responder com
+	// UMA nota de voz. Qualquer falha cai (com log) para o envio de texto abaixo.
+	sentVoice := false
+	if shouldReplyAsAudio(e.deps.Voice, inbound) && len(output.Bubbles) > 0 {
+		sentVoice = e.trySendVoice(ctx, conv, inbound, output, reasoningJSON)
+		if !sentVoice {
+			log.Info("voz falhou; caindo para texto", "wamid", wamid)
 		}
+	}
 
-		// Sleep acontece fora de qualquer transação
-		e.deps.Sleep(delay)
-
-		idempotencyKey := fmt.Sprintf("%s:bubble:%d", wamid, i)
-
-		outboundMsg := OutboundMessage{
-			TenantID:       inbound.TenantID,
-			ConversationID: conv.ID,
-			Channel:        inbound.Channel,
-			To:             inbound.ExternalID,
-			Intent:         IntentFreeForm,
-			Content:        MessageContent{Type: "text", Text: bubble},
-			IdempotencyKey: idempotencyKey,
-		}
-
-		// Apenas o primeiro balão carrega o reasoning.
-		var bubbleReasoning *string
-		if i == 0 {
-			bubbleReasoning = reasoningJSON
-		}
-
-		// Envia e persiste dentro de uma transação individual por balão
-		txErr := e.withTenant(ctx, func(tx pgx.Tx) error {
-			providerMsgID, err := e.deps.Sender.SendMessage(ctx, outboundMsg)
-			if err != nil {
-				return fmt.Errorf("SendMessage bubble %d: %w", i, err)
+	if !sentVoice {
+		for i, bubble := range output.Bubbles {
+			// Calcula delay de humanização
+			var delay time.Duration
+			if i == 0 {
+				delay = FirstBubbleDelayMs(bubble)
+			} else {
+				delay = BetweenBubblesDelayMs(prevText)
 			}
 
-			// Persiste com ON CONFLICT DO NOTHING para exactly-once
-			if err := e.deps.Messages.RecordOutbound(ctx, tx, idempotencyKey, inbound.TenantID, conv.ID, providerMsgID, bubble, bubbleReasoning); err != nil {
-				return fmt.Errorf("RecordOutbound bubble %d: %w", i, err)
+			// Sleep acontece fora de qualquer transação
+			e.deps.Sleep(delay)
+
+			idempotencyKey := fmt.Sprintf("%s:bubble:%d", wamid, i)
+
+			outboundMsg := OutboundMessage{
+				TenantID:       inbound.TenantID,
+				ConversationID: conv.ID,
+				Channel:        inbound.Channel,
+				To:             inbound.ExternalID,
+				Intent:         IntentFreeForm,
+				Content:        MessageContent{Type: "text", Text: bubble},
+				IdempotencyKey: idempotencyKey,
 			}
 
-			return nil
-		})
-		if txErr != nil {
-			log.Error("erro ao enviar balão", "index", i, "err", txErr)
-			return fmt.Errorf("engine.Handle (balão %d): %w", i, txErr)
-		}
+			// Apenas o primeiro balão carrega o reasoning.
+			var bubbleReasoning *string
+			if i == 0 {
+				bubbleReasoning = reasoningJSON
+			}
 
-		// Broadcast do balão enviado (após commit da transação individual).
-		if e.deps.Broadcast != nil {
-			e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: conv.ID})
-		}
+			// Envia e persiste dentro de uma transação individual por balão
+			txErr := e.withTenant(ctx, func(tx pgx.Tx) error {
+				providerMsgID, err := e.deps.Sender.SendMessage(ctx, outboundMsg)
+				if err != nil {
+					return fmt.Errorf("SendMessage bubble %d: %w", i, err)
+				}
 
-		prevText = bubble
+				// Persiste com ON CONFLICT DO NOTHING para exactly-once
+				if err := e.deps.Messages.RecordOutbound(ctx, tx, idempotencyKey, inbound.TenantID, conv.ID, providerMsgID, bubble, bubbleReasoning); err != nil {
+					return fmt.Errorf("RecordOutbound bubble %d: %w", i, err)
+				}
+
+				return nil
+			})
+			if txErr != nil {
+				log.Error("erro ao enviar balão", "index", i, "err", txErr)
+				return fmt.Errorf("engine.Handle (balão %d): %w", i, txErr)
+			}
+
+			// Broadcast do balão enviado (após commit da transação individual).
+			if e.deps.Broadcast != nil {
+				e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: conv.ID})
+			}
+
+			prevText = bubble
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -1012,6 +1026,58 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// shouldReplyAsAudio: responde em áudio só quando o cliente mandou voz e o TTS está ligado.
+func shouldReplyAsAudio(v *VoiceClient, inbound InboundMessage) bool {
+	return inbound.WasVoice && v.Enabled()
+}
+
+// trySendVoice gera UMA nota de voz com a resposta inteira e envia pelo Meta.
+// Retorna false (com log) em qualquer falha → chamador cai no texto.
+func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation, inbound InboundMessage, output ResponderOutput, reasoningJSON *string) bool {
+	log := e.deps.Logger
+	ms, ok := e.deps.Sender.(*WhatsAppSender)
+	if !ok {
+		return false // só Meta suporta upload de mídia
+	}
+	text := joinBubbles(output.Bubbles)
+	ogg, err := e.deps.Voice.Synthesize(ctx, text)
+	if err != nil {
+		log.Error("tts: synthesize", "err", err)
+		return false
+	}
+	mediaID, err := ms.UploadAudio(ctx, ogg)
+	if err != nil {
+		log.Error("tts: upload", "err", err)
+		return false
+	}
+	ref := "wa_media_id:" + mediaID
+	idemKey := fmt.Sprintf("%s:voice", inbound.ProviderMessageID)
+	out := OutboundMessage{
+		TenantID:       inbound.TenantID,
+		ConversationID: conv.ID,
+		Channel:        inbound.Channel,
+		To:             inbound.ExternalID,
+		Intent:         IntentFreeForm,
+		Content:        MessageContent{Type: "audio", MediaURL: &ref, Transcript: &text},
+		IdempotencyKey: idemKey,
+	}
+	txErr := e.withTenant(ctx, func(tx pgx.Tx) error {
+		providerMsgID, serr := ms.SendMessage(ctx, out)
+		if serr != nil {
+			return serr
+		}
+		return e.deps.Messages.RecordOutbound(ctx, tx, idemKey, inbound.TenantID, conv.ID, providerMsgID, text, reasoningJSON)
+	})
+	if txErr != nil {
+		log.Error("tts: enviar/gravar", "err", txErr)
+		return false
+	}
+	if e.deps.Broadcast != nil {
+		e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: conv.ID})
+	}
+	return true
 }
 
 func applyTransition(current ConversationState, output ResponderOutput) ConversationState {
