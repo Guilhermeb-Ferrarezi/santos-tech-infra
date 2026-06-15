@@ -60,9 +60,14 @@ Na ingestão do webhook Meta, **antes** do buffer/`bestText`/`Handle`, quando
   `contentToBody` passa a usar `audio.id` quando `MediaURL` tem o prefixo `wa_media_id:`,
   senão mantém `link` (compat).
 - Persistência: 1 `outbound_message` (`content` JSONB type=audio, com o texto também em
-  `Transcript` pra histórico/dashboard legível). Idempotência: chave por resposta
-  (`<wamid>:voice`), exactly-once como hoje.
+  `Transcript` pra histórico/dashboard legível). **Não guardamos o áudio** — quem hospeda é o
+  Meta; ficamos só com o media id + texto. Idempotência: chave por resposta (`<wamid>:voice`),
+  exactly-once como hoje.
 - Falha no TTS/upload → **fallback para texto** (envia os balões normais). Nunca fica mudo.
+
+**Arquivos temporários:** STT e TTS escrevem em diretório temp (`os.MkdirTemp`/`os.CreateTemp`)
+e fazem `defer os.RemoveAll` — nada acumula em disco. O .ogg final é uns KB (~2–3 KB/s de fala);
+o WAV intermediário do Piper é maior (~44 KB/s) mas transitório e apagado após o upload.
 
 ## Config (sem credencial externa — tudo local)
 Novos campos em `config.go` (env): `VOICE_ENABLED` (bool, default false),
