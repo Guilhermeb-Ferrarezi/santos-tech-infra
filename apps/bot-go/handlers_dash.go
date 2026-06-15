@@ -698,6 +698,7 @@ type dashAgenda struct {
 
 // dashUpcoming — aula experimental já agendada no Notion.
 type dashUpcoming struct {
+	PageID    string `json:"pageId"`
 	Aluno     string `json:"aluno"`
 	DataHora  string `json:"dataHora"`
 	Display   string `json:"display"`
@@ -729,7 +730,8 @@ func (s *Server) handleDashBookings(w http.ResponseWriter, r *http.Request) {
 	if n := s.engine.deps.Notion; n != nil && n.Enabled() {
 		for _, e := range n.Schedule(ctx) {
 			out.Upcoming = append(out.Upcoming, dashUpcoming{
-				Aluno: e.Aluno, DataHora: e.DataHora, Display: e.Display,
+				PageID: e.PageID,
+				Aluno:  e.Aluno, DataHora: e.DataHora, Display: e.Display,
 				Status: e.Status, Professor: e.Professor, WhatsApp: e.WhatsApp,
 			})
 		}
