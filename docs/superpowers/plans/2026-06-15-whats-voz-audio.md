@@ -1,85 +1,102 @@
-# Bot responde em áudio (espelho) — STT + TTS — Implementation Plan
+# Bot responde em áudio (espelho) via OpenAI — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Quando o cliente manda voz no WhatsApp (Meta), o bot transcreve (whisper.cpp), responde com a IA atual e devolve a resposta como nota de voz (Piper), tudo local.
+**Goal:** Quando o cliente manda voz no WhatsApp (Meta), o bot transcreve (OpenAI STT), responde com a IA atual e devolve a resposta como nota de voz feminina (OpenAI TTS). Sem binários/infra local.
 
-**Architecture:** Binários (`ffmpeg`, `whisper-cli`, `piper`) embutidos na imagem do `bot-go`; modelos num volume persistente. Um `VoiceClient` (voice.go) encapsula STT/TTS via `os/exec`. STT acontece na ingestão do webhook (preenche `Transcript`); TTS acontece no envio quando o inbound foi voz (espelho), com **fallback para texto** em qualquer falha.
+**Architecture:** Um `VoiceClient` (voice.go) chama a OpenAI por HTTP: `/v1/audio/transcriptions` (STT) e `/v1/audio/speech` (TTS, `response_format=opus`). STT acontece na ingestão do webhook (preenche `Transcript` + `WasVoice`); TTS no envio quando o inbound foi voz (espelho), com **fallback para texto** em qualquer falha. **Dockerfile não muda** (segue distroless; só HTTP em Go).
 
-**Tech Stack:** Go 1.24, Meta Cloud API (Graph v21.0), whisper.cpp, Piper, ffmpeg.
+**Tech Stack:** Go 1.24, OpenAI Audio API, Meta Cloud API (Graph v21.0).
 
-**Caminho:** `/home/guilherme/projetos/sg/santos-tech-infra/apps/bot-go`. Go em `~/.local/bin` (`export PATH="$HOME/.local/bin:$PATH"`). Branch já criada: `feat/whats-voz-audio`.
+**Caminho:** `/home/guilherme/projetos/sg/santos-tech-infra/apps/bot-go`. `export PATH="$HOME/.local/bin:$PATH"` p/ ter `go`. Branch: `feat/whats-voz-audio` (já criada).
 
-**Testes (realidade do repo):** sem harness de DB; binários de áudio não rodam em CI. TDD aplica-se às **funções puras** (montagem de comando, junção de balões, seleção id/link) e ao HTTP do Meta (httptest). Execução real de STT/TTS = verificação manual no servidor (Fase C).
+**Testes:** sem DB; tudo testável por **httptest** (OpenAI e Meta mockados via `OPENAI_BASE_URL`/URL injetada) + funções puras. Execução com key real = verificação manual (Task C1).
 
 ---
 
 ## FASE A — STT (entender a voz do cliente)
 
-### Task A1: Config de voz
+### Task A1: Config de voz (OpenAI)
 
 **Files:** `config.go`
 
-- [ ] **Step 1: Adicionar campos ao struct `Config`** (após o bloco "Dashboard"):
+- [ ] **Step 1: Campos no struct `Config`** (após o bloco "Dashboard"):
 
 ```go
-	// Voz (STT/TTS local). Tudo opcional; VOICE_ENABLED liga a feature.
-	VoiceEnabled bool
-	WhisperBin   string
-	WhisperModel string
-	PiperBin     string
-	PiperVoice   string
-	FFmpegBin    string
+	// Voz (STT/TTS via OpenAI). VOICE_ENABLED liga a feature.
+	VoiceEnabled   bool
+	OpenAIKey      string
+	OpenAIBaseURL  string
+	OpenAITTSVoice string
+	OpenAITTSModel string
+	OpenAISTTModel string
 ```
 
 - [ ] **Step 2: Preencher em `LoadConfig`** (antes do fechamento do `return Config{...}`):
 
 ```go
-		VoiceEnabled: getEnv("VOICE_ENABLED", "false") == "true",
-		WhisperBin:   getEnv("WHISPER_BIN", "whisper-cli"),
-		WhisperModel: getEnv("WHISPER_MODEL", "/models/ggml-small-q5_1.bin"),
-		PiperBin:     getEnv("PIPER_BIN", "piper"),
-		PiperVoice:   getEnv("PIPER_VOICE", "/models/pt_BR-faber-medium.onnx"),
-		FFmpegBin:    getEnv("FFMPEG_BIN", "ffmpeg"),
+		VoiceEnabled:   getEnv("VOICE_ENABLED", "false") == "true",
+		OpenAIKey:      getEnv("OPENAI_API_KEY", ""),
+		OpenAIBaseURL:  strings.TrimRight(getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "/"),
+		OpenAITTSVoice: getEnv("OPENAI_TTS_VOICE", "nova"),
+		OpenAITTSModel: getEnv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
+		OpenAISTTModel: getEnv("OPENAI_STT_MODEL", "whisper-1"),
 ```
 
-- [ ] **Step 3:** `export PATH="$HOME/.local/bin:$PATH" && go build ./...` → sem erro.
-- [ ] **Step 4: Commit** `git add config.go && git commit -m "feat(bot): config de voz (STT/TTS local)"`
+- [ ] **Step 3:** `go build ./...` → sem erro.
+- [ ] **Step 4: Commit** `git add config.go && git commit -m "feat(bot): config de voz (OpenAI STT/TTS)"`
 
 ---
 
-### Task A2: VoiceClient — STT (voice.go) com montagem de comando testável
+### Task A2: VoiceClient + STT (Transcribe) via OpenAI
 
 **Files:** Create `voice.go`, Test `voice_test.go`
 
-- [ ] **Step 1: Teste das funções puras de montagem de args** (`voice_test.go`):
+- [ ] **Step 1: Teste httptest do STT** (`voice_test.go`):
 
 ```go
 package main
 
 import (
-	"reflect"
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
-func TestWhisperArgs(t *testing.T) {
-	got := whisperArgs("/m/model.bin", "/tmp/a.wav")
-	want := []string{"-m", "/m/model.bin", "-l", "pt", "-nt", "-otxt", "-of", "/tmp/a", "-f", "/tmp/a.wav"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("whisperArgs = %v, quer %v", got, want)
+func newTestVoice(baseURL string) *VoiceClient {
+	return &VoiceClient{
+		enabled: true, apiKey: "k", baseURL: baseURL,
+		ttsVoice: "nova", ttsModel: "gpt-4o-mini-tts", sttModel: "whisper-1",
+		http: &http.Client{},
 	}
 }
 
-func TestFfmpegToWavArgs(t *testing.T) {
-	got := ffmpegToWavArgs("/tmp/in.ogg", "/tmp/out.wav")
-	want := []string{"-y", "-i", "/tmp/in.ogg", "-ar", "16000", "-ac", "1", "/tmp/out.wav"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("ffmpegToWavArgs = %v, quer %v", got, want)
+func TestTranscribe(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/audio/transcriptions" {
+			t.Errorf("path inesperado: %s", r.URL.Path)
+		}
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "multipart/form-data") {
+			t.Errorf("content-type: %s", ct)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"olá tudo bem"}`))
+	}))
+	defer srv.Close()
+
+	got, err := newTestVoice(srv.URL).Transcribe(context.Background(), []byte("OGG"), "audio/ogg")
+	if err != nil {
+		t.Fatalf("erro: %v", err)
+	}
+	if got != "olá tudo bem" {
+		t.Fatalf("got %q", got)
 	}
 }
 ```
 
-- [ ] **Step 2:** `go test ./... -run 'TestWhisperArgs|TestFfmpegToWavArgs'` → FAIL (undefined).
+- [ ] **Step 2:** `go test ./... -run TestTranscribe` → FAIL (undefined).
 
 - [ ] **Step 3: Implementar `voice.go`:**
 
@@ -87,79 +104,87 @@ func TestFfmpegToWavArgs(t *testing.T) {
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"time"
 )
 
-// VoiceClient encapsula STT (whisper.cpp) e TTS (Piper) via binários locais.
+// VoiceClient faz STT e TTS via OpenAI (HTTP). Sem binários locais.
 type VoiceClient struct {
-	enabled      bool
-	whisperBin   string
-	whisperModel string
-	piperBin     string
-	piperVoice   string
-	ffmpegBin    string
+	enabled  bool
+	apiKey   string
+	baseURL  string
+	ttsVoice string
+	ttsModel string
+	sttModel string
+	http     *http.Client
 }
 
 func NewVoiceClient(cfg Config) *VoiceClient {
 	return &VoiceClient{
-		enabled:      cfg.VoiceEnabled,
-		whisperBin:   cfg.WhisperBin,
-		whisperModel: cfg.WhisperModel,
-		piperBin:     cfg.PiperBin,
-		piperVoice:   cfg.PiperVoice,
-		ffmpegBin:    cfg.FFmpegBin,
+		enabled:  cfg.VoiceEnabled && cfg.OpenAIKey != "",
+		apiKey:   cfg.OpenAIKey,
+		baseURL:  cfg.OpenAIBaseURL,
+		ttsVoice: cfg.OpenAITTSVoice,
+		ttsModel: cfg.OpenAITTSModel,
+		sttModel: cfg.OpenAISTTModel,
+		http:     &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
 func (v *VoiceClient) Enabled() bool { return v != nil && v.enabled }
 
-// whisperArgs monta os argumentos do whisper-cli: PT, sem timestamps, saída em <base>.txt.
-func whisperArgs(model, wav string) []string {
-	base := strings.TrimSuffix(wav, filepath.Ext(wav))
-	return []string{"-m", model, "-l", "pt", "-nt", "-otxt", "-of", base, "-f", wav}
-}
-
-// ffmpegToWavArgs converte qualquer áudio em WAV 16kHz mono (formato do whisper).
-func ffmpegToWavArgs(in, out string) []string {
-	return []string{"-y", "-i", in, "-ar", "16000", "-ac", "1", out}
-}
-
-// Transcribe recebe o áudio bruto (OGG/Opus do WhatsApp) e devolve o texto em PT.
-// Usa diretório temporário com limpeza garantida (defer RemoveAll).
-func (v *VoiceClient) Transcribe(ctx context.Context, audio []byte) (string, error) {
-	dir, err := os.MkdirTemp("", "stt-*")
+// Transcribe envia o áudio (OGG/Opus do WhatsApp) ao STT da OpenAI e devolve o texto PT.
+func (v *VoiceClient) Transcribe(ctx context.Context, audio []byte, mime string) (string, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", "audio.ogg")
 	if err != nil {
-		return "", fmt.Errorf("voice: tempdir: %w", err)
+		return "", fmt.Errorf("voice: stt form: %w", err)
 	}
-	defer os.RemoveAll(dir)
+	if _, err := fw.Write(audio); err != nil {
+		return "", fmt.Errorf("voice: stt write: %w", err)
+	}
+	_ = mw.WriteField("model", v.sttModel)
+	_ = mw.WriteField("language", "pt")
+	if err := mw.Close(); err != nil {
+		return "", fmt.Errorf("voice: stt close: %w", err)
+	}
 
-	inPath := filepath.Join(dir, "in.ogg")
-	wavPath := filepath.Join(dir, "a.wav")
-	if err := os.WriteFile(inPath, audio, 0o600); err != nil {
-		return "", fmt.Errorf("voice: write in: %w", err)
-	}
-	if err := exec.CommandContext(ctx, v.ffmpegBin, ffmpegToWavArgs(inPath, wavPath)...).Run(); err != nil {
-		return "", fmt.Errorf("voice: ffmpeg->wav: %w", err)
-	}
-	if err := exec.CommandContext(ctx, v.whisperBin, whisperArgs(v.whisperModel, wavPath)...).Run(); err != nil {
-		return "", fmt.Errorf("voice: whisper: %w", err)
-	}
-	out, err := os.ReadFile(strings.TrimSuffix(wavPath, ".wav") + ".txt")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.baseURL+"/audio/transcriptions", &buf)
 	if err != nil {
-		return "", fmt.Errorf("voice: read transcript: %w", err)
+		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	req.Header.Set("Authorization", "Bearer "+v.apiKey)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := v.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("voice: stt do: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("voice: stt status %d: %s", resp.StatusCode, string(raw))
+	}
+	var out struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", fmt.Errorf("voice: stt decode: %w", err)
+	}
+	return out.Text, nil
 }
 ```
 
-- [ ] **Step 4:** `go test ./... -run 'TestWhisperArgs|TestFfmpegToWavArgs'` → PASS.
+- [ ] **Step 4:** `go test ./... -run TestTranscribe` → PASS.
 - [ ] **Step 5:** `go vet ./... && gofmt -l voice.go voice_test.go` (limpo).
-- [ ] **Step 6: Commit** `git add voice.go voice_test.go && git commit -m "feat(bot): VoiceClient STT (whisper.cpp via exec)"`
+- [ ] **Step 6: Commit** `git add voice.go voice_test.go && git commit -m "feat(bot): VoiceClient STT via OpenAI"`
 
 ---
 
@@ -167,7 +192,7 @@ func (v *VoiceClient) Transcribe(ctx context.Context, audio []byte) (string, err
 
 **Files:** `whatsapp.go`, Test `whatsapp_media_test.go`
 
-- [ ] **Step 1: Teste com httptest** (`whatsapp_media_test.go`):
+- [ ] **Step 1: Teste httptest** (`whatsapp_media_test.go`):
 
 ```go
 package main
@@ -183,7 +208,7 @@ func TestDownloadMedia(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/lookup" {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"url":"` + "http://" + r.Host + `/bytes","mime_type":"audio/ogg"}`))
+			_, _ = w.Write([]byte(`{"url":"http://` + r.Host + `/bytes","mime_type":"audio/ogg"}`))
 			return
 		}
 		_, _ = w.Write([]byte("OGGDATA"))
@@ -201,16 +226,14 @@ func TestDownloadMedia(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2:** `go test ./... -run TestDownloadMedia` → FAIL (undefined).
+- [ ] **Step 2:** `go test ./... -run TestDownloadMedia` → FAIL.
 
-- [ ] **Step 3: Implementar em `whatsapp.go`** (após `post`). `DownloadMedia` resolve a URL pelo media id (endpoint Graph) e delega a `downloadMediaFrom` (testável com URL injetada):
+- [ ] **Step 3: Implementar em `whatsapp.go`** (após `post`):
 
 ```go
-// DownloadMedia baixa o conteúdo de uma mídia do WhatsApp a partir do media id.
-// Passo 1: GET graph/<id> → { url }. Passo 2: GET url (mesmo Bearer) → bytes.
+// DownloadMedia baixa o conteúdo de uma mídia do WhatsApp pelo media id (lookup→bytes).
 func (s *WhatsAppSender) DownloadMedia(ctx context.Context, mediaID string) ([]byte, string, error) {
-	lookup := fmt.Sprintf("https://graph.facebook.com/v21.0/%s", mediaID)
-	return s.downloadMediaFrom(ctx, lookup)
+	return s.downloadMediaFrom(ctx, fmt.Sprintf("https://graph.facebook.com/v21.0/%s", mediaID))
 }
 
 func (s *WhatsAppSender) downloadMediaFrom(ctx context.Context, lookupURL string) ([]byte, string, error) {
@@ -234,7 +257,6 @@ func (s *WhatsAppSender) downloadMediaFrom(ctx context.Context, lookupURL string
 	if meta.URL == "" {
 		return nil, "", fmt.Errorf("whatsapp: media sem url")
 	}
-
 	dreq, err := http.NewRequestWithContext(ctx, http.MethodGet, meta.URL, nil)
 	if err != nil {
 		return nil, "", err
@@ -245,7 +267,7 @@ func (s *WhatsAppSender) downloadMediaFrom(ctx context.Context, lookupURL string
 		return nil, "", fmt.Errorf("whatsapp: media download: %w", err)
 	}
 	defer dresp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(dresp.Body, 16<<20)) // teto 16MB
+	data, err := io.ReadAll(io.LimitReader(dresp.Body, 16<<20))
 	if err != nil {
 		return nil, "", fmt.Errorf("whatsapp: media read: %w", err)
 	}
@@ -258,20 +280,19 @@ func (s *WhatsAppSender) downloadMediaFrom(ctx context.Context, lookupURL string
 
 ---
 
-### Task A4: Campo `WasVoice` no inbound + preservar na combinação
+### Task A4: Campo `WasVoice` + preservar na combinação da rajada
 
 **Files:** `types.go`, `server.go` (combineInbound)
 
-- [ ] **Step 1: Adicionar `WasVoice` em `InboundMessage`** (`types.go`, após `ReceivedAt`):
+- [ ] **Step 1: `WasVoice` em `InboundMessage`** (`types.go`, após `ReceivedAt`):
 
 ```go
 	ReceivedAt        time.Time
-	// WasVoice indica que a mensagem original do cliente era nota de voz (para o
-	// modo espelho: responder em áudio). Setado após o STT.
+	// WasVoice: a mensagem original do cliente era nota de voz (modo espelho).
 	WasVoice bool
 ```
 
-- [ ] **Step 2: Preservar em `combineInbound`** (`server.go`): após `base := items[len(items)-1].msg`, marcar se qualquer item da rajada foi voz:
+- [ ] **Step 2: Preservar em `combineInbound`** (`server.go`), após `base := items[len(items)-1].msg`:
 
 ```go
 	base := items[len(items)-1].msg
@@ -284,35 +305,34 @@ func (s *WhatsAppSender) downloadMediaFrom(ctx context.Context, lookupURL string
 ```
 
 - [ ] **Step 3:** `go build ./... && go vet ./...` → ok.
-- [ ] **Step 4: Commit** `git add types.go server.go && git commit -m "feat(bot): InboundMessage.WasVoice preservado na rajada"`
+- [ ] **Step 4: Commit** `git add types.go server.go && git commit -m "feat(bot): InboundMessage.WasVoice"`
 
 ---
 
 ### Task A5: Wire do Voice no Server + hook de STT na ingestão
 
-**Files:** `server.go` (Server struct, NewServer, processInbound), `main.go`
+**Files:** `server.go`, `main.go`
 
-- [ ] **Step 1: Campo `voice` no `Server`** (`server.go`, struct `Server`, junto de `evoClient`):
+- [ ] **Step 1: Campo `voice` no `Server`** (junto de `evoClient`):
 
 ```go
 	evoClient  *EvolutionClient
 	voice      *VoiceClient
 ```
 
-- [ ] **Step 2: Parâmetro no `NewServer`** — adicionar `voice *VoiceClient` ao final da assinatura e setar `voice: voice` no struct literal. Assinatura atual termina em `evoClient *EvolutionClient)`; vira `evoClient *EvolutionClient, voice *VoiceClient)`. No corpo, após `evoClient:  evoClient,` adicionar `voice:      voice,`.
+- [ ] **Step 2: `NewServer`** — adicionar `voice *VoiceClient` ao FINAL da assinatura; no struct literal, após `evoClient:  evoClient,` adicionar `voice:      voice,`.
 
-- [ ] **Step 3: Hook de STT em `processInbound`** (`server.go`), logo após o loop começar `for _, msg := range msgs {` e ANTES do `msg.TenantID = ...`/dedup, transcrever áudio:
+- [ ] **Step 3: Hook de STT em `processInbound`** — logo após `for _, msg := range msgs {`, ANTES de `msg.TenantID = ...`:
 
 ```go
 	for _, msg := range msgs {
-		// STT: transcreve nota de voz antes de tudo (preenche Transcript + WasVoice),
-		// para o engine entender e o modo espelho responder em áudio. Best-effort.
+		// STT: transcreve nota de voz antes de tudo (Transcript + WasVoice). Best-effort.
 		if msg.Content.Type == "audio" && msg.Content.Transcript == nil &&
 			s.voice.Enabled() && s.sender != nil && msg.Content.MediaURL != nil {
 			mediaID := strings.TrimPrefix(*msg.Content.MediaURL, "wa_media_id:")
-			if audio, _, derr := s.sender.DownloadMedia(ctx, mediaID); derr != nil {
+			if audio, mime, derr := s.sender.DownloadMedia(ctx, mediaID); derr != nil {
 				s.logger.Error("stt: download mídia", "err", derr)
-			} else if text, terr := s.voice.Transcribe(ctx, audio); terr != nil {
+			} else if text, terr := s.voice.Transcribe(ctx, audio, mime); terr != nil {
 				s.logger.Error("stt: transcrição", "err", terr)
 			} else if text != "" {
 				msg.Content.Transcript = &text
@@ -325,87 +345,105 @@ func (s *WhatsAppSender) downloadMediaFrom(ctx context.Context, lookupURL string
 
 (`strings` já está importado em server.go.)
 
-- [ ] **Step 4: Construir e passar o Voice no `main.go`** — após `sender := NewWhatsAppSender(...)` (linha ~85):
+- [ ] **Step 4: `main.go`** — após `sender := NewWhatsAppSender(...)`:
 
 ```go
 	voiceClient := NewVoiceClient(cfg)
 ```
 
-E na chamada `NewServer(...)` (linha ~149+), adicionar `voiceClient` como último argumento, na mesma ordem da nova assinatura.
+E passar `voiceClient` como ÚLTIMO argumento na chamada `NewServer(...)`.
 
-- [ ] **Step 5:** `go build ./... && go vet ./... && go test ./...` → tudo verde.
+- [ ] **Step 5:** `go build ./... && go vet ./... && go test ./...` → verde.
 - [ ] **Step 6: Commit** `git add server.go main.go && git commit -m "feat(bot): STT na ingestão (transcreve voz do cliente)"`
 
 ---
 
-## FASE B — TTS (responder em nota de voz)
+## FASE B — TTS (responder em nota de voz feminina)
 
-### Task B1: VoiceClient.Synthesize + junção de balões
+### Task B1: VoiceClient.Synthesize (OpenAI TTS) + joinBubbles
 
 **Files:** `voice.go`, `voice_test.go`
 
-- [ ] **Step 1: Teste das funções puras** (adicionar em `voice_test.go`):
+- [ ] **Step 1: Testes** (adicionar em `voice_test.go`):
 
 ```go
 func TestJoinBubbles(t *testing.T) {
 	if got := joinBubbles([]string{"Oi!", "Tudo bem?"}); got != "Oi!\nTudo bem?" {
 		t.Fatalf("joinBubbles = %q", got)
 	}
-	if got := joinBubbles([]string{"Só um"}); got != "Só um" {
-		t.Fatalf("joinBubbles single = %q", got)
-	}
 }
 
-func TestFfmpegToOggArgs(t *testing.T) {
-	got := ffmpegToOggArgs("/tmp/a.wav", "/tmp/a.ogg")
-	want := []string{"-y", "-i", "/tmp/a.wav", "-c:a", "libopus", "-b:a", "24k", "-ar", "48000", "-ac", "1", "/tmp/a.ogg"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("ffmpegToOggArgs = %v, quer %v", got, want)
+func TestSynthesize(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/audio/speech" {
+			t.Errorf("path: %s", r.URL.Path)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["voice"] != "nova" || body["response_format"] != "opus" {
+			t.Errorf("body inesperado: %v", body)
+		}
+		_, _ = w.Write([]byte("OGGAUDIO"))
+	}))
+	defer srv.Close()
+
+	got, err := newTestVoice(srv.URL).Synthesize(context.Background(), "olá")
+	if err != nil {
+		t.Fatalf("erro: %v", err)
+	}
+	if string(got) != "OGGAUDIO" {
+		t.Fatalf("got %q", got)
 	}
 }
 ```
 
-- [ ] **Step 2:** `go test ./... -run 'TestJoinBubbles|TestFfmpegToOggArgs'` → FAIL.
+(Adicionar `"encoding/json"` aos imports do `voice_test.go`.)
+
+- [ ] **Step 2:** `go test ./... -run 'TestJoinBubbles|TestSynthesize'` → FAIL.
 
 - [ ] **Step 3: Implementar em `voice.go`:**
 
 ```go
-// joinBubbles junta os balões num texto único para gerar UMA nota de voz.
+import "strings" // adicionar ao import block existente
+
+// joinBubbles junta os balões num texto único (uma nota de voz por resposta).
 func joinBubbles(bubbles []string) string {
 	return strings.Join(bubbles, "\n")
 }
 
-// ffmpegToOggArgs converte WAV em OGG/Opus (formato de nota de voz do WhatsApp).
-func ffmpegToOggArgs(in, out string) []string {
-	return []string{"-y", "-i", in, "-c:a", "libopus", "-b:a", "24k", "-ar", "48000", "-ac", "1", out}
-}
-
-// Synthesize gera uma nota de voz OGG/Opus a partir do texto. Piper escreve WAV;
-// ffmpeg converte para OGG/Opus. Temporários limpos via defer.
+// Synthesize gera a nota de voz (OGG/Opus) com a voz feminina configurada.
 func (v *VoiceClient) Synthesize(ctx context.Context, text string) ([]byte, error) {
-	dir, err := os.MkdirTemp("", "tts-*")
+	body, err := json.Marshal(map[string]any{
+		"model":           v.ttsModel,
+		"voice":           v.ttsVoice,
+		"input":           text,
+		"response_format": "opus",
+	})
 	if err != nil {
-		return nil, fmt.Errorf("voice: tempdir: %w", err)
+		return nil, fmt.Errorf("voice: tts marshal: %w", err)
 	}
-	defer os.RemoveAll(dir)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.baseURL+"/audio/speech", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+v.apiKey)
+	req.Header.Set("Content-Type", "application/json")
 
-	wavPath := filepath.Join(dir, "out.wav")
-	oggPath := filepath.Join(dir, "out.ogg")
-
-	piper := exec.CommandContext(ctx, v.piperBin, "--model", v.piperVoice, "--output_file", wavPath)
-	piper.Stdin = strings.NewReader(text)
-	if err := piper.Run(); err != nil {
-		return nil, fmt.Errorf("voice: piper: %w", err)
+	resp, err := v.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("voice: tts do: %w", err)
 	}
-	if err := exec.CommandContext(ctx, v.ffmpegBin, ffmpegToOggArgs(wavPath, oggPath)...).Run(); err != nil {
-		return nil, fmt.Errorf("voice: ffmpeg->ogg: %w", err)
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("voice: tts status %d: %s", resp.StatusCode, string(data))
 	}
-	return os.ReadFile(oggPath)
+	return data, nil
 }
 ```
 
-- [ ] **Step 4:** `go test ./... -run 'TestJoinBubbles|TestFfmpegToOggArgs'` → PASS.
-- [ ] **Step 5: Commit** `git add voice.go voice_test.go && git commit -m "feat(bot): VoiceClient TTS (Piper -> OGG/Opus)"`
+- [ ] **Step 4:** `go test ./... -run 'TestJoinBubbles|TestSynthesize'` → PASS.
+- [ ] **Step 5: Commit** `git add voice.go voice_test.go && git commit -m "feat(bot): VoiceClient TTS via OpenAI (voz feminina)"`
 
 ---
 
@@ -413,14 +451,11 @@ func (v *VoiceClient) Synthesize(ctx context.Context, text string) ([]byte, erro
 
 **Files:** `whatsapp.go`, Test `whatsapp_media_test.go`
 
-- [ ] **Step 1: Teste httptest** (adicionar em `whatsapp_media_test.go`):
+- [ ] **Step 1: Teste** (adicionar em `whatsapp_media_test.go`):
 
 ```go
 func TestUploadAudio(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ct := r.Header.Get("Content-Type"); ct == "" || ct[:19] != "multipart/form-data" {
-			t.Errorf("content-type inesperado: %q", ct)
-		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"MEDIA123"}`))
 	}))
@@ -439,13 +474,12 @@ func TestUploadAudio(t *testing.T) {
 
 - [ ] **Step 2:** `go test ./... -run TestUploadAudio` → FAIL.
 
-- [ ] **Step 3: Implementar em `whatsapp.go`** (precisa `mime/multipart` no import block). `UploadAudio` chama `uploadAudioTo` com a URL real:
+- [ ] **Step 3: Implementar em `whatsapp.go`** (precisa `mime/multipart` no import):
 
 ```go
 // UploadAudio envia bytes OGG/Opus ao endpoint de mídia do Meta e devolve o media id.
 func (s *WhatsAppSender) UploadAudio(ctx context.Context, ogg []byte) (string, error) {
-	url := fmt.Sprintf("https://graph.facebook.com/v21.0/%s/media", s.phoneNumberID)
-	return s.uploadAudioTo(ctx, url, ogg)
+	return s.uploadAudioTo(ctx, fmt.Sprintf("https://graph.facebook.com/v21.0/%s/media", s.phoneNumberID), ogg)
 }
 
 func (s *WhatsAppSender) uploadAudioTo(ctx context.Context, url string, ogg []byte) (string, error) {
@@ -463,7 +497,6 @@ func (s *WhatsAppSender) uploadAudioTo(ctx context.Context, url string, ogg []by
 	if err := mw.Close(); err != nil {
 		return "", fmt.Errorf("whatsapp: upload close: %w", err)
 	}
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
 	if err != nil {
 		return "", err
@@ -499,23 +532,21 @@ func (s *WhatsAppSender) uploadAudioTo(ctx context.Context, url string, ogg []by
 
 **Files:** `whatsapp.go`, Test `whatsapp_media_test.go`
 
-- [ ] **Step 1: Teste** (adicionar em `whatsapp_media_test.go`):
+- [ ] **Step 1: Teste:**
 
 ```go
 func TestContentToBodyAudioByID(t *testing.T) {
 	id := "wa_media_id:MEDIA123"
-	body := contentToBody(MessageContent{Type: "audio", MediaURL: &id})
-	audio := body["audio"].(map[string]any)
+	audio := contentToBody(MessageContent{Type: "audio", MediaURL: &id})["audio"].(map[string]any)
 	if audio["id"] != "MEDIA123" {
-		t.Fatalf("esperava id MEDIA123, got %v", audio)
+		t.Fatalf("esperava id, got %v", audio)
 	}
-	if _, hasLink := audio["link"]; hasLink {
-		t.Fatalf("não deveria ter link quando é media id")
+	if _, has := audio["link"]; has {
+		t.Fatalf("não deveria ter link")
 	}
-
 	link := "https://x/a.ogg"
-	body2 := contentToBody(MessageContent{Type: "audio", MediaURL: &link})
-	if body2["audio"].(map[string]any)["link"] != "https://x/a.ogg" {
+	a2 := contentToBody(MessageContent{Type: "audio", MediaURL: &link})["audio"].(map[string]any)
+	if a2["link"] != "https://x/a.ogg" {
 		t.Fatalf("esperava link")
 	}
 }
@@ -547,11 +578,10 @@ func TestContentToBodyAudioByID(t *testing.T) {
 
 **Files:** `engine.go`, `main.go`, Test `engine_voice_test.go`
 
-- [ ] **Step 1: Adicionar `Voice` ao `EngineDeps`** (`engine.go`, após `Notion *NotionClient`):
+- [ ] **Step 1: `Voice` no `EngineDeps`** (`engine.go`, após `Notion *NotionClient`):
 
 ```go
-	// Voice — STT/TTS local (opcional). Quando presente e habilitado, o engine
-	// responde em áudio às mensagens que vieram em voz (espelho).
+	// Voice — STT/TTS via OpenAI (opcional). Habilitado → responde em áudio às mensagens de voz.
 	Voice *VoiceClient
 ```
 
@@ -566,13 +596,13 @@ func TestShouldReplyAsAudio(t *testing.T) {
 	on := &VoiceClient{enabled: true}
 	off := &VoiceClient{enabled: false}
 	if !shouldReplyAsAudio(on, InboundMessage{WasVoice: true}) {
-		t.Fatal("voz + habilitado deveria ser true")
+		t.Fatal("voz+on deveria ser true")
 	}
 	if shouldReplyAsAudio(on, InboundMessage{WasVoice: false}) {
-		t.Fatal("texto não deveria virar áudio")
+		t.Fatal("texto não vira áudio")
 	}
 	if shouldReplyAsAudio(off, InboundMessage{WasVoice: true}) {
-		t.Fatal("desabilitado deveria ser false")
+		t.Fatal("off deveria ser false")
 	}
 	if shouldReplyAsAudio(nil, InboundMessage{WasVoice: true}) {
 		t.Fatal("nil deveria ser false")
@@ -582,7 +612,7 @@ func TestShouldReplyAsAudio(t *testing.T) {
 
 - [ ] **Step 3:** `go test ./... -run TestShouldReplyAsAudio` → FAIL.
 
-- [ ] **Step 4: Implementar a decisão + o envio de voz no `engine.go`.** Adicionar o helper puro:
+- [ ] **Step 4: Implementar no `engine.go`** o helper + o envio. Helper:
 
 ```go
 // shouldReplyAsAudio: responde em áudio só quando o cliente mandou voz e o TTS está ligado.
@@ -591,7 +621,8 @@ func shouldReplyAsAudio(v *VoiceClient, inbound InboundMessage) bool {
 }
 ```
 
-E, no início do bloco de envio (logo ANTES do `for i, bubble := range output.Bubbles {`), tentar a nota de voz única; em sucesso, **envolver o loop de texto num `if !sentVoice`** (sem `goto`, evita erro "jumps over declaration"):
+No bloco de envio, ANTES do `for i, bubble := range output.Bubbles {`, tentar a voz e
+**envolver o loop de texto num `if !sentVoice`** (sem `goto`):
 
 ```go
 	sentVoice := false
@@ -604,20 +635,19 @@ E, no início do bloco de envio (logo ANTES do `for i, bubble := range output.Bu
 
 	if !sentVoice {
 		for i, bubble := range output.Bubbles {
-			// ... corpo atual do loop, inalterado ...
+			// ... corpo atual do loop, INALTERADO (indentado dentro do if) ...
 		}
 	}
 ```
 
-Ou seja: indente o `for` existente dentro do `if !sentVoice {`. Não muda nada do corpo do loop — só o envolve. O código após o loop (broadcast/fase 3) continua igual, fora do `if`.
-
-E implementar `trySendVoice` (perto do final do arquivo). Ele sintetiza, faz upload pelo `*WhatsAppSender` (type-assert; só Meta), envia e persiste. Retorna `false` em qualquer falha (→ fallback texto):
+Indente o `for` existente dentro do `if !sentVoice {`. O código após o loop (broadcast/fase 3)
+continua igual, FORA do `if`. Implementar `trySendVoice` perto do fim do arquivo:
 
 ```go
 // trySendVoice gera UMA nota de voz com a resposta inteira e envia pelo Meta.
-// Retorna true se entregou; false (com log) para o chamador cair no texto.
+// Retorna false (com log) em qualquer falha → chamador cai no texto.
 func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation, inbound InboundMessage, output ResponderOutput, reasoningJSON *string) bool {
-	log := e.logger()
+	log := e.deps.Logger
 	ms, ok := e.deps.Sender.(*WhatsAppSender)
 	if !ok {
 		return false // só Meta suporta upload de mídia
@@ -649,7 +679,6 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 		if serr != nil {
 			return serr
 		}
-		// Grava o TEXTO no histórico (dashboard legível); idempotente.
 		return e.deps.Messages.RecordOutbound(ctx, tx, idemKey, inbound.TenantID, conv.ID, providerMsgID, text, reasoningJSON)
 	})
 	if txErr != nil {
@@ -663,142 +692,53 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 }
 ```
 
-> Nota: confirme o helper de logger usado no engine (ex.: `e.logger()` ou `e.deps.Logger`); use o mesmo padrão já existente no arquivo. Se for `log` local já definido no início de `Handle`, reaproveite-o passando-o como parâmetro em vez de `e.logger()`.
+> Confirme como o engine referencia o logger (no início de `Handle` há um `log := ...`). Use o
+> mesmo: se for `log := e.deps.Logger` no topo de `Handle`, em `trySendVoice` use `e.deps.Logger`
+> (como acima). Ajuste se o nome do campo divergir.
 
-- [ ] **Step 5: Passar o Voice nas duas `EngineDeps` do `main.go`** — no engine Meta (`engine := NewConversationEngine(EngineDeps{...})`, ~93) adicionar `Voice: voiceClient,`. (No `evoEngine` é inofensivo, mas como é Evolution o `trySendVoice` retorna false por type-assert; pode deixar sem.)
+- [ ] **Step 5: `main.go`** — na `EngineDeps{...}` do engine Meta (`engine := NewConversationEngine(...)`), adicionar `Voice: voiceClient,`.
 
-- [ ] **Step 6:** `go build ./... && go vet ./... && go test ./...` → tudo verde. Se o `goto`/label gerar erro de "jumps over declaration", mover declarações para antes do `if` ou trocar o `goto` por um `if/else` envolvendo o loop (preferir if/else se mais limpo).
-
-- [ ] **Step 7: Commit** `git add engine.go main.go engine_voice_test.go && git commit -m "feat(bot): responder em nota de voz quando o cliente manda áudio (espelho)"`
-
----
-
-## FASE C — Imagem, modelos e deploy
-
-### Task C1: Dockerfile com ffmpeg + whisper.cpp + piper e entrypoint dos modelos
-
-**Files:** `Dockerfile`, Create `entrypoint.sh`
-
-- [ ] **Step 1: Reescrever `Dockerfile`.** O runtime sai de `distroless/static` (sem shell/libs) para `debian:bookworm-slim` com `ffmpeg`, `whisper.cpp` e `piper`. whisper.cpp é compilado no builder; piper baixado (release). Conteúdo:
-
-```dockerfile
-# ---- build do bot (Go) ----
-FROM golang:1.24-bookworm AS gobuild
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o bot .
-
-# ---- build do whisper.cpp ----
-FROM debian:bookworm-slim AS whisperbuild
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      git build-essential cmake ca-certificates && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /w \
- && cd /w && cmake -B build && cmake --build build --config Release -j \
- && cp build/bin/whisper-cli /usr/local/bin/whisper-cli
-
-# ---- runtime ----
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ffmpeg ca-certificates curl && rm -rf /var/lib/apt/lists/*
-# piper (binário pré-compilado)
-RUN curl -fsSL -o /tmp/piper.tar.gz \
-      https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz \
- && tar -xzf /tmp/piper.tar.gz -C /usr/local/lib \
- && ln -s /usr/local/lib/piper/piper /usr/local/bin/piper \
- && rm /tmp/piper.tar.gz
-COPY --from=whisperbuild /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
-COPY --from=gobuild /app/bot /bot
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-EXPOSE 3000
-ENTRYPOINT ["/entrypoint.sh"]
-```
-
-- [ ] **Step 2: Criar `entrypoint.sh`** — baixa os modelos no volume `/models` se ausentes, depois sobe o bot:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-MODELS=/models
-mkdir -p "$MODELS"
-
-WHISPER="${WHISPER_MODEL:-$MODELS/ggml-small-q5_1.bin}"
-PIPER_ONNX="${PIPER_VOICE:-$MODELS/pt_BR-faber-medium.onnx}"
-
-if [ "${VOICE_ENABLED:-false}" = "true" ]; then
-  if [ ! -f "$WHISPER" ]; then
-    echo "baixando modelo whisper…"
-    curl -fsSL -o "$WHISPER" \
-      https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin
-  fi
-  if [ ! -f "$PIPER_ONNX" ]; then
-    echo "baixando voz piper pt-BR…"
-    curl -fsSL -o "$PIPER_ONNX" \
-      https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx
-    curl -fsSL -o "$PIPER_ONNX.json" \
-      https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json
-  fi
-fi
-
-exec /bot
-```
-
-- [ ] **Step 3: Build local da imagem (sanity)** — confirma que a imagem compila e os binários existem:
-
-```bash
-cd /home/guilherme/projetos/sg/santos-tech-infra/apps/bot-go
-docker build -t bot-voice-test . && \
-docker run --rm --entrypoint sh bot-voice-test -c "which ffmpeg whisper-cli piper && /bot --help 2>/dev/null; echo OK"
-```
-Expected: caminhos dos 3 binários impressos + "OK". (Se `docker` não estiver disponível na máquina, registrar como verificação a fazer no servidor.)
-
-- [ ] **Step 4: Commit** `git add Dockerfile entrypoint.sh && git commit -m "build(bot): imagem com ffmpeg+whisper.cpp+piper e entrypoint dos modelos"`
+- [ ] **Step 6:** `go build ./... && go vet ./... && go test ./...` → tudo verde.
+- [ ] **Step 7: Commit** `git add engine.go main.go engine_voice_test.go && git commit -m "feat(bot): responde em nota de voz quando o cliente manda áudio (espelho)"`
 
 ---
 
-### Task C2: .env.example, docs e notas de deploy
+## FASE C — Docs e verificação
 
-**Files:** `.env.example` (se existir no bot-go), `docs`/`llms.txt` central
+### Task C1: .env.example, docs e PR
 
-- [ ] **Step 1: Documentar as envs** no `.env.example` do bot-go (se existir; senão pular):
+- [ ] **Step 1: `.env.example`** do bot-go (se existir; senão pular):
 
 ```
-# Voz (STT/TTS local) — opcional
+# Voz (STT/TTS via OpenAI) — opcional
 VOICE_ENABLED=false
-WHISPER_MODEL=/models/ggml-small-q5_1.bin
-PIPER_VOICE=/models/pt_BR-faber-medium.onnx
+OPENAI_API_KEY=
+OPENAI_TTS_VOICE=nova
 ```
 
-- [ ] **Step 2: llms.txt central** — registrar que o bot (Meta) agora aceita voz (transcreve) e responde em voz no modo espelho, quando `VOICE_ENABLED=true`. (Se a doc não detalhar o bot, pular — não inventar formato.)
+- [ ] **Step 2: llms.txt central** — registrar que o bot (Meta) aceita voz (transcreve) e responde
+  em voz feminina no modo espelho quando `VOICE_ENABLED=true`. (Se não detalhar o bot, pular.)
 
-- [ ] **Step 3: Notas de deploy (Easypanel)** — anotar no PR: criar **volume persistente** montado em `/models`; garantir **RAM ≥2GB** no serviço; setar `VOICE_ENABLED=true`. Primeiro boot baixa os modelos (~245MB) — pode demorar.
+- [ ] **Step 3: Deploy (anotar no PR):** sem mudança de imagem. Setar no Easypanel
+  `VOICE_ENABLED=true` + `OPENAI_API_KEY` (+ opcional `OPENAI_TTS_VOICE`).
 
-- [ ] **Step 4: Verificação manual no servidor (anotar resultado):**
-  - Mandar um áudio real pro número Meta → conferir que o bot respondeu coerente (STT ok) **em nota de voz** (TTS ok).
-  - Medir latência aproximada.
-  - `VOICE_ENABLED=false` → volta a responder em texto (fallback).
-  - Forçar erro (ex.: modelo ausente) → resposta sai em texto, sem travar.
+- [ ] **Step 4: Verificação manual** (com key real): mandar áudio real → conferir transcrição +
+  resposta em voz feminina; `VOICE_ENABLED=0` → volta a texto; key inválida → texto (fallback).
 
-- [ ] **Step 5: Commit** (se houve mudança de docs) `git commit -am "docs(bot): voz no WhatsApp (espelho) — envs e deploy"`
-
-- [ ] **Step 6: PR**
+- [ ] **Step 5: Commit + PR**
 
 ```bash
+git commit -am "docs(bot): voz no WhatsApp (espelho via OpenAI) — envs e deploy"
 git push -u origin feat/whats-voz-audio
-gh pr create --base master --title "feat(bot): responder em áudio (espelho) — STT+TTS local" --body "..."
+gh pr create --base master --title "feat(bot): responder em áudio (espelho) via OpenAI" --body "..."
 ```
 
 ---
 
 ## Cobertura do spec (self-review)
-
-- **STT (entender voz):** A2 (Transcribe), A3 (download mídia), A4/A5 (WasVoice + hook na ingestão). ✅
-- **TTS (responder voz, espelho):** B1 (Synthesize/join), B2 (upload), B3 (audio por id), B4 (decisão + envio + fallback). ✅
-- **Local/binários/modelos/volume/RAM:** C1 (imagem + entrypoint), C2 (deploy). ✅
-- **Config `VOICE_ENABLED` + fallback texto:** A1 (config), A5/B4 (best-effort em todos os passos). ✅
-- **Limpeza de temporários:** A2/B1 (`defer os.RemoveAll`). ✅
-- **Uma nota de voz por resposta:** B1 `joinBubbles` + B4 envio único. ✅
-- **Não guardar o áudio:** B4 grava só o texto em `RecordOutbound`. ✅
-- **Testes:** unitários puros (args, join, decisão), httptest (download/upload/contentToBody); execução real = manual (C2). ✅
+- STT: A2 (Transcribe OpenAI), A3 (download mídia), A4/A5 (WasVoice + hook). ✅
+- TTS feminino: B1 (Synthesize OpenAI, voz nova), B2 (upload), B3 (audio por id), B4 (decisão+envio+fallback). ✅
+- Config OpenAI + `VOICE_ENABLED` + base URL injetável p/ testes: A1. ✅
+- Sem infra local / Dockerfile inalterado: refletido (sem Fase de Docker). ✅
+- Uma nota de voz, não guardar áudio, idempotência: B1/B4. ✅
+- Testes httptest + puros: A2/A3/B1/B2/B3/B4. ✅
