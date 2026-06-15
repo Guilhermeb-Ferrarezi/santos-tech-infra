@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS board_members (
   PRIMARY KEY (board_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_board_members_user ON board_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS name        TEXT NOT NULL DEFAULT '';
 ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '{}';
