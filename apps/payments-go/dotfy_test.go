@@ -5,29 +5,42 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
 func TestDotfyCreateCharge(t *testing.T) {
+	var gotValue float64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			w.WriteHeader(401)
 			return
 		}
+		var req dotfyChargeReq
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotValue = req.Value
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"ch_123","brCode":"00020126...","qrCodeImage":"data:image/png;base64,xxx","status":"ACTIVE"}`))
+		// envelope real do Dotfy: {success, data{...}}, qrCode = copia-e-cola
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"ch_123","chargeId":"dotfyt_x","correlationID":"dotfyt_x","qrCode":"00020126...","qrCodeImage":"data:image/png;base64,xxx","paymentLink":"https://app.dotfy.com.br/p/ch_123","value":6600}}`))
 	}))
 	defer srv.Close()
 
 	p := &dotfyProvider{base: srv.URL, key: "test-key", client: srv.Client()}
-	res, err := p.CreateCharge(context.Background(), ChargeRequest{CorrelationID: "abc", AmountCents: 53990, PayerName: "Fulano", PayerTaxID: "00000000000"})
+	// R$539,90 = 53990 centavos → API espera 539.90 REAIS
+	res, err := p.CreateCharge(context.Background(), ChargeRequest{CorrelationID: "nosso", AmountCents: 53990, PayerName: "Fulano", PayerTaxID: "00000000000"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.ProviderChargeID != "ch_123" || res.BRCode == "" {
+	if gotValue != 539.90 {
+		t.Fatalf("value enviado deveria ser 539.90 reais, veio %v", gotValue)
+	}
+	if res.ProviderChargeID != "ch_123" || res.BRCode != "00020126..." {
 		t.Fatalf("response mal parseado: %+v", res)
+	}
+	if res.CorrelationID != "dotfyt_x" {
+		t.Fatalf("deveria adotar o correlationID do Dotfy, veio %q", res.CorrelationID)
 	}
 }
 

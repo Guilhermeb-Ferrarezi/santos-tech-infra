@@ -13,8 +13,10 @@ type ChargeRequest struct {
 
 type ChargeResult struct {
 	ProviderChargeID string
-	BRCode           string // copia-e-cola
+	CorrelationID    string // correlationID efetivo do gateway (o Dotfy gera o seu próprio)
+	BRCode           string // Pix copia-e-cola
 	QRCode           string // imagem (base64/data-uri) ou URL
+	PaymentLink      string // link de checkout hospedado pelo gateway
 	Status           string
 }
 

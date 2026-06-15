@@ -71,6 +71,11 @@ func (s *Server) createAndPersistCharge(ctx context.Context, c *Charge, st *Stud
 		return err
 	}
 	c.ProviderChargeID, c.BRCode, c.QRCode = res.ProviderChargeID, res.BRCode, res.QRCode
+	// O Dotfy gera o próprio correlationID e é ELE que volta no webhook — então
+	// gravamos esse valor para a reconciliação do CHARGE_PAID/EXPIRED casar.
+	if res.CorrelationID != "" {
+		c.CorrelationID = res.CorrelationID
+	}
 	if err := s.store.InsertCharge(ctx, c); err != nil {
 		return err
 	}

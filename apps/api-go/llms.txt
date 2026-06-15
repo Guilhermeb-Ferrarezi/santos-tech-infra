@@ -461,3 +461,10 @@ POST   /webhooks/dotfy   eventos CHARGE_PAID (baixa) / CHARGE_EXPIRED (inadimpl�
 Tabelas próprias (mesmo Postgres `santos_tech`, prefixo pay_): pay_students,
 pay_plans, pay_subscriptions, pay_charges, pay_webhook_events.
 Fase 2 planejada: tela de checkout Pix própria (consome brCode/qrCode do JSON).
+
+Dotfy (confirmado contra app.dotfy.com.br): POST /api/charges com body
+{correlationID,value,payerName,payerTaxId,description,expiresAt} — ATENÇÃO `value`
+em REAIS (não centavos); resposta envelopada {success,data:{id,chargeId,
+correlationID,qrCode(=copia-e-cola),qrCodeImage,paymentLink,value(centavos)}}.
+O Dotfy IGNORA o correlationID enviado e gera o próprio — guardamos o retornado
+para reconciliar o webhook. Reconciliação por correlation_id (valor do Dotfy).

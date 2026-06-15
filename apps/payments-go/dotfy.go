@@ -68,21 +68,43 @@ func (p *dotfyProvider) verifyWebhookSignature(headers map[string][]string, body
 	return nil
 }
 
-// dotfyChargeReq — formato do request. Ajustar aos nomes reais confirmados na sandbox.
+// dotfyChargeReq — formato real confirmado contra a API (app.dotfy.com.br).
+// IMPORTANTE: `value` é em REAIS (não centavos). O `correlationID` enviado é
+// ignorado pelo Dotfy, que gera o seu próprio — reconciliamos pelo valor retornado.
 type dotfyChargeReq struct {
-	CorrelationID string `json:"correlationID"`
-	Amount        int64  `json:"amount"` // centavos
-	PayerName     string `json:"payerName,omitempty"`
-	PayerTaxID    string `json:"payerTaxId,omitempty"`
-	Description   string `json:"description,omitempty"`
-	ExpiresAt     string `json:"expiresAt,omitempty"`
+	CorrelationID string  `json:"correlationID,omitempty"`
+	Value         float64 `json:"value"` // em REAIS
+	PayerName     string  `json:"payerName,omitempty"`
+	PayerTaxID    string  `json:"payerTaxId,omitempty"`
+	Description   string  `json:"description,omitempty"`
+	ExpiresAt     string  `json:"expiresAt,omitempty"`
 }
 
+// dotfyChargeResp — resposta envelopada {success, data}. No data: `qrCode` é o
+// copia-e-cola, `qrCodeImage` a imagem, `id`/`chargeId` os identificadores, e
+// `correlationID` o id efetivo gerado pelo Dotfy. `value` volta em centavos.
 type dotfyChargeResp struct {
-	ID      string `json:"id"`
-	BRCode  string `json:"brCode"`
-	QRImage string `json:"qrCodeImage"`
-	Status  string `json:"status"`
+	Success bool `json:"success"`
+	Data    struct {
+		ID            string `json:"id"`
+		ChargeID      string `json:"chargeId"`
+		CorrelationID string `json:"correlationID"`
+		QRCode        string `json:"qrCode"`      // copia-e-cola
+		QRCodeImage   string `json:"qrCodeImage"` // imagem (data-uri base64)
+		PaymentLink   string `json:"paymentLink"`
+		ExpiresAt     string `json:"expiresAt"`
+		Value         int64  `json:"value"` // centavos
+	} `json:"data"`
+}
+
+func (r dotfyChargeResp) toResult() ChargeResult {
+	return ChargeResult{
+		ProviderChargeID: r.Data.ID,
+		CorrelationID:    r.Data.CorrelationID,
+		BRCode:           r.Data.QRCode,
+		QRCode:           r.Data.QRCodeImage,
+		PaymentLink:      r.Data.PaymentLink,
+	}
 }
 
 func (p *dotfyProvider) do(ctx context.Context, method, path string, body any) ([]byte, error) {
@@ -116,7 +138,7 @@ func (p *dotfyProvider) do(ctx context.Context, method, path string, body any) (
 func (p *dotfyProvider) CreateCharge(ctx context.Context, req ChargeRequest) (ChargeResult, error) {
 	data, err := p.do(ctx, http.MethodPost, "/api/charges", dotfyChargeReq{
 		CorrelationID: req.CorrelationID,
-		Amount:        req.AmountCents,
+		Value:         float64(req.AmountCents) / 100, // API espera REAIS
 		PayerName:     req.PayerName,
 		PayerTaxID:    req.PayerTaxID,
 		Description:   req.Description,
@@ -129,7 +151,7 @@ func (p *dotfyProvider) CreateCharge(ctx context.Context, req ChargeRequest) (Ch
 	if err := json.Unmarshal(data, &r); err != nil {
 		return ChargeResult{}, err
 	}
-	return ChargeResult{ProviderChargeID: r.ID, BRCode: r.BRCode, QRCode: r.QRImage, Status: r.Status}, nil
+	return r.toResult(), nil
 }
 
 func (p *dotfyProvider) GetCharge(ctx context.Context, id string) (ChargeResult, error) {
@@ -141,7 +163,7 @@ func (p *dotfyProvider) GetCharge(ctx context.Context, id string) (ChargeResult,
 	if err := json.Unmarshal(data, &r); err != nil {
 		return ChargeResult{}, err
 	}
-	return ChargeResult{ProviderChargeID: r.ID, BRCode: r.BRCode, QRCode: r.QRImage, Status: r.Status}, nil
+	return r.toResult(), nil
 }
 
 // dotfyWebhook — formato do evento. Ajustar aos nomes reais.
