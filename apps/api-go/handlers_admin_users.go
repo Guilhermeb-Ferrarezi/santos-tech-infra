@@ -20,6 +20,7 @@ var emailRe = regexp.MustCompile(`^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$`)
 // `email` tem precedência se os dois vierem. Com `shared=true`, cria uma caixa
 // institucional @santos-tech.com sem login e sem convite.
 func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Email     string `json:"email"`
 		LocalPart string `json:"localPart"`
@@ -142,6 +143,7 @@ func (s *Server) handleListAdminUsers(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateAdminUser atualiza nome/role e/ou suspende/reativa.
 func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "id inválido"))

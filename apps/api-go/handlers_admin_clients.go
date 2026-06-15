@@ -68,6 +68,7 @@ func (s *Server) handleListOAuthClients(w http.ResponseWriter, r *http.Request) 
 
 // POST /auth/admin/oauth-clients {clientId, name, redirectUris}
 func (s *Server) handleCreateOAuthClient(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		ClientID     string   `json:"clientId"`
 		Name         string   `json:"name"`
@@ -98,6 +99,7 @@ func (s *Server) handleCreateOAuthClient(w http.ResponseWriter, r *http.Request)
 
 // PATCH /auth/admin/oauth-clients/{id} {name?, redirectUris?, isActive?}
 func (s *Server) handleUpdateOAuthClient(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if !isValidUUID(r.PathValue("id")) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "id inválido"))
 		return

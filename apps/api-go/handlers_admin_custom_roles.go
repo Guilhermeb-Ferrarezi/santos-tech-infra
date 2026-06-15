@@ -53,6 +53,7 @@ func (s *Server) handleListCustomRoles(w http.ResponseWriter, r *http.Request) {
 
 // POST /auth/admin/custom-roles
 func (s *Server) handleCreateCustomRole(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Name        string              `json:"name"`
 		Description *string             `json:"description"`
@@ -98,6 +99,7 @@ func (s *Server) handleGetCustomRole(w http.ResponseWriter, r *http.Request) {
 
 // PATCH /auth/admin/custom-roles/{id}
 func (s *Server) handleUpdateCustomRole(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	id := r.PathValue("id")
 	if !isValidUUID(id) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "id inválido"))
