@@ -22,7 +22,9 @@ func appErr(status int, code, message string) *AppError {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("falha ao serializar resposta JSON", "err", err)
+	}
 }
 
 func writeErr(w http.ResponseWriter, err error) {
