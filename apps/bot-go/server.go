@@ -133,10 +133,11 @@ type Server struct {
 	withTenant func(ctx context.Context, fn func(pgx.Tx) error) error
 	evoEngine  *ConversationEngine
 	evoClient  *EvolutionClient
+	voice      *VoiceClient
 }
 
 // NewServer cria um Server com as dependências fornecidas.
-func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, pool *pgxpool.Pool, sender *WhatsAppSender, logger *slog.Logger, hub *WSHub, logRepo *ProcessingLogRepo, evoEngine *ConversationEngine, evoClient *EvolutionClient) *Server {
+func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, pool *pgxpool.Pool, sender *WhatsAppSender, logger *slog.Logger, hub *WSHub, logRepo *ProcessingLogRepo, evoEngine *ConversationEngine, evoClient *EvolutionClient, voice *VoiceClient) *Server {
 	return &Server{
 		cfg:        cfg,
 		engine:     engine,
@@ -153,6 +154,7 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		withTenant: withTenant(pool, cfg.TenantID),
 		evoEngine:  evoEngine,
 		evoClient:  evoClient,
+		voice:      voice,
 	}
 }
 
@@ -288,6 +290,20 @@ func (s *Server) processInbound(body []byte) {
 	window := s.debounceWindow(ctx)
 
 	for _, msg := range msgs {
+		// STT: transcreve nota de voz antes de tudo (Transcript + WasVoice). Best-effort.
+		if msg.Content.Type == "audio" && msg.Content.Transcript == nil &&
+			s.voice.Enabled() && s.sender != nil && msg.Content.MediaURL != nil {
+			mediaID := strings.TrimPrefix(*msg.Content.MediaURL, "wa_media_id:")
+			if audio, mime, derr := s.sender.DownloadMedia(ctx, mediaID); derr != nil {
+				s.logger.Error("stt: download mídia", "err", derr)
+			} else if text, terr := s.voice.Transcribe(ctx, audio, mime); terr != nil {
+				s.logger.Error("stt: transcrição", "err", terr)
+			} else if text != "" {
+				msg.Content.Transcript = &text
+				msg.WasVoice = true
+			}
+		}
+
 		msg.TenantID = s.cfg.TenantID
 
 		// Dedup via WebhookRepo
