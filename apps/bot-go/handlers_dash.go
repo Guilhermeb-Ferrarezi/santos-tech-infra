@@ -67,6 +67,9 @@ type dashConfig struct {
 	DebounceMs                  int       `json:"debounceMs"`
 	EvolutionBotReplyEnabled    bool      `json:"evolutionBotReplyEnabled"`
 	EvolutionLeadCaptureEnabled bool      `json:"evolutionLeadCaptureEnabled"`
+	// Captação por número: nomes das instâncias do Evolution com captação DESLIGADA
+	// (ausência = captando). Substitui o toggle global na prática.
+	EvolutionCaptureDisabled []string `json:"evolutionCaptureDisabled"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -326,6 +329,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 	var cfg dashConfig
 	var allowedRaw []byte
 	var adminNumbersRaw []byte
+	var captureDisabledRaw []byte
 	var qhStart, qhEnd *string
 	var kbRaw *string
 
@@ -339,7 +343,8 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		       tc.admin_whatsapp_numbers,
 		       tc.debounce_ms,
 		       tc.evolution_bot_reply_enabled,
-		       tc.evolution_lead_capture_enabled
+		       tc.evolution_lead_capture_enabled,
+		       tc.evolution_capture_disabled
 		FROM tenant_config tc
 		WHERE tc.tenant_id = $1
 	`, tenantID).Scan(
@@ -347,12 +352,19 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		&allowedRaw, &qhStart, &qhEnd, &kbRaw, &cfg.SystemPrompt,
 		&cfg.AdminSystemPrompt,
 		&adminNumbersRaw, &cfg.DebounceMs, &cfg.EvolutionBotReplyEnabled,
-		&cfg.EvolutionLeadCaptureEnabled,
+		&cfg.EvolutionLeadCaptureEnabled, &captureDisabledRaw,
 	)
 	if err != nil {
 		s.logger.Error("dash: get config", "err", err)
 		jsonErr(w, "config not found", http.StatusNotFound)
 		return
+	}
+
+	if len(captureDisabledRaw) > 0 {
+		_ = json.Unmarshal(captureDisabledRaw, &cfg.EvolutionCaptureDisabled)
+	}
+	if cfg.EvolutionCaptureDisabled == nil {
+		cfg.EvolutionCaptureDisabled = []string{}
 	}
 
 	if len(allowedRaw) > 0 {
@@ -462,6 +474,11 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		kbJSON = []byte("[]")
 	}
 
+	captureDisabledJSON, _ := json.Marshal(body.EvolutionCaptureDisabled)
+	if body.EvolutionCaptureDisabled == nil {
+		captureDisabledJSON = []byte("[]")
+	}
+
 	var quietHoursJSON *string
 	if body.QuietHoursStart != nil && body.QuietHoursEnd != nil &&
 		*body.QuietHoursStart != "" && *body.QuietHoursEnd != "" {
@@ -483,12 +500,13 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		    debounce_ms            = $11,
 		    admin_system_prompt    = $12,
 		    evolution_bot_reply_enabled = $13,
-		    evolution_lead_capture_enabled = $14
+		    evolution_lead_capture_enabled = $14,
+		    evolution_capture_disabled = $15::jsonb
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
 		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt,
 		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt, body.EvolutionBotReplyEnabled,
-		body.EvolutionLeadCaptureEnabled)
+		body.EvolutionLeadCaptureEnabled, captureDisabledJSON)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)
@@ -903,6 +921,26 @@ func (s *Server) handleDashPatchLead(w http.ResponseWriter, r *http.Request) {
 	`, tenantID, id, body.Status, body.Owner, body.Interest)
 	if err != nil {
 		s.logger.Error("dash: patch lead", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		jsonErr(w, "lead not found", http.StatusNotFound)
+		return
+	}
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
+// DELETE /api/leads/{id} — remove um lead do funil (não toca em conversa/contato).
+func (s *Server) handleDashDeleteLead(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+	id := r.PathValue("id")
+
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM lead WHERE tenant_id = $1 AND id = $2`, tenantID, id)
+	if err != nil {
+		s.logger.Error("dash: delete lead", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)
 		return
 	}
