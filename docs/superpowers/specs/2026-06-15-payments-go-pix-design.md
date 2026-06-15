@@ -124,6 +124,9 @@ via **Stripe** entra na **Fase 2** sem tocar no núcleo.
 - Splits, subcontas white-label (BaaS), saques/chaves Pix, disputas/MEDs, dashboard de analytics.
 - Integração direta com `portal-do-aluno` (cadastro é próprio nesta fase).
 - Front-end/painel visual (a API só expõe JSON; painel pode vir depois).
+  - **Planejado (Fase 2):** **tela de checkout Pix própria** da Santos Tech (NÃO a do Dotfy).
+    A API já devolve `brCode` (copia-e-cola) + `qrCode` no JSON de cada cobrança, então o
+    front próprio consome esses campos e renderiza o Pix com a identidade visual de vocês.
 
 ## Plano de implementação (alto nível)
 1. Scaffold `apps/payments-go` (`main.go`, `config.go`, `server.go`, `db.go`, `models.go`,
