@@ -88,6 +88,52 @@ func newHexID() string {
 	return hex.EncodeToString(b)
 }
 
+// validRescheduleSource valida a origem aceita em POST /api/bookings/reschedule.
+func validRescheduleSource(s string) bool {
+	return s == "notion" || s == "pending"
+}
+
+// sendTextOutbound envia um texto avulso por uma conversa já conhecida (canal + telefone),
+// gravando em outbound_message. Reusado pelo envio manual e pela remarcação.
+func (s *Server) sendTextOutbound(ctx context.Context, tenantID TenantID, convID, channel, phone, text string) (string, error) {
+	var sender ChatSender
+	if channel == "evolution" {
+		if s.evoClient == nil || !s.evoClient.Enabled() {
+			return "", fmt.Errorf("Evolution API não configurada")
+		}
+		sender = s.evoClient
+	} else {
+		if s.sender.accessToken == "" || s.sender.phoneNumberID == "" {
+			return "", fmt.Errorf("Meta API não configurada")
+		}
+		sender = s.sender
+	}
+
+	content := MessageContent{Type: "text", Text: text}
+	idemKey := newHexID()
+	wamid, err := sender.SendMessage(ctx, OutboundMessage{
+		TenantID:       tenantID,
+		ConversationID: ConversationID(convID),
+		Channel:        channel,
+		To:             phone,
+		Intent:         IntentFreeForm,
+		Content:        content,
+		IdempotencyKey: idemKey,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	contentJSON, _ := json.Marshal(content)
+	_, _ = s.pool.Exec(ctx, `
+		INSERT INTO outbound_message
+			(tenant_id, conversation_id, provider_message_id, idempotency_key, intent_category, content, status, sent_at)
+		VALUES ($1, $2::uuid, $3, $4, 'FREE_FORM'::outbound_intent, $5, 'sent', now())
+		ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+	`, tenantID, convID, wamid, idemKey, contentJSON)
+	return wamid, nil
+}
+
 // ── GET /api/conversations ───────────────────────────────────────────────────
 
 func (s *Server) handleDashConversations(w http.ResponseWriter, r *http.Request) {
@@ -262,50 +308,12 @@ func (s *Server) handleDashSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Escolhe o sender pelo canal da conversa.
-	var sender ChatSender
-	if channel == "evolution" {
-		if s.evoClient == nil || !s.evoClient.Enabled() {
-			jsonErr(w, "Evolution API não configurada", http.StatusServiceUnavailable)
-			return
-		}
-		sender = s.evoClient
-	} else {
-		if s.sender.accessToken == "" || s.sender.phoneNumberID == "" {
-			jsonErr(w, "Meta API não configurada", http.StatusServiceUnavailable)
-			return
-		}
-		sender = s.sender
-	}
-
-	content := MessageContent{Type: "text", Text: body.Text}
-	idemKey := newHexID()
-
-	outMsg := OutboundMessage{
-		TenantID:       tenantID,
-		ConversationID: ConversationID(convID),
-		Channel:        channel,
-		To:             phone,
-		Intent:         IntentFreeForm,
-		Content:        content,
-		IdempotencyKey: idemKey,
-	}
-
-	wamid, err := sender.SendMessage(ctx, outMsg)
+	wamid, err := s.sendTextOutbound(ctx, tenantID, convID, channel, phone, body.Text)
 	if err != nil {
 		s.logger.Error("dash: send message", "err", err)
 		jsonErr(w, "falha ao enviar mensagem", http.StatusInternalServerError)
 		return
 	}
-
-	contentJSON, _ := json.Marshal(content)
-	_, _ = s.pool.Exec(ctx, `
-		INSERT INTO outbound_message
-			(tenant_id, conversation_id, provider_message_id, idempotency_key, intent_category, content, status, sent_at)
-		VALUES ($1, $2::uuid, $3, $4, 'FREE_FORM'::outbound_intent, $5, 'sent', now())
-		ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
-	`, tenantID, convID, wamid, idemKey, contentJSON)
-
 	jsonOK(w, map[string]string{"wamid": wamid})
 }
 
