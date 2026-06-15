@@ -35,7 +35,7 @@ func generateTokens(accessSecret, refreshSecret string, userID int64, email stri
 // verifyToken valida um JWT HS256 e retorna o userID (claim sub).
 func verifyToken(token, secret string) (int64, error) {
 	t, err := jwt.Parse(token, func(t *jwt.Token) (any, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok || t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 			return nil, errors.New("método de assinatura inesperado")
 		}
 		return []byte(secret), nil
