@@ -70,7 +70,10 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hash := sha256Hex(body.Token)
-	idStr, err := s.rdb.Get(r.Context(), "pwd_reset:"+hash).Result()
+	// GetDel consome o token atomicamente: a chave é deletada junto com o Get,
+	// eliminando a janela TOCTOU em que dois requests simultâneos com o mesmo
+	// token poderiam ambos ter sucesso. Padrão já usado no OAuth code exchange.
+	idStr, err := s.rdb.GetDel(r.Context(), "pwd_reset:"+hash).Result()
 	if err != nil || idStr == "" {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_TOKEN", "Link de recuperação inválido ou expirado"))
 		return
@@ -103,9 +106,6 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.deleteUserSessions(r.Context(), uid); err != nil {
 		slog.Error("falha ao revogar sessões após reset de senha", "uid", uid, "err", err)
-	}
-	if err := s.rdb.Del(r.Context(), "pwd_reset:"+hash).Err(); err != nil {
-		slog.Error("falha ao remover token de reset de senha do Redis", "err", err)
 	}
 	if firstPassword {
 		go s.sendWelcomeEmail(u.Email, u.Name)
