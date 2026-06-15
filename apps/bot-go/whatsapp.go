@@ -253,7 +253,11 @@ func contentToBody(content MessageContent) map[string]any {
 	case "audio":
 		audio := map[string]any{}
 		if content.MediaURL != nil {
-			audio["link"] = *content.MediaURL
+			if id, ok := strings.CutPrefix(*content.MediaURL, "wa_media_id:"); ok {
+				audio["id"] = id
+			} else {
+				audio["link"] = *content.MediaURL
+			}
 		}
 		return map[string]any{"type": "audio", "audio": audio}
 	case "video":

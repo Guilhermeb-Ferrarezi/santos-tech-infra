@@ -44,3 +44,19 @@ func TestUploadAudio(t *testing.T) {
 		t.Fatalf("id = %q", id)
 	}
 }
+
+func TestContentToBodyAudioByID(t *testing.T) {
+	id := "wa_media_id:MEDIA123"
+	audio := contentToBody(MessageContent{Type: "audio", MediaURL: &id})["audio"].(map[string]any)
+	if audio["id"] != "MEDIA123" {
+		t.Fatalf("esperava id, got %v", audio)
+	}
+	if _, has := audio["link"]; has {
+		t.Fatalf("não deveria ter link")
+	}
+	link := "https://x/a.ogg"
+	a2 := contentToBody(MessageContent{Type: "audio", MediaURL: &link})["audio"].(map[string]any)
+	if a2["link"] != "https://x/a.ogg" {
+		t.Fatalf("esperava link")
+	}
+}
