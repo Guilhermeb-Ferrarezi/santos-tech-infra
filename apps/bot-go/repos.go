@@ -1040,6 +1040,20 @@ func (r *PendingBookingRepo) MarkStatus(ctx context.Context, tx pgx.Tx, tenantID
 	return nil
 }
 
+// UpdateProposed reescreve o horário proposto de um agendamento aberto (remarcação
+// pelo dashboard). Mantém o status. Zera proposed_day para o display usar a data exata.
+func (r *PendingBookingRepo) UpdateProposed(ctx context.Context, tx pgx.Tx, tenantID TenantID, id, date, tm string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE pending_booking
+		SET proposed_date = $3, proposed_time = $4, proposed_day = '', updated_at = now()
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantID, id, date, tm)
+	if err != nil {
+		return fmt.Errorf("PendingBookingRepo.UpdateProposed: %w", err)
+	}
+	return nil
+}
+
 // ============================================================================
 // ScheduledContactRepo
 // ============================================================================
