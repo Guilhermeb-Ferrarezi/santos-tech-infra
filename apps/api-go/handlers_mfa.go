@@ -51,7 +51,8 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "MFA_SETUP_EXPIRED", "Setup expirado, gere novamente"))
 		return
 	}
-	if !totp.Validate(body.Code, secret) {
+	code := strings.TrimSpace(body.Code)
+	if !totp.Validate(code, secret) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
 		return
 	}
