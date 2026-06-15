@@ -66,7 +66,7 @@ func (v *VoiceClient) Transcribe(ctx context.Context, audio []byte, mime string)
 		return "", fmt.Errorf("voice: stt do: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("voice: stt status %d: %s", resp.StatusCode, string(raw))
 	}
@@ -107,7 +107,7 @@ func (v *VoiceClient) Synthesize(ctx context.Context, text string) ([]byte, erro
 		return nil, fmt.Errorf("voice: tts do: %w", err)
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("voice: tts status %d: %s", resp.StatusCode, string(data))
 	}

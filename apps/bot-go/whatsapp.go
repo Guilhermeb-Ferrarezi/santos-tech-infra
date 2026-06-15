@@ -158,6 +158,10 @@ func (s *WhatsAppSender) downloadMediaFrom(ctx context.Context, lookupURL string
 		return nil, "", fmt.Errorf("whatsapp: media lookup: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return nil, "", fmt.Errorf("whatsapp: media lookup status %d: %s", resp.StatusCode, string(raw))
+	}
 	var meta struct {
 		URL      string `json:"url"`
 		MimeType string `json:"mime_type"`
@@ -178,6 +182,10 @@ func (s *WhatsAppSender) downloadMediaFrom(ctx context.Context, lookupURL string
 		return nil, "", fmt.Errorf("whatsapp: media download: %w", err)
 	}
 	defer dresp.Body.Close()
+	if dresp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(dresp.Body, 4<<10))
+		return nil, "", fmt.Errorf("whatsapp: media download status %d: %s", dresp.StatusCode, string(raw))
+	}
 	data, err := io.ReadAll(io.LimitReader(dresp.Body, 16<<20))
 	if err != nil {
 		return nil, "", fmt.Errorf("whatsapp: media read: %w", err)
