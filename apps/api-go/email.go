@@ -26,7 +26,10 @@ func newEmailClient(cfg Config) *emailClient {
 }
 
 func (e *emailClient) send(ctx context.Context, to, subject, html string) error {
-	body, _ := json.Marshal(map[string]string{"to": to, "subject": subject, "html": html})
+	body, err := json.Marshal(map[string]string{"to": to, "subject": subject, "html": html})
+	if err != nil {
+		return fmt.Errorf("marshal email request: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.url+"/send", bytes.NewReader(body))
 	if err != nil {
 		return err
