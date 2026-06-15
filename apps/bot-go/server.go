@@ -504,9 +504,11 @@ func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
 		return
 	}
 
+	ctx := context.Background()
+
 	// Toggle: se a captação estiver desligada, ignora a mensagem por completo
 	// (não cria lead nem deixa o bot responder).
-	if !s.evolutionLeadCaptureEnabled(context.Background()) {
+	if !s.evolutionLeadCaptureEnabled(ctx) {
 		return
 	}
 
@@ -516,7 +518,6 @@ func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
 		text = ev.Data.Message.ExtendedTextMessage.Text
 	}
 
-	ctx := context.Background()
 	err := s.withTenant(ctx, func(tx pgx.Tx) error {
 		contact, _, err := s.contacts.FindByChannelIdentity(ctx, tx, "evolution", phone)
 		if err != nil {
