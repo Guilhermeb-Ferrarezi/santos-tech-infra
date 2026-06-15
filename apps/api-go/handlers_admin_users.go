@@ -76,7 +76,7 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 	var email string
 	switch {
 	case body.Email != "":
-		if !emailRe.MatchString(body.Email) {
+		if len(body.Email) > 254 || !emailRe.MatchString(body.Email) {
 			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "email inválido"))
 			return
 		}

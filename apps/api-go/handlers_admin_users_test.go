@@ -44,6 +44,18 @@ func TestCreateAdminUserBadLocalPart(t *testing.T) {
 	}
 }
 
+// email longo (> 254 chars, RFC 5321) → 400 antes do banco.
+func TestCreateAdminUserEmailTooLong(t *testing.T) {
+	s := testServer(Config{})
+	longEmail := strings.Repeat("a", 249) + "@b.com" // 255 chars > 254
+	w := httptest.NewRecorder()
+	s.handleCreateAdminUser(w, httptest.NewRequest("POST", "/auth/admin/users",
+		strings.NewReader(`{"email":"`+longEmail+`","name":"X"}`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("email longo: code=%d, esperado 400", w.Code)
+	}
+}
+
 // role fora de {1,2,3} → 400 antes do banco.
 func TestCreateAdminUserBadRole(t *testing.T) {
 	s := testServer(Config{})
