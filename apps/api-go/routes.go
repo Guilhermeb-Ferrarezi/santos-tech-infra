@@ -88,16 +88,18 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Documentação das APIs pra agentes/devs — autenticada (sessão ou PAT)
 	mux.HandleFunc("GET /llms.txt", s.rateLimit(30, min, s.authGuard(s.handleLLMsTxt)))
 
-	// Quadros (Excalidraw) — admins e professores; cena salva com autosave
-	// (debounce no front), por isso o limite de PUT é mais folgado.
-	mux.HandleFunc("GET /boards", s.staffGuard(s.handleListBoards))
-	mux.HandleFunc("POST /boards", s.rateLimit(20, min, s.staffGuard(s.handleCreateBoard)))
-	mux.HandleFunc("GET /boards/{id}", s.staffGuard(s.handleGetBoard))
-	mux.HandleFunc("PUT /boards/{id}", s.rateLimit(60, min, s.staffGuard(s.handleUpdateBoard)))
-	mux.HandleFunc("DELETE /boards/{id}", s.staffGuard(s.handleDeleteBoard))
-	mux.HandleFunc("GET /boards/{id}/members", s.staffGuard(s.handleListBoardMembers))
-	mux.HandleFunc("POST /boards/{id}/members", s.rateLimit(20, min, s.staffGuard(s.handleAddBoardMember)))
-	mux.HandleFunc("DELETE /boards/{id}/members/{userId}", s.staffGuard(s.handleRemoveBoardMember))
+	// Quadros (Excalidraw) — admin/professor OU cargo personalizado (role 4) com
+	// a permissão "quadros"; quadros são colaborativos, então professor cria/edita/
+	// apaga (allowTeacher=true em write/delete). Cena salva com autosave (debounce
+	// no front), por isso o limite de PUT é mais folgado.
+	mux.HandleFunc("GET /boards", s.portalRead("quadros", s.handleListBoards))
+	mux.HandleFunc("POST /boards", s.rateLimit(20, min, s.permGuard("quadros", "write", true, s.handleCreateBoard)))
+	mux.HandleFunc("GET /boards/{id}", s.portalRead("quadros", s.handleGetBoard))
+	mux.HandleFunc("PUT /boards/{id}", s.rateLimit(60, min, s.permGuard("quadros", "write", true, s.handleUpdateBoard)))
+	mux.HandleFunc("DELETE /boards/{id}", s.permGuard("quadros", "delete", true, s.handleDeleteBoard))
+	mux.HandleFunc("GET /boards/{id}/members", s.portalRead("quadros", s.handleListBoardMembers))
+	mux.HandleFunc("POST /boards/{id}/members", s.rateLimit(20, min, s.permGuard("quadros", "write", true, s.handleAddBoardMember)))
+	mux.HandleFunc("DELETE /boards/{id}/members/{userId}", s.permGuard("quadros", "write", true, s.handleRemoveBoardMember))
 
 	// Portal admin/professor — overview, catálogo, turmas, matrículas e salas
 	s.registerPortalRoutes(mux)
