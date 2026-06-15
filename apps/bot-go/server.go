@@ -503,6 +503,13 @@ func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
 	if phone == "" {
 		return
 	}
+
+	// Toggle: se a captação estiver desligada, ignora a mensagem por completo
+	// (não cria lead nem deixa o bot responder).
+	if !s.evolutionLeadCaptureEnabled(context.Background()) {
+		return
+	}
+
 	name := ev.Data.PushName
 	text := ev.Data.Message.Conversation
 	if text == "" {
