@@ -54,18 +54,19 @@ type dashMessage struct {
 }
 
 type dashConfig struct {
-	BotName                  string    `json:"botName"`
-	BotGender                string    `json:"botGender"`
-	BotEnabledByDefault      bool      `json:"botEnabledByDefault"`
-	BotAllowedNumbers        []string  `json:"botAllowedNumbers"`
-	QuietHoursStart          *string   `json:"quietHoursStart"`
-	QuietHoursEnd            *string   `json:"quietHoursEnd"`
-	KBContent                []KBEntry `json:"kbContent"`
-	SystemPrompt             string    `json:"systemPrompt"`
-	AdminSystemPrompt        string    `json:"adminSystemPrompt"`
-	AdminWhatsAppNumbers     []string  `json:"adminWhatsAppNumbers"`
-	DebounceMs               int       `json:"debounceMs"`
-	EvolutionBotReplyEnabled bool      `json:"evolutionBotReplyEnabled"`
+	BotName                     string    `json:"botName"`
+	BotGender                   string    `json:"botGender"`
+	BotEnabledByDefault         bool      `json:"botEnabledByDefault"`
+	BotAllowedNumbers           []string  `json:"botAllowedNumbers"`
+	QuietHoursStart             *string   `json:"quietHoursStart"`
+	QuietHoursEnd               *string   `json:"quietHoursEnd"`
+	KBContent                   []KBEntry `json:"kbContent"`
+	SystemPrompt                string    `json:"systemPrompt"`
+	AdminSystemPrompt           string    `json:"adminSystemPrompt"`
+	AdminWhatsAppNumbers        []string  `json:"adminWhatsAppNumbers"`
+	DebounceMs                  int       `json:"debounceMs"`
+	EvolutionBotReplyEnabled    bool      `json:"evolutionBotReplyEnabled"`
+	EvolutionLeadCaptureEnabled bool      `json:"evolutionLeadCaptureEnabled"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -85,6 +86,52 @@ func newHexID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// validRescheduleSource valida a origem aceita em POST /api/bookings/reschedule.
+func validRescheduleSource(s string) bool {
+	return s == "notion" || s == "pending"
+}
+
+// sendTextOutbound envia um texto avulso por uma conversa já conhecida (canal + telefone),
+// gravando em outbound_message. Reusado pelo envio manual e pela remarcação.
+func (s *Server) sendTextOutbound(ctx context.Context, tenantID TenantID, convID, channel, phone, text string) (string, error) {
+	var sender ChatSender
+	if channel == "evolution" {
+		if s.evoClient == nil || !s.evoClient.Enabled() {
+			return "", fmt.Errorf("Evolution API não configurada")
+		}
+		sender = s.evoClient
+	} else {
+		if s.sender.accessToken == "" || s.sender.phoneNumberID == "" {
+			return "", fmt.Errorf("Meta API não configurada")
+		}
+		sender = s.sender
+	}
+
+	content := MessageContent{Type: "text", Text: text}
+	idemKey := newHexID()
+	wamid, err := sender.SendMessage(ctx, OutboundMessage{
+		TenantID:       tenantID,
+		ConversationID: ConversationID(convID),
+		Channel:        channel,
+		To:             phone,
+		Intent:         IntentFreeForm,
+		Content:        content,
+		IdempotencyKey: idemKey,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	contentJSON, _ := json.Marshal(content)
+	_, _ = s.pool.Exec(ctx, `
+		INSERT INTO outbound_message
+			(tenant_id, conversation_id, provider_message_id, idempotency_key, intent_category, content, status, sent_at)
+		VALUES ($1, $2::uuid, $3, $4, 'FREE_FORM'::outbound_intent, $5, 'sent', now())
+		ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+	`, tenantID, convID, wamid, idemKey, contentJSON)
+	return wamid, nil
 }
 
 // ── GET /api/conversations ───────────────────────────────────────────────────
@@ -261,50 +308,12 @@ func (s *Server) handleDashSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Escolhe o sender pelo canal da conversa.
-	var sender ChatSender
-	if channel == "evolution" {
-		if s.evoClient == nil || !s.evoClient.Enabled() {
-			jsonErr(w, "Evolution API não configurada", http.StatusServiceUnavailable)
-			return
-		}
-		sender = s.evoClient
-	} else {
-		if s.sender.accessToken == "" || s.sender.phoneNumberID == "" {
-			jsonErr(w, "Meta API não configurada", http.StatusServiceUnavailable)
-			return
-		}
-		sender = s.sender
-	}
-
-	content := MessageContent{Type: "text", Text: body.Text}
-	idemKey := newHexID()
-
-	outMsg := OutboundMessage{
-		TenantID:       tenantID,
-		ConversationID: ConversationID(convID),
-		Channel:        channel,
-		To:             phone,
-		Intent:         IntentFreeForm,
-		Content:        content,
-		IdempotencyKey: idemKey,
-	}
-
-	wamid, err := sender.SendMessage(ctx, outMsg)
+	wamid, err := s.sendTextOutbound(ctx, tenantID, convID, channel, phone, body.Text)
 	if err != nil {
 		s.logger.Error("dash: send message", "err", err)
 		jsonErr(w, "falha ao enviar mensagem", http.StatusInternalServerError)
 		return
 	}
-
-	contentJSON, _ := json.Marshal(content)
-	_, _ = s.pool.Exec(ctx, `
-		INSERT INTO outbound_message
-			(tenant_id, conversation_id, provider_message_id, idempotency_key, intent_category, content, status, sent_at)
-		VALUES ($1, $2::uuid, $3, $4, 'FREE_FORM'::outbound_intent, $5, 'sent', now())
-		ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
-	`, tenantID, convID, wamid, idemKey, contentJSON)
-
 	jsonOK(w, map[string]string{"wamid": wamid})
 }
 
@@ -329,7 +338,8 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		       tc.admin_system_prompt,
 		       tc.admin_whatsapp_numbers,
 		       tc.debounce_ms,
-		       tc.evolution_bot_reply_enabled
+		       tc.evolution_bot_reply_enabled,
+		       tc.evolution_lead_capture_enabled
 		FROM tenant_config tc
 		WHERE tc.tenant_id = $1
 	`, tenantID).Scan(
@@ -337,6 +347,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		&allowedRaw, &qhStart, &qhEnd, &kbRaw, &cfg.SystemPrompt,
 		&cfg.AdminSystemPrompt,
 		&adminNumbersRaw, &cfg.DebounceMs, &cfg.EvolutionBotReplyEnabled,
+		&cfg.EvolutionLeadCaptureEnabled,
 	)
 	if err != nil {
 		s.logger.Error("dash: get config", "err", err)
@@ -471,11 +482,13 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		    admin_whatsapp_numbers = $10::jsonb,
 		    debounce_ms            = $11,
 		    admin_system_prompt    = $12,
-		    evolution_bot_reply_enabled = $13
+		    evolution_bot_reply_enabled = $13,
+		    evolution_lead_capture_enabled = $14
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
 		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt,
-		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt, body.EvolutionBotReplyEnabled)
+		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt, body.EvolutionBotReplyEnabled,
+		body.EvolutionLeadCaptureEnabled)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)
@@ -693,6 +706,7 @@ type dashAgenda struct {
 
 // dashUpcoming — aula experimental já agendada no Notion.
 type dashUpcoming struct {
+	PageID    string `json:"pageId"`
 	Aluno     string `json:"aluno"`
 	DataHora  string `json:"dataHora"`
 	Display   string `json:"display"`
@@ -724,7 +738,8 @@ func (s *Server) handleDashBookings(w http.ResponseWriter, r *http.Request) {
 	if n := s.engine.deps.Notion; n != nil && n.Enabled() {
 		for _, e := range n.Schedule(ctx) {
 			out.Upcoming = append(out.Upcoming, dashUpcoming{
-				Aluno: e.Aluno, DataHora: e.DataHora, Display: e.Display,
+				PageID: e.PageID,
+				Aluno:  e.Aluno, DataHora: e.DataHora, Display: e.Display,
 				Status: e.Status, Professor: e.Professor, WhatsApp: e.WhatsApp,
 			})
 		}
@@ -753,6 +768,109 @@ func (s *Server) handleDashBookings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w, out)
+}
+
+// convByPhone acha a conversa mais recente de um telefone (qualquer canal), comparando
+// só os dígitos. Usado na remarcação de aulas vindas do Notion (sem conversationId).
+func (s *Server) convByPhone(ctx context.Context, tenantID TenantID, phone string) (convID, channel string, err error) {
+	digits := normalizePhone(phone)
+	if digits == "" {
+		return "", "", fmt.Errorf("telefone vazio")
+	}
+	err = s.pool.QueryRow(ctx, `
+		SELECT conv.id::text, conv.channel::text
+		FROM conversation conv
+		JOIN channel_identity ci ON ci.id = conv.channel_identity_id
+		WHERE conv.tenant_id = $1
+		  AND regexp_replace(ci.external_id, '\D', '', 'g') = $2
+		ORDER BY conv.last_inbound_at DESC NULLS LAST
+		LIMIT 1
+	`, tenantID, digits).Scan(&convID, &channel)
+	return convID, channel, err
+}
+
+// POST /api/bookings/reschedule — remarca uma aula (Notion ou pendência) e, se houver
+// message, avisa o aluno pelo WhatsApp (best-effort). Body:
+//
+//	{ source: "notion"|"pending", id, date: "YYYY-MM-DD", time: "HH:MM", phone, message }
+func (s *Server) handleDashReschedule(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+
+	var body struct {
+		Source  string `json:"source"`
+		ID      string `json:"id"`
+		Date    string `json:"date"`
+		Time    string `json:"time"`
+		Phone   string `json:"phone"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if !validRescheduleSource(body.Source) || body.ID == "" {
+		jsonErr(w, "invalid source/id", http.StatusBadRequest)
+		return
+	}
+	iso, ok := ResolveBookingDateTime(body.Date, body.Time, time.Now())
+	if !ok {
+		jsonErr(w, "data/hora inválida", http.StatusBadRequest)
+		return
+	}
+	// Normaliza date/time a partir do ISO resolvido — mesma fonte de verdade do
+	// caminho Notion (evita gravar string crua/livre em pending_booking).
+	resolved, _ := time.Parse(time.RFC3339, iso)
+	resolvedDate := resolved.In(brLocation).Format("2006-01-02")
+	resolvedTime := resolved.In(brLocation).Format("15:04")
+
+	// 1) Persistir a remarcação.
+	switch body.Source {
+	case "notion":
+		n := s.engine.deps.Notion
+		if n == nil || !n.Enabled() {
+			jsonErr(w, "Notion não configurado", http.StatusServiceUnavailable)
+			return
+		}
+		if err := n.UpdateBookingDateTime(ctx, body.ID, iso); err != nil {
+			s.logger.Error("dash: reschedule notion", "err", err)
+			jsonErr(w, "falha ao remarcar no Notion", http.StatusInternalServerError)
+			return
+		}
+	case "pending":
+		if s.engine.deps.Bookings == nil {
+			jsonErr(w, "pendências indisponíveis", http.StatusServiceUnavailable)
+			return
+		}
+		if err := s.withTenant(ctx, func(tx pgx.Tx) error {
+			return s.engine.deps.Bookings.UpdateProposed(ctx, tx, tenantID, body.ID, resolvedDate, resolvedTime)
+		}); err != nil {
+			s.logger.Error("dash: reschedule pending", "err", err)
+			jsonErr(w, "falha ao remarcar pendência", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// 2) Avisar o aluno (best-effort: não desfaz a remarcação se falhar).
+	resp := map[string]any{"ok": true, "notified": false}
+	if strings.TrimSpace(body.Message) != "" {
+		convID, channel, err := s.convByPhone(ctx, tenantID, body.Phone)
+		if err != nil {
+			// Best-effort: a remarcação já foi persistida. Loga (inclui erro real de
+			// DB, não só "não encontrado") e responde sem derrubar a remarcação.
+			s.logger.Error("dash: reschedule notify lookup", "phone", body.Phone, "err", err)
+			resp["notifyError"] = "conversa não encontrada para o número"
+			jsonOK(w, resp)
+			return
+		}
+		if _, err := s.sendTextOutbound(ctx, tenantID, convID, channel, body.Phone, body.Message); err != nil {
+			resp["notifyError"] = err.Error()
+			jsonOK(w, resp)
+			return
+		}
+		resp["notified"] = true
+	}
+	jsonOK(w, resp)
 }
 
 // PATCH /api/leads/{id} — atualiza status (e opcional owner/interest) de um lead.

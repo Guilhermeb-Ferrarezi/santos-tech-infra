@@ -182,6 +182,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/logs", da(s.handleDashLogs))
 	mux.Handle("GET /api/leads", da(s.handleDashLeads))
 	mux.Handle("GET /api/bookings", da(s.handleDashBookings))
+	mux.Handle("POST /api/bookings/reschedule", da(s.handleDashReschedule))
 	mux.Handle("PATCH /api/leads/{id}", da(s.handleDashPatchLead))
 	mux.Handle("GET /api/evolution/instances", da(s.handleDashEvolutionInstances))
 	mux.HandleFunc("GET /api/ws", s.handleDashWS)
@@ -450,6 +451,18 @@ func (s *Server) evolutionBotReplyEnabled(ctx context.Context) bool {
 	return on
 }
 
+// evolutionLeadCaptureEnabled lê o toggle "captar leads do Evolution" (default true).
+// Desligado = ignorar por completo as mensagens da Evolution.
+func (s *Server) evolutionLeadCaptureEnabled(ctx context.Context) bool {
+	var on bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT evolution_lead_capture_enabled FROM tenant_config WHERE tenant_id = $1`, s.cfg.TenantID,
+	).Scan(&on); err != nil {
+		return true // fail-open: na dúvida, mantém o comportamento atual (captar)
+	}
+	return on
+}
+
 // handleEvolutionWebhook recebe eventos da Evolution e captura leads (origin=evolution).
 // Autenticado por segredo em ?secret=. ACK imediato; processa em background.
 func (s *Server) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request) {
@@ -491,13 +504,21 @@ func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
 	if phone == "" {
 		return
 	}
+
+	ctx := context.Background()
+
+	// Toggle: se a captação estiver desligada, ignora a mensagem por completo
+	// (não cria lead nem deixa o bot responder).
+	if !s.evolutionLeadCaptureEnabled(ctx) {
+		return
+	}
+
 	name := ev.Data.PushName
 	text := ev.Data.Message.Conversation
 	if text == "" {
 		text = ev.Data.Message.ExtendedTextMessage.Text
 	}
 
-	ctx := context.Background()
 	err := s.withTenant(ctx, func(tx pgx.Tx) error {
 		contact, _, err := s.contacts.FindByChannelIdentity(ctx, tx, "evolution", phone)
 		if err != nil {

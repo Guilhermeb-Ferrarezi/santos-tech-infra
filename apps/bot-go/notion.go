@@ -92,6 +92,7 @@ func (c *NotionClient) fetchSchedule(ctx context.Context) ([]ScheduleEntry, erro
 
 	var out struct {
 		Results []struct {
+			ID         string                     `json:"id"`
 			Properties map[string]json.RawMessage `json:"properties"`
 		} `json:"results"`
 	}
@@ -114,6 +115,7 @@ func (c *NotionClient) fetchSchedule(ctx context.Context) ([]ScheduleEntry, erro
 			continue // já passou
 		}
 		entries = append(entries, ScheduleEntry{
+			PageID:    r.ID,
 			Aluno:     notionTitle(r.Properties["Aluno/Responsável"]),
 			DataHora:  start,
 			Display:   formatBRDateTime(start),
@@ -174,6 +176,49 @@ func (c *NotionClient) CreateBooking(ctx context.Context, b Booking) error {
 		return fmt.Errorf("notion: create page status %d: %s", resp.StatusCode, string(raw))
 	}
 	// Invalida o cache pra o próximo Schedule() já refletir o novo agendamento.
+	c.mu.Lock()
+	c.cache = nil
+	c.mu.Unlock()
+	return nil
+}
+
+// UpdateBookingDateTime atualiza a propriedade "Data e hora" de uma página de aula
+// já existente (remarcação). iso é RFC3339 com offset (ex.: vindo de ResolveBookingDateTime).
+func (c *NotionClient) UpdateBookingDateTime(ctx context.Context, pageID, iso string) error {
+	if !c.Enabled() {
+		return fmt.Errorf("notion: não configurado")
+	}
+	if pageID == "" {
+		return fmt.Errorf("notion: pageID vazio")
+	}
+
+	body := map[string]any{
+		"properties": map[string]any{
+			"Data e hora": map[string]any{"date": map[string]any{"start": iso}},
+		},
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("notion: marshal update: %w", err)
+	}
+
+	url := "https://api.notion.com/v1/pages/" + pageID
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	c.setHeaders(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("notion: update page status %d: %s", resp.StatusCode, string(raw))
+	}
+	// Invalida o cache pra o próximo Schedule() refletir o novo horário.
 	c.mu.Lock()
 	c.cache = nil
 	c.mu.Unlock()

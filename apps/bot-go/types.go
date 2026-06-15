@@ -129,6 +129,7 @@ type TenantConfig struct {
 // ScheduleEntry — uma aula experimental já agendada, lida do data source
 // "Agenda — Aulas Experimentais" do Notion (horários ocupados).
 type ScheduleEntry struct {
+	PageID    string // id da página no Notion (para remarcar)
 	Aluno     string // Aluno/Responsável (title)
 	DataHora  string // ISO 8601 (start do campo "Data e hora")
 	Display   string // formatado pra humano, ex.: "ter 17/06 às 19:30"
