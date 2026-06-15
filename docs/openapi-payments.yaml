@@ -1,0 +1,215 @@
+openapi: 3.1.0
+info:
+  title: Santos Tech — Pagamentos (Pix/Dotfy)
+  version: "1.0.0"
+  description: >
+    API de pagamentos da Santos Tech (apps/payments-go). Cobra mensalidades
+    (recorrência própria) e matrículas/avulsos via Pix pelo gateway Dotfy.
+    Valores sempre em centavos. Auth: JWT HS256 do ecossistema; rotas admin
+    exigem role=3. Erros no padrão `{code,message}`.
+servers:
+  - url: https://api.santos-tech.com/payments
+  - url: http://localhost:3336
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      properties:
+        code: { type: string }
+        message: { type: string }
+    Student:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        taxId: { type: string }
+        email: { type: string }
+        phone: { type: string }
+        createdAt: { type: string, format: date-time }
+    Plan:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        amountCents: { type: integer }
+        dueDay: { type: integer, minimum: 1, maximum: 28 }
+        active: { type: boolean }
+    Subscription:
+      type: object
+      properties:
+        id: { type: integer }
+        studentId: { type: integer }
+        planId: { type: integer }
+        amountCents: { type: integer }
+        dueDay: { type: integer, minimum: 1, maximum: 28 }
+        status: { type: string, enum: [active, paused, canceled] }
+    Charge:
+      type: object
+      properties:
+        id: { type: integer }
+        kind: { type: string, enum: [mensalidade, matricula, avulso] }
+        subscriptionId: { type: integer, nullable: true }
+        studentId: { type: integer }
+        amountCents: { type: integer }
+        dueDate: { type: string, format: date }
+        referenceMonth: { type: string, nullable: true }
+        status: { type: string, enum: [pending, paid, expired, canceled] }
+        provider: { type: string }
+        providerChargeId: { type: string }
+        correlationId: { type: string }
+        brCode: { type: string, description: "Pix copia-e-cola" }
+        qrCode: { type: string, description: "imagem do QR (base64/data-uri) ou URL" }
+        paidAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+paths:
+  /health:
+    get:
+      summary: Liveness
+      security: []
+      responses:
+        "200": { description: ok }
+  /students:
+    post:
+      summary: Cria aluno/responsável
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, taxId, email]
+              properties:
+                name: { type: string }
+                taxId: { type: string }
+                email: { type: string }
+                phone: { type: string }
+      responses:
+        "201": { description: criado, content: { application/json: { schema: { $ref: "#/components/schemas/Student" } } } }
+        "400": { description: inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    get:
+      summary: Lista alunos
+      responses:
+        "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Student" } } } } }
+  /students/{id}:
+    get:
+      summary: Detalhe do aluno
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Student" } } } }
+        "404": { description: não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /students/{id}/charges:
+    get:
+      summary: Histórico de cobranças do aluno
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Charge" } } } } }
+  /plans:
+    post:
+      summary: Cria plano de mensalidade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, amountCents, dueDay]
+              properties:
+                name: { type: string }
+                amountCents: { type: integer }
+                dueDay: { type: integer, minimum: 1, maximum: 28 }
+      responses:
+        "201": { description: criado, content: { application/json: { schema: { $ref: "#/components/schemas/Plan" } } } }
+        "400": { description: inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    get:
+      summary: Lista planos
+      responses:
+        "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Plan" } } } } }
+  /subscriptions:
+    post:
+      summary: Cria assinatura (matrícula em plano)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [studentId, planId, amountCents, dueDay]
+              properties:
+                studentId: { type: integer }
+                planId: { type: integer }
+                amountCents: { type: integer }
+                dueDay: { type: integer, minimum: 1, maximum: 28 }
+      responses:
+        "201": { description: criada, content: { application/json: { schema: { $ref: "#/components/schemas/Subscription" } } } }
+        "400": { description: inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    get:
+      summary: Lista assinaturas
+      responses:
+        "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Subscription" } } } } }
+  /subscriptions/{id}:
+    patch:
+      summary: Atualiza status da assinatura
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [active, paused, canceled] }
+      responses:
+        "200": { description: ok }
+        "400": { description: inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /charges:
+    post:
+      summary: Cria cobrança avulsa/matrícula (Pix)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, studentId, amountCents]
+              properties:
+                kind: { type: string, enum: [matricula, avulso] }
+                studentId: { type: integer }
+                amountCents: { type: integer }
+                description: { type: string }
+                dueDate: { type: string, format: date }
+      responses:
+        "201": { description: criada (inclui brCode/qrCode), content: { application/json: { schema: { $ref: "#/components/schemas/Charge" } } } }
+        "400": { description: inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: falha no gateway, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    get:
+      summary: Lista cobranças
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, paid, expired, canceled] } }
+        - { name: student_id, in: query, schema: { type: integer } }
+      responses:
+        "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Charge" } } } } }
+  /charges/{id}:
+    get:
+      summary: Detalhe da cobrança
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Charge" } } } }
+        "404": { description: não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /webhooks/dotfy:
+    post:
+      summary: Webhook do Dotfy (público, idempotente)
+      security: []
+      description: >
+        Recebe CHARGE_PAID (dá baixa), CHARGE_EXPIRED (marca inadimplência) e
+        CHARGE_CREATED (no-op). Idempotência por id do evento.
+      responses:
+        "200": { description: processado/duplicado }
+        "400": { description: webhook inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }

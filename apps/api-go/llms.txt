@@ -12,6 +12,7 @@
 | Auth central | `https://api.santos-tech.com/auth` | santos-tech-infra/apps/api-go |
 | Claude Agent | `https://api.santos-tech.com/claude` | santos-tech-infra/apps/agent-go |
 | MCP (gateway p/ agentes) | `https://api.santos-tech.com/mcp` | santos-tech-infra/apps/mcp-go |
+| Pagamentos (Pix/Dotfy) | `https://api.santos-tech.com/payments` | santos-tech-infra/apps/payments-go |
 | Email (envio/leads/campanhas) | `https://mails.santos-tech.com/api` | sg/email (api/) |
 | Tela de login/perfil (UI) | `https://auth.santos-tech.com` | santos-tech-infra/apps/auth-web |
 
@@ -425,3 +426,38 @@ DELETE /portal/notifications/dispatches/{dispatchId}     (sudo)
 Activity logs (auditoria; staff):
 GET    /portal/activity-logs?action=&entityType=&actorId=&actorGroup=user|staff&q=&from=&to=&limit=&offset=
          → {items:[{id,actor:{id,name,email,role},action,entityType,entityId,method,endpoint,metadata,createdAt}],total}
+
+## Pagamentos (apps/payments-go) — Pix via Dotfy
+
+Serviço Go autônomo (porta 3336). Cobra mensalidades (recorrência própria) e
+matrículas/avulsos via Pix. Gateway: Dotfy (`https://app.dotfy.com.br`,
+`Authorization: Bearer <DOTFY_API_KEY>`). Dotfy é Pix puro e SEM recorrência
+nativa — a mensalidade é gerada por um job diário in-process (1 cobrança/mês por
+assinatura ativa, idempotente por `(subscription_id, reference_month)`). Valores
+sempre em centavos. Auth: JWT HS256 do ecossistema; rotas admin exigem role=3.
+Erros no padrão `{code,message}`. Multi-provider (cartão/Stripe planejado p/ Fase 2).
+
+Cadastro (admin):
+POST   /students            body {name,taxId,email,phone?}      → 201 {id,...}
+GET    /students                                                → [{...}]
+GET    /students/{id}                                           → {...}
+GET    /students/{id}/charges                                   → [charges do aluno]
+POST   /plans               body {name,amountCents,dueDay}      → 201 {id,...}
+GET    /plans                                                   → [{...}]
+POST   /subscriptions       body {studentId,planId,amountCents,dueDay} → 201 {id,status}
+GET    /subscriptions                                           → [{...}]
+PATCH  /subscriptions/{id}  body {status:active|paused|canceled} → {status}
+
+Cobranças (admin):
+POST   /charges   body {kind:matricula|avulso,studentId,amountCents,description?,dueDate?}
+         → 201 {id,...,brCode,qrCode,correlationId,status} (cria no Dotfy + envia email do Pix)
+GET    /charges?status=&student_id=                             → [{...}]
+GET    /charges/{id}                                            → {...}
+
+Webhook (público, verificado/idempotente):
+POST   /webhooks/dotfy   eventos CHARGE_PAID (baixa) / CHARGE_EXPIRED (inadimplência)
+         / CHARGE_CREATED (no-op). Idempotência por id do evento em pay_webhook_events.
+
+Tabelas próprias (mesmo Postgres `santos_tech`, prefixo pay_): pay_students,
+pay_plans, pay_subscriptions, pay_charges, pay_webhook_events.
+Fase 2 planejada: tela de checkout Pix própria (consome brCode/qrCode do JSON).

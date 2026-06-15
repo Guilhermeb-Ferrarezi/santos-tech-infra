@@ -21,7 +21,7 @@ type Config struct {
 
 func LoadConfig() Config {
 	return Config{
-		Port:               getEnv("PORT", "3334"),
+		Port:               getEnv("PORT", "3336"),
 		DatabaseURL:        mustEnv("DATABASE_URL"),
 		JWTSecret:          mustEnv("JWT_SECRET"),
 		CORSOrigins:        splitCSV(getEnv("CORS_ORIGIN", "")),
