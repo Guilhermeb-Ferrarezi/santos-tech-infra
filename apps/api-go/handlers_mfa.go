@@ -120,7 +120,7 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 	// enviado pro email (/auth/mfa/email-code) — necessário p/ contas só com email-2FA.
 	code := strings.TrimSpace(body.Code)
 	valid := u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret)
-	if !valid {
+	if !valid && len(code) == recoveryCodeLen {
 		valid = s.consumeRecoveryCode(r.Context(), uid, sha256Hex(strings.ToUpper(code)))
 	}
 	if !valid {
@@ -233,7 +233,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 			s.rdb.Del(r.Context(), "mfa_email:"+body.Challenge)
 		}
 	}
-	if !valid && s.consumeRecoveryCode(r.Context(), uid, sha256Hex(strings.ToUpper(code))) {
+	if !valid && len(code) == recoveryCodeLen && s.consumeRecoveryCode(r.Context(), uid, sha256Hex(strings.ToUpper(code))) {
 		valid = true
 	}
 	if !valid {

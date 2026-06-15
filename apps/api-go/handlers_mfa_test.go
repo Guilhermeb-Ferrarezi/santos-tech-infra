@@ -125,3 +125,17 @@ func TestHandleMFAMethodBadBody(t *testing.T) {
 		t.Fatalf("code=%d (queria 400)", w.Code)
 	}
 }
+
+// TestGenRecoveryCodesLen verifica que os códigos gerados têm exatamente
+// recoveryCodeLen caracteres — mesma constante usada para filtrar a consulta ao banco.
+func TestGenRecoveryCodesLen(t *testing.T) {
+	codes := genRecoveryCodes(10)
+	if len(codes) != 10 {
+		t.Fatalf("queria 10 códigos, got %d", len(codes))
+	}
+	for i, c := range codes {
+		if len(c) != recoveryCodeLen {
+			t.Errorf("código[%d] = %q: comprimento %d (queria %d)", i, c, len(c), recoveryCodeLen)
+		}
+	}
+}

@@ -126,7 +126,7 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 			if !valid {
 				valid = s.consumeAcctEmailCode(r.Context(), uid, code)
 			}
-			if !valid {
+			if !valid && len(code) == recoveryCodeLen {
 				valid = s.consumeRecoveryCode(r.Context(), uid, sha256Hex(strings.ToUpper(code)))
 			}
 		}
