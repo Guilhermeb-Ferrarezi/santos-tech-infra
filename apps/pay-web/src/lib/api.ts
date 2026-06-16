@@ -1,5 +1,7 @@
 const BASE = import.meta.env.VITE_API_URL ?? "https://api.santos-tech.com/payments";
 const AUTH = import.meta.env.VITE_AUTH_URL ?? "https://auth.santos-tech.com";
+// raiz da API do ecossistema (onde vive /auth/refresh), derivada do BASE.
+const API_ROOT = BASE.replace(/\/payments\/?$/, "");
 
 function redirectToLogin(): never {
   const back = encodeURIComponent(window.location.href);
@@ -7,13 +9,20 @@ function redirectToLogin(): never {
   throw new Error("redirecting");
 }
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
+async function req<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     credentials: "include",
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
-  if (res.status === 401) redirectToLogin();
+  if (res.status === 401) {
+    // tenta renovar a sessão uma vez antes de mandar pro login (evita re-login à toa)
+    if (!retried) {
+      const refreshed = await fetch(`${API_ROOT}/auth/refresh`, { method: "POST", credentials: "include" });
+      if (refreshed.ok) return req<T>(path, init, true);
+    }
+    redirectToLogin();
+  }
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message ?? `Erro ${res.status}`);
   return res.status === 204 ? (undefined as T) : res.json();
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -264,10 +265,12 @@ func (s *Store) GetProductBySlug(ctx context.Context, slug string) (*Product, er
 	return &p, nil
 }
 
+// GetProductByID retorna só produtos ATIVOS — usado no carrinho e no checkout, para
+// não exibir nem cobrar item desativado depois de já ter entrado no carrinho.
 func (s *Store) GetProductByID(ctx context.Context, id int64) (*Product, error) {
 	var p Product
 	err := s.db.QueryRow(ctx,
-		`SELECT id, slug, name, description, price_cents, active FROM pay_products WHERE id=$1`, id).
+		`SELECT id, slug, name, description, price_cents, active FROM pay_products WHERE id=$1 AND active=true`, id).
 		Scan(&p.ID, &p.Slug, &p.Name, &p.Description, &p.PriceCents, &p.Active)
 	if err != nil {
 		return nil, err
@@ -276,21 +279,30 @@ func (s *Store) GetProductByID(ctx context.Context, id int64) (*Product, error) 
 }
 
 func (s *Store) UpdateProduct(ctx context.Context, p *Product) error {
-	_, err := s.db.Exec(ctx,
+	tag, err := s.db.Exec(ctx,
 		`UPDATE pay_products SET name=$2, description=$3, price_cents=$4, active=$5 WHERE id=$1`,
 		p.ID, p.Name, p.Description, p.PriceCents, p.Active)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 // ── Customers ─────────────────────────────────────────────────────────────
 
-func (s *Store) UpsertCustomer(ctx context.Context, userID int64, name, email string) (*Customer, error) {
+// UpsertCustomer garante o registro do cliente SEM sobrescrever dados já preenchidos.
+// O DO UPDATE é um no-op (re-grava o próprio user_id) só para o RETURNING devolver a
+// linha existente — tax_id/phone/name/email persistidos não são tocados.
+func (s *Store) UpsertCustomer(ctx context.Context, userID int64) (*Customer, error) {
 	var c Customer
 	err := s.db.QueryRow(ctx, `
-		INSERT INTO pay_customers (user_id, name, email) VALUES ($1,$2,$3)
-		ON CONFLICT (user_id) DO UPDATE SET name=EXCLUDED.name, email=EXCLUDED.email
+		INSERT INTO pay_customers (user_id) VALUES ($1)
+		ON CONFLICT (user_id) DO UPDATE SET user_id=EXCLUDED.user_id
 		RETURNING id, user_id, tax_id, phone, name, email`,
-		userID, name, email).Scan(&c.ID, &c.UserID, &c.TaxID, &c.Phone, &c.Name, &c.Email)
+		userID).Scan(&c.ID, &c.UserID, &c.TaxID, &c.Phone, &c.Name, &c.Email)
 	if err != nil {
 		return nil, err
 	}

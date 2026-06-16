@@ -1,9 +1,12 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *Server) handleCreateProduct(w http.ResponseWriter, r *http.Request) {
@@ -47,6 +50,10 @@ func (s *Server) handleUpdateProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.UpdateProduct(r.Context(), &in); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "not_found", "Produto não encontrado")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao atualizar")
 		return
 	}

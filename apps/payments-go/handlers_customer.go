@@ -2,18 +2,21 @@ package main
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *Server) uid(r *http.Request) int64 { return r.Context().Value(userIDKey).(int64) }
 
-// resolve (ou cria) o customer do usuário logado. name/email vêm do token? Não temos —
-// usamos vazio e o cliente preenche; o nome do pagador no Pix usa o que ele informar.
+// customer garante (idempotente, sem sobrescrever dados) o registro do cliente logado.
 func (s *Server) customer(ctx context.Context, userID int64) (*Customer, error) {
-	return s.store.UpsertCustomer(ctx, userID, "", "")
+	return s.store.UpsertCustomer(ctx, userID)
 }
 
 func (s *Server) handleGetMeCustomer(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +90,11 @@ func (s *Server) handleAddCart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRemoveCart(w http.ResponseWriter, r *http.Request) {
-	pid, _ := strconv.ParseInt(r.PathValue("productId"), 10, 64)
+	pid, err := strconv.ParseInt(r.PathValue("productId"), 10, 64)
+	if err != nil || pid <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_param", "productId inválido")
+		return
+	}
 	if err := s.cart.Remove(r.Context(), s.uid(r), pid); err != nil {
 		writeError(w, http.StatusInternalServerError, "redis_error", "Falha ao remover")
 		return
@@ -150,8 +157,8 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.InsertChargeItems(r.Context(), c.ID, chargeItems); err != nil {
-		// não falha o pagamento; só loga
-		_ = err
+		// não falha o pagamento (cobrança já válida no Dotfy), mas registra para auditoria
+		slog.Warn("falha ao gravar itens da cobrança", "charge_id", c.ID, "err", err)
 	}
 	_ = s.cart.Clear(r.Context(), uid)
 	if in.Save {
@@ -163,7 +170,12 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMeCharges(w http.ResponseWriter, r *http.Request) {
-	cust, err := s.customer(r.Context(), s.uid(r))
+	// Leitura: não cria o customer à toa. Sem customer ainda → histórico vazio.
+	cust, err := s.store.GetCustomerByUserID(r.Context(), s.uid(r))
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusOK, []Charge{})
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha")
 		return

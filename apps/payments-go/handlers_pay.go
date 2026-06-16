@@ -51,6 +51,16 @@ func (s *Server) handlePayEvents(w http.ResponseWriter, r *http.Request) {
 	pubsub := s.subscribeCharge(r.Context(), token)
 	defer pubsub.Close()
 	ch := pubsub.Channel()
+
+	// Re-checa após assinar: fecha a janela de corrida em que o pagamento cai
+	// ENTRE o GetCharge inicial e o Subscribe (senão o evento publicado se perderia
+	// e o stream ficaria aberto pra sempre).
+	if c2, err := s.store.GetChargeByPublicToken(r.Context(), token); err == nil && c2.Status != "pending" {
+		fmt.Fprintf(w, "event: paid\ndata: paid\n\n")
+		flusher.Flush()
+		return
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():

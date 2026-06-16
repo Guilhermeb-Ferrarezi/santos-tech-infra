@@ -10,8 +10,22 @@ export default function ProductPage() {
   const nav = useNavigate();
   const [p, setP] = useState<Product | null>(null);
   const [err, setErr] = useState("");
+  const [adding, setAdding] = useState(false);
   useEffect(() => { api.product(slug).then(setP).catch(() => setErr("Produto não encontrado")); }, [slug]);
-  if (err) return <Centered>{err}</Centered>;
+
+  async function comprar() {
+    setAdding(true);
+    setErr("");
+    try {
+      await api.addToCart(slug);
+      nav("/cart");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Erro ao adicionar ao carrinho");
+      setAdding(false);
+    }
+  }
+
+  if (err && !p) return <Centered>{err}</Centered>;
   if (!p) return <Centered>Carregando…</Centered>;
   return (
     <Centered>
@@ -19,8 +33,9 @@ export default function ProductPage() {
         <h1 className="text-2xl font-bold text-[#0e2937]">{p.name}</h1>
         <p className="text-slate-600">{p.description}</p>
         <div className="text-3xl font-bold text-[#0db88f]">{formatBRL(p.priceCents)}</div>
-        <Button className="w-full" onClick={async () => { await api.addToCart(slug); nav("/cart"); }}>
-          Comprar
+        {err && <p className="text-sm text-rose-600">{err}</p>}
+        <Button className="w-full" onClick={comprar} disabled={adding}>
+          {adding ? "Adicionando…" : "Comprar"}
         </Button>
       </Card>
     </Centered>
