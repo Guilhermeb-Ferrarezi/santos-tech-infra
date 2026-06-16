@@ -9,6 +9,7 @@ import (
 type Config struct {
 	Port               string
 	DatabaseURL        string
+	RedisURL           string
 	JWTSecret          string
 	CORSOrigins        []string
 	EmailAPIURL        string
@@ -24,6 +25,7 @@ func LoadConfig() Config {
 	return Config{
 		Port:               getEnv("PORT", "3336"),
 		DatabaseURL:        mustEnv("DATABASE_URL"),
+		RedisURL:           mustEnv("REDIS_URL"),
 		JWTSecret:          mustEnv("JWT_SECRET"),
 		CORSOrigins:        splitCSV(getEnv("CORS_ORIGIN", "")),
 		EmailAPIURL:        strings.TrimRight(getEnv("EMAIL_API_URL", "https://mails.santos-tech.com/api"), "/"),

@@ -22,8 +22,8 @@ func newEmailClient(cfg Config) *emailClient {
 }
 
 func (e *emailClient) send(ctx context.Context, to, subject, html string) error {
-	if e.url == "" || e.key == "" {
-		return nil // email desabilitado: não bloqueia a cobrança
+	if e.url == "" || e.key == "" || to == "" {
+		return nil // email desabilitado ou sem destinatário: não bloqueia a cobrança
 	}
 	body, _ := json.Marshal(map[string]string{"to": to, "subject": subject, "html": html})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.url+"/send", bytes.NewReader(body))

@@ -40,7 +40,7 @@ func (s *Server) generateMonthlyCharges(ctx context.Context) {
 		subID := row.Sub.ID
 		student := row.Student
 		c := &Charge{
-			Kind: "mensalidade", SubscriptionID: &subID, StudentID: student.ID,
+			Kind: "mensalidade", SubscriptionID: &subID, StudentID: &student.ID,
 			AmountCents: row.Sub.AmountCents, DueDate: monthlyDueDate(now.Year(), now.Month(), row.Sub.DueDay),
 			ReferenceMonth: &ref, Provider: "dotfy", CorrelationID: newCorrelationID(),
 		}

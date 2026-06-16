@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -139,13 +140,20 @@ func (s *Store) SubscriptionsDueToday(ctx context.Context, day int, refMonth str
 func (s *Store) InsertCharge(ctx context.Context, c *Charge) error {
 	return s.db.QueryRow(ctx, `
 		INSERT INTO pay_charges
-		  (kind, subscription_id, student_id, amount_cents, due_date, reference_month,
-		   provider, provider_charge_id, correlation_id, br_code, qr_code)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		  (kind, subscription_id, student_id, customer_id, amount_cents, due_date, reference_month,
+		   provider, provider_charge_id, correlation_id, public_token, payer_tax_id, br_code, qr_code)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		RETURNING id, status, created_at`,
-		c.Kind, c.SubscriptionID, c.StudentID, c.AmountCents, c.DueDate, c.ReferenceMonth,
-		c.Provider, c.ProviderChargeID, c.CorrelationID, c.BRCode, c.QRCode).
+		c.Kind, c.SubscriptionID, c.StudentID, c.CustomerID, c.AmountCents, c.DueDate, c.ReferenceMonth,
+		c.Provider, c.ProviderChargeID, c.CorrelationID, nullStr(c.PublicToken), nullStr(c.payerTaxID), c.BRCode, c.QRCode).
 		Scan(&c.ID, &c.Status, &c.CreatedAt)
+}
+
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func (s *Store) ListCharges(ctx context.Context, status string, studentID int64) ([]Charge, error) {
@@ -210,4 +218,155 @@ func (s *Store) MarkWebhookSeen(ctx context.Context, id, typ string, payload []b
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+func (s *Store) PublicTokenByCorrelation(ctx context.Context, correlationID string) (string, error) {
+	var tok *string
+	err := s.db.QueryRow(ctx, `SELECT public_token FROM pay_charges WHERE correlation_id=$1`, correlationID).Scan(&tok)
+	if err != nil || tok == nil {
+		return "", err
+	}
+	return *tok, nil
+}
+
+// ── Products ──────────────────────────────────────────────────────────────
+
+func (s *Store) CreateProduct(ctx context.Context, p *Product) error {
+	return s.db.QueryRow(ctx,
+		`INSERT INTO pay_products (slug, name, description, price_cents) VALUES ($1,$2,$3,$4) RETURNING id, active`,
+		p.Slug, p.Name, p.Description, p.PriceCents).Scan(&p.ID, &p.Active)
+}
+
+func (s *Store) ListProducts(ctx context.Context) ([]Product, error) {
+	rows, err := s.db.Query(ctx, `SELECT id, slug, name, description, price_cents, active FROM pay_products ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Product{}
+	for rows.Next() {
+		var p Product
+		if err := rows.Scan(&p.ID, &p.Slug, &p.Name, &p.Description, &p.PriceCents, &p.Active); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetProductBySlug(ctx context.Context, slug string) (*Product, error) {
+	var p Product
+	err := s.db.QueryRow(ctx,
+		`SELECT id, slug, name, description, price_cents, active FROM pay_products WHERE slug=$1 AND active=true`, slug).
+		Scan(&p.ID, &p.Slug, &p.Name, &p.Description, &p.PriceCents, &p.Active)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// GetProductByID retorna só produtos ATIVOS — usado no carrinho e no checkout, para
+// não exibir nem cobrar item desativado depois de já ter entrado no carrinho.
+func (s *Store) GetProductByID(ctx context.Context, id int64) (*Product, error) {
+	var p Product
+	err := s.db.QueryRow(ctx,
+		`SELECT id, slug, name, description, price_cents, active FROM pay_products WHERE id=$1 AND active=true`, id).
+		Scan(&p.ID, &p.Slug, &p.Name, &p.Description, &p.PriceCents, &p.Active)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+func (s *Store) UpdateProduct(ctx context.Context, p *Product) error {
+	tag, err := s.db.Exec(ctx,
+		`UPDATE pay_products SET name=$2, description=$3, price_cents=$4, active=$5 WHERE id=$1`,
+		p.ID, p.Name, p.Description, p.PriceCents, p.Active)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// ── Customers ─────────────────────────────────────────────────────────────
+
+// UpsertCustomer garante o registro do cliente SEM sobrescrever dados já preenchidos.
+// O DO UPDATE é um no-op (re-grava o próprio user_id) só para o RETURNING devolver a
+// linha existente — tax_id/phone/name/email persistidos não são tocados.
+func (s *Store) UpsertCustomer(ctx context.Context, userID int64) (*Customer, error) {
+	var c Customer
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO pay_customers (user_id) VALUES ($1)
+		ON CONFLICT (user_id) DO UPDATE SET user_id=EXCLUDED.user_id
+		RETURNING id, user_id, tax_id, phone, name, email`,
+		userID).Scan(&c.ID, &c.UserID, &c.TaxID, &c.Phone, &c.Name, &c.Email)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (s *Store) GetCustomerByUserID(ctx context.Context, userID int64) (*Customer, error) {
+	var c Customer
+	err := s.db.QueryRow(ctx,
+		`SELECT id, user_id, tax_id, phone, name, email FROM pay_customers WHERE user_id=$1`, userID).
+		Scan(&c.ID, &c.UserID, &c.TaxID, &c.Phone, &c.Name, &c.Email)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (s *Store) UpdateCustomerData(ctx context.Context, userID int64, taxID, phone string) error {
+	_, err := s.db.Exec(ctx, `UPDATE pay_customers SET tax_id=$2, phone=$3 WHERE user_id=$1`, userID, taxID, phone)
+	return err
+}
+
+// ── Charge items + charges por token/cliente ──────────────────────────────
+
+func (s *Store) InsertChargeItems(ctx context.Context, chargeID int64, items []ChargeItem) error {
+	for _, it := range items {
+		if _, err := s.db.Exec(ctx,
+			`INSERT INTO pay_charge_items (charge_id, product_id, name, price_cents, quantity) VALUES ($1,$2,$3,$4,$5)`,
+			chargeID, it.ProductID, it.Name, it.PriceCents, it.Quantity); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) GetChargeByPublicToken(ctx context.Context, token string) (*Charge, error) {
+	var c Charge
+	err := s.db.QueryRow(ctx, `
+		SELECT id, kind, student_id, customer_id, amount_cents, due_date::text, status,
+		       COALESCE(br_code,''), COALESCE(qr_code,''), correlation_id, paid_at, created_at
+		FROM pay_charges WHERE public_token=$1`, token).
+		Scan(&c.ID, &c.Kind, &c.StudentID, &c.CustomerID, &c.AmountCents, &c.DueDate, &c.Status,
+			&c.BRCode, &c.QRCode, &c.CorrelationID, &c.PaidAt, &c.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (s *Store) ListChargesByCustomer(ctx context.Context, customerID int64) ([]Charge, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, kind, amount_cents, due_date::text, status, COALESCE(br_code,''), correlation_id, paid_at, created_at
+		FROM pay_charges WHERE customer_id=$1 ORDER BY created_at DESC`, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Charge{}
+	for rows.Next() {
+		var c Charge
+		if err := rows.Scan(&c.ID, &c.Kind, &c.AmountCents, &c.DueDate, &c.Status, &c.BRCode, &c.CorrelationID, &c.PaidAt, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
