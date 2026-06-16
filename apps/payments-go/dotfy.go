@@ -128,8 +128,11 @@ func (p *dotfyProvider) do(ctx context.Context, method, path string, body any) (
 		return nil, err
 	}
 	defer res.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	data, readErr := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if res.StatusCode >= 300 {
+		if readErr != nil {
+			return nil, fmt.Errorf("dotfy %s %s: status %d (falha ao ler resposta: %w)", method, path, res.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("dotfy %s %s: status %d: %s", method, path, res.StatusCode, data)
 	}
 	return data, nil
