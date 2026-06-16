@@ -462,6 +462,10 @@ type evolutionWebhook struct {
 			// Participant: em grupos, o JID de quem enviou (o remoteJid é o ...@g.us).
 			// Em chats 1:1 vem vazio (o remetente é o próprio remoteJid).
 			Participant string `json:"participant"`
+			// ParticipantAlt: quando o participant vem como LID (...@lid), a Evolution
+			// envia aqui o número real (...@s.whatsapp.net). Preferir este para
+			// identificar o remetente (ex.: gate de admin).
+			ParticipantAlt string `json:"participantAlt"`
 		} `json:"key"`
 		PushName string `json:"pushName"`
 		Message  struct {
@@ -563,8 +567,12 @@ func (s *Server) dispatchEvolutionCommand(ev evolutionWebhook) bool {
 		return false
 	}
 
-	// Remetente: em grupo é o participant; em 1:1 é o próprio remoteJid.
-	from := ev.Data.Key.Participant
+	// Remetente: prefere o número real (participantAlt) quando o participant vem
+	// como LID; em grupo é o participant; em 1:1 é o próprio remoteJid.
+	from := ev.Data.Key.ParticipantAlt
+	if from == "" {
+		from = ev.Data.Key.Participant
+	}
 	if from == "" {
 		from = chatJid
 	}
