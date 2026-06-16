@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // issueSession gera tokens, grava a sessão (refresh hash), seta os cookies e
@@ -111,7 +114,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// a proteção contra credential-stuffing distribuído continua vindo do
 	// rate-limit por IP da rota (routes.go) + do limite global.
 	lockKey := "login_fail:" + clientIP(r) + ":" + strings.ToLower(ident)
-	if n, _ := s.rdb.Get(r.Context(), lockKey).Int(); n >= maxLoginFails {
+	lockN, lockErr := s.rdb.Get(r.Context(), lockKey).Int()
+	if lockErr != nil && !errors.Is(lockErr, redis.Nil) {
+		// Redis indisponível: fail-closed — não permitir tentativa sem confirmar o contador.
+		slog.Error("login: erro Redis ao verificar lockout", "key", lockKey, "err", lockErr)
+		writeErr(w, appErr(http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "Serviço temporariamente indisponível"))
+		return
+	}
+	if lockN >= maxLoginFails {
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
 		return
 	}
