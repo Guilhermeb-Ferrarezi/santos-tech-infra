@@ -169,6 +169,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+bp+"/webhooks/evolution", s.handleEvolutionWebhook)
 	mux.HandleFunc("GET "+bp+"/health", s.handleHealth)
 
+	// Endpoint interno (server-to-server) — protegido por X-Api-Key
+	mux.HandleFunc("POST /internal/send", s.handleInternalSend)
+
 	// Dashboard API
 	da := s.dashMiddleware
 	mux.Handle("GET /api/conversations", da(s.handleDashConversations))
