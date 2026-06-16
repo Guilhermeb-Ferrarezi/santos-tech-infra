@@ -99,10 +99,6 @@ func (s *Server) createAndPersistCharge(ctx context.Context, c *Charge, st *Stud
 	if err := s.store.InsertCharge(ctx, c); err != nil {
 		return err
 	}
-	// email é best-effort: não falha a cobrança (que já está válida).
-	if mailErr := s.email.send(ctx, st.Email, "Sua cobrança Pix — Santos Tech", pixEmailHTML(st.Name, c.AmountCents, c.BRCode)); mailErr != nil {
-		slog.Warn("falha ao enviar email da cobrança", "charge", c.ID, "err", mailErr)
-	}
 	return nil
 }
 

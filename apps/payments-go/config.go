@@ -14,6 +14,7 @@ type Config struct {
 	CORSOrigins        []string
 	EmailAPIURL        string
 	EmailAPIKey        string
+	NotifyEmail        string // destino do aviso de pagamento confirmado (opcional)
 	DotfyBaseURL       string
 	DotfyAPIKey        string
 	DotfyWebhookSecret string
@@ -30,6 +31,7 @@ func LoadConfig() Config {
 		CORSOrigins:        splitCSV(getEnv("CORS_ORIGIN", "")),
 		EmailAPIURL:        strings.TrimRight(getEnv("EMAIL_API_URL", "https://mails.santos-tech.com/api"), "/"),
 		EmailAPIKey:        getEnv("EMAIL_API_KEY", ""),
+		NotifyEmail:        strings.TrimSpace(getEnv("PAYMENT_NOTIFY_EMAIL", "")),
 		DotfyBaseURL:       strings.TrimRight(getEnv("DOTFY_BASE_URL", "https://app.dotfy.com.br"), "/"),
 		DotfyAPIKey:        mustEnv("DOTFY_API_KEY"),
 		DotfyWebhookSecret: getEnv("DOTFY_WEBHOOK_SECRET", ""),

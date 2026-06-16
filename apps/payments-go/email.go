@@ -45,10 +45,38 @@ func (e *emailClient) send(ctx context.Context, to, subject, html string) error 
 	return nil
 }
 
-func pixEmailHTML(studentName string, amountCents int64, brCode string) string {
+// paymentReceiptEmailHTML — recibo enviado a quem pagou, na confirmação.
+func paymentReceiptEmailHTML(payerName string, amountCents int64) string {
 	reais := float64(amountCents) / 100
-	return fmt.Sprintf(`<p>Olá, %s!</p><p>Sua cobrança Pix de <b>R$ %.2f</b> está disponível.</p>
-<p>Copie e cole o código abaixo no seu app do banco:</p>
-<pre style="background:#F5F8FA;padding:12px;border-radius:8px;word-break:break-all">%s</pre>
-<p>Equipe Santos Tech</p>`, studentName, reais, brCode)
+	greet := "Olá!"
+	if payerName != "" {
+		greet = fmt.Sprintf("Olá, %s!", payerName)
+	}
+	return fmt.Sprintf(`<p>%s</p>
+<p>✅ Recebemos o seu pagamento de <b>R$ %.2f</b>. Obrigado!</p>
+<p>Este é o seu comprovante de confirmação. Qualquer dúvida, é só responder este email.</p>
+<p style="color:#496B84;font-size:12px">Equipe Santos Tech</p>`, greet, reais)
+}
+
+// paymentPaidEmailHTML — aviso interno de pagamento confirmado (para o admin).
+func paymentPaidEmailHTML(c *Charge) string {
+	reais := float64(c.AmountCents) / 100
+	payer := c.PayerName
+	if payer == "" {
+		payer = "—"
+	}
+	when := time.Now()
+	if c.PaidAt != nil {
+		when = *c.PaidAt
+	}
+	return fmt.Sprintf(`<p>✅ <b>Pagamento confirmado</b></p>
+<table style="border-collapse:collapse;font-size:14px">
+<tr><td style="padding:4px 12px 4px 0;color:#496B84">Valor</td><td><b>R$ %.2f</b></td></tr>
+<tr><td style="padding:4px 12px 4px 0;color:#496B84">Pagador</td><td>%s</td></tr>
+<tr><td style="padding:4px 12px 4px 0;color:#496B84">Tipo</td><td>%s</td></tr>
+<tr><td style="padding:4px 12px 4px 0;color:#496B84">Cobrança</td><td>#%d</td></tr>
+<tr><td style="padding:4px 12px 4px 0;color:#496B84">Pago em</td><td>%s</td></tr>
+</table>
+<p style="color:#496B84;font-size:12px">Santos Tech · Pagamentos</p>`,
+		reais, payer, c.Kind, c.ID, when.Format("02/01/2006 15:04"))
 }
