@@ -128,7 +128,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		hash = *u.PasswordHash
 	}
 	if u == nil || u.LoginDisabled || u.PasswordHash == nil || !verifyPassword(body.Password, hash) {
-		s.rdb.Incr(r.Context(), lockKey)
+		incrCmd := s.rdb.Incr(r.Context(), lockKey)
+		if incrCmd.Err() != nil {
+			slog.Warn("login_fail: Incr falhou; rejeitando (fail-closed)", "key", lockKey, "err", incrCmd.Err())
+			writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+			return
+		}
 		if err := s.rdb.ExpireNX(r.Context(), lockKey, loginFailWindow).Err(); err != nil {
 			slog.Warn("login_fail: ExpireNX falhou; contador de lockout pode não expirar", "key", lockKey, "err", err)
 		}
