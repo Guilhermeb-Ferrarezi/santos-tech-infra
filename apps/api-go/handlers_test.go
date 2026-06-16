@@ -81,6 +81,20 @@ func TestHandleLoginBadBody(t *testing.T) {
 	}
 }
 
+// TestDummyPasswordHashValid verifica que o hash sentinela de timing (usado para
+// normalizar o tempo de resposta do login quando o usuário não existe) é gerado
+// corretamente no boot e pode ser verificado pelo argon2id.
+func TestDummyPasswordHashValid(t *testing.T) {
+	if dummyPasswordHash == "" {
+		t.Fatal("dummyPasswordHash vazio: verifyPassword seria um no-op para usuários inexistentes")
+	}
+	// verifyPassword com a senha correta deve retornar true — confirma que o hash
+	// sentinela é um argon2id bem formado e que a normalização de timing funcionaria.
+	if !verifyPassword("__timing_sentinel__", dummyPasswordHash) {
+		t.Fatal("verifyPassword falhou contra dummyPasswordHash: hash inválido")
+	}
+}
+
 func TestHandleRefreshNoCookie(t *testing.T) {
 	s := testServer(Config{})
 	w := httptest.NewRecorder()

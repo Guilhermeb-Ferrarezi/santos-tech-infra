@@ -137,7 +137,9 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Confirmação inválida"))
 		return
 	}
-	s.rdb.Del(r.Context(), attemptKey) // fator válido → zera o contador
+	if err := s.rdb.Del(r.Context(), attemptKey).Err(); err != nil {
+		slog.Warn("sudo_verify: falha ao remover contador de tentativas do Redis", "uid", uid, "err", err)
+	}
 
 	sudoExp := time.Now().Add(sudoTTL)
 	access, err := generateSudoAccess(s.cfg.JWTSecret, u.ID, u.Email, sudoExp)

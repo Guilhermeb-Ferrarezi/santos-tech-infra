@@ -122,12 +122,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// Normaliza o tempo de resposta: executa verifyPassword mesmo quando o
 	// identificador não existe, tornando "conta inexistente" indistinguível
-	// de "senha incorreta" para quem mede latências.
+	// de "senha incorreta" para quem mede latências. passOK é computado
+	// ANTES do if para evitar que o short-circuit de `u == nil ||` impeça
+	// a chamada ao argon2id quando o usuário não existe.
 	hash := dummyPasswordHash
 	if u != nil && u.PasswordHash != nil {
 		hash = *u.PasswordHash
 	}
-	if u == nil || u.LoginDisabled || u.PasswordHash == nil || !verifyPassword(body.Password, hash) {
+	passOK := verifyPassword(body.Password, hash)
+	if u == nil || u.LoginDisabled || u.PasswordHash == nil || !passOK {
 		incrCmd := s.rdb.Incr(r.Context(), lockKey)
 		if incrCmd.Err() != nil {
 			slog.Warn("login_fail: Incr falhou; rejeitando (fail-closed)", "key", lockKey, "err", incrCmd.Err())

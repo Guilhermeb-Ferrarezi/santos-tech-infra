@@ -269,6 +269,12 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Product" } } } }
         "400": { description: inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      summary: Exclui produto (admin) — histórico de cobranças preservado (product_id vira null)
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: excluído, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean } } } } } }
+        "404": { description: não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /products/by-slug/{slug}:
     get:
       summary: Produto público por slug (sem auth; só ativos)

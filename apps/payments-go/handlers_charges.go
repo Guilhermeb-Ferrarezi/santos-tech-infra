@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -63,7 +64,14 @@ func (s *Server) handleCreateCharge(w http.ResponseWriter, r *http.Request) {
 		DueDate: in.DueDate, Provider: "dotfy", CorrelationID: newCorrelationID(),
 	}
 	if err := s.createAndPersistCharge(r.Context(), c, st, in.Description); err != nil {
-		writeError(w, http.StatusBadGateway, "provider_error", "Falha ao gerar cobrança no gateway")
+		var pe *ProviderError
+		if errors.As(err, &pe) {
+			slog.Warn("charge: erro do gateway", "status", pe.Status, "message", pe.Message)
+			writeError(w, http.StatusUnprocessableEntity, "provider_error", clientSafeGatewayMsg(pe.Message))
+			return
+		}
+		slog.Warn("charge: falha no provider", "err", err)
+		writeError(w, http.StatusUnprocessableEntity, "provider_error", "Falha ao gerar a cobrança. Tente novamente.")
 		return
 	}
 	writeJSON(w, http.StatusCreated, c)

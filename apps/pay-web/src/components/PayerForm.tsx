@@ -3,6 +3,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Checkbox } from "./ui/checkbox";
 import { Button } from "./ui/button";
+import { maskCPF, maskPhone, onlyDigits } from "../lib/format";
 
 export function PayerForm({
   onSubmit,
@@ -18,24 +19,29 @@ export function PayerForm({
 
   function handle(e: FormEvent) {
     e.preventDefault();
-    const digits = taxId.replace(/\D/g, "");
-    if (digits.length !== 11) {
+    const cpf = onlyDigits(taxId);
+    const tel = onlyDigits(phone);
+    if (cpf.length !== 11) {
       setErr("Informe um CPF válido (11 dígitos).");
       return;
     }
+    if (tel && tel.length !== 10 && tel.length !== 11) {
+      setErr("Telefone inválido (DDD + número).");
+      return;
+    }
     setErr("");
-    onSubmit(digits, phone.replace(/\D/g, ""), save);
+    onSubmit(cpf, tel, save);
   }
 
   return (
     <form className="space-y-4" onSubmit={handle}>
       <div className="space-y-1">
         <Label htmlFor="cpf">CPF</Label>
-        <Input id="cpf" inputMode="numeric" value={taxId} onChange={(e) => setTaxId(e.target.value)} placeholder="000.000.000-00" required />
+        <Input id="cpf" inputMode="numeric" maxLength={14} value={taxId} onChange={(e) => setTaxId(maskCPF(e.target.value))} placeholder="000.000.000-00" required />
       </div>
       <div className="space-y-1">
         <Label htmlFor="tel">Telefone</Label>
-        <Input id="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(16) 90000-0000" />
+        <Input id="tel" inputMode="tel" maxLength={15} value={phone} onChange={(e) => setPhone(maskPhone(e.target.value))} placeholder="(16) 90000-0000" />
       </div>
       <label className="flex items-center gap-2 text-sm">
         <Checkbox checked={save} onCheckedChange={(v) => setSave(Boolean(v))} />

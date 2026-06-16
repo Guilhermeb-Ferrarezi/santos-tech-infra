@@ -57,6 +57,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /products", s.requireAdmin(s.handleCreateProduct))
 	mux.HandleFunc("GET /products", s.requireAdmin(s.handleListProducts))
 	mux.HandleFunc("PUT /products/{id}", s.requireAdmin(s.handleUpdateProduct))
+	mux.HandleFunc("DELETE /products/{id}", s.requireAdmin(s.handleDeleteProduct))
 	mux.HandleFunc("GET /products/by-slug/{slug}", s.handleGetProductBySlug) // público
 
 	mux.HandleFunc("GET /me/customer", s.authGuard(s.handleGetMeCustomer))

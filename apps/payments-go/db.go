@@ -115,6 +115,11 @@ CREATE TABLE IF NOT EXISTS pay_charge_items (
 );
 CREATE INDEX IF NOT EXISTS idx_pay_charge_items_charge ON pay_charge_items(charge_id);
 ALTER TABLE pay_charges ALTER COLUMN student_id DROP NOT NULL;
+-- Permite excluir um produto sem apagar o histórico: o item da cobrança mantém o
+-- snapshot (name/price) e o product_id vira NULL.
+ALTER TABLE pay_charge_items DROP CONSTRAINT IF EXISTS pay_charge_items_product_id_fkey;
+ALTER TABLE pay_charge_items ADD CONSTRAINT pay_charge_items_product_id_fkey
+  FOREIGN KEY (product_id) REFERENCES pay_products(id) ON DELETE SET NULL;
 `
 
 func migrate(ctx context.Context, db *pgxpool.Pool) error {

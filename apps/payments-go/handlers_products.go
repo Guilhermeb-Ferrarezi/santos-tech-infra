@@ -45,7 +45,7 @@ func (s *Server) handleUpdateProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = id
-	if err := productValid(in); err != nil {
+	if err := productUpdateValid(in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
@@ -58,6 +58,21 @@ func (s *Server) handleUpdateProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, in)
+}
+
+func (s *Server) handleDeleteProduct(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err := s.store.DeleteProduct(r.Context(), id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "not_found", "Produto não encontrado")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao excluir")
+		return
+	}
+	// 200 com corpo (não 204): clientes que parseiam JSON da resposta quebram com um
+	// 204 sem corpo (ex: o authApi do account-kit faz res.json()).
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // público — usado pela tela de pagamento antes do login

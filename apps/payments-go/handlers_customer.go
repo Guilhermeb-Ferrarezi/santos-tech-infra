@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -37,11 +36,21 @@ func (s *Server) handlePutMeCustomer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_body", "JSON inválido")
 		return
 	}
+	taxID := onlyDigits(in.TaxID)
+	phone := onlyDigits(in.Phone)
+	if taxID != "" && !validCPF(taxID) {
+		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido (11 dígitos)")
+		return
+	}
+	if !validPhone(phone) {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Telefone inválido (10 ou 11 dígitos)")
+		return
+	}
 	if _, err := s.customer(r.Context(), s.uid(r)); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha")
 		return
 	}
-	if err := s.store.UpdateCustomerData(r.Context(), s.uid(r), strings.TrimSpace(in.TaxID), strings.TrimSpace(in.Phone)); err != nil {
+	if err := s.store.UpdateCustomerData(r.Context(), s.uid(r), taxID, phone); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao salvar")
 		return
 	}
@@ -112,9 +121,14 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_body", "JSON inválido")
 		return
 	}
-	in.TaxID = strings.TrimSpace(in.TaxID)
-	if in.TaxID == "" {
-		writeError(w, http.StatusBadRequest, "invalid_body", "CPF obrigatório")
+	in.TaxID = onlyDigits(in.TaxID)
+	in.Phone = onlyDigits(in.Phone)
+	if !validCPF(in.TaxID) {
+		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido (11 dígitos)")
+		return
+	}
+	if !validPhone(in.Phone) {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Telefone inválido (10 ou 11 dígitos)")
 		return
 	}
 	uid := s.uid(r)
@@ -153,7 +167,16 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 	st := &Student{Name: "Cliente", TaxID: in.TaxID} // payerName/payerTaxId p/ o Dotfy
 	if err := s.createAndPersistCharge(r.Context(), c, st, "Compra Santos Tech"); err != nil {
-		writeError(w, http.StatusBadGateway, "provider_error", "Falha ao gerar cobrança")
+		// 422 (não 502): o Cloudflare/Traefik substitui respostas 5xx do origin por uma
+		// página de erro HTML sem CORS, escondendo a mensagem. Com 4xx o cliente recebe o JSON.
+		var pe *ProviderError
+		if errors.As(err, &pe) {
+			slog.Warn("checkout: erro do gateway", "status", pe.Status, "message", pe.Message)
+			writeError(w, http.StatusUnprocessableEntity, "provider_error", clientSafeGatewayMsg(pe.Message))
+			return
+		}
+		slog.Warn("checkout: falha no provider", "err", err)
+		writeError(w, http.StatusUnprocessableEntity, "provider_error", "Falha ao gerar a cobrança. Tente novamente.")
 		return
 	}
 	if err := s.store.InsertChargeItems(r.Context(), c.ID, chargeItems); err != nil {
@@ -162,7 +185,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.cart.Clear(r.Context(), uid)
 	if in.Save {
-		_ = s.store.UpdateCustomerData(r.Context(), uid, in.TaxID, strings.TrimSpace(in.Phone))
+		_ = s.store.UpdateCustomerData(r.Context(), uid, in.TaxID, in.Phone)
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token": c.PublicToken, "brCode": c.BRCode, "qrCode": c.QRCode, "amountCents": total,
