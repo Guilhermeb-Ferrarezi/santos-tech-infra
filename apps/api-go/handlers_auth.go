@@ -239,21 +239,25 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
 		return
 	}
-	// resolveToken aceita JWT de sessão E PAT (st_...) — /auth/me precisa dos
-	// dois, como toda rota atrás do authGuard.
-	uid, err := s.resolveToken(r.Context(), token)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	u, err := s.userByID(r.Context(), uid)
+	// resolveToken aceita JWT de sessão E PAT (st_...) — /auth/me precisa dos dois.
+	// Para JWT já devolve o *User carregado do banco (suspensão já verificada);
+	// para PAT devolve nil e buscamos abaixo.
+	uid, u, err := s.resolveToken(r.Context(), token)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	if u == nil {
-		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Usuário não encontrado"))
-		return
+		// Caminho PAT: resolveToken não carrega o usuário completo.
+		u, err = s.userByID(r.Context(), uid)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if u == nil {
+			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Usuário não encontrado"))
+			return
+		}
 	}
 	if u.SuspendedAt != nil {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta suspensa"))
