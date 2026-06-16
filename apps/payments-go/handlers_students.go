@@ -19,6 +19,14 @@ func (s *Server) handleCreateStudent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_body", "name, taxId e email são obrigatórios")
 		return
 	}
+	if len(in.TaxID) != 11 || strings.IndexFunc(in.TaxID, func(r rune) bool { return r < '0' || r > '9' }) != -1 {
+		writeError(w, http.StatusBadRequest, "invalid_body", "taxId deve ter exatamente 11 dígitos numéricos")
+		return
+	}
+	if !strings.Contains(in.Email, "@") || !strings.Contains(in.Email, ".") {
+		writeError(w, http.StatusBadRequest, "invalid_body", "email inválido")
+		return
+	}
 	if err := s.store.CreateStudent(r.Context(), &in); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao salvar aluno")
 		return

@@ -45,6 +45,12 @@ func (s *Server) handleCreateCharge(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.DueDate == "" {
 		in.DueDate = time.Now().AddDate(0, 0, 3).Format("2006-01-02")
+	} else {
+		d, err := time.Parse("2006-01-02", in.DueDate)
+		if err != nil || d.Before(time.Now().Truncate(24*time.Hour)) {
+			writeError(w, http.StatusBadRequest, "invalid_body", "dueDate deve ser uma data válida no formato YYYY-MM-DD, hoje ou futura")
+			return
+		}
 	}
 	c := &Charge{
 		Kind: in.Kind, StudentID: st.ID, AmountCents: in.AmountCents,
