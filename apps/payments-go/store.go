@@ -392,13 +392,15 @@ func (s *Store) GetChargeByPublicToken(ctx context.Context, token string) (*Char
 }
 
 // PayerEmailByCharge retorna nome e email de quem paga a cobrança — do aluno
-// (student_id, sempre presente) com fallback para o cliente (customer_id).
+// (student_id) ou do cliente (customer_id). LEFT JOIN nos dois: a cobrança pode
+// não ter aluno/cliente correspondente (ex.: vinda do pay-web), e ainda assim
+// queremos a linha (com email vazio) em vez de "no rows".
 func (s *Store) PayerEmailByCharge(ctx context.Context, chargeID int64) (name, email string, err error) {
 	err = s.db.QueryRow(ctx, `
 		SELECT COALESCE(NULLIF(st.name,''),  cu.name, ''),
 		       COALESCE(NULLIF(st.email,''), cu.email, '')
 		FROM pay_charges c
-		JOIN pay_students st ON st.id = c.student_id
+		LEFT JOIN pay_students  st ON st.id = c.student_id
 		LEFT JOIN pay_customers cu ON cu.id = c.customer_id
 		WHERE c.id=$1`, chargeID).Scan(&name, &email)
 	return
