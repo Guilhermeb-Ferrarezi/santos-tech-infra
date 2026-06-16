@@ -267,12 +267,11 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		valid = true
 	}
 	if !valid {
-		if ec, e := s.rdb.Get(r.Context(), "mfa_email:"+body.Challenge).Result(); e == nil && ec != "" &&
+		// GetDel é atômico: evita que duas requisições concorrentes com o mesmo
+		// código ambas passem antes que a primeira remova a chave (TOCTOU).
+		if ec, e := s.rdb.GetDel(r.Context(), "mfa_email:"+body.Challenge).Result(); e == nil && ec != "" &&
 			subtle.ConstantTimeCompare([]byte(ec), []byte(code)) == 1 {
 			valid = true
-			if err := s.rdb.Del(r.Context(), "mfa_email:"+body.Challenge).Err(); err != nil {
-				slog.Warn("mfa_verify: falha ao remover OTP de email do Redis", "challenge", body.Challenge, "err", err)
-			}
 		}
 	}
 	if !valid && len(code) == recoveryCodeLen && s.consumeRecoveryCode(r.Context(), uid, sha256Hex(strings.ToUpper(code))) {
