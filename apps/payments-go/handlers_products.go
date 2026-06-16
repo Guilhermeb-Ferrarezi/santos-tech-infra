@@ -70,7 +70,9 @@ func (s *Server) handleDeleteProduct(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao excluir")
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	// 200 com corpo (não 204): clientes que parseiam JSON da resposta quebram com um
+	// 204 sem corpo (ex: o authApi do account-kit faz res.json()).
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // público — usado pela tela de pagamento antes do login
