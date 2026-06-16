@@ -250,8 +250,15 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
 		return
 	}
+	// fail-closed: se não conseguirmos invalidar o desafio, não emitimos a sessão.
+	// Sem isso, uma falha transitória do Redis deixaria o challenge vivo por até
+	// 10 min, permitindo replay com um novo código válido (TOTP ou OTP de email
+	// que ainda não foi removido). Padrão consistente com o fail-closed do Incr
+	// acima (linha ~216): Redis instável → rejeitar é mais seguro que deixar passar.
 	if err := s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "mfa_attempts:"+body.Challenge).Err(); err != nil {
-		slog.Warn("mfa_verify: falha ao limpar chaves do desafio após autenticação", "challenge", body.Challenge, "err", err)
+		slog.Error("mfa_verify: falha ao invalidar desafio após autenticação bem-sucedida", "challenge", body.Challenge, "err", err)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao finalizar autenticação. Tente novamente."))
+		return
 	}
 	if err := s.issueSession(r.Context(), w, r, u); err != nil {
 		writeErr(w, err)
