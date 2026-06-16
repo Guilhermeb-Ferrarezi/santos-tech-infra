@@ -217,13 +217,16 @@ func (p *dotfyProvider) ParseWebhook(headers map[string][]string, body []byte) (
 	if wh.Event == "" {
 		return WebhookEvent{}, errors.New("evento sem tipo")
 	}
+	// O Dotfy prefixa o tipo com "EVENT:" (ex.: "EVENT:CHARGE_PAID"); normaliza
+	// para o nome puro que o handler reconhece (CHARGE_PAID/EXPIRED/CREATED).
+	eventType := strings.TrimPrefix(wh.Event, "EVENT:")
 	evID := wh.Data.ID
 	if evID == "" {
 		evID = wh.Data.CorrelationID
 	}
 	return WebhookEvent{
-		ID:               evID + ":" + wh.Event,
-		Type:             wh.Event,
+		ID:               evID + ":" + eventType,
+		Type:             eventType,
 		CorrelationID:    wh.Data.CorrelationID,
 		ProviderChargeID: wh.Data.ID,
 		Raw:              body,
