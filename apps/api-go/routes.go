@@ -101,6 +101,10 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /boards/{id}/members", s.rateLimit(20, min, s.permGuard("quadros", "write", true, s.handleAddBoardMember)))
 	mux.HandleFunc("DELETE /boards/{id}/members/{userId}", s.permGuard("quadros", "write", true, s.handleRemoveBoardMember))
 
+	// Calendário Editorial — admin CRUD completo; cargo social:read visualiza;
+	// cargo social:execute atualiza status e notas.
+	s.registerSocialRoutes(mux)
+
 	// Portal admin/professor — overview, catálogo, turmas, matrículas e salas
 	s.registerPortalRoutes(mux)
 
@@ -118,4 +122,15 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource", s.handleProtectedResourceMCP)
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", s.handleProtectedResourceMCP)
 	mux.HandleFunc("POST /oauth/register", s.rateLimit(10, min, s.handleOAuthRegister))
+}
+
+func (s *Server) registerSocialRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /social/posts",               s.permGuard("social", "read",    false, s.handleListSocialPosts))
+	mux.HandleFunc("GET /social/posts/{id}",          s.permGuard("social", "read",    false, s.handleGetSocialPost))
+	mux.HandleFunc("POST /social/posts",              s.adminGuard(s.handleCreateSocialPost))
+	mux.HandleFunc("PUT /social/posts/{id}",          s.adminGuard(s.handleUpdateSocialPost))
+	mux.HandleFunc("DELETE /social/posts/{id}",       s.adminGuard(s.handleDeleteSocialPost))
+	mux.HandleFunc("PATCH /social/posts/{id}/status", s.permGuard("social", "execute", false, s.handleUpdateSocialPostStatus))
+	mux.HandleFunc("GET /social/posts/{id}/notes",    s.permGuard("social", "read",    false, s.handleListSocialPostNotes))
+	mux.HandleFunc("POST /social/posts/{id}/notes",   s.permGuard("social", "execute", false, s.handleAddSocialPostNote))
 }
