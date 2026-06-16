@@ -28,9 +28,15 @@ func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if err := s.rdb.Set(r.Context(), "mfa_setup:"+strconv.FormatInt(uid, 10), key.Secret(), 10*time.Minute).Err(); err != nil {
+	uidStr := strconv.FormatInt(uid, 10)
+	if err := s.rdb.Set(r.Context(), "mfa_setup:"+uidStr, key.Secret(), 10*time.Minute).Err(); err != nil {
 		writeErr(w, err)
 		return
+	}
+	// Novo setup → zera o contador de tentativas para não bloquear o usuário que
+	// regenerou o QR code após exceder o limite em handleMFAEnable.
+	if err := s.rdb.Del(r.Context(), "mfa_enable_attempts:"+uidStr).Err(); err != nil {
+		slog.Warn("mfa_setup: falha ao resetar contador de tentativas", "uid", uid, "err", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"secret": key.Secret(), "otpauthUrl": key.URL()})
 }
@@ -46,9 +52,35 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
-	secret, err := s.rdb.Get(r.Context(), "mfa_setup:"+strconv.FormatInt(uid, 10)).Result()
+	uidStr := strconv.FormatInt(uid, 10)
+	secret, err := s.rdb.Get(r.Context(), "mfa_setup:"+uidStr).Result()
 	if err != nil || secret == "" {
 		writeErr(w, appErr(http.StatusBadRequest, "MFA_SETUP_EXPIRED", "Setup expirado, gere novamente"))
+		return
+	}
+	// Teto de tentativas por usuário (≤5 numa janela de 15min), espelhando handleMFADisable:
+	// sem isso, confirmar o setup do MFA fica sujeito a brute-force do código TOTP
+	// limitado apenas pelo rate-limit por IP (bypassável com múltiplos IPs/VPNs).
+	// fail-closed: se o Redis falhar, não sabemos quantas tentativas houve; rejeitar
+	// é mais seguro do que deixar passar e permite ao usuário tentar novamente em instantes.
+	attemptKey := "mfa_enable_attempts:" + uidStr
+	enableAttemptsCmd := s.rdb.Incr(r.Context(), attemptKey)
+	if enableAttemptsCmd.Err() != nil {
+		slog.Warn("mfa_enable_attempts: redis error; rejecting to fail closed", "uid", uid, "err", enableAttemptsCmd.Err())
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+		return
+	}
+	attempts := enableAttemptsCmd.Val()
+	if err := s.rdb.ExpireNX(r.Context(), attemptKey, 15*time.Minute).Err(); err != nil {
+		slog.Warn("mfa_enable_attempts: ExpireNX falhou; contador pode não expirar", "uid", uid, "err", err)
+	}
+	if attempts > 5 {
+		// Invalida o setup atual: força o usuário a gerar um novo QR code, o que
+		// também zera o contador (em handleMFASetup).
+		if err := s.rdb.Del(r.Context(), "mfa_setup:"+uidStr, attemptKey).Err(); err != nil {
+			slog.Warn("mfa_enable: falha ao invalidar setup após excesso de tentativas", "uid", uid, "err", err)
+		}
+		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Gere um novo QR code."))
 		return
 	}
 	code := strings.TrimSpace(body.Code)
@@ -60,8 +92,8 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if err := s.rdb.Del(r.Context(), "mfa_setup:"+strconv.FormatInt(uid, 10)).Err(); err != nil {
-		slog.Warn("mfa_enable: falha ao remover chave de setup do Redis", "uid", uid, "err", err)
+	if err := s.rdb.Del(r.Context(), "mfa_setup:"+uidStr, attemptKey).Err(); err != nil {
+		slog.Warn("mfa_enable: falha ao remover chaves de setup do Redis", "uid", uid, "err", err)
 	}
 
 	codes := genRecoveryCodes(10)
