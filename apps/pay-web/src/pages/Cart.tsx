@@ -1,20 +1,21 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { api, type CartLine } from "../lib/api";
 import { formatBRL } from "../lib/format";
 import { Card } from "../components/ui/card";
 import { PayerForm } from "../components/PayerForm";
+import { PixModal } from "../components/PixModal";
 import { Centered } from "./Product";
 
 export default function CartPage() {
-  const nav = useNavigate();
   const [lines, setLines] = useState<CartLine[] | null>(null);
   const [err, setErr] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [pixToken, setPixToken] = useState<string | null>(null);
 
-  useEffect(() => {
+  function loadCart() {
     api.cart().then(setLines).catch(() => { setErr("Não foi possível carregar sua conta."); setLines([]); });
-  }, []);
+  }
+  useEffect(loadCart, []);
 
   if (lines === null) return <Centered>Carregando…</Centered>;
 
@@ -25,9 +26,10 @@ export default function CartPage() {
     setErr("");
     try {
       const r = await api.checkout(taxId, phone, save);
-      nav(`/pay/${r.token}`);
+      setPixToken(r.token); // abre o modal do Pix, sem trocar de rota
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Erro ao gerar cobrança");
+    } finally {
       setSubmitting(false);
     }
   }
@@ -53,6 +55,7 @@ export default function CartPage() {
         )}
         {err && <p className="text-sm text-rose-600">{err}</p>}
       </Card>
+      <PixModal token={pixToken} onClose={() => { setPixToken(null); loadCart(); }} />
     </Centered>
   );
 }
