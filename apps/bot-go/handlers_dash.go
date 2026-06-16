@@ -70,6 +70,11 @@ type dashConfig struct {
 	// Captação por número: nomes das instâncias do Evolution com captação DESLIGADA
 	// (ausência = captando). Substitui o toggle global na prática.
 	EvolutionCaptureDisabled []string `json:"evolutionCaptureDisabled"`
+
+	// Notificações de deploy (Coolify → WhatsApp)
+	NotifPhone    string `json:"notifPhone"`
+	NotifInstance string `json:"notifInstance"`
+	NotifEnabled  bool   `json:"notifEnabled"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -344,7 +349,10 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		       tc.debounce_ms,
 		       tc.evolution_bot_reply_enabled,
 		       tc.evolution_lead_capture_enabled,
-		       tc.evolution_capture_disabled
+		       tc.evolution_capture_disabled,
+		       tc.notif_phone,
+		       tc.notif_instance,
+		       tc.notif_enabled
 		FROM tenant_config tc
 		WHERE tc.tenant_id = $1
 	`, tenantID).Scan(
@@ -353,6 +361,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		&cfg.AdminSystemPrompt,
 		&adminNumbersRaw, &cfg.DebounceMs, &cfg.EvolutionBotReplyEnabled,
 		&cfg.EvolutionLeadCaptureEnabled, &captureDisabledRaw,
+		&cfg.NotifPhone, &cfg.NotifInstance, &cfg.NotifEnabled,
 	)
 	if err != nil {
 		s.logger.Error("dash: get config", "err", err)
@@ -501,12 +510,16 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		    admin_system_prompt    = $12,
 		    evolution_bot_reply_enabled = $13,
 		    evolution_lead_capture_enabled = $14,
-		    evolution_capture_disabled = $15::jsonb
+		    evolution_capture_disabled = $15::jsonb,
+		    notif_phone    = $16,
+		    notif_instance = $17,
+		    notif_enabled  = $18
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
 		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt,
 		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt, body.EvolutionBotReplyEnabled,
-		body.EvolutionLeadCaptureEnabled, captureDisabledJSON)
+		body.EvolutionLeadCaptureEnabled, captureDisabledJSON,
+		body.NotifPhone, body.NotifInstance, body.NotifEnabled)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)

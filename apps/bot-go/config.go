@@ -62,6 +62,9 @@ type Config struct {
 	DashAPIKey     string
 	DashCORSOrigin string
 
+	// Coolify — webhook de falha de deploy
+	CoolifyWebhookSecret string
+
 	// Voz (STT/TTS via OpenAI). VOICE_ENABLED liga a feature.
 	VoiceEnabled   bool
 	OpenAIKey      string
@@ -113,6 +116,8 @@ func LoadConfig() Config {
 
 		DashAPIKey:     getEnv("DASH_API_KEY", ""),
 		DashCORSOrigin: getEnv("DASH_CORS_ORIGIN", "https://santos-tech.com"),
+
+		CoolifyWebhookSecret: getEnv("COOLIFY_WEBHOOK_SECRET", ""),
 
 		VoiceEnabled:   getEnv("VOICE_ENABLED", "false") == "true",
 		OpenAIKey:      getEnv("OPENAI_API_KEY", ""),
