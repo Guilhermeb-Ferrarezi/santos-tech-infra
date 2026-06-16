@@ -25,13 +25,7 @@ func (s *Server) handleDotfyWebhook(w http.ResponseWriter, r *http.Request) {
 	ev, err := s.provider.ParseWebhook(r.Header, body)
 	if err != nil {
 		// Assinatura ausente/inválida ou payload não confiável → rejeita como não autenticado.
-		// DEBUG temporário: captura assinatura/timestamp/corpo para descobrir o formato
-		// exato do HMAC do Dotfy (qual string é assinada e em que encoding).
-		slog.Warn("webhook dotfy rejeitado", "err", err,
-			"sig", r.Header.Get("X-Webhook-Signature"),
-			"ts", r.Header.Get("X-Webhook-Timestamp"),
-			"id", r.Header.Get("X-Webhook-Id"),
-			"body", string(body))
+		slog.Warn("webhook dotfy rejeitado", "err", err, "id", r.Header.Get("X-Webhook-Id"), "body_len", len(body))
 		writeError(w, http.StatusUnauthorized, "webhook_rejected", "Webhook não autenticado")
 		return
 	}

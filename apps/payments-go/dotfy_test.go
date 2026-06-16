@@ -60,25 +60,32 @@ func TestDotfyParseWebhook_SemSecret(t *testing.T) {
 func TestDotfyParseWebhook_AssinaturaHMAC(t *testing.T) {
 	secret := "whsec_test"
 	body := []byte(`{"event":"CHARGE_PAID","data":{"id":"ch_1","correlationID":"stpay_abc"}}`)
+	// Formato Dotfy (estilo Stripe): t=<timestamp>,v1=HMAC-SHA256(secret, "<t>.<body>") hex.
+	ts := "1781649901121"
 	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(ts + "."))
 	mac.Write(body)
-	sig := hex.EncodeToString(mac.Sum(nil))
-	p := &dotfyProvider{secret: secret, sigHeader: "X-Signature"}
+	sig := "t=" + ts + ",v1=" + hex.EncodeToString(mac.Sum(nil))
+	p := &dotfyProvider{secret: secret, sigHeader: "X-Webhook-Signature"}
 
-	// assinatura válida → passa (aceita também o prefixo "sha256=")
-	if _, err := p.ParseWebhook(map[string][]string{"X-Signature": {"sha256=" + sig}}, body); err != nil {
+	// assinatura válida → passa
+	if _, err := p.ParseWebhook(map[string][]string{"X-Webhook-Signature": {sig}}, body); err != nil {
 		t.Fatalf("assinatura válida deveria passar: %v", err)
 	}
 	// ausente → rejeita
 	if _, err := p.ParseWebhook(map[string][]string{}, body); err == nil {
 		t.Fatal("assinatura ausente deveria falhar")
 	}
-	// inválida → rejeita
-	if _, err := p.ParseWebhook(map[string][]string{"X-Signature": {"deadbeef"}}, body); err == nil {
+	// formato inesperado → rejeita
+	if _, err := p.ParseWebhook(map[string][]string{"X-Webhook-Signature": {"deadbeef"}}, body); err == nil {
+		t.Fatal("assinatura em formato inesperado deveria falhar")
+	}
+	// v1 inválido → rejeita
+	if _, err := p.ParseWebhook(map[string][]string{"X-Webhook-Signature": {"t=" + ts + ",v1=deadbeef"}}, body); err == nil {
 		t.Fatal("assinatura inválida deveria falhar")
 	}
 	// corpo adulterado com assinatura do corpo original → rejeita
-	if _, err := p.ParseWebhook(map[string][]string{"X-Signature": {sig}}, []byte(`{"event":"CHARGE_PAID","data":{"id":"ch_1","correlationID":"OUTRO"}}`)); err == nil {
+	if _, err := p.ParseWebhook(map[string][]string{"X-Webhook-Signature": {sig}}, []byte(`{"event":"CHARGE_PAID","data":{"id":"ch_1","correlationID":"OUTRO"}}`)); err == nil {
 		t.Fatal("corpo adulterado deveria falhar")
 	}
 }

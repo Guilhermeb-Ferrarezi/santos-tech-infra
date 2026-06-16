@@ -49,20 +49,37 @@ func headerValue(headers map[string][]string, name string) string {
 }
 
 // verifyWebhookSignature computa HMAC-SHA256(corpo cru, secret) em hex e compara em
-// tempo constante com o header de assinatura. Aceita o valor com ou sem prefixo
-// "sha256=". O encoding/nome exato do header devem ser confirmados na conta Dotfy
-// (ajustáveis por DOTFY_WEBHOOK_SIG_HEADER); a defesa em si (HMAC + constant-time +
-// fail-closed) independe desses detalhes.
+// tempo constante com o header de assinatura. O Dotfy usa o formato estilo Stripe
+// "t=<timestamp>,v1=<hmac_hex>", onde v1 = HMAC-SHA256(secret, "<t>.<corpo cru>")
+// em hexadecimal. O header é configurável por DOTFY_WEBHOOK_SIG_HEADER
+// (X-Webhook-Signature). Defesa: HMAC + constant-time + fail-closed.
 func (p *dotfyProvider) verifyWebhookSignature(headers map[string][]string, body []byte) error {
 	provided := headerValue(headers, p.sigHeader)
 	if provided == "" {
 		return errors.New("assinatura ausente no webhook")
 	}
-	provided = strings.TrimSpace(strings.TrimPrefix(provided, "sha256="))
+	var t, v1 string
+	for _, part := range strings.Split(provided, ",") {
+		k, val, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "t":
+			t = val
+		case "v1":
+			v1 = val
+		}
+	}
+	if t == "" || v1 == "" {
+		return errors.New("assinatura do webhook em formato inesperado")
+	}
 	mac := hmac.New(sha256.New, []byte(p.secret))
+	mac.Write([]byte(t))
+	mac.Write([]byte("."))
 	mac.Write(body)
 	expected := hex.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(expected), []byte(provided)) {
+	if !hmac.Equal([]byte(expected), []byte(v1)) {
 		return errors.New("assinatura do webhook inválida")
 	}
 	return nil
