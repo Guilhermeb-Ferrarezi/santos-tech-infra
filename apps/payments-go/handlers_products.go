@@ -60,6 +60,19 @@ func (s *Server) handleUpdateProduct(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, in)
 }
 
+func (s *Server) handleDeleteProduct(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err := s.store.DeleteProduct(r.Context(), id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "not_found", "Produto não encontrado")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao excluir")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // público — usado pela tela de pagamento antes do login
 func (s *Server) handleGetProductBySlug(w http.ResponseWriter, r *http.Request) {
 	p, err := s.store.GetProductBySlug(r.Context(), r.PathValue("slug"))
