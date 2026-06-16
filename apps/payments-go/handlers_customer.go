@@ -171,9 +171,11 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		// página de erro HTML sem CORS, escondendo a mensagem. Com 4xx o cliente recebe o JSON.
 		var pe *ProviderError
 		if errors.As(err, &pe) {
-			writeError(w, http.StatusUnprocessableEntity, "provider_error", pe.Message)
+			slog.Warn("checkout: erro do gateway", "status", pe.Status, "message", pe.Message)
+			writeError(w, http.StatusUnprocessableEntity, "provider_error", clientSafeGatewayMsg(pe.Message))
 			return
 		}
+		slog.Warn("checkout: falha no provider", "err", err)
 		writeError(w, http.StatusUnprocessableEntity, "provider_error", "Falha ao gerar a cobrança. Tente novamente.")
 		return
 	}
