@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, type PayData, BASE } from "../lib/api";
+import { api, type PayData } from "../lib/api";
 import { formatBRL } from "../lib/format";
 import { Card } from "../components/ui/card";
 import { CopyField } from "../components/CopyField";
@@ -17,7 +17,7 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     if (paid) return;
-    const es = new EventSource(`${BASE}/pay/${token}/events`, { withCredentials: true });
+    const es = new EventSource(api.payEventsUrl(token), { withCredentials: true });
     es.addEventListener("paid", () => { setPaid(true); es.close(); });
     return () => es.close();
   }, [token, paid]);
