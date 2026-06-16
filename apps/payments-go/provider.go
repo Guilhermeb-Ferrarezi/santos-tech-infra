@@ -2,6 +2,15 @@ package main
 
 import "context"
 
+// ProviderError carrega uma mensagem amigável vinda do gateway (ex: "Valor máximo
+// permitido por cobrança: R$ 100,00"), para ser repassada ao cliente sem expor 502.
+type ProviderError struct {
+	Message string
+	Status  int
+}
+
+func (e *ProviderError) Error() string { return e.Message }
+
 type ChargeRequest struct {
 	CorrelationID string
 	AmountCents   int64

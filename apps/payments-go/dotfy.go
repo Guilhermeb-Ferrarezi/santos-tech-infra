@@ -133,6 +133,13 @@ func (p *dotfyProvider) do(ctx context.Context, method, path string, body any) (
 		if readErr != nil {
 			return nil, fmt.Errorf("dotfy %s %s: status %d (falha ao ler resposta: %w)", method, path, res.StatusCode, readErr)
 		}
+		// o Dotfy retorna {"error":"mensagem amigável"} — repassa ao cliente
+		var de struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(data, &de) == nil && de.Error != "" {
+			return nil, &ProviderError{Message: de.Error, Status: res.StatusCode}
+		}
 		return nil, fmt.Errorf("dotfy %s %s: status %d: %s", method, path, res.StatusCode, data)
 	}
 	return data, nil

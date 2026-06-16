@@ -167,7 +167,14 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 	st := &Student{Name: "Cliente", TaxID: in.TaxID} // payerName/payerTaxId p/ o Dotfy
 	if err := s.createAndPersistCharge(r.Context(), c, st, "Compra Santos Tech"); err != nil {
-		writeError(w, http.StatusBadGateway, "provider_error", "Falha ao gerar cobrança")
+		// 422 (não 502): o Cloudflare/Traefik substitui respostas 5xx do origin por uma
+		// página de erro HTML sem CORS, escondendo a mensagem. Com 4xx o cliente recebe o JSON.
+		var pe *ProviderError
+		if errors.As(err, &pe) {
+			writeError(w, http.StatusUnprocessableEntity, "provider_error", pe.Message)
+			return
+		}
+		writeError(w, http.StatusUnprocessableEntity, "provider_error", "Falha ao gerar a cobrança. Tente novamente.")
 		return
 	}
 	if err := s.store.InsertChargeItems(r.Context(), c.ID, chargeItems); err != nil {
