@@ -61,3 +61,20 @@ func validPhone(digits string) bool {
 	}
 	return len(digits) == 10 || len(digits) == 11
 }
+
+// clientSafeGatewayMsg sanitiza a mensagem de erro do gateway antes de devolvê-la ao
+// cliente: remove caracteres de controle e limita o tamanho. Mensagens anômalas
+// (vazias, longas demais) caem num texto genérico para não vazar conteúdo inesperado.
+func clientSafeGatewayMsg(raw string) string {
+	s := strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return ' '
+		}
+		return r
+	}, raw)
+	s = strings.TrimSpace(s)
+	if s == "" || len(s) > 200 {
+		return "Cobrança recusada pelo gateway. Verifique os dados e tente novamente."
+	}
+	return s
+}
