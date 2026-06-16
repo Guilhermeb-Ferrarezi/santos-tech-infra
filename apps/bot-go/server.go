@@ -453,6 +453,9 @@ type evolutionWebhook struct {
 			RemoteJid string `json:"remoteJid"`
 			FromMe    bool   `json:"fromMe"`
 			ID        string `json:"id"`
+			// Participant: em grupos, o JID de quem enviou (o remoteJid é o ...@g.us).
+			// Em chats 1:1 vem vazio (o remetente é o próprio remoteJid).
+			Participant string `json:"participant"`
 		} `json:"key"`
 		PushName string `json:"pushName"`
 		Message  struct {
@@ -520,7 +523,53 @@ func (s *Server) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request) 
 		s.logger.Debug("evolution: payload inválido", "err", err)
 		return
 	}
-	go s.captureEvolutionLead(ev)
+
+	// Interceptador de comando de operação (/status, /redeploy, /logs, /ajuda).
+	// Mensagens com prefixo "/" vindas de um ADMIN acionam ações na Coolify e
+	// respondem no MESMO chat (em grupo, o ...@g.us). Tratado ANTES da captura de
+	// lead — inclusive em grupos, que a captura ignora. Se o comando for tratado,
+	// NÃO segue para o fluxo normal (lead/IA).
+	go func() {
+		if s.dispatchEvolutionCommand(ev) {
+			return
+		}
+		s.captureEvolutionLead(ev)
+	}()
+}
+
+// dispatchEvolutionCommand extrai remetente/chat/texto de um evento da Evolution e
+// delega ao handleAdminCommand. Retorna true se a mensagem foi consumida como
+// comando (e portanto NÃO deve seguir para captura de lead / IA).
+func (s *Server) dispatchEvolutionCommand(ev evolutionWebhook) bool {
+	if !strings.Contains(strings.ToLower(ev.Event), "upsert") || ev.Data.Key.FromMe {
+		return false
+	}
+	chatJid := ev.Data.Key.RemoteJid
+	if chatJid == "" || strings.HasPrefix(chatJid, "status@") {
+		return false
+	}
+
+	text := ev.Data.Message.Conversation
+	if text == "" {
+		text = ev.Data.Message.ExtendedTextMessage.Text
+	}
+	if !strings.HasPrefix(strings.TrimSpace(text), "/") {
+		return false
+	}
+
+	// Remetente: em grupo é o participant; em 1:1 é o próprio remoteJid.
+	from := ev.Data.Key.Participant
+	if from == "" {
+		from = chatJid
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	handled, err := s.handleAdminCommand(ctx, from, chatJid, ev.Instance, text)
+	if err != nil {
+		s.logger.Error("evolution: comando admin falhou", "err", err)
+	}
+	return handled
 }
 
 // captureEvolutionLead cria/atualiza um lead a partir de uma mensagem recebida na
