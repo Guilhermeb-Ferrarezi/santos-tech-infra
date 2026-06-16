@@ -88,7 +88,7 @@ export function PixView({ token, onClose }: { token: string; onClose: () => void
         {copied ? <><Check className="size-5" /> Código copiado!</> : <><Copy className="size-5" /> Copiar código Pix</>}
       </Button>
       <div className="flex items-center justify-center gap-2 text-sm text-amber-600">
-        <Loader2 className="size-4 animate-spin" /> Aguardando pagamento… confirma sozinho aqui.
+        <Loader2 className="size-4 animate-spin" /> Aguardando pagamento…
       </div>
       <Button variant="ghost" className="w-full text-slate-500" onClick={onClose}>Cancelar</Button>
     </div>
