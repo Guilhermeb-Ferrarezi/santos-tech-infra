@@ -45,7 +45,7 @@ func (s *Server) handleUpdateProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = id
-	if err := productValid(in); err != nil {
+	if err := productUpdateValid(in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}

@@ -18,6 +18,18 @@ func productValid(p Product) error {
 	return nil
 }
 
+// productUpdateValid valida um update: o slug é imutável e NÃO é enviado, então não
+// é exigido aqui (só name e priceCents).
+func productUpdateValid(p Product) error {
+	if strings.TrimSpace(p.Name) == "" {
+		return errors.New("name obrigatório")
+	}
+	if p.PriceCents <= 0 {
+		return errors.New("priceCents deve ser > 0")
+	}
+	return nil
+}
+
 // onlyDigits remove tudo que não for dígito (normaliza CPF/telefone vindos com máscara).
 func onlyDigits(s string) string {
 	var b strings.Builder
