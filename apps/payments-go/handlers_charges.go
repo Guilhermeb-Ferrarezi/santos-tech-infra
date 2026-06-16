@@ -16,6 +16,12 @@ func newCorrelationID() string {
 	return "stpay_" + hex.EncodeToString(b)
 }
 
+func newPublicToken() string {
+	b := make([]byte, 18)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 type createChargeInput struct {
 	Kind        string `json:"kind"` // matricula | avulso
 	StudentID   int64  `json:"studentId"`
