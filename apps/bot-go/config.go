@@ -65,6 +65,11 @@ type Config struct {
 	// Coolify — webhook de falha de deploy
 	CoolifyWebhookSecret string
 
+	// Coolify API — comandos de operação pelo WhatsApp (/status, /redeploy, /logs).
+	// Opcionais: se ausentes, os comandos respondem "Coolify não configurada".
+	CoolifyAPIURL   string
+	CoolifyAPIToken string
+
 	// Voz (STT/TTS via OpenAI). VOICE_ENABLED liga a feature.
 	VoiceEnabled   bool
 	OpenAIKey      string
@@ -118,6 +123,8 @@ func LoadConfig() Config {
 		DashCORSOrigin: getEnv("DASH_CORS_ORIGIN", "https://santos-tech.com"),
 
 		CoolifyWebhookSecret: getEnv("COOLIFY_WEBHOOK_SECRET", ""),
+		CoolifyAPIURL:        strings.TrimRight(getEnv("COOLIFY_API_URL", ""), "/"),
+		CoolifyAPIToken:      getEnv("COOLIFY_API_TOKEN", ""),
 
 		VoiceEnabled:   getEnv("VOICE_ENABLED", "false") == "true",
 		OpenAIKey:      getEnv("OPENAI_API_KEY", ""),
