@@ -454,13 +454,40 @@ POST   /charges   body {kind:matricula|avulso,studentId,amountCents,description?
 GET    /charges?status=&student_id=                             → [{...}]
 GET    /charges/{id}                                            → {...}
 
+Catálogo de produtos (admin, exceto by-slug):
+POST   /products            body {slug,name,description?,priceCents}  → 201 {id,...,active}
+GET    /products                                                → [{...}]
+PUT    /products/{id}        body {name,description?,priceCents,active} → {...}
+GET    /products/by-slug/{slug}   (PÚBLICO, sem auth; só produtos ativos) → {...}
+
+Cliente logado (authGuard, /me/*) — checkout self-service:
+GET    /me/customer                                             → {id,userId,taxId,phone,...} (cria se não existir)
+PUT    /me/customer         body {taxId?,phone?}                → {ok:true}
+GET    /me/cart                                                 → [{product,quantity}] (enriquecido)
+POST   /me/cart             body {slug}                         → {ok:true} (soma quantidade)
+DELETE /me/cart/{productId}                                     → {ok:true}
+POST   /me/cart/checkout    body {taxId,phone?,save?}           → 201 {token,brCode,qrCode,amountCents}
+         (recalcula total pelo catálogo, cria cobrança Dotfy, grava itens, esvazia o carrinho)
+GET    /me/charges                                              → [charges do customer]
+
+Pagamento público (sem auth) — tela de Pix pelo token público da cobrança:
+GET    /pay/{token}                                             → {amountCents,brCode,qrCode,status,dueDate}
+GET    /pay/{token}/events   (SSE, text/event-stream)           → event:status (atual) e event:paid ao confirmar
+
+Carrinho fica no REDIS (hash `cart:{userID}` productID→quantity, TTL 7 dias). O SSE
+usa Redis pub/sub: o webhook CHARGE_PAID publica no canal `pay:charge:{token}` e o
+stream empurra `event: paid` e encerra. Cobranças de cliente usam `customer_id` +
+`public_token` (student_id é nullable). Preço SEMPRE recalculado no servidor.
+
 Webhook (público, verificado/idempotente):
-POST   /webhooks/dotfy   eventos CHARGE_PAID (baixa) / CHARGE_EXPIRED (inadimplência)
-         / CHARGE_CREATED (no-op). Idempotência por id do evento em pay_webhook_events.
+POST   /webhooks/dotfy   eventos CHARGE_PAID (baixa + publica no Redis p/ SSE) /
+         CHARGE_EXPIRED (inadimplência) / CHARGE_CREATED (no-op). Idempotência por
+         id do evento em pay_webhook_events.
 
 Tabelas próprias (mesmo Postgres `santos_tech`, prefixo pay_): pay_students,
-pay_plans, pay_subscriptions, pay_charges, pay_webhook_events.
-Fase 2 planejada: tela de checkout Pix própria (consome brCode/qrCode do JSON).
+pay_plans, pay_subscriptions, pay_charges, pay_webhook_events, pay_products,
+pay_customers, pay_charge_items.
+Env extra (Fase 2): REDIS_URL (carrinho + pub/sub do SSE).
 
 Dotfy (confirmado contra app.dotfy.com.br): POST /api/charges com body
 {correlationID,value,payerName,payerTaxId,description,expiresAt} — ATENÇÃO `value`

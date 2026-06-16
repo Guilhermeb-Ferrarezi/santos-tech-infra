@@ -44,6 +44,8 @@ func (s *Server) handleDotfyWebhook(w http.ResponseWriter, r *http.Request) {
 	case "CHARGE_PAID":
 		if err := s.store.MarkChargePaid(r.Context(), ev.CorrelationID); err != nil {
 			slog.Warn("falha ao marcar paga", "corr", ev.CorrelationID, "err", err)
+		} else if tok, e := s.store.PublicTokenByCorrelation(r.Context(), ev.CorrelationID); e == nil {
+			s.publishChargePaid(r.Context(), tok)
 		}
 	case "CHARGE_EXPIRED":
 		if err := s.store.MarkChargeExpired(r.Context(), ev.CorrelationID); err != nil {

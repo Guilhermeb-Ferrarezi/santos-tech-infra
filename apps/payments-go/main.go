@@ -27,8 +27,13 @@ func main() {
 		slog.Error("DOTFY_WEBHOOK_SECRET ausente em produção: webhooks serão RECUSADOS até configurar")
 	}
 
+	rdb, err := newRedis(cfg.RedisURL)
+	if err != nil {
+		slog.Error("falha ao conectar no Redis", "err", err)
+		os.Exit(1)
+	}
 	provider := newDotfyProvider(cfg)
-	srv := NewServer(cfg, db, provider)
+	srv := NewServer(cfg, db, rdb, provider)
 
 	go srv.runRecurringLoop(ctx)
 

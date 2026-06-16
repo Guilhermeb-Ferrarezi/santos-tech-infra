@@ -16,6 +16,12 @@ func newCorrelationID() string {
 	return "stpay_" + hex.EncodeToString(b)
 }
 
+func newPublicToken() string {
+	b := make([]byte, 18)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 type createChargeInput struct {
 	Kind        string `json:"kind"` // matricula | avulso
 	StudentID   int64  `json:"studentId"`
@@ -47,7 +53,7 @@ func (s *Server) handleCreateCharge(w http.ResponseWriter, r *http.Request) {
 		in.DueDate = time.Now().AddDate(0, 0, 3).Format("2006-01-02")
 	}
 	c := &Charge{
-		Kind: in.Kind, StudentID: st.ID, AmountCents: in.AmountCents,
+		Kind: in.Kind, StudentID: &st.ID, AmountCents: in.AmountCents,
 		DueDate: in.DueDate, Provider: "dotfy", CorrelationID: newCorrelationID(),
 	}
 	if err := s.createAndPersistCharge(r.Context(), c, st, in.Description); err != nil {
