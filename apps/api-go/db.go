@@ -101,6 +101,30 @@ ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS updated_at  TIMESTAMPTZ NOT NU
 INSERT INTO oauth_clients (client_id, name, redirect_uris)
 VALUES ('santos-tech-mobile', 'Santos Tech Mobile', ARRAY['santostech://auth'])
 ON CONFLICT (client_id) DO NOTHING;
+CREATE TABLE IF NOT EXISTS social_posts (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title         TEXT NOT NULL,
+  caption       TEXT NOT NULL DEFAULT '',
+  platform      TEXT NOT NULL,
+  pilar         TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'ideia',
+  scheduled_at  TIMESTAMPTZ,
+  media_url     TEXT NOT NULL DEFAULT '',
+  reference_url TEXT NOT NULL DEFAULT '',
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_social_posts_status ON social_posts(status);
+CREATE INDEX IF NOT EXISTS idx_social_posts_scheduled_at ON social_posts(scheduled_at);
+CREATE TABLE IF NOT EXISTS social_post_notes (
+  id         BIGSERIAL PRIMARY KEY,
+  post_id    UUID NOT NULL REFERENCES social_posts(id) ON DELETE CASCADE,
+  author_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  content    TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_social_post_notes_post ON social_post_notes(post_id);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
