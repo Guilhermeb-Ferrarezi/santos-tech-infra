@@ -56,7 +56,8 @@ components:
         id: { type: integer }
         kind: { type: string, enum: [mensalidade, matricula, avulso] }
         subscriptionId: { type: integer, nullable: true }
-        studentId: { type: integer }
+        studentId: { type: integer, nullable: true }
+        customerId: { type: integer, nullable: true }
         amountCents: { type: integer }
         dueDate: { type: string, format: date }
         referenceMonth: { type: string, nullable: true }
@@ -64,10 +65,34 @@ components:
         provider: { type: string }
         providerChargeId: { type: string }
         correlationId: { type: string }
+        publicToken: { type: string, description: "token público p/ tela de pagamento (cobranças de cliente)" }
         brCode: { type: string, description: "Pix copia-e-cola" }
         qrCode: { type: string, description: "imagem do QR (base64/data-uri) ou URL" }
         paidAt: { type: string, format: date-time, nullable: true }
         createdAt: { type: string, format: date-time }
+    Product:
+      type: object
+      properties:
+        id: { type: integer }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: string }
+        priceCents: { type: integer }
+        active: { type: boolean }
+    Customer:
+      type: object
+      properties:
+        id: { type: integer }
+        userId: { type: integer }
+        taxId: { type: string }
+        phone: { type: string }
+        name: { type: string }
+        email: { type: string }
+    CartItem:
+      type: object
+      properties:
+        productId: { type: integer }
+        quantity: { type: integer }
 paths:
   /health:
     get:
@@ -202,6 +227,176 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Charge" } } } }
+        "404": { description: não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /products:
+    post:
+      summary: Cria produto do catálogo (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug, name, priceCents]
+              properties:
+                slug: { type: string }
+                name: { type: string }
+                description: { type: string }
+                priceCents: { type: integer }
+      responses:
+        "201": { description: criado, content: { application/json: { schema: { $ref: "#/components/schemas/Product" } } } }
+        "400": { description: inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    get:
+      summary: Lista produtos (admin)
+      responses:
+        "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Product" } } } } }
+  /products/{id}:
+    put:
+      summary: Atualiza produto (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, priceCents]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                priceCents: { type: integer }
+                active: { type: boolean }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Product" } } } }
+        "400": { description: inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /products/by-slug/{slug}:
+    get:
+      summary: Produto público por slug (sem auth; só ativos)
+      security: []
+      parameters: [{ name: slug, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Product" } } } }
+        "404": { description: não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /me/customer:
+    get:
+      summary: Customer do usuário logado (cria se não existir)
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Customer" } } } }
+    put:
+      summary: Atualiza CPF/telefone do customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                taxId: { type: string }
+                phone: { type: string }
+      responses:
+        "200": { description: ok }
+  /me/cart:
+    get:
+      summary: Carrinho do usuário (itens enriquecidos com o produto)
+      responses:
+        "200":
+          description: linhas do carrinho
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    product: { $ref: "#/components/schemas/Product" }
+                    quantity: { type: integer }
+    post:
+      summary: Adiciona produto ao carrinho (por slug)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug]
+              properties:
+                slug: { type: string }
+      responses:
+        "200": { description: ok }
+        "404": { description: produto não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /me/cart/{productId}:
+    delete:
+      summary: Remove produto do carrinho
+      parameters: [{ name: productId, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: ok }
+  /me/cart/checkout:
+    post:
+      summary: Fecha o carrinho e gera a cobrança Pix
+      description: >
+        Recalcula o total a partir do catálogo (preço sempre do servidor),
+        cria a cobrança Dotfy, persiste os itens, esvazia o carrinho e
+        devolve o token público + brCode/qrCode.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taxId]
+              properties:
+                taxId: { type: string, description: "CPF do pagador" }
+                phone: { type: string }
+                save: { type: boolean, description: "salva CPF/telefone no customer" }
+      responses:
+        "201":
+          description: cobrança criada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  brCode: { type: string }
+                  qrCode: { type: string }
+                  amountCents: { type: integer }
+        "400": { description: carrinho vazio ou CPF ausente, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: falha no gateway, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /me/charges:
+    get:
+      summary: Histórico de cobranças do customer logado
+      responses:
+        "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Charge" } } } } }
+  /pay/{token}:
+    get:
+      summary: Dados públicos da cobrança (tela de pagamento)
+      security: []
+      parameters: [{ name: token, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  amountCents: { type: integer }
+                  brCode: { type: string }
+                  qrCode: { type: string }
+                  status: { type: string, enum: [pending, paid, expired, canceled] }
+                  dueDate: { type: string, format: date }
+        "404": { description: não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /pay/{token}/events:
+    get:
+      summary: SSE do status da cobrança (Server-Sent Events)
+      security: []
+      description: >
+        text/event-stream. Emite `event: status` com o status atual no início;
+        quando o webhook confirmar o pagamento, emite `event: paid` e encerra.
+        Usa Redis pub/sub no canal `pay:charge:{token}`.
+      parameters: [{ name: token, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: stream SSE (text/event-stream) }
         "404": { description: não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /webhooks/dotfy:
     post:
