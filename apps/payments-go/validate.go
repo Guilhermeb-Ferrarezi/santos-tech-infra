@@ -62,6 +62,26 @@ func validPhone(digits string) bool {
 	return len(digits) == 10 || len(digits) == 11
 }
 
+// validName: não vazio, máximo 100 caracteres.
+func validName(s string) bool {
+	s = strings.TrimSpace(s)
+	return s != "" && len(s) <= 100
+}
+
+// validEmail: formato básico x@y.z, máximo 254 caracteres.
+func validEmail(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || len(s) > 254 {
+		return false
+	}
+	at := strings.LastIndex(s, "@")
+	if at < 1 {
+		return false
+	}
+	dot := strings.LastIndex(s[at:], ".")
+	return dot > 1 && dot < len(s[at:])-1
+}
+
 // clientSafeGatewayMsg sanitiza a mensagem de erro do gateway antes de devolvê-la ao
 // cliente: remove caracteres de controle e limita o tamanho. Mensagens anômalas
 // (vazias, longas demais) caem num texto genérico para não vazar conteúdo inesperado.

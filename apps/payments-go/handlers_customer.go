@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -31,6 +32,8 @@ func (s *Server) handlePutMeCustomer(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		TaxID string `json:"taxId"`
 		Phone string `json:"phone"`
+		Name  string `json:"name"`
+		Email string `json:"email"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", "JSON inválido")
@@ -50,7 +53,7 @@ func (s *Server) handlePutMeCustomer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha")
 		return
 	}
-	if err := s.store.UpdateCustomerData(r.Context(), s.uid(r), taxID, phone); err != nil {
+	if err := s.store.UpdateCustomerData(r.Context(), s.uid(r), taxID, phone, strings.TrimSpace(in.Name), strings.TrimSpace(in.Email)); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao salvar")
 		return
 	}
@@ -115,6 +118,8 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		TaxID string `json:"taxId"`
 		Phone string `json:"phone"`
+		Name  string `json:"name"`
+		Email string `json:"email"`
 		Save  bool   `json:"save"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
@@ -123,6 +128,16 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 	in.TaxID = onlyDigits(in.TaxID)
 	in.Phone = onlyDigits(in.Phone)
+	in.Name = strings.TrimSpace(in.Name)
+	in.Email = strings.TrimSpace(in.Email)
+	if !validName(in.Name) {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Nome obrigatório (máximo 100 caracteres)")
+		return
+	}
+	if !validEmail(in.Email) {
+		writeError(w, http.StatusBadRequest, "invalid_body", "E-mail inválido")
+		return
+	}
 	if !validCPF(in.TaxID) {
 		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido (11 dígitos)")
 		return
@@ -165,7 +180,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		Provider: "dotfy", CorrelationID: newCorrelationID(),
 		PublicToken: newPublicToken(), payerTaxID: in.TaxID,
 	}
-	st := &Student{Name: "Cliente", TaxID: in.TaxID} // payerName/payerTaxId p/ o Dotfy
+	st := &Student{Name: in.Name, TaxID: in.TaxID, Email: in.Email} // payerName/payerTaxId p/ o Dotfy
 	if err := s.createAndPersistCharge(r.Context(), c, st, "Compra Santos Tech"); err != nil {
 		// 422 (não 502): o Cloudflare/Traefik substitui respostas 5xx do origin por uma
 		// página de erro HTML sem CORS, escondendo a mensagem. Com 4xx o cliente recebe o JSON.
@@ -185,7 +200,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.cart.Clear(r.Context(), uid)
 	if in.Save {
-		_ = s.store.UpdateCustomerData(r.Context(), uid, in.TaxID, in.Phone)
+		_ = s.store.UpdateCustomerData(r.Context(), uid, in.TaxID, in.Phone, in.Name, in.Email)
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token": c.PublicToken, "brCode": c.BRCode, "qrCode": c.QRCode, "amountCents": total,

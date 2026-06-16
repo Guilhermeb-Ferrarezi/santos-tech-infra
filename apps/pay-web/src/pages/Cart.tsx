@@ -21,11 +21,11 @@ export default function CartPage() {
 
   const total = lines.reduce((s, l) => s + l.product.priceCents * l.quantity, 0);
 
-  async function checkout(taxId: string, phone: string, save: boolean) {
+  async function checkout(taxId: string, phone: string, name: string, email: string, save: boolean) {
     setSubmitting(true);
     setErr("");
     try {
-      const r = await api.checkout(taxId, phone, save);
+      const r = await api.checkout(taxId, phone, name, email, save);
       setPixToken(r.token); // abre o modal do Pix, sem trocar de rota
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Erro ao gerar cobrança");

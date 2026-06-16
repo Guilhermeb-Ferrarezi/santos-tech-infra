@@ -331,8 +331,10 @@ func (s *Store) GetCustomerByUserID(ctx context.Context, userID int64) (*Custome
 	return &c, nil
 }
 
-func (s *Store) UpdateCustomerData(ctx context.Context, userID int64, taxID, phone string) error {
-	_, err := s.db.Exec(ctx, `UPDATE pay_customers SET tax_id=$2, phone=$3 WHERE user_id=$1`, userID, taxID, phone)
+func (s *Store) UpdateCustomerData(ctx context.Context, userID int64, taxID, phone, name, email string) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE pay_customers SET tax_id=$2, phone=$3, name=$4, email=$5 WHERE user_id=$1`,
+		userID, taxID, phone, name, email)
 	return err
 }
 

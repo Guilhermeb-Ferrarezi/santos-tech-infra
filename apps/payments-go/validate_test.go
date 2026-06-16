@@ -37,3 +37,39 @@ func TestValidPhone(t *testing.T) {
 		t.Fatal("poucos dígitos deveria ser inválido")
 	}
 }
+
+func TestValidName(t *testing.T) {
+	if !validName("João da Silva") {
+		t.Fatal("nome normal deveria ser válido")
+	}
+	if validName("") {
+		t.Fatal("vazio deveria ser inválido")
+	}
+	if validName("   ") {
+		t.Fatal("só espaços deveria ser inválido")
+	}
+	if validName(string(make([]byte, 101))) {
+		t.Fatal("mais de 100 chars deveria ser inválido")
+	}
+}
+
+func TestValidEmail(t *testing.T) {
+	if !validEmail("joao@email.com") {
+		t.Fatal("email válido deveria passar")
+	}
+	if !validEmail("a@b.co") {
+		t.Fatal("email curto válido deveria passar")
+	}
+	if validEmail("") {
+		t.Fatal("vazio deveria ser inválido")
+	}
+	if validEmail("semArroba") {
+		t.Fatal("sem @ deveria ser inválido")
+	}
+	if validEmail("@semlocal.com") {
+		t.Fatal("sem local-part deveria ser inválido")
+	}
+	if validEmail("sem@ponto") {
+		t.Fatal("sem ponto no domínio deveria ser inválido")
+	}
+}

@@ -39,9 +39,9 @@ export const api = {
   cart: () => req<CartLine[]>(`/me/cart`),
   addToCart: (slug: string) => req<{ ok: boolean }>(`/me/cart`, { method: "POST", body: JSON.stringify({ slug }) }),
   removeFromCart: (productId: number) => req<{ ok: boolean }>(`/me/cart/${seg(Number(productId))}`, { method: "DELETE" }),
-  checkout: (taxId: string, phone: string, save: boolean) =>
+  checkout: (taxId: string, phone: string, name: string, email: string, save: boolean) =>
     req<{ token: string; brCode: string; qrCode: string; amountCents: number }>(`/me/cart/checkout`,
-      { method: "POST", body: JSON.stringify({ taxId, phone, save }) }),
+      { method: "POST", body: JSON.stringify({ taxId, phone, name, email, save }) }),
   pay: (token: string) => req<PayData>(`/pay/${seg(token)}`),
   payEventsUrl: (token: string) => `${BASE}/pay/${seg(token)}/events`,
   history: () => req<unknown[]>(`/me/charges`),
