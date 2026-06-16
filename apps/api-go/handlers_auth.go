@@ -251,7 +251,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta suspensa"))
 		return
 	}
-	s.rdb.Set(r.Context(), "user:last_seen:"+strconv.FormatInt(u.ID, 10), "1", 5*time.Minute)
+	if err := s.rdb.Set(r.Context(), "user:last_seen:"+strconv.FormatInt(u.ID, 10), "1", 5*time.Minute).Err(); err != nil {
+		slog.Warn("falha ao registrar último acesso", "uid", u.ID, "err", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": s.buildProfile(r.Context(), u)})
 }
 
