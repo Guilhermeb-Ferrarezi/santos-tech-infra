@@ -278,6 +278,17 @@ func (s *Store) GetProductByID(ctx context.Context, id int64) (*Product, error) 
 	return &p, nil
 }
 
+func (s *Store) DeleteProduct(ctx context.Context, id int64) error {
+	tag, err := s.db.Exec(ctx, `DELETE FROM pay_products WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
 func (s *Store) UpdateProduct(ctx context.Context, p *Product) error {
 	tag, err := s.db.Exec(ctx,
 		`UPDATE pay_products SET name=$2, description=$3, price_cents=$4, active=$5 WHERE id=$1`,
