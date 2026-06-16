@@ -82,45 +82,21 @@ func (c *CoolifyClient) Deploy(ctx context.Context, uuid string) error {
 	return err
 }
 
-// DeploymentLogs retorna as últimas linhas do último deployment de uma aplicação.
-// GET /api/v1/deployments/{uuid} — o campo "logs" é uma string JSON de objetos
-// com "output". Retorna no máximo `maxLines` linhas (as mais recentes).
+// DeploymentLogs retorna as últimas linhas de log de RUNTIME do container do app.
+// `uuid` é o UUID da APLICAÇÃO (não de um deployment). GET
+// /api/v1/applications/{uuid}/logs devolve {"logs":"<texto separado por \n>"}.
 func (c *CoolifyClient) DeploymentLogs(ctx context.Context, uuid string, maxLines int) (string, error) {
-	raw, err := c.do(ctx, http.MethodGet, "/api/v1/deployments/"+uuid)
+	raw, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/v1/applications/%s/logs?lines=%d", uuid, maxLines))
 	if err != nil {
 		return "", err
 	}
-	var dep struct {
+	var resp struct {
 		Logs string `json:"logs"`
 	}
-	if err := json.Unmarshal(raw, &dep); err != nil {
-		return "", fmt.Errorf("coolify: deployment parse: %w", err)
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return "", fmt.Errorf("coolify: logs parse: %w", err)
 	}
-	if dep.Logs == "" {
-		return "", nil
-	}
-
-	// O campo "logs" é uma string JSON de objetos {output,...}.
-	var entries []struct {
-		Output string `json:"output"`
-	}
-	if err := json.Unmarshal([]byte(dep.Logs), &entries); err != nil {
-		// Formato inesperado: devolve o texto cru, truncado.
-		return tailLines(dep.Logs, maxLines), nil
-	}
-
-	var lines []string
-	for _, e := range entries {
-		for _, ln := range strings.Split(strings.TrimRight(e.Output, "\n"), "\n") {
-			if strings.TrimSpace(ln) != "" {
-				lines = append(lines, ln)
-			}
-		}
-	}
-	if len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
-	}
-	return strings.Join(lines, "\n"), nil
+	return tailLines(resp.Logs, maxLines), nil
 }
 
 // ResolveApp encontra uma aplicação por nome (match case-insensitive por
