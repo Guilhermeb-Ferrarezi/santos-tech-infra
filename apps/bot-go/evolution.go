@@ -57,9 +57,15 @@ func (c *EvolutionClient) sendText(ctx context.Context, to, text string) (string
 	if !c.Enabled() {
 		return "", fmt.Errorf("evolution: não configurado")
 	}
-	number := strings.TrimSuffix(to, "@s.whatsapp.net")
-	if i := strings.IndexAny(number, "@:"); i > 0 {
-		number = number[:i]
+	// Grupos: o JID completo (...@g.us) precisa ir inteiro — a Evolution roteia
+	// pelo sufixo. Para contatos, normaliza para só o número (remove
+	// @s.whatsapp.net e o sufixo de device :NN).
+	number := to
+	if !strings.HasSuffix(to, "@g.us") {
+		number = strings.TrimSuffix(to, "@s.whatsapp.net")
+		if i := strings.IndexAny(number, "@:"); i > 0 {
+			number = number[:i]
+		}
 	}
 
 	body := map[string]any{"number": number, "text": text}
