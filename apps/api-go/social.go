@@ -80,12 +80,11 @@ func (s *Server) listSocialPosts(ctx context.Context) ([]SocialPost, error) {
 	defer rows.Close()
 	out := []SocialPost{}
 	for rows.Next() {
-		var p SocialPost
-		if err := rows.Scan(&p.ID, &p.Title, &p.Caption, &p.Platform, &p.Pilar, &p.Status,
-			&p.ScheduledAt, &p.MediaURL, &p.ReferenceURL, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		p, err := scanSocialPost(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, p)
+		out = append(out, *p)
 	}
 	return out, rows.Err()
 }
@@ -122,8 +121,14 @@ func (s *Server) updateSocialPostStatus(ctx context.Context, id, status string) 
 }
 
 func (s *Server) deleteSocialPost(ctx context.Context, id string) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM social_posts WHERE id=$1::uuid`, id)
-	return err
+	tag, err := s.db.Exec(ctx, `DELETE FROM social_posts WHERE id=$1::uuid`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errSocialPostNotFound
+	}
+	return nil
 }
 
 func (s *Server) listSocialPostNotes(ctx context.Context, postID string) ([]SocialPostNote, error) {
@@ -152,12 +157,13 @@ func (s *Server) insertSocialPostNote(ctx context.Context, postID string, author
 	err := s.db.QueryRow(ctx, `
 		INSERT INTO social_post_notes (post_id, author_id, content)
 		VALUES ($1::uuid, $2, $3)
-		RETURNING id, post_id::text, author_id, content, created_at`,
+		RETURNING id, post_id::text, author_id,
+		          (SELECT COALESCE(name,'') FROM users WHERE id=author_id),
+		          content, created_at`,
 		postID, authorID, content).
-		Scan(&n.ID, &n.PostID, &n.AuthorID, &n.Content, &n.CreatedAt)
+		Scan(&n.ID, &n.PostID, &n.AuthorID, &n.AuthorName, &n.Content, &n.CreatedAt)
 	if err != nil {
-		return nil, err
+		return nil, portalDBErr(err)
 	}
-	_ = s.db.QueryRow(ctx, `SELECT name FROM users WHERE id=$1`, authorID).Scan(&n.AuthorName)
 	return &n, nil
 }
