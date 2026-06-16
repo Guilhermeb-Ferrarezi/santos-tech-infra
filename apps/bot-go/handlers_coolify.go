@@ -37,6 +37,9 @@ func (s *Server) handleCoolifyWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := coolifyDeployStatus(payload)
+	// DEBUG temporário: registra o que a Coolify manda, para descobrir se/como ela
+	// notifica falha de build e o formato do payload.
+	slog.Info("coolify webhook recebido", "status_classificado", status, "payload", string(body))
 	if status == "" || status == "started" {
 		// Sem classificação acionável (ou apenas "iniciou") → nada a notificar.
 		w.WriteHeader(http.StatusOK)
