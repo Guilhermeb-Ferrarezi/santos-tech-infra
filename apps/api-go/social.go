@@ -1,0 +1,163 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+type SocialPost struct {
+	ID           string     `json:"id"`
+	Title        string     `json:"title"`
+	Caption      string     `json:"caption"`
+	Platform     string     `json:"platform"`
+	Pilar        string     `json:"pilar"`
+	Status       string     `json:"status"`
+	ScheduledAt  *time.Time `json:"scheduledAt"`
+	MediaURL     string     `json:"mediaUrl"`
+	ReferenceURL string     `json:"referenceUrl"`
+	CreatedBy    *int64     `json:"createdBy"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
+}
+
+type SocialPostNote struct {
+	ID         int64     `json:"id"`
+	PostID     string    `json:"postId"`
+	AuthorID   *int64    `json:"authorId"`
+	AuthorName string    `json:"authorName"`
+	Content    string    `json:"content"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+type SocialPostInput struct {
+	Title        string     `json:"title"`
+	Caption      string     `json:"caption"`
+	Platform     string     `json:"platform"`
+	Pilar        string     `json:"pilar"`
+	Status       string     `json:"status"`
+	ScheduledAt  *time.Time `json:"scheduledAt"`
+	MediaURL     string     `json:"mediaUrl"`
+	ReferenceURL string     `json:"referenceUrl"`
+}
+
+var validSocialPlatforms = map[string]bool{
+	"facebook": true, "instagram": true, "tiktok": true, "twitter_x": true,
+	"threads": true, "youtube": true, "linkedin": true,
+}
+
+var validSocialPilares = map[string]bool{
+	"educacional": true, "institucional": true, "bastidores": true,
+	"produto": true, "engajamento": true,
+}
+
+var validSocialStatuses = map[string]bool{
+	"ideia": true, "planejado": true, "em_producao": true,
+	"revisao": true, "agendado": true, "publicado": true,
+}
+
+const socialPostCols = `id::text, title, caption, platform, pilar, status,
+	scheduled_at, media_url, reference_url, created_by, created_at, updated_at`
+
+func scanSocialPost(row pgx.Row) (*SocialPost, error) {
+	var p SocialPost
+	err := row.Scan(&p.ID, &p.Title, &p.Caption, &p.Platform, &p.Pilar, &p.Status,
+		&p.ScheduledAt, &p.MediaURL, &p.ReferenceURL, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &p, err
+}
+
+func (s *Server) listSocialPosts(ctx context.Context) ([]SocialPost, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT `+socialPostCols+` FROM social_posts ORDER BY COALESCE(scheduled_at, created_at) DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SocialPost{}
+	for rows.Next() {
+		var p SocialPost
+		if err := rows.Scan(&p.ID, &p.Title, &p.Caption, &p.Platform, &p.Pilar, &p.Status,
+			&p.ScheduledAt, &p.MediaURL, &p.ReferenceURL, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Server) getSocialPost(ctx context.Context, id string) (*SocialPost, error) {
+	return scanSocialPost(s.db.QueryRow(ctx,
+		`SELECT `+socialPostCols+` FROM social_posts WHERE id = $1::uuid`, id))
+}
+
+func (s *Server) insertSocialPost(ctx context.Context, in SocialPostInput, createdBy int64) (*SocialPost, error) {
+	return scanSocialPost(s.db.QueryRow(ctx, `
+		INSERT INTO social_posts (title, caption, platform, pilar, status, scheduled_at, media_url, reference_url, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		RETURNING `+socialPostCols,
+		in.Title, in.Caption, in.Platform, in.Pilar, in.Status,
+		in.ScheduledAt, in.MediaURL, in.ReferenceURL, createdBy))
+}
+
+func (s *Server) updateSocialPost(ctx context.Context, id string, in SocialPostInput) (*SocialPost, error) {
+	return scanSocialPost(s.db.QueryRow(ctx, `
+		UPDATE social_posts SET
+			title=$2, caption=$3, platform=$4, pilar=$5, status=$6,
+			scheduled_at=$7, media_url=$8, reference_url=$9, updated_at=now()
+		WHERE id=$1::uuid
+		RETURNING `+socialPostCols,
+		id, in.Title, in.Caption, in.Platform, in.Pilar, in.Status,
+		in.ScheduledAt, in.MediaURL, in.ReferenceURL))
+}
+
+func (s *Server) updateSocialPostStatus(ctx context.Context, id, status string) (*SocialPost, error) {
+	return scanSocialPost(s.db.QueryRow(ctx, `
+		UPDATE social_posts SET status=$2, updated_at=now()
+		WHERE id=$1::uuid RETURNING `+socialPostCols, id, status))
+}
+
+func (s *Server) deleteSocialPost(ctx context.Context, id string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM social_posts WHERE id=$1::uuid`, id)
+	return err
+}
+
+func (s *Server) listSocialPostNotes(ctx context.Context, postID string) ([]SocialPostNote, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT n.id, n.post_id::text, n.author_id, COALESCE(u.name,''), n.content, n.created_at
+		FROM social_post_notes n
+		LEFT JOIN users u ON u.id = n.author_id
+		WHERE n.post_id = $1::uuid ORDER BY n.created_at`, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SocialPostNote{}
+	for rows.Next() {
+		var n SocialPostNote
+		if err := rows.Scan(&n.ID, &n.PostID, &n.AuthorID, &n.AuthorName, &n.Content, &n.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+func (s *Server) insertSocialPostNote(ctx context.Context, postID string, authorID int64, content string) (*SocialPostNote, error) {
+	var n SocialPostNote
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO social_post_notes (post_id, author_id, content)
+		VALUES ($1::uuid, $2, $3)
+		RETURNING id, post_id::text, author_id, content, created_at`,
+		postID, authorID, content).
+		Scan(&n.ID, &n.PostID, &n.AuthorID, &n.Content, &n.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	_ = s.db.QueryRow(ctx, `SELECT name FROM users WHERE id=$1`, authorID).Scan(&n.AuthorName)
+	return &n, nil
+}
