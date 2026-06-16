@@ -51,7 +51,9 @@ func (s *Server) handleEmailVerifySend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao gerar o código"))
 		return
 	}
-	s.rdb.Del(r.Context(), emailVerifyAttKey(uid))
+	if err := s.rdb.Del(r.Context(), emailVerifyAttKey(uid)).Err(); err != nil {
+		slog.Warn("email_verify_send: falha ao limpar contador de tentativas no Redis", "uid", uid, "err", err)
+	}
 	if err := s.rdb.Set(r.Context(), emailVerifyCDKey(uid), "1", emailVerifyCooldown).Err(); err != nil {
 		slog.Warn("email_verify_send: falha ao gravar cooldown", "uid", uid, "err", err)
 	}
@@ -100,7 +102,9 @@ func (s *Server) handleEmailVerifyConfirm(w http.ResponseWriter, r *http.Request
 		slog.Warn("email_verify_confirm: ExpireNX falhou; contador de tentativas pode não expirar", "uid", uid, "err", err)
 	}
 	if attempts > emailVerifyMaxAttempts {
-		s.rdb.Del(r.Context(), emailVerifyKey(uid), emailVerifyAttKey(uid))
+		if err := s.rdb.Del(r.Context(), emailVerifyKey(uid), emailVerifyAttKey(uid)).Err(); err != nil {
+			slog.Warn("email_verify_confirm: falha ao invalidar código após exceder tentativas", "uid", uid, "err", err)
+		}
 		writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Muitas tentativas; envie outro código"))
 		return
 	}
@@ -112,6 +116,8 @@ func (s *Server) handleEmailVerifyConfirm(w http.ResponseWriter, r *http.Request
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao confirmar a verificação"))
 		return
 	}
-	s.rdb.Del(r.Context(), emailVerifyKey(uid), emailVerifyAttKey(uid), emailVerifyCDKey(uid))
+	if err := s.rdb.Del(r.Context(), emailVerifyKey(uid), emailVerifyAttKey(uid), emailVerifyCDKey(uid)).Err(); err != nil {
+		slog.Warn("email_verify_confirm: falha ao limpar chaves de verificação após sucesso", "uid", uid, "err", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"verified": true})
 }
