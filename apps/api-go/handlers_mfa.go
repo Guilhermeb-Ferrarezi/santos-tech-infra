@@ -7,6 +7,7 @@ import (
 	"encoding/base32"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -327,10 +328,9 @@ func genRecoveryCodes(n int) []string {
 }
 
 func emailCode() string {
-	b := make([]byte, 3)
-	if _, err := rand.Read(b); err != nil {
+	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
+	if err != nil {
 		panic("crypto/rand unavailable: " + err.Error())
 	}
-	n := int(b[0])<<16 | int(b[1])<<8 | int(b[2])
-	return fmt.Sprintf("%06d", n%1000000)
+	return fmt.Sprintf("%06d", n.Int64())
 }
