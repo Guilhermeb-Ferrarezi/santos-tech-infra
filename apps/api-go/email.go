@@ -43,6 +43,7 @@ func (e *emailClient) send(ctx context.Context, to, subject, html string) error 
 	defer res.Body.Close()
 	if res.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 512))
+		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
 		return fmt.Errorf("email api retornou status %d: %q", res.StatusCode, b)
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
