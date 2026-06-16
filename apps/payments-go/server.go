@@ -57,6 +57,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /products/{id}", s.requireAdmin(s.handleUpdateProduct))
 	mux.HandleFunc("GET /products/by-slug/{slug}", s.handleGetProductBySlug) // público
 
+	mux.HandleFunc("GET /pay/{token}", s.handleGetPay)
+	mux.HandleFunc("GET /pay/{token}/events", s.handlePayEvents)
+
 	mux.HandleFunc("POST /webhooks/dotfy", s.handleDotfyWebhook)
 
 	return s.cors(mux)
