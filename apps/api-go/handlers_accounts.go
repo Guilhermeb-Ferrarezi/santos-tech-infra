@@ -8,6 +8,7 @@ import (
 // GET /auth/accounts — contas conhecidas neste navegador (cookie assinado),
 // já podadas das sessões mortas. "active" = a sessão do refresh cookie atual.
 func (s *Server) handleAccountsList(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	ids := s.readAccounts(r)
 	if len(ids) == 0 {
 		writeJSON(w, http.StatusOK, map[string]any{"accounts": []AccountSummary{}})
@@ -50,6 +51,7 @@ func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request) {
 // POST /auth/accounts/{sessionId}/activate — troca a conta ativa no auth-web:
 // rotaciona a sessão escolhida (a antiga é apagada) e seta os cookies ativos.
 func (s *Server) handleAccountActivate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	sid := r.PathValue("sessionId")
 	if !slices.Contains(s.readAccounts(r), sid) {
 		writeErr(w, appErr(http.StatusUnauthorized, "SESSION_EXPIRED", "Sessão não encontrada neste navegador"))
