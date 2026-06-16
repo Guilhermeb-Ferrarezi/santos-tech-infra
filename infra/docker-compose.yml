@@ -26,6 +26,23 @@ services:
       <<: *db-env
     restart: unless-stopped
 
+  payments-go:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.payments-go
+    ports:
+      - "3336:3336"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    environment:
+      <<: *db-env
+      PORT: "3336"
+      DOTFY_BASE_URL: ${DOTFY_BASE_URL:-https://app.dotfy.com.br}
+    restart: unless-stopped
+
   agent-go:
     build:
       context: ..
