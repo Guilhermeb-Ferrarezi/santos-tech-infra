@@ -6,20 +6,23 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 type Server struct {
 	cfg      Config
 	db       *pgxpool.Pool
+	rdb      *redis.Client
 	store    *Store
 	provider PaymentProvider
 	email    *emailClient
 }
 
-func NewServer(cfg Config, db *pgxpool.Pool, provider PaymentProvider) *Server {
+func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client, provider PaymentProvider) *Server {
 	return &Server{
 		cfg:      cfg,
 		db:       db,
+		rdb:      rdb,
 		store:    &Store{db: db},
 		provider: provider,
 		email:    newEmailClient(cfg),
