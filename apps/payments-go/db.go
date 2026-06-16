@@ -83,6 +83,38 @@ CREATE TABLE IF NOT EXISTS pay_webhook_events (
   payload      JSONB NOT NULL,
   processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS pay_products (
+  id           BIGSERIAL PRIMARY KEY,
+  slug         TEXT NOT NULL UNIQUE,
+  name         TEXT NOT NULL,
+  description  TEXT NOT NULL DEFAULT '',
+  price_cents  BIGINT NOT NULL CHECK (price_cents > 0),
+  active       BOOLEAN NOT NULL DEFAULT true,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS pay_customers (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    BIGINT NOT NULL UNIQUE,
+  tax_id     TEXT NOT NULL DEFAULT '',
+  phone      TEXT NOT NULL DEFAULT '',
+  name       TEXT NOT NULL DEFAULT '',
+  email      TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS customer_id BIGINT REFERENCES pay_customers(id);
+ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS public_token TEXT;
+ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS payer_tax_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pay_charges_public_token ON pay_charges(public_token) WHERE public_token IS NOT NULL;
+CREATE TABLE IF NOT EXISTS pay_charge_items (
+  id          BIGSERIAL PRIMARY KEY,
+  charge_id   BIGINT NOT NULL REFERENCES pay_charges(id) ON DELETE CASCADE,
+  product_id  BIGINT REFERENCES pay_products(id),
+  name        TEXT NOT NULL,
+  price_cents BIGINT NOT NULL,
+  quantity    INT NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_pay_charge_items_charge ON pay_charge_items(charge_id);
+ALTER TABLE pay_charges ALTER COLUMN student_id DROP NOT NULL;
 `
 
 func migrate(ctx context.Context, db *pgxpool.Pool) error {
