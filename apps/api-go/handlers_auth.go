@@ -140,6 +140,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if err := s.rdb.ExpireNX(r.Context(), lockKey, loginFailWindow).Err(); err != nil {
 			slog.Warn("login_fail: ExpireNX falhou; contador de lockout pode não expirar", "key", lockKey, "err", err)
 		}
+		// Verifica o valor APÓS o Incr atômico para fechar a janela TOCTOU: dois
+		// requests simultâneos podem ambos passar pelo Get pré-check (ambos veem
+		// n=9), mas o Incr é atômico — o primeiro chega a 10, o segundo a 11.
+		// Sem esta verificação, ambos retornariam INVALID_CREDENTIALS em vez de
+		// TOO_MANY_ATTEMPTS, permitindo N extra tentativas iguais ao número de
+		// goroutines concorrentes na janela argon2id (~300 ms).
+		if incrCmd.Val() > maxLoginFails {
+			writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
+			return
+		}
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_CREDENTIALS", "Email ou senha inválidos"))
 		return
 	}
