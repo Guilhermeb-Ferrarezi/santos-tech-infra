@@ -52,6 +52,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /charges", s.requireAdmin(s.handleListCharges))
 	mux.HandleFunc("GET /charges/{id}", s.requireAdmin(s.handleGetCharge))
 
+	mux.HandleFunc("POST /products", s.requireAdmin(s.handleCreateProduct))
+	mux.HandleFunc("GET /products", s.requireAdmin(s.handleListProducts))
+	mux.HandleFunc("PUT /products/{id}", s.requireAdmin(s.handleUpdateProduct))
+	mux.HandleFunc("GET /products/by-slug/{slug}", s.handleGetProductBySlug) // público
+
 	mux.HandleFunc("POST /webhooks/dotfy", s.handleDotfyWebhook)
 
 	return s.cors(mux)
@@ -67,7 +72,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 				break
 			}
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
