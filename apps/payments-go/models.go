@@ -46,8 +46,23 @@ type Charge struct {
 	QRCode           string     `json:"qrCode"`
 	PaidAt           *time.Time `json:"paidAt,omitempty"`
 	CreatedAt        time.Time  `json:"createdAt"`
+	PayerName        string     `json:"payerName,omitempty"`
 
 	payerTaxID string // snapshot p/ insert; não serializa
+}
+
+type StatsPeriod struct {
+	PaidTotal     int64 `json:"paidTotal"`
+	PaidCount     int64 `json:"paidCount"`
+	PendingTotal  int64 `json:"pendingTotal"`
+	PendingCount  int64 `json:"pendingCount"`
+	ExpiredCount  int64 `json:"expiredCount"`
+	CanceledCount int64 `json:"canceledCount"`
+}
+
+type StatsResult struct {
+	Month   StatsPeriod `json:"month"`
+	AllTime StatsPeriod `json:"allTime"`
 }
 
 type Product struct {

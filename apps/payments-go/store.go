@@ -158,12 +158,15 @@ func nullStr(s string) any {
 
 func (s *Store) ListCharges(ctx context.Context, status string, studentID int64) ([]Charge, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, kind, subscription_id, student_id, amount_cents, due_date::text, reference_month,
-		       status, provider, COALESCE(provider_charge_id,''), correlation_id,
-		       COALESCE(br_code,''), COALESCE(qr_code,''), paid_at, created_at
-		FROM pay_charges
-		WHERE ($1='' OR status=$1) AND ($2=0 OR student_id=$2)
-		ORDER BY created_at DESC`, status, studentID)
+		SELECT c.id, c.kind, c.subscription_id, c.student_id, c.amount_cents, c.due_date::text, c.reference_month,
+		       c.status, c.provider, COALESCE(c.provider_charge_id,''), c.correlation_id,
+		       COALESCE(c.br_code,''), COALESCE(c.qr_code,''), c.paid_at, c.created_at,
+		       COALESCE(NULLIF(st.name,''), NULLIF(cu.name,''), '') AS payer_name
+		FROM pay_charges c
+		LEFT JOIN pay_students st ON st.id = c.student_id
+		LEFT JOIN pay_customers cu ON cu.id = c.customer_id
+		WHERE ($1='' OR c.status=$1) AND ($2=0 OR c.student_id=$2)
+		ORDER BY c.created_at DESC`, status, studentID)
 	if err != nil {
 		return nil, err
 	}
@@ -173,12 +176,35 @@ func (s *Store) ListCharges(ctx context.Context, status string, studentID int64)
 		var c Charge
 		if err := rows.Scan(&c.ID, &c.Kind, &c.SubscriptionID, &c.StudentID, &c.AmountCents, &c.DueDate,
 			&c.ReferenceMonth, &c.Status, &c.Provider, &c.ProviderChargeID, &c.CorrelationID,
-			&c.BRCode, &c.QRCode, &c.PaidAt, &c.CreatedAt); err != nil {
+			&c.BRCode, &c.QRCode, &c.PaidAt, &c.CreatedAt, &c.PayerName); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) GetStats(ctx context.Context) (StatsResult, error) {
+	var r StatsResult
+	scan := func(p *StatsPeriod, where string) error {
+		return s.db.QueryRow(ctx, `
+			SELECT
+				COALESCE(COUNT(*) FILTER (WHERE status='paid'),     0),
+				COALESCE(SUM(amount_cents) FILTER (WHERE status='paid'), 0),
+				COALESCE(COUNT(*) FILTER (WHERE status='pending'),  0),
+				COALESCE(SUM(amount_cents) FILTER (WHERE status='pending'), 0),
+				COALESCE(COUNT(*) FILTER (WHERE status='expired'),  0),
+				COALESCE(COUNT(*) FILTER (WHERE status='canceled'), 0)
+			FROM pay_charges `+where).
+			Scan(&p.PaidCount, &p.PaidTotal, &p.PendingCount, &p.PendingTotal, &p.ExpiredCount, &p.CanceledCount)
+	}
+	if err := scan(&r.Month, "WHERE created_at >= date_trunc('month', now())"); err != nil {
+		return r, err
+	}
+	if err := scan(&r.AllTime, ""); err != nil {
+		return r, err
+	}
+	return r, nil
 }
 
 func (s *Store) GetCharge(ctx context.Context, id int64) (*Charge, error) {

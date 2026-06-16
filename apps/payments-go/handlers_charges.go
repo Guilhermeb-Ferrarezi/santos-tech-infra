@@ -106,6 +106,15 @@ func (s *Server) createAndPersistCharge(ctx context.Context, c *Charge, st *Stud
 	return nil
 }
 
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := s.store.GetStats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao calcular estatísticas")
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
 func (s *Server) handleListCharges(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	studentID, _ := strconv.ParseInt(r.URL.Query().Get("student_id"), 10, 64)
