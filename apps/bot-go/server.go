@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 // ---------------------------------------------------------------------------
@@ -134,27 +135,32 @@ type Server struct {
 	evoEngine  *ConversationEngine
 	evoClient  *EvolutionClient
 	voice      *VoiceClient
+	// rdb pode ser nil — o dedupe de notificações cai pro fallback in-memory.
+	rdb         *redis.Client
+	notifDedupe *notifDedupe
 }
 
 // NewServer cria um Server com as dependências fornecidas.
-func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, pool *pgxpool.Pool, sender *WhatsAppSender, logger *slog.Logger, hub *WSHub, logRepo *ProcessingLogRepo, evoEngine *ConversationEngine, evoClient *EvolutionClient, voice *VoiceClient) *Server {
+func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, pool *pgxpool.Pool, sender *WhatsAppSender, logger *slog.Logger, hub *WSHub, logRepo *ProcessingLogRepo, evoEngine *ConversationEngine, evoClient *EvolutionClient, voice *VoiceClient, rdb *redis.Client) *Server {
 	return &Server{
-		cfg:        cfg,
-		engine:     engine,
-		webhook:    webhook,
-		pool:       pool,
-		sender:     sender,
-		logger:     logger,
-		dbnc:       newDebouncer(),
-		burst:      newBurstBuffer(),
-		hub:        hub,
-		logRepo:    logRepo,
-		contacts:   NewContactRepo(pool),
-		leads:      NewLeadRepo(pool),
-		withTenant: withTenant(pool, cfg.TenantID),
-		evoEngine:  evoEngine,
-		evoClient:  evoClient,
-		voice:      voice,
+		cfg:         cfg,
+		engine:      engine,
+		webhook:     webhook,
+		pool:        pool,
+		sender:      sender,
+		logger:      logger,
+		dbnc:        newDebouncer(),
+		burst:       newBurstBuffer(),
+		hub:         hub,
+		logRepo:     logRepo,
+		contacts:    NewContactRepo(pool),
+		leads:       NewLeadRepo(pool),
+		withTenant:  withTenant(pool, cfg.TenantID),
+		evoEngine:   evoEngine,
+		evoClient:   evoClient,
+		voice:       voice,
+		rdb:         rdb,
+		notifDedupe: newNotifDedupe(),
 	}
 }
 
