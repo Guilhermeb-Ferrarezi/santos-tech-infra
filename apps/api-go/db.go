@@ -133,7 +133,7 @@ UPDATE social_posts SET pilar='educacional'   WHERE pilar='engajamento';
 -- Recriar constraints com os valores do handoff (drop+add é idempotente)
 ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_platform_check;
 ALTER TABLE social_posts ADD CONSTRAINT social_posts_platform_check
-  CHECK (platform IN ('facebook','instagram','tiktok','twitter_x','threads','google_meu_negocio','blog','linkedin'));
+  CHECK (platform IN ('facebook','instagram','tiktok','youtube','twitter_x','threads','google_meu_negocio','blog','linkedin'));
 ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_pilar_check;
 ALTER TABLE social_posts ADD CONSTRAINT social_posts_pilar_check
   CHECK (pilar IN ('educacional','institucional','captacao','prova_social','bastidores','tech_mundo_real'));

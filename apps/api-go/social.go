@@ -44,8 +44,8 @@ type SocialPostInput struct {
 }
 
 var validSocialPlatforms = map[string]bool{
-	"facebook": true, "instagram": true, "tiktok": true, "twitter_x": true,
-	"threads": true, "google_meu_negocio": true, "blog": true, "linkedin": true,
+	"facebook": true, "instagram": true, "tiktok": true, "youtube": true,
+	"threads": true, "google_meu_negocio": true, "blog": true, "twitter_x": true, "linkedin": true,
 }
 
 var validSocialPilares = map[string]bool{
