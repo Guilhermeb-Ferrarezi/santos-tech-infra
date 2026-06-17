@@ -34,6 +34,29 @@ func TestParseRepoURL(t *testing.T) {
 	}
 }
 
+func TestRepoCloneURL(t *testing.T) {
+	cases := map[string]string{
+		"Santos-Techrp/dashboard":                "https://github.com/Santos-Techrp/dashboard.git",
+		"Guilhermeb-Ferrarezi/santos-tech-infra": "https://github.com/Guilhermeb-Ferrarezi/santos-tech-infra.git",
+		"owner/repo.git":                         "https://github.com/owner/repo.git",
+		"https://github.com/owner/repo.git":      "https://github.com/owner/repo.git",
+		"git@github.com:owner/repo.git":          "git@github.com:owner/repo.git",
+	}
+	for in, want := range cases {
+		if got := repoCloneURL(in); got != want {
+			t.Errorf("repoCloneURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestParseRepoURLAcceptsOwnerRepo(t *testing.T) {
+	// A Coolify entrega "owner/repo"; parseRepoURL precisa extrair os dois.
+	o, r, err := parseRepoURL("Santos-Techrp/dashboard")
+	if err != nil || o != "Santos-Techrp" || r != "dashboard" {
+		t.Fatalf("got (%q,%q,%v)", o, r, err)
+	}
+}
+
 func TestGitHubAppDisabledWhenUnset(t *testing.T) {
 	g, err := NewGitHubApp("", "")
 	if err != nil || g.Enabled() {

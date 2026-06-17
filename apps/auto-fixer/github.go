@@ -121,6 +121,17 @@ func (g *GitHubApp) RepoToken(ctx context.Context, now time.Time, owner, repo st
 	return tr.Token, nil
 }
 
+// repoCloneURL normaliza o campo da Coolify (que vem como "owner/repo") para uma
+// URL https clonável. Aceita também URLs já completas (https:// ou git@).
+func repoCloneURL(gitRepo string) string {
+	s := strings.TrimSpace(gitRepo)
+	if strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "git@") {
+		return s
+	}
+	s = strings.TrimSuffix(strings.Trim(s, "/"), ".git")
+	return "https://github.com/" + s + ".git"
+}
+
 // parseRepoURL extrai (owner, repo) de uma URL de repositório GitHub.
 // Aceita https://github.com/owner/repo(.git) e git@github.com:owner/repo(.git).
 func parseRepoURL(u string) (owner, repo string, err error) {

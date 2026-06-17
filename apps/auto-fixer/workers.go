@@ -112,8 +112,9 @@ func (w *Workers) HandleFixRun(ctx context.Context, t *asynq.Task) error {
 	}
 
 	token := w.repoToken(ctx, in.Repo)
+	cloneURL := repoCloneURL(in.Repo) // Coolify devolve "owner/repo" → URL https
 	workdir := workdirFor(w.cfg.WorkspaceRoot, in.App, in.ID)
-	if err := cloneRepo(ctx, in.Repo, in.Branch, workdir, token); err != nil {
+	if err := cloneRepo(ctx, cloneURL, in.Branch, workdir, token); err != nil {
 		return w.fail(ctx, in, "falha ao clonar o repo: "+err.Error())
 	}
 
