@@ -136,7 +136,6 @@ CREATE TABLE IF NOT EXISTS social_post_status_history (
 );
 CREATE INDEX IF NOT EXISTS idx_social_post_status_history_post ON social_post_status_history(post_id);
 -- Migração: normalizar valores antigos de plataforma/pilar para os corretos
-UPDATE social_posts SET platform='instagram' WHERE platform='youtube';
 UPDATE social_posts SET pilar='institucional' WHERE pilar='produto';
 UPDATE social_posts SET pilar='educacional'   WHERE pilar='engajamento';
 -- Recriar constraints com os valores do handoff (drop+add é idempotente)
@@ -149,6 +148,32 @@ ALTER TABLE social_posts ADD CONSTRAINT social_posts_pilar_check
 ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_status_check;
 ALTER TABLE social_posts ADD CONSTRAINT social_posts_status_check
   CHECK (status IN ('ideia','planejado','em_producao','revisao','aprovado','agendado','publicado','arquivado'));
+ALTER TABLE social_posts
+  ADD COLUMN IF NOT EXISTS formato             text   NOT NULL DEFAULT 'estatico',
+  ADD COLUMN IF NOT EXISTS objetivo            text   NOT NULL DEFAULT 'alcance',
+  ADD COLUMN IF NOT EXISTS programa            text   NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS receita             text   NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS plataformas_destino text[] NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS copy_arte           jsonb  NOT NULL DEFAULT '[]',
+  ADD COLUMN IF NOT EXISTS hashtags            text[] NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS conceito_visual     text   NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS paleta              jsonb  NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS prompt_ia           text   NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS specs               jsonb  NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS master_url          text   NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS mandatorios         text   NOT NULL DEFAULT '';
+ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_formato_check;
+ALTER TABLE social_posts ADD CONSTRAINT social_posts_formato_check
+  CHECK (formato IN ('estatico','carrossel','reel','story','video_longo','short','thumbnail','card_link'));
+ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_objetivo_check;
+ALTER TABLE social_posts ADD CONSTRAINT social_posts_objetivo_check
+  CHECK (objetivo IN ('alcance','engajamento','conversao','autoridade'));
+ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_programa_check;
+ALTER TABLE social_posts ADD CONSTRAINT social_posts_programa_check
+  CHECK (programa IN ('','create','jr','camps','academies'));
+ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_receita_check;
+ALTER TABLE social_posts ADD CONSTRAINT social_posts_receita_check
+  CHECK (receita IN ('','capa_gancho','hero_numero','versus','antes_depois','desenvolvimento','cta_fechamento','checklist','passo_a_passo','citacao_depoimento','poster_anuncio'));
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

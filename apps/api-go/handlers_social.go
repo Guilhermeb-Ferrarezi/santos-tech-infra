@@ -30,6 +30,23 @@ func validateSocialPostInput(in *SocialPostInput) error {
 	if !validSocialStatuses[in.Status] {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Status inválido")
 	}
+	if !validSocialFormatos[in.Formato] {
+		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Formato inválido")
+	}
+	if !validSocialObjetivos[in.Objetivo] {
+		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Objetivo inválido")
+	}
+	if !validSocialProgramas[in.Programa] {
+		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Programa inválido")
+	}
+	if !validSocialReceitas[in.Receita] {
+		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Receita inválida")
+	}
+	for _, p := range in.PlataformasDestino {
+		if !validSocialPlatforms[p] {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Plataforma-destino inválida")
+		}
+	}
 	return nil
 }
 

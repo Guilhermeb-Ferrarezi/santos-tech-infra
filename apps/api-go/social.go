@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -18,9 +19,24 @@ type SocialPost struct {
 	ScheduledAt  *time.Time `json:"scheduledAt"`
 	MediaURL     string     `json:"mediaUrl"`
 	ReferenceURL string     `json:"referenceUrl"`
-	CreatedBy    *int64     `json:"createdBy"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
+
+	Formato            string          `json:"formato"`
+	Objetivo           string          `json:"objetivo"`
+	Programa           string          `json:"programa"`
+	Receita            string          `json:"receita"`
+	PlataformasDestino []string        `json:"plataformasDestino"`
+	CopyArte           json.RawMessage `json:"copyArte"`
+	Hashtags           []string        `json:"hashtags"`
+	ConceitoVisual     string          `json:"conceitoVisual"`
+	Paleta             json.RawMessage `json:"paleta"`
+	PromptIA           string          `json:"promptIa"`
+	Specs              json.RawMessage `json:"specs"`
+	MasterURL          string          `json:"masterUrl"`
+	Mandatorios        string          `json:"mandatorios"`
+
+	CreatedBy *int64    `json:"createdBy"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type SocialPostNote struct {
@@ -41,6 +57,20 @@ type SocialPostInput struct {
 	ScheduledAt  *time.Time `json:"scheduledAt"`
 	MediaURL     string     `json:"mediaUrl"`
 	ReferenceURL string     `json:"referenceUrl"`
+
+	Formato            string          `json:"formato"`
+	Objetivo           string          `json:"objetivo"`
+	Programa           string          `json:"programa"`
+	Receita            string          `json:"receita"`
+	PlataformasDestino []string        `json:"plataformasDestino"`
+	CopyArte           json.RawMessage `json:"copyArte"`
+	Hashtags           []string        `json:"hashtags"`
+	ConceitoVisual     string          `json:"conceitoVisual"`
+	Paleta             json.RawMessage `json:"paleta"`
+	PromptIA           string          `json:"promptIa"`
+	Specs              json.RawMessage `json:"specs"`
+	MasterURL          string          `json:"masterUrl"`
+	Mandatorios        string          `json:"mandatorios"`
 }
 
 var validSocialPlatforms = map[string]bool{
@@ -58,17 +88,52 @@ var validSocialStatuses = map[string]bool{
 	"revisao": true, "aprovado": true, "agendado": true, "publicado": true, "arquivado": true,
 }
 
+var validSocialFormatos = map[string]bool{
+	"estatico": true, "carrossel": true, "reel": true, "story": true,
+	"video_longo": true, "short": true, "thumbnail": true, "card_link": true,
+}
+var validSocialObjetivos = map[string]bool{
+	"alcance": true, "engajamento": true, "conversao": true, "autoridade": true,
+}
+var validSocialProgramas = map[string]bool{
+	"": true, "create": true, "jr": true, "camps": true, "academies": true,
+}
+var validSocialReceitas = map[string]bool{
+	"": true, "capa_gancho": true, "hero_numero": true, "versus": true,
+	"antes_depois": true, "desenvolvimento": true, "cta_fechamento": true,
+	"checklist": true, "passo_a_passo": true, "citacao_depoimento": true, "poster_anuncio": true,
+}
+
 const socialPostCols = `id::text, title, caption, platform, pilar, status,
-	scheduled_at, media_url, reference_url, created_by, created_at, updated_at`
+	scheduled_at, media_url, reference_url,
+	formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
+	conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
+	created_by, created_at, updated_at`
 
 func scanSocialPost(row pgx.Row) (*SocialPost, error) {
 	var p SocialPost
 	err := row.Scan(&p.ID, &p.Title, &p.Caption, &p.Platform, &p.Pilar, &p.Status,
-		&p.ScheduledAt, &p.MediaURL, &p.ReferenceURL, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
+		&p.ScheduledAt, &p.MediaURL, &p.ReferenceURL,
+		&p.Formato, &p.Objetivo, &p.Programa, &p.Receita, &p.PlataformasDestino, &p.CopyArte, &p.Hashtags,
+		&p.ConceitoVisual, &p.Paleta, &p.PromptIA, &p.Specs, &p.MasterURL, &p.Mandatorios,
+		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	return &p, err
+}
+
+func jsonbOrDefault(raw json.RawMessage, def string) json.RawMessage {
+	if len(raw) == 0 {
+		return json.RawMessage(def)
+	}
+	return raw
+}
+func sliceOrEmpty(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func (s *Server) listSocialPosts(ctx context.Context) ([]SocialPost, error) {
@@ -96,22 +161,31 @@ func (s *Server) getSocialPost(ctx context.Context, id string) (*SocialPost, err
 
 func (s *Server) insertSocialPost(ctx context.Context, in SocialPostInput, createdBy int64) (*SocialPost, error) {
 	return scanSocialPost(s.db.QueryRow(ctx, `
-		INSERT INTO social_posts (title, caption, platform, pilar, status, scheduled_at, media_url, reference_url, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		INSERT INTO social_posts (title, caption, platform, pilar, status, scheduled_at, media_url, reference_url,
+			formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
+			conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
 		RETURNING `+socialPostCols,
-		in.Title, in.Caption, in.Platform, in.Pilar, in.Status,
-		in.ScheduledAt, in.MediaURL, in.ReferenceURL, createdBy))
+		in.Title, in.Caption, in.Platform, in.Pilar, in.Status, in.ScheduledAt, in.MediaURL, in.ReferenceURL,
+		in.Formato, in.Objetivo, in.Programa, in.Receita, sliceOrEmpty(in.PlataformasDestino),
+		jsonbOrDefault(in.CopyArte, "[]"), sliceOrEmpty(in.Hashtags),
+		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.PromptIA, jsonbOrDefault(in.Specs, "{}"),
+		in.MasterURL, in.Mandatorios, createdBy))
 }
 
 func (s *Server) updateSocialPost(ctx context.Context, id string, in SocialPostInput) (*SocialPost, error) {
 	return scanSocialPost(s.db.QueryRow(ctx, `
 		UPDATE social_posts SET
-			title=$2, caption=$3, platform=$4, pilar=$5, status=$6,
-			scheduled_at=$7, media_url=$8, reference_url=$9, updated_at=now()
+			title=$2, caption=$3, platform=$4, pilar=$5, status=$6, scheduled_at=$7, media_url=$8, reference_url=$9,
+			formato=$10, objetivo=$11, programa=$12, receita=$13, plataformas_destino=$14, copy_arte=$15, hashtags=$16,
+			conceito_visual=$17, paleta=$18, prompt_ia=$19, specs=$20, master_url=$21, mandatorios=$22, updated_at=now()
 		WHERE id=$1::uuid
 		RETURNING `+socialPostCols,
-		id, in.Title, in.Caption, in.Platform, in.Pilar, in.Status,
-		in.ScheduledAt, in.MediaURL, in.ReferenceURL))
+		id, in.Title, in.Caption, in.Platform, in.Pilar, in.Status, in.ScheduledAt, in.MediaURL, in.ReferenceURL,
+		in.Formato, in.Objetivo, in.Programa, in.Receita, sliceOrEmpty(in.PlataformasDestino),
+		jsonbOrDefault(in.CopyArte, "[]"), sliceOrEmpty(in.Hashtags),
+		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.PromptIA, jsonbOrDefault(in.Specs, "{}"),
+		in.MasterURL, in.Mandatorios))
 }
 
 func (s *Server) updateSocialPostStatus(ctx context.Context, id, status string) (*SocialPost, error) {
