@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -132,6 +133,7 @@ func (s *Server) handleOAuthConfirm(w http.ResponseWriter, r *http.Request) {
 // POST /oauth/token — application/x-www-form-urlencoded (padrão OAuth).
 // Tokens voltam no CORPO (sem cookies): quem gerencia é o app cliente.
 func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := r.ParseForm(); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
@@ -206,10 +208,14 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta indisponível"))
 		return
 	}
-	// Rotaciona criando uma sessão NOVA (id diferente): o fluxo OAuth não tem
-	// cookies — o app cliente guarda os próprios tokens, então a sessão é
-	// deliberadamente desacoplada do cookie multi-conta "accounts" do navegador.
-	_ = s.deleteSession(r.Context(), sid)
+	// fail-closed: não emitir token novo se não conseguir revogar o anterior
+	// (evita dois refresh tokens simultâneos ativos para a mesma sessão).
+	// Espelha o comportamento do handleRefresh para o fluxo cookie.
+	if err := s.deleteSession(r.Context(), sid); err != nil {
+		slog.Error("oauth_token_refresh: falha ao revogar sessão anterior", "sid", sid, "err", err)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao renovar sessão"))
+		return
+	}
 	s.writeTokenResponse(w, r, u)
 }
 
