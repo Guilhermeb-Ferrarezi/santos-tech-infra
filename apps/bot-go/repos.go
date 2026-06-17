@@ -757,6 +757,35 @@ func (r *WebhookRepo) PendingRetries(ctx context.Context, limit int) ([]WebhookE
 	return events, rows.Err()
 }
 
+// GetByID carrega um webhook_event pelo ID. Usado pelo consumidor do Redis
+// Stream de retries, que carrega só o ID na entrada do stream. Devolve
+// (nil, nil) quando o evento não existe (já foi limpo/descartado).
+func (r *WebhookRepo) GetByID(ctx context.Context, id WebhookEventID) (*WebhookEvent, error) {
+	var e WebhookEvent
+	var rawPayload []byte
+	var status string
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, provider, provider_event_id, raw_payload,
+		       processing_status, attempts, next_retry_at, last_error,
+		       processed_at, received_at
+		FROM webhook_events
+		WHERE id = $1
+	`, id).Scan(
+		&e.ID, &e.TenantID, &e.Provider, &e.ProviderEventID, &rawPayload,
+		&status, &e.Attempts, &e.NextRetryAt, &e.LastError,
+		&e.ProcessedAt, &e.CreatedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("WebhookRepo.GetByID: %w", err)
+	}
+	e.RawPayload = rawPayload
+	e.Status = status
+	return &e, nil
+}
+
 // ============================================================================
 // TenantConfigRepo
 // ============================================================================

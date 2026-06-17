@@ -32,6 +32,10 @@ type WorkerDeps struct {
 	// Webhook — usado pelo drenador de retries (mensagens retidas em quiet hours).
 	Webhook *WebhookRepo
 
+	// RetryStream — consumidor do Redis Stream de retries (reprocesso quase em
+	// tempo real). Pode ser nil (Redis ausente) → só o polling roda.
+	RetryStream *RetryStream
+
 	// Engines para reprocessar mensagens retidas (quiet hours) quando o retry vence.
 	// Engine = canal oficial (Meta); EvoEngine = canal não-oficial (Evolution).
 	Engine    *ConversationEngine
@@ -114,6 +118,18 @@ func (w *Worker) Start(ctx context.Context) {
 		defer wg.Done()
 		w.retryLoop(ctx)
 	}()
+
+	// Consumidor do Redis Stream de retries (reprocesso quase em tempo real).
+	// O retryLoop acima permanece como SAFETY NET (intervalo maior). Só sobe se
+	// houver stream + webhook + engine.
+	if w.deps.RetryStream != nil && w.deps.RetryStream.enabled() &&
+		w.deps.Webhook != nil && w.deps.Engine != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.deps.RetryStream.Consume(ctx, w.handleStreamRetry)
+		}()
+	}
 
 	<-ctx.Done()
 	w.deps.Logger.Info("worker: contexto cancelado, aguardando goroutines")
@@ -407,7 +423,15 @@ func (w *Worker) retryLoop(ctx context.Context) {
 		return
 	}
 
-	ticker := time.NewTicker(60 * time.Second)
+	// Safety net: com o Redis Stream cobrindo o caminho quente, o polling pode
+	// ser bem mais espaçado (default 5min via RetryPollInterval). Cobre eventos
+	// órfãos (stream fora, publish perdido) sem martelar o Postgres. Mantém 60s
+	// se o intervalo não estiver configurado (compat. com testes/zero-value).
+	interval := w.deps.Config.RetryPollInterval
+	if interval <= 0 {
+		interval = 60 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	w.runRetries(ctx) // imediato na primeira vez
@@ -436,6 +460,37 @@ func (w *Worker) runRetries(ctx context.Context) {
 	for _, ev := range events {
 		w.processRetry(ctx, ev)
 	}
+}
+
+// handleStreamRetry é o handler do consumidor do Redis Stream. Carrega o
+// webhook pelo ID (o stream só transporta o ID), checa se ainda é elegível para
+// retry e o reprocessa via processRetry (que já marca done/failed no banco).
+//
+// Retorna erro APENAS em falha transitória (não conseguiu carregar o evento) —
+// nesse caso o RetryStream NÃO dá XACK e a entrada é reentregue (at-least-once),
+// e o polling do Postgres é a rede de segurança final. Em qualquer desfecho
+// terminal (processado, descartado, não-elegível), retorna nil → XACK.
+func (w *Worker) handleStreamRetry(ctx context.Context, webhookID WebhookEventID) error {
+	ev, err := w.deps.Webhook.GetByID(ctx, webhookID)
+	if err != nil {
+		// Erro transitório no banco: não ACKa, deixa reentregar.
+		return fmt.Errorf("handleStreamRetry: GetByID: %w", err)
+	}
+	if ev == nil {
+		// Evento sumiu (limpeza/descartado): nada a fazer, ACK.
+		return nil
+	}
+	if ev.Status != "failed" {
+		// Já resolvido (done) por outro caminho, ou ainda não elegível: ACK e
+		// deixa o polling pegar quando next_retry_at vencer, se for o caso.
+		w.deps.Logger.Debug("handleStreamRetry: webhook não está 'failed', ignorando",
+			"webhookID", webhookID, "status", ev.Status)
+		return nil
+	}
+	// processRetry cuida do MarkDone/MarkFailed; aqui o desfecho é sempre
+	// terminal para fins de ACK (o estado de retry persiste no banco).
+	w.processRetry(ctx, *ev)
+	return nil
 }
 
 // processRetry reconstrói a InboundMessage de um webhook retido e re-invoca o engine

@@ -138,6 +138,9 @@ func main() {
 	})
 
 	// 12. Instancia Worker
+	// O consumidor do Redis Stream compartilha key/group com o produtor do
+	// Server (ambos derivados de cfg) — o consumer name é único por instância.
+	retryStream := NewRetryStream(redisClient, cfg.RetryStreamKey, cfg.RetryStreamGroup, cfg.RetryStreamConsumer, logger)
 	worker := NewWorker(WorkerDeps{
 		Config:            cfg,
 		DB:                pool,
@@ -146,6 +149,7 @@ func main() {
 		Outbox:            outbox,
 		ScheduledContacts: scheduled,
 		Webhook:           webhooks,
+		RetryStream:       retryStream,
 		Engine:            engine,
 		EvoEngine:         evoEngine,
 		Sender:            sender,
@@ -157,8 +161,12 @@ func main() {
 	// 13. Instancia Server
 	server := NewServer(cfg, engine, webhooks, pool, sender, logger, hub, logRepo, evoEngine, evolutionClient, voiceClient, redisClient)
 
-	// 14. Inicia worker em background
-	go worker.Start(ctx)
+	// 14. Inicia worker em background; workerDone fecha quando ele drena no shutdown.
+	workerDone := make(chan struct{})
+	go func() {
+		worker.Start(ctx)
+		close(workerDone)
+	}()
 
 	// 15. Configura servidor HTTP
 	httpServer := &http.Server{
@@ -191,6 +199,15 @@ func main() {
 		logger.Error("erro no graceful shutdown", "err", err)
 	} else {
 		logger.Info("servidor HTTP encerrado com sucesso")
+	}
+
+	// Aguarda o worker (consumer do Redis Stream + loops) drenar antes que os
+	// defers fechem Postgres/Redis — evita uso-após-fechar no XACK/queries.
+	select {
+	case <-workerDone:
+		logger.Info("worker encerrado com sucesso")
+	case <-time.After(10 * time.Second):
+		logger.Warn("timeout aguardando worker encerrar")
 	}
 
 	_ = leads
