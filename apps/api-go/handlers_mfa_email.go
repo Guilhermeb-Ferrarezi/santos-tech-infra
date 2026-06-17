@@ -30,14 +30,7 @@ func (s *Server) sendChallengeEmailCode(ctx context.Context, challenge, email st
 		return err
 	}
 	html := emailCodeHTML(code, "Use o código abaixo para concluir o seu login:")
-	to := email
-	safeGo("sendChallengeEmailCode", func() {
-		c, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
-		if err := s.email.send(c, to, "Seu código de verificação — Santos Tech", html); err != nil {
-			slog.Error("falha ao enviar código MFA por email (challenge)", "err", err)
-		}
-	})
+	s.enqueueEmail("sendChallengeEmailCode", email, "Seu código de verificação — Santos Tech", html)
 	return nil
 }
 
@@ -84,14 +77,7 @@ func (s *Server) handleMFAEmailCode(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("falha ao gravar cooldown do código de email MFA", "uid", uid, "err", err)
 	}
 	html := emailCodeHTML(code, "Use o código abaixo para confirmar a alteração do 2FA da sua conta:")
-	to := u.Email
-	safeGo("handleMFAEmailCode", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
-		if err := s.email.send(ctx, to, "Seu código de verificação — Santos Tech", html); err != nil {
-			slog.Error("falha ao enviar código MFA por email (conta)", "uid", uid, "err", err)
-		}
-	})
+	s.enqueueEmail("handleMFAEmailCode", u.Email, "Seu código de verificação — Santos Tech", html)
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
 
@@ -165,6 +151,7 @@ func (s *Server) handleMFAEmailEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	s.invalidateUserCache(uid)
 	// Recovery codes só na primeira ativação do MFA (não regenera ao somar método).
 	resp := map[string]any{"enabled": true, "method": method}
 	if !u.MFAEnabled {
@@ -222,5 +209,6 @@ func (s *Server) handleMFAMethod(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	s.invalidateUserCache(uid)
 	writeJSON(w, http.StatusOK, map[string]string{"method": body.Method})
 }

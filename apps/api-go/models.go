@@ -18,12 +18,12 @@ type User struct {
 	Email           string
 	Username        *string
 	Name            string
-	PasswordHash    *string
+	PasswordHash    *string `json:"-"` // nunca serializar (cache Redis, logs, respostas)
 	AvatarURL       *string
 	Role            int16
 	CustomRoleID    *string
 	MFAEnabled      bool
-	TOTPSecret      *string
+	TOTPSecret      *string `json:"-"` // seed TOTP — nunca serializar
 	SuspendedAt     *time.Time
 	CreatedAt       time.Time
 	Preferences     json.RawMessage // JSONB de preferências de UI (free-form)

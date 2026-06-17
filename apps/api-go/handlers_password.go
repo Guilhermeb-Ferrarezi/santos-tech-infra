@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -37,22 +36,19 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.cfg.AuthWebOrigin, token)
-		safeGo("sendResetEmail", func() { s.sendResetEmail(email, resetURL) })
+		s.sendResetEmail(email, resetURL)
 	}
 	// resposta sempre igual (não vaza se o email existe)
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
 
+// sendResetEmail enfileira (fila durável) o email de recuperação de senha.
 func (s *Server) sendResetEmail(to, url string) {
 	html := emailLayout(emailGreeting("") + fmt.Sprintf(`<p style="margin:0">Recebemos uma solicitação para redefinir a senha da sua conta <strong>Santos Tech</strong>:</p>
 %s
 <p style="margin:0;color:#496B84;font-size:13px">Este link expira em <strong>1 hora</strong>. Se você não solicitou, ignore este email — sua senha continua a mesma.</p>
 %s`, emailButton(url, "Criar nova senha"), emailLinkFallback(url)))
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	defer cancel()
-	if err := s.email.send(ctx, to, "Recuperação de senha — Santos Tech", html); err != nil {
-		slog.Error("falha ao enviar email de recuperação", "err", err)
-	}
+	s.enqueueEmail("sendResetEmail", to, "Recuperação de senha — Santos Tech", html)
 }
 
 func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
@@ -112,8 +108,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		slog.Error("falha ao revogar sessões após reset de senha", "uid", uid, "err", err)
 	}
 	if firstPassword {
-		welcomeEmail, welcomeName := u.Email, u.Name
-		safeGo("sendWelcomeEmail", func() { s.sendWelcomeEmail(welcomeEmail, welcomeName) })
+		s.sendWelcomeEmail(u.Email, u.Name)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
@@ -126,9 +121,5 @@ func (s *Server) sendWelcomeEmail(to, name string) {
 <p style="margin:0 0 8px">Entre com o seu email e a senha que você acabou de definir. Esse mesmo login dá acesso à sua caixa de email <strong>@santos-tech.com</strong>.</p>
 <p style="margin:0;color:#496B84;font-size:13px">Se não foi você quem ativou a conta, avise um administrador imediatamente.</p>`,
 		emailButton(s.cfg.AuthWebOrigin, "Entrar na plataforma")))
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	defer cancel()
-	if err := s.email.send(ctx, to, "Conta ativada — Santos Tech", html); err != nil {
-		slog.Error("falha ao enviar email de boas-vindas", "err", err)
-	}
+	s.enqueueEmail("sendWelcomeEmail", to, "Conta ativada — Santos Tech", html)
 }

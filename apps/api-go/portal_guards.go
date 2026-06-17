@@ -50,7 +50,7 @@ func (s *Server) invalidateCustomRoleCache(ctx context.Context, roleID string) {
 // admin-only (professor não escreve) — exceto correção, que professor faz.
 func (s *Server) permGuard(resource, action string, allowTeacher bool, next http.HandlerFunc) http.HandlerFunc {
 	return s.authGuard(func(w http.ResponseWriter, r *http.Request) {
-		u, err := s.userByID(r.Context(), userIDFrom(r))
+		u, err := s.cachedUserByID(r.Context(), userIDFrom(r))
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -110,7 +110,7 @@ func (s *Server) portalCorrigir(next http.HandlerFunc) http.HandlerFunc {
 // professor OU cargo com QUALQUER permissão de leitura no portal (portal_*:read).
 func (s *Server) portalAnyRead(next http.HandlerFunc) http.HandlerFunc {
 	return s.authGuard(func(w http.ResponseWriter, r *http.Request) {
-		u, err := s.userByID(r.Context(), userIDFrom(r))
+		u, err := s.cachedUserByID(r.Context(), userIDFrom(r))
 		if err != nil {
 			writeErr(w, err)
 			return
