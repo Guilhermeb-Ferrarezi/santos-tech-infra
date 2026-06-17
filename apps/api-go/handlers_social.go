@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 )
@@ -140,6 +141,18 @@ func (s *Server) handleUpdateSocialPostStatus(w http.ResponseWriter, r *http.Req
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Status inválido"))
 		return
 	}
+
+	current, err := s.getSocialPost(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if current == nil {
+		writeErr(w, errSocialPostNotFound)
+		return
+	}
+	oldStatus := current.Status
+
 	post, err := s.updateSocialPostStatus(r.Context(), id, in.Status)
 	if err != nil {
 		writeErr(w, err)
@@ -149,7 +162,43 @@ func (s *Server) handleUpdateSocialPostStatus(w http.ResponseWriter, r *http.Req
 		writeErr(w, errSocialPostNotFound)
 		return
 	}
+
+	changedBy := userIDFrom(r)
+	if oldStatus != in.Status {
+		_ = s.insertSocialPostStatusHistory(r.Context(), id, changedBy, oldStatus, in.Status)
+	}
+
+	if in.Status == "revisao" && s.cfg.SocialAlertEmail != "" {
+		go func() {
+			html := fmt.Sprintf(`<p>Um post foi movido para <strong>Revisão</strong> e aguarda sua aprovação.</p>
+<table style="border-collapse:collapse;font-family:sans-serif;font-size:14px">
+<tr><td style="padding:4px 12px 4px 0;color:#666">Título</td><td><strong>%s</strong></td></tr>
+<tr><td style="padding:4px 12px 4px 0;color:#666">Plataforma</td><td>%s</td></tr>
+<tr><td style="padding:4px 12px 4px 0;color:#666">Pilar</td><td>%s</td></tr>
+</table>
+<p style="margin-top:16px">Acesse o <a href="https://santos-tech.com/dashboard/social/calendario">Calendário Editorial</a> para revisar e aprovar.</p>`,
+				post.Title, post.Platform, post.Pilar)
+			_ = s.email.send(r.Context(), s.cfg.SocialAlertEmail,
+				"Santos Tech — Post para revisão: "+post.Title, html)
+		}()
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{"post": post})
+}
+
+// GET /social/posts/{id}/history
+func (s *Server) handleListSocialPostStatusHistory(w http.ResponseWriter, r *http.Request) {
+	id, err := socialPostIDFrom(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	history, err := s.listSocialPostStatusHistory(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"history": history})
 }
 
 // GET /social/posts/{id}/notes

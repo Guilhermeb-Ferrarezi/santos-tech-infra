@@ -152,6 +152,44 @@ func (s *Server) listSocialPostNotes(ctx context.Context, postID string) ([]Soci
 	return out, rows.Err()
 }
 
+type SocialPostStatusHistory struct {
+	ID        int64     `json:"id"`
+	PostID    string    `json:"postId"`
+	ChangedBy *int64    `json:"changedById"`
+	Author    string    `json:"changedBy"`
+	OldStatus string    `json:"oldStatus"`
+	NewStatus string    `json:"newStatus"`
+	ChangedAt time.Time `json:"changedAt"`
+}
+
+func (s *Server) listSocialPostStatusHistory(ctx context.Context, postID string) ([]SocialPostStatusHistory, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT h.id, h.post_id::text, h.changed_by, COALESCE(u.name,''), h.old_status, h.new_status, h.changed_at
+		FROM social_post_status_history h
+		LEFT JOIN users u ON u.id = h.changed_by
+		WHERE h.post_id = $1::uuid ORDER BY h.changed_at DESC`, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SocialPostStatusHistory{}
+	for rows.Next() {
+		var h SocialPostStatusHistory
+		if err := rows.Scan(&h.ID, &h.PostID, &h.ChangedBy, &h.Author, &h.OldStatus, &h.NewStatus, &h.ChangedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+func (s *Server) insertSocialPostStatusHistory(ctx context.Context, postID string, changedBy int64, oldStatus, newStatus string) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO social_post_status_history (post_id, changed_by, old_status, new_status)
+		VALUES ($1::uuid, $2, $3, $4)`, postID, changedBy, oldStatus, newStatus)
+	return err
+}
+
 func (s *Server) insertSocialPostNote(ctx context.Context, postID string, authorID int64, content string) (*SocialPostNote, error) {
 	var n SocialPostNote
 	err := s.db.QueryRow(ctx, `

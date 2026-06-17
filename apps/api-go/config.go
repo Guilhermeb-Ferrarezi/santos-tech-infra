@@ -27,6 +27,7 @@ type Config struct {
 	EmailAPIURL        string // ex: https://mails.santos-tech.com/api
 	EmailAPIKey        string
 	AgentURL           string // base do claude agent (health em /claude/health)
+	SocialAlertEmail   string // email para notificar quando post vai para revisão
 	Production         bool
 
 	// Gateway de notificações do portal do aluno (templates/dispatches). Vazio =
@@ -59,6 +60,7 @@ func LoadConfig() Config {
 		GoogleCallbackURL:  getEnv("GOOGLE_CALLBACK_URL", ""),
 		EmailAPIURL:        strings.TrimRight(getEnv("EMAIL_API_URL", "https://mails.santos-tech.com/api"), "/"),
 		AgentURL:           strings.TrimRight(getEnv("AGENT_URL", "https://api.santos-tech.com"), "/"),
+		SocialAlertEmail:   getEnv("SOCIAL_ALERT_EMAIL", ""),
 		EmailAPIKey:        mustEnv("EMAIL_API_KEY"),
 		Production:         getEnv("NODE_ENV", "development") == "production",
 

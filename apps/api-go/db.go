@@ -126,6 +126,15 @@ CREATE TABLE IF NOT EXISTS social_post_notes (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_social_post_notes_post ON social_post_notes(post_id);
+CREATE TABLE IF NOT EXISTS social_post_status_history (
+  id          BIGSERIAL PRIMARY KEY,
+  post_id     UUID NOT NULL REFERENCES social_posts(id) ON DELETE CASCADE,
+  changed_by  BIGINT REFERENCES users(id),
+  old_status  TEXT NOT NULL,
+  new_status  TEXT NOT NULL,
+  changed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_social_post_status_history_post ON social_post_status_history(post_id);
 -- Migração: normalizar valores antigos de plataforma/pilar para os corretos
 UPDATE social_posts SET platform='instagram' WHERE platform='youtube';
 UPDATE social_posts SET pilar='institucional' WHERE pilar='produto';
