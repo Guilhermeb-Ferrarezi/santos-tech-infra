@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -117,6 +118,25 @@ func (s *Server) handleMFAEmailEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
+	// Teto de tentativas por usuário (≤5 numa janela de 15min): sem isso, o OTP de
+	// e-mail (6 dígitos, 10⁶ combinações) seria brute-forçável limitado só pelo
+	// rate-limit por IP — bypassável com múltiplos IPs/VPNs. Conta a tentativa ANTES
+	// de validar; zera ao ativar com sucesso (mais abaixo). fail-closed: Redis
+	// indisponível → rejeitar é mais seguro que deixar passar.
+	attemptKey := "mfa_email_enable_attempts:" + strconv.FormatInt(uid, 10)
+	attemptsCmd := s.rdb.Incr(r.Context(), attemptKey)
+	if attemptsCmd.Err() != nil {
+		slog.Warn("mfa_email_enable_attempts: redis error; rejecting to fail closed", "uid", uid, "err", attemptsCmd.Err())
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+		return
+	}
+	if err := s.rdb.ExpireNX(r.Context(), attemptKey, 15*time.Minute).Err(); err != nil {
+		slog.Warn("mfa_email_enable_attempts: ExpireNX falhou; contador pode não expirar", "uid", uid, "err", err)
+	}
+	if attemptsCmd.Val() > 5 {
+		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
+		return
+	}
 	u, err := s.userByID(r.Context(), uid)
 	if err != nil || u == nil {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
@@ -129,6 +149,10 @@ func (s *Server) handleMFAEmailEnable(w http.ResponseWriter, r *http.Request) {
 	if !s.consumeAcctEmailCode(r.Context(), uid, body.Code) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido ou expirado"))
 		return
+	}
+	// Fator válido → zera o contador de tentativas
+	if err := s.rdb.Del(r.Context(), attemptKey).Err(); err != nil {
+		slog.Warn("mfa_email_enable: falha ao remover contador de tentativas do Redis", "uid", uid, "err", err)
 	}
 	method := u.MFAMethod
 	if u.TOTPSecret == nil || !u.MFAEnabled {
