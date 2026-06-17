@@ -39,10 +39,20 @@ func main() {
 	store := &Store{rdb: rdb}
 	evo := NewEvolutionClient(cfg.EvolutionURL, cfg.EvolutionKey, cfg.EvolutionInst)
 	cool := NewCoolifyClient(cfg.CoolifyAPIURL, cfg.CoolifyAPIToken)
+	ghApp, err := NewGitHubApp(cfg.GHAppID, cfg.GHAppKey)
+	if err != nil {
+		slog.Error("github app inválido", "err", err)
+		os.Exit(1)
+	}
+	if ghApp.Enabled() {
+		slog.Info("github app habilitado (token efêmero escopado por repo)")
+	} else {
+		slog.Warn("github app não configurado — git via PAT (postura de segurança reduzida)")
+	}
 	client := asynq.NewClient(asynqRedis)
 	defer client.Close()
 
-	workers := &Workers{cfg: cfg, store: store, evo: evo, cool: cool, client: client}
+	workers := &Workers{cfg: cfg, store: store, evo: evo, cool: cool, ghApp: ghApp, client: client}
 
 	asynqSrv := asynq.NewServer(asynqRedis, asynq.Config{Concurrency: 5})
 	mux := asynq.NewServeMux()

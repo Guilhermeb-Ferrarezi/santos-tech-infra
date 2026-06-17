@@ -17,7 +17,26 @@ type Workers struct {
 	store  *Store
 	evo    *EvolutionClient
 	cool   *CoolifyClient
+	ghApp  *GitHubApp // pode ser nil/disabled → cai pro PAT
 	client *asynq.Client
+}
+
+// repoToken devolve o token de git para o incidente: preferencialmente um
+// installation token efêmero escopado ao repo (GitHub App); cai para o PAT
+// (GITHUB_TOKEN) com WARN de downgrade quando o App não está disponível.
+func (w *Workers) repoToken(ctx context.Context, repoURL string) string {
+	if w.ghApp.Enabled() {
+		if owner, repo, err := parseRepoURL(repoURL); err == nil {
+			if tok, err := w.ghApp.RepoToken(ctx, time.Now(), owner, repo); err == nil {
+				return tok
+			} else {
+				slog.Warn("github app falhou — usando PAT (downgrade de postura)", "err", err, "repo", repoURL)
+			}
+		} else {
+			slog.Warn("não consegui parsear o repo p/ o github app — usando PAT", "err", err, "repo", repoURL)
+		}
+	}
+	return w.cfg.GithubToken
 }
 
 // react reage na mensagem-âncora, degradando com graça (a reação é cosmética).
@@ -92,8 +111,9 @@ func (w *Workers) HandleFixRun(ctx context.Context, t *asynq.Task) error {
 		return w.fail(ctx, in, "não consegui resolver o repositório/branch do app")
 	}
 
+	token := w.repoToken(ctx, in.Repo)
 	workdir := workdirFor(w.cfg.WorkspaceRoot, in.App, in.ID)
-	if err := cloneRepo(ctx, in.Repo, in.Branch, workdir, w.cfg.GithubToken); err != nil {
+	if err := cloneRepo(ctx, in.Repo, in.Branch, workdir, token); err != nil {
 		return w.fail(ctx, in, "falha ao clonar o repo: "+err.Error())
 	}
 
@@ -116,7 +136,7 @@ func (w *Workers) HandleFixRun(ctx context.Context, t *asynq.Task) error {
 		return w.fail(ctx, in, "o Claude não alterou nada — sem fix para aplicar")
 	}
 
-	if err := pushBranch(ctx, workdir, in.Branch, w.cfg.GithubToken); err != nil {
+	if err := pushBranch(ctx, workdir, in.Branch, token); err != nil {
 		return w.fail(ctx, in, "falha no push: "+err.Error())
 	}
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config reúne todas as variáveis de ambiente do auto-fixer.
@@ -20,7 +21,9 @@ type Config struct {
 	ClaudeBin       string // CLAUDE_BIN (default "claude")
 	ClaudeModel     string // CLAUDE_DEFAULT_MODEL (default "sonnet")
 	ClaudeOAuth     string // CLAUDE_CODE_OAUTH_TOKEN
-	GithubToken     string // GITHUB_TOKEN (só askpass do orquestrador: clone/push; nunca vai ao processo do Claude)
+	GithubToken     string // GITHUB_TOKEN (fallback/PAT — só askpass do orquestrador: clone/push; nunca vai ao processo do Claude)
+	GHAppID         string // GH_APP_ID (preferencial: token efêmero escopado por repo)
+	GHAppKey        string // GH_APP_PRIVATE_KEY (PEM; aceita \n literais)
 	WorkspaceRoot   string // WORKSPACE_ROOT (default /data/workspaces)
 	MaxFixAttempts  int    // MAX_FIX_ATTEMPTS (default 2)
 	RebuildTimeout  int    // REBUILD_TIMEOUT_MIN (default 15)
@@ -57,6 +60,8 @@ func loadConfig() (Config, error) {
 		ClaudeModel:     env("CLAUDE_DEFAULT_MODEL", "sonnet"),
 		ClaudeOAuth:     os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"),
 		GithubToken:     os.Getenv("GITHUB_TOKEN"),
+		GHAppID:         os.Getenv("GH_APP_ID"),
+		GHAppKey:        strings.ReplaceAll(os.Getenv("GH_APP_PRIVATE_KEY"), "\\n", "\n"),
 		WorkspaceRoot:   env("WORKSPACE_ROOT", "/data/workspaces"),
 		MaxFixAttempts:  atoiDef(os.Getenv("MAX_FIX_ATTEMPTS"), 2),
 		RebuildTimeout:  atoiDef(os.Getenv("REBUILD_TIMEOUT_MIN"), 15),
