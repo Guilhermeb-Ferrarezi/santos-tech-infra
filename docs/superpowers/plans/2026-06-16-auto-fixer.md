@@ -1155,6 +1155,23 @@ func newTask(name string, v any) *asynq.Task {
 
 ---
 
+## Segurança & Hardening (decisão: push direto + hardening)
+
+O `auto-fixer` roda `claude --dangerously-skip-permissions` **sem humano no loop** e injeta **logs de build (dado não confiável)** no prompt → risco de prompt-injection escalando para execução arbitrária com os tokens do ambiente. Decisão do usuário (2026-06-16): manter o push direto na main, mitigando com isolamento em camadas (não ir para PR-com-aprovação).
+
+**Já aplicado (Task 5):** validação de argv no git (`--` + regex `validRef`, só `https://`) e askpass com `printf`/aspas simples escapadas (sem command-injection).
+
+### Task 10: Token efêmero escopado ao repo (GitHub App)
+**Depende de credencial externa:** o usuário precisa criar um GitHub App na org Santos-Techrp com permissão `contents:write` e instalá-lo nos repos. Envs novas: `GH_APP_ID`, `GH_APP_PRIVATE_KEY`, `GH_APP_INSTALLATION_ID`.
+- Substituir o `GITHUB_TOKEN` amplo por um **installation token** gerado por incidente (`POST /app/installations/{id}/access_tokens`, opcionalmente com `repositories:[<repo>]`), TTL ~1h.
+- `runClaudeFix` e `cloneRepo`/`pushBranch` recebem esse token efêmero em vez do PAT do env. Se o Claude for sequestrado, o acesso se limita ao repo do incidente e expira sozinho.
+- Fallback: sem GitHub App configurado, cai pro `GITHUB_TOKEN` do env (degrada com graça) e **loga o downgrade de postura**.
+
+### Task 11: Execução do Claude em container efêmero
+- `runClaudeFix` passa a orquestrar `docker run --rm` (imagem com `claude` + git) por incidente, em vez de `exec` no processo do fixer: rede restrita (`--network` só com o necessário p/ GitHub+API do Claude), sem montar segredos persistentes (token efêmero passado por env do container descartável), workspace montado como volume temporário.
+- O fixer precisa de acesso ao Docker socket (`/var/run/docker.sock`) — documentar no compose e no README a implicação (o socket é poder de root; manter o host do fixer dedicado).
+- Fallback: sem Docker disponível, cai pro `exec` direto e loga o downgrade.
+
 ## Self-Review
 
 **Cobertura do spec (fluxo pedido pelo usuário):**
