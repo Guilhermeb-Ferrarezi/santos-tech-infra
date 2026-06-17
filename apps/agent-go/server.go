@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -33,11 +34,39 @@ func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client) *Server {
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	// Endpoints públicos (sem authGuard nem rate limit) — usados pelo healthcheck
+	// e pelo scrape do Prometheus.
 	mux.HandleFunc("GET /claude/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
+	mux.HandleFunc("GET /claude/ready", s.handleReady)
+	mux.Handle("GET /claude/metrics", metricsHandler())
 	s.registerRoutes(mux)
-	return requestLogger(s.cors(s.globalRateLimit(mux)))
+	return requestLogger(metricsMiddleware(s.cors(s.globalRateLimit(mux))))
+}
+
+// handleReady é o readiness probe: pinga Redis e Postgres com timeout curto e
+// responde 503 se qualquer dependência falhar. Público (sem authGuard) para não
+// quebrar o healthcheck.
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	checks := map[string]string{"redis": "ok", "postgres": "ok"}
+	ready := true
+	if err := s.rdb.Ping(ctx).Err(); err != nil {
+		checks["redis"] = "unavailable"
+		ready = false
+	}
+	if err := s.db.Ping(ctx); err != nil {
+		checks["postgres"] = "unavailable"
+		ready = false
+	}
+	status := http.StatusOK
+	if !ready {
+		status = http.StatusServiceUnavailable
+	}
+	writeJSON(w, status, map[string]any{"ready": ready, "checks": checks})
 }
 
 // ── CORS (com credenciais) ───────────────────────────────────────────────────

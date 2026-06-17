@@ -72,6 +72,11 @@ func (s *Server) notifyPaymentPaid(publicToken string) {
 		return
 	}
 	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic em notifyPaymentPaid", "panic", rec, "token", publicToken)
+			}
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		c, err := s.store.GetChargeByPublicToken(ctx, publicToken)

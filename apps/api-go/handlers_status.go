@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -56,6 +58,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	run := func(name string, fn func(ctx context.Context) error) {
 		wg.Add(1)
 		go func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					slog.Error("panic em checagem de status", "service", name, "panic", rec, "stack", string(debug.Stack()))
+				}
+			}()
 			defer wg.Done()
 			st := check(fn)
 			mu.Lock()
@@ -80,4 +87,28 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	// auth = este próprio serviço: se respondeu, está de pé.
 	results["auth"] = svcStatus{OK: true}
 	writeJSON(w, http.StatusOK, map[string]any{"status": overall, "services": results})
+}
+
+// GET /ready — readiness probe PÚBLICA (sem auth, fora do rate limit): pinga as
+// dependências críticas (Postgres + Redis) com timeout curto e responde 503 se
+// alguma falhar. É o que o orquestrador usa pra decidir mandar tráfego. Diferente
+// de /health (liveness, não toca dependências).
+func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Endpoint público: não expõe err.Error() das deps (pode vazar host/DSN);
+	// só OK true/false por dependência.
+	checks := map[string]svcStatus{}
+	dbErr := s.db.Ping(ctx)
+	checks["db"] = svcStatus{OK: dbErr == nil}
+	rdErr := s.rdb.Ping(ctx).Err()
+	checks["redis"] = svcStatus{OK: rdErr == nil}
+
+	ready := dbErr == nil && rdErr == nil
+	code := http.StatusOK
+	if !ready {
+		code = http.StatusServiceUnavailable
+	}
+	writeJSON(w, code, map[string]any{"ready": ready, "checks": checks})
 }

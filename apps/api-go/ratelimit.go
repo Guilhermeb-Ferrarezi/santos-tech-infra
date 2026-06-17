@@ -151,7 +151,7 @@ func (s *Server) allow(ctx context.Context, key string, max int, window time.Dur
 // degrada o serviço de qualquer forma.)
 func (s *Server) rateLimit(max int, window time.Duration, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		key := fmt.Sprintf("rl:%s:%s", r.URL.Path, clientIP(r))
+		key := fmt.Sprintf("api-go:rl:%s:%s", r.URL.Path, clientIP(r))
 		if !s.allow(r.Context(), key, max, window, true) {
 			writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Muitas tentativas. Tente novamente em instantes."))
 			return
@@ -166,7 +166,13 @@ func (s *Server) rateLimit(max int, window time.Duration, next http.HandlerFunc)
 // seu próprio rateLimit fail-closed por cima.
 func (s *Server) globalRateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.allow(r.Context(), "rl:global:"+clientIP(r), 200, time.Minute, false) {
+		// Endpoints operacionais ficam fora do rate limit (probes/scrape frequentes).
+		switch r.URL.Path {
+		case "/health", "/ready", "/metrics":
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.allow(r.Context(), "api-go:rl:global:"+clientIP(r), 200, time.Minute, false) {
 			writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Muitas requisições. Aguarde um momento."))
 			return
 		}

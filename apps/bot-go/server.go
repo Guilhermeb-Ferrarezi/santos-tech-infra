@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -175,6 +176,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+bp+"/webhooks/evolution", s.handleEvolutionWebhook)
 	mux.HandleFunc("POST "+bp+"/webhooks/coolify", s.handleCoolifyWebhook)
 	mux.HandleFunc("GET "+bp+"/health", s.handleHealth)
+	mux.HandleFunc("GET "+bp+"/ready", s.handleReady)
+	mux.Handle("GET "+bp+"/metrics", promhttp.Handler())
 
 	// Dashboard API
 	da := s.dashMiddleware
@@ -202,7 +205,7 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	return requestLogger(mux)
+	return requestLogger(metricsMiddleware(mux))
 }
 
 // dashMiddleware adiciona CORS e verifica X-Dash-Key.
@@ -445,6 +448,43 @@ func (s *Server) debounceWindow(ctx context.Context) time.Duration {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+// ---------------------------------------------------------------------------
+// handleReady — GET /ready (readiness: pinga Postgres e Redis)
+// ---------------------------------------------------------------------------
+
+// handleReady checa as dependências críticas (Postgres e Redis) com timeout
+// curto e responde 503 se alguma falhar. Público (sem authGuard) — é o endpoint
+// que o orquestrador usa para decidir mandar tráfego.
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	checks := map[string]string{}
+	ready := true
+
+	if err := s.pool.Ping(ctx); err != nil {
+		checks["postgres"] = "unavailable"
+		ready = false
+	} else {
+		checks["postgres"] = "ok"
+	}
+
+	if s.rdb != nil {
+		if err := s.rdb.Ping(ctx).Err(); err != nil {
+			checks["redis"] = "unavailable"
+			ready = false
+		} else {
+			checks["redis"] = "ok"
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if !ready {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"ready": ready, "checks": checks})
 }
 
 // ---------------------------------------------------------------------------

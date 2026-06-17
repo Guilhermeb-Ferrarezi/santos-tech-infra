@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
+	"runtime/debug"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -60,9 +62,17 @@ func (s *Server) handleConversationWS(w http.ResponseWriter, r *http.Request) {
 
 	// Writer único: drena o canal de eventos para o WS.
 	go func() {
+		// recover() é o PRIMEIRO defer: um panic aqui (ex: write em conexão já
+		// fechada) não pode derrubar o processo. cancel() encerra o reader.
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic no writer do WebSocket",
+					"conv", conv.ID, "panic", rec, "stack", string(debug.Stack()))
+			}
+			cancel()
+		}()
 		for ev := range events {
 			if err := wsjson.Write(ctx, c, ev); err != nil {
-				cancel()
 				return
 			}
 		}
