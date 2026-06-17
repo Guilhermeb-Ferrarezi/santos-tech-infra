@@ -107,7 +107,10 @@ func (s *Server) handlePortalListTemplates(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var raw []gatewayTemplate
-	_ = json.Unmarshal(resp.Result, &raw)
+	if err := json.Unmarshal(resp.Result, &raw); err != nil {
+		writeErr(w, appErr(http.StatusBadGateway, "INTERNAL_ERROR", "resposta inválida do gateway"))
+		return
+	}
 	items := make([]portalNotifTemplateDTO, 0, len(raw))
 	for _, t := range raw {
 		items = append(items, t.toDTO())
@@ -135,7 +138,10 @@ func (s *Server) handlePortalCreateTemplate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var t gatewayTemplate
-	_ = json.Unmarshal(resp.Result, &t)
+	if err := json.Unmarshal(resp.Result, &t); err != nil {
+		writeErr(w, appErr(http.StatusBadGateway, "INTERNAL_ERROR", "resposta inválida do gateway"))
+		return
+	}
 	dto := t.toDTO()
 	s.portalLogActivity(r, "notification_template_create", "notification_template", fmt.Sprint(dto.ID), nil)
 	writeJSON(w, http.StatusCreated, map[string]any{"template": dto})
@@ -166,7 +172,10 @@ func (s *Server) handlePortalUpdateTemplate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var t gatewayTemplate
-	_ = json.Unmarshal(resp.Result, &t)
+	if err := json.Unmarshal(resp.Result, &t); err != nil {
+		writeErr(w, appErr(http.StatusBadGateway, "INTERNAL_ERROR", "resposta inválida do gateway"))
+		return
+	}
 	dto := t.toDTO()
 	s.portalLogActivity(r, "notification_template_update", "notification_template", fmt.Sprint(id), nil)
 	writeJSON(w, http.StatusOK, map[string]any{"template": dto})
@@ -209,7 +218,10 @@ func (s *Server) handlePortalListDispatches(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var raw []gatewayDispatch
-	_ = json.Unmarshal(resp.Result, &raw)
+	if err := json.Unmarshal(resp.Result, &raw); err != nil {
+		writeErr(w, appErr(http.StatusBadGateway, "INTERNAL_ERROR", "resposta inválida do gateway"))
+		return
+	}
 	items := make([]portalNotifDispatchDTO, 0, len(raw))
 	for _, d := range raw {
 		items = append(items, d.toDTO())
@@ -272,7 +284,10 @@ func (s *Server) handlePortalDispatchTemplate(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var templates []gatewayTemplate
-	_ = json.Unmarshal(tplResp.Result, &templates)
+	if err := json.Unmarshal(tplResp.Result, &templates); err != nil {
+		writeErr(w, appErr(http.StatusBadGateway, "INTERNAL_ERROR", "resposta inválida do gateway"))
+		return
+	}
 	var tpl *portalNotifTemplateDTO
 	for _, t := range templates {
 		dto := t.toDTO()
@@ -326,7 +341,10 @@ func (s *Server) handlePortalDispatchTemplate(w http.ResponseWriter, r *http.Req
 	s.portalLogActivity(r, "notification_dispatch_create", "notification_dispatch", fmt.Sprint(id), nil)
 	// devolve o Result cru do gateway sob "dispatch" (shape do upstream)
 	var dispatch map[string]any
-	_ = json.Unmarshal(resp.Result, &dispatch)
+	if err := json.Unmarshal(resp.Result, &dispatch); err != nil {
+		writeErr(w, appErr(http.StatusBadGateway, "INTERNAL_ERROR", "resposta inválida do gateway"))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"dispatch": dispatch})
 }
 
