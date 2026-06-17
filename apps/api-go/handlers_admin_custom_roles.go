@@ -130,6 +130,7 @@ func (s *Server) handleUpdateCustomRole(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "cargo não encontrado"))
 		return
 	}
+	s.invalidateCustomRoleCache(r.Context(), id)
 	writeJSON(w, http.StatusOK, map[string]any{"role": customRoleJSON(cr)})
 }
 
@@ -149,5 +150,6 @@ func (s *Server) handleDeleteCustomRole(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "cargo não encontrado"))
 		return
 	}
+	s.invalidateCustomRoleCache(r.Context(), id)
 	w.WriteHeader(http.StatusNoContent)
 }
