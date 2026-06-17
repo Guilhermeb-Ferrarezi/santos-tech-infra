@@ -80,12 +80,16 @@ func loadConfig() (Config, error) {
 	if c.Sandbox == "docker" && (c.RunnerImage == "" || c.WorkspaceVolume == "") {
 		return c, fmt.Errorf("config: CLAUDE_SANDBOX=docker exige CLAUDE_RUNNER_IMAGE e WORKSPACE_VOLUME")
 	}
+	// Auth do GitHub: precisa de pelo menos um caminho — GitHub App (preferencial)
+	// ou PAT (fallback). Não exige os dois.
+	if c.GithubToken == "" && (c.GHAppID == "" || c.GHAppKey == "") {
+		return c, fmt.Errorf("config: defina GITHUB_TOKEN ou (GH_APP_ID + GH_APP_PRIVATE_KEY)")
+	}
 	for k, v := range map[string]string{
 		"REDIS_URL": c.RedisURL, "COOLIFY_API_URL": c.CoolifyAPIURL,
 		"COOLIFY_API_TOKEN": c.CoolifyAPIToken, "EVOLUTION_API_URL": c.EvolutionURL,
 		"EVOLUTION_API_KEY": c.EvolutionKey, "EVOLUTION_INSTANCE": c.EvolutionInst,
 		"NOTIF_GROUP_JID": c.GroupJID, "CLAUDE_CODE_OAUTH_TOKEN": c.ClaudeOAuth,
-		"GITHUB_TOKEN": c.GithubToken,
 	} {
 		if v == "" {
 			return c, fmt.Errorf("config: %s obrigatório", k)
