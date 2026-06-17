@@ -247,19 +247,18 @@ func (s *Server) sendInvite(ctx context.Context, u *User) {
 		return
 	}
 	url := fmt.Sprintf("%s/reset-password?token=%s", s.cfg.AuthWebOrigin, token)
-	go s.sendInviteEmail(u.Email, u.Name, url)
+	s.sendInviteEmail(u.Email, u.Name, url)
 }
 
+// sendInviteEmail enfileira (fila durável) o email de convite (definição da
+// primeira senha). Antes era `go s.sendInviteEmail(...)`, que se perdia num
+// restart — agora vira task asynq com retry.
 func (s *Server) sendInviteEmail(to, name, url string) {
 	html := emailLayout(emailGreeting(name) + fmt.Sprintf(`<p style="margin:0">Você foi convidado para acessar a <strong>plataforma Santos Tech</strong>. Defina sua senha para ativar a conta:</p>
 %s
 <p style="margin:0;color:#496B84;font-size:13px">Este link expira em <strong>72 horas</strong>. Se você não esperava este convite, ignore este email.</p>
 %s`, emailButton(url, "Definir minha senha"), emailLinkFallback(url)))
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	defer cancel()
-	if err := s.email.send(ctx, to, "Seu acesso à Santos Tech", html); err != nil {
-		slog.Error("falha ao enviar email de convite", "err", err)
-	}
+	s.enqueueEmail("sendInviteEmail", to, "Seu acesso à Santos Tech", html)
 }
 
 // adminUserJSON é a forma pública de um usuário nas rotas admin.

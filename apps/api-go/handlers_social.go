@@ -1,13 +1,10 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"html"
-	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 )
 
 var errSocialPostNotFound = appErr(http.StatusNotFound, "SOCIAL_POST_NOT_FOUND", "Post não encontrado")
@@ -191,30 +188,24 @@ func (s *Server) handleUpdateSocialPostStatus(w http.ResponseWriter, r *http.Req
 
 	if in.Status == "revisao" && s.cfg.SocialAlertEmail != "" {
 		title, platform, pilar, to := post.Title, post.Platform, post.Pilar, s.cfg.SocialAlertEmail
-		safeGo("socialRevisionAlert", func() {
-			// title/platform/pilar entram no HTML do email — escapar para evitar
-			// injeção de HTML (title é texto livre do usuário; os demais por defesa em profundidade).
-			body := fmt.Sprintf(`<p>Um post foi movido para <strong>Revisão</strong> e aguarda sua aprovação.</p>
+		// title/platform/pilar entram no HTML do email — escapar para evitar
+		// injeção de HTML (title é texto livre do usuário; os demais por defesa em profundidade).
+		body := fmt.Sprintf(`<p>Um post foi movido para <strong>Revisão</strong> e aguarda sua aprovação.</p>
 <table style="border-collapse:collapse;font-family:sans-serif;font-size:14px">
 <tr><td style="padding:4px 12px 4px 0;color:#666">Título</td><td><strong>%s</strong></td></tr>
 <tr><td style="padding:4px 12px 4px 0;color:#666">Plataforma</td><td>%s</td></tr>
 <tr><td style="padding:4px 12px 4px 0;color:#666">Pilar</td><td>%s</td></tr>
 </table>
 <p style="margin-top:16px">Acesse o <a href="https://santos-tech.com/dashboard/social/calendario">Calendário Editorial</a> para revisar e aprovar.</p>`,
-				html.EscapeString(title), html.EscapeString(platform), html.EscapeString(pilar))
-			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-			defer cancel()
-			// remove CR/LF do título para impedir injeção de cabeçalho no assunto.
-			safeTitle := strings.Map(func(r rune) rune {
-				if r == '\n' || r == '\r' {
-					return -1
-				}
-				return r
-			}, title)
-			if err := s.email.send(ctx, to, "Santos Tech — Post para revisão: "+safeTitle, body); err != nil {
-				slog.Error("falha ao enviar alerta de revisão de post social", "err", err, "post", title)
+			html.EscapeString(title), html.EscapeString(platform), html.EscapeString(pilar))
+		// remove CR/LF do título para impedir injeção de cabeçalho no assunto.
+		safeTitle := strings.Map(func(r rune) rune {
+			if r == '\n' || r == '\r' {
+				return -1
 			}
-		})
+			return r
+		}, title)
+		s.enqueueEmail("socialRevisionAlert", to, "Santos Tech — Post para revisão: "+safeTitle, body)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"post": post})

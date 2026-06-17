@@ -41,6 +41,12 @@ type portalOverview struct {
 }
 
 func (s *Server) portalOverview(ctx context.Context) (portalOverview, error) {
+	// Cache-aside (TTL 5min, fail-open): os 5 COUNTs são caros e o agregado muda
+	// só em mutação de catálogo/turma, que invalidam a chave explicitamente.
+	return getOrSetJSON(ctx, s.rdb, cachePortalOverview, cachePortalTTL, s.portalOverviewFromDB)
+}
+
+func (s *Server) portalOverviewFromDB(ctx context.Context) (portalOverview, error) {
 	var out portalOverview
 	err := s.portalDB.QueryRow(ctx, `SELECT
 		(SELECT COUNT(*) FROM course),
@@ -204,6 +210,7 @@ func (s *Server) portalCreateCourse(ctx context.Context, in portalCourseInput) (
 	if err != nil {
 		return nil, err
 	}
+	s.invalidatePortalOverview()
 	return s.portalGetCourse(ctx, id)
 }
 
@@ -224,6 +231,7 @@ func (s *Server) portalUpdateCourse(ctx context.Context, id int64, in portalCour
 	if tag.RowsAffected() == 0 {
 		return nil, notFoundErr("Curso")
 	}
+	s.invalidatePortalOverview()
 	return s.portalGetCourse(ctx, id)
 }
 
@@ -240,6 +248,7 @@ func (s *Server) portalDeleteByID(ctx context.Context, table string, id int64) e
 	if tag.RowsAffected() == 0 {
 		return notFoundErr("Registro")
 	}
+	s.invalidatePortalOverview() // delete de course/module/phase muda os COUNTs
 	return nil
 }
 
@@ -263,6 +272,7 @@ func (s *Server) portalCreateModule(ctx context.Context, courseID int64, in port
 	if dto.Name == "" {
 		dto.Name = "Módulo " + dto.ID
 	}
+	s.invalidatePortalOverview()
 	return &dto, nil
 }
 
@@ -285,6 +295,7 @@ func (s *Server) portalUpdateModule(ctx context.Context, moduleID int64, in port
 	if dto.Name == "" {
 		dto.Name = "Módulo " + dto.ID
 	}
+	s.invalidatePortalOverview()
 	return &dto, nil
 }
 
@@ -316,6 +327,7 @@ func (s *Server) portalCreatePhase(ctx context.Context, moduleID int64, in porta
 	if dto.Name == "" {
 		dto.Name = "Fase " + dto.ID
 	}
+	s.invalidatePortalOverview()
 	return &dto, nil
 }
 
@@ -339,6 +351,7 @@ func (s *Server) portalUpdatePhase(ctx context.Context, phaseID int64, in portal
 	if dto.Name == "" {
 		dto.Name = "Fase " + dto.ID
 	}
+	s.invalidatePortalOverview()
 	return &dto, nil
 }
 
@@ -407,6 +420,7 @@ func (s *Server) portalCreateClass(ctx context.Context, in portalClassInput) (*p
 	if err != nil {
 		return nil, portalDBErr(err)
 	}
+	s.invalidatePortalOverview()
 	return &dto, nil
 }
 
@@ -449,6 +463,7 @@ func (s *Server) portalUpdateClass(ctx context.Context, id int64, in portalClass
 	if dto.Name == "" {
 		dto.Name = "Turma " + dto.ID
 	}
+	s.invalidatePortalOverview()
 	return &dto, nil
 }
 
@@ -470,7 +485,11 @@ func (s *Server) portalDeleteClass(ctx context.Context, id int64) error {
 	if tag.RowsAffected() == 0 {
 		return notFoundErr("Turma")
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.invalidatePortalOverview() // delete de class (+ class_rooms via cascata) muda os COUNTs
+	return nil
 }
 
 func (s *Server) portalListClassStudents(ctx context.Context, classID int64) ([]portalStudentDTO, error) {
@@ -593,6 +612,7 @@ func (s *Server) portalCreateClassRoom(ctx context.Context, classID int64, in po
 		return nil, portalDBErr(err)
 	}
 	dto.Status = portalRoomStatus(dto.IsAuthorized, dto.TargetLimited)
+	s.invalidatePortalOverview()
 	return &dto, nil
 }
 
@@ -644,6 +664,7 @@ func (s *Server) portalDeleteClassRoom(ctx context.Context, roomID int64) error 
 	if tag.RowsAffected() == 0 {
 		return notFoundErr("Sala")
 	}
+	s.invalidatePortalOverview() // delete de class_rooms muda o COUNT de salas
 	return nil
 }
 

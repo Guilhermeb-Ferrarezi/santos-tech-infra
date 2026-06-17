@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/subtle"
 	"fmt"
 	"log/slog"
@@ -58,14 +57,7 @@ func (s *Server) handleEmailVerifySend(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("email_verify_send: falha ao gravar cooldown", "uid", uid, "err", err)
 	}
 	html := emailCodeHTML(code, "Use o código abaixo para verificar o seu email:")
-	to := u.Email
-	safeGo("handleEmailVerifySend", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
-		if err := s.email.send(ctx, to, "Verifique seu email — Santos Tech", html); err != nil {
-			slog.Error("falha ao enviar email de verificação", "uid", uid, "err", err)
-		}
-	})
+	s.enqueueEmail("handleEmailVerifySend", u.Email, "Verifique seu email — Santos Tech", html)
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
 
@@ -117,6 +109,7 @@ func (s *Server) handleEmailVerifyConfirm(w http.ResponseWriter, r *http.Request
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao confirmar a verificação"))
 		return
 	}
+	s.invalidateUserCache(uid)
 	if err := s.rdb.Del(r.Context(), emailVerifyKey(uid), emailVerifyAttKey(uid), emailVerifyCDKey(uid)).Err(); err != nil {
 		slog.Warn("email_verify_confirm: falha ao limpar chaves de verificação após sucesso", "uid", uid, "err", err)
 	}

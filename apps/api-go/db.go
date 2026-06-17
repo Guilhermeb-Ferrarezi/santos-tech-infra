@@ -276,7 +276,7 @@ func (s *Server) listAllUsers(ctx context.Context) ([]User, error) {
 // updateUserAdmin atualiza nome, role e/ou quota. customRoleID só é aplicado quando role=4;
 // quando role volta para 1/2/3, customRoleID é limpo automaticamente.
 func (s *Server) updateUserAdmin(ctx context.Context, id int64, name *string, role *int16, quotaBytes *int64, customRoleID *string) (*User, error) {
-	return scanUser(s.db.QueryRow(ctx,
+	u, err := scanUser(s.db.QueryRow(ctx,
 		`UPDATE users SET
 		   name             = COALESCE($2, name),
 		   role             = COALESCE($3, role),
@@ -288,6 +288,10 @@ func (s *Server) updateUserAdmin(ctx context.Context, id int64, name *string, ro
 		                      END
 		 WHERE id = $1 RETURNING `+userCols,
 		id, name, role, quotaBytes, customRoleID))
+	if err == nil {
+		s.invalidateUserCache(id)
+	}
+	return u, err
 }
 
 // setUserSuspended seta (now()) ou limpa (NULL) o suspended_at.
@@ -304,6 +308,9 @@ func (s *Server) updateUserAdmin(ctx context.Context, id int64, name *string, ro
 func (s *Server) setUserSuspended(ctx context.Context, id int64, suspended bool) error {
 	if !suspended {
 		_, err := s.db.Exec(ctx, `UPDATE users SET suspended_at = NULL WHERE id = $1`, id)
+		if err == nil {
+			s.invalidateUserCache(id)
+		}
 		return err
 	}
 	tx, err := s.db.Begin(ctx)
@@ -322,27 +329,45 @@ func (s *Server) setUserSuspended(ctx context.Context, id int64, suspended bool)
 		 WHERE user_id = $1 AND (expires_at IS NULL OR expires_at > now())`, id); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	// Invalida só após o commit: a suspensão precisa cortar o acesso de imediato
+	// (resolveToken volta a checar suspended_at no banco em vez do cache velho).
+	s.invalidateUserCache(id)
+	return nil
 }
 
 // deleteUser remove o usuário (cascata em recovery_codes/api_keys via FK).
 func (s *Server) deleteUser(ctx context.Context, id int64) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	if err == nil {
+		s.invalidateUserCache(id)
+	}
 	return err
 }
 
 func (s *Server) updatePassword(ctx context.Context, userID int64, hash string) error {
 	_, err := s.db.Exec(ctx, `UPDATE users SET password_hash=$1 WHERE id=$2`, hash, userID)
+	if err == nil {
+		s.invalidateUserCache(userID)
+	}
 	return err
 }
 
 func (s *Server) updateAvatarURL(ctx context.Context, userID int64, url string) error {
 	_, err := s.db.Exec(ctx, `UPDATE users SET avatar_url=$1 WHERE id=$2`, url, userID)
+	if err == nil {
+		s.invalidateUserCache(userID)
+	}
 	return err
 }
 
 func (s *Server) setMFA(ctx context.Context, userID int64, enabled bool, secret *string) error {
 	_, err := s.db.Exec(ctx, `UPDATE users SET mfa_enabled=$1, totp_secret=$2 WHERE id=$3`, enabled, secret, userID)
+	if err == nil {
+		s.invalidateUserCache(userID)
+	}
 	return err
 }
 
@@ -353,6 +378,9 @@ func (s *Server) upsertPreferences(ctx context.Context, userID int64, patch []by
 	err := s.db.QueryRow(ctx,
 		`UPDATE users SET preferences = preferences || $1::jsonb WHERE id=$2 RETURNING preferences`,
 		string(patch), userID).Scan(&out)
+	if err == nil {
+		s.invalidateUserCache(userID)
+	}
 	return out, err
 }
 
