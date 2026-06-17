@@ -13,16 +13,17 @@ ENV VITE_AUTH_URL=$VITE_AUTH_URL
 
 RUN bun run build
 
-# Imagem oficial nginx non-root (UID 101): já escuta em 8080 e traz pid + diretórios
-# temp em caminhos graváveis pelo usuário sem privilégio. NÃO usar `USER root` nem
-# `nginx -t` aqui: rodar como root no build cria /tmp/nginx.pid com dono root, que o
-# runtime (uid 101) não consegue sobrescrever (foi o que causou o crash anterior).
-# O conf.d já é gravável pelo uid 101. Porta interna (8080) roteada pelo orquestrador.
-FROM nginxinc/nginx-unprivileged:alpine
+FROM nginx:alpine
 COPY --from=builder /app/apps/pay-web/dist /usr/share/nginx/html
-RUN printf '%s\n' \
+
+# SPA + headers de segurança em todas as respostas. nginx roda como root no master
+# (workers caem para o usuário `nginx` automaticamente), igual ao comportamento
+# original. O non-root completo do master fica para um passo futuro com a imagem
+# nginxinc/nginx-unprivileged, validado com `docker run` (não só `docker build`).
+RUN set -eux; \
+    printf '%s\n' \
       'server {' \
-      '  listen 8080;' \
+      '  listen 80;' \
       '  server_name _;' \
       '  root /usr/share/nginx/html;' \
       '  index index.html;' \
@@ -33,5 +34,7 @@ RUN printf '%s\n' \
       '  location / {' \
       '    try_files $uri $uri/ /index.html;' \
       '  }' \
-      '}' > /etc/nginx/conf.d/default.conf
-EXPOSE 8080
+      '}' > /etc/nginx/conf.d/default.conf; \
+    nginx -t
+
+EXPOSE 80
