@@ -35,6 +35,10 @@ type Config struct {
 	NotificationsGatewayURL   string // ex: https://portal.santos-tech.com (base, sem barra final)
 	NotificationsSharedSecret string // header x-notification-admin-secret
 
+	// Loki (tela de Logs, admin-only). Vazio = endpoints respondem 503.
+	// Em produção, alcançável pela rede docker da Coolify (ex: http://obs-loki:3100).
+	LokiURL string
+
 	// Cloudflare R2 (S3-compatível) para uploads (ex: avatares). Vazio = desabilitado.
 	R2AccountID string
 	R2AccessKey string
@@ -66,6 +70,8 @@ func LoadConfig() Config {
 
 		NotificationsGatewayURL:   strings.TrimRight(getEnv("NOTIFICATIONS_PORTAL_API_URL", ""), "/"),
 		NotificationsSharedSecret: getEnv("NOTIFICATIONS_SHARED_SECRET", ""),
+
+		LokiURL:     strings.TrimRight(getEnv("LOKI_URL", ""), "/"),
 
 		R2AccountID: getEnv("CF_ACCOUNT_ID", ""),
 		R2AccessKey: getEnv("CF_R2_ACCESS_KEY", ""),
