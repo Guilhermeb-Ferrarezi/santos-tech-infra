@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
@@ -18,6 +19,9 @@ type Server struct {
 	cart     *CartStore
 	provider PaymentProvider
 	email    *emailClient
+	// queue enfileira tasks asynq (notificação de pagamento). Pode ser nil em
+	// testes que não montam a fila — os callers tratam o nil com fallback.
+	queue *asynq.Client
 }
 
 func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client, provider PaymentProvider) *Server {

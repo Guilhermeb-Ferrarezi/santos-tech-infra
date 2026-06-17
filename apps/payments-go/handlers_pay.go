@@ -27,7 +27,7 @@ func (s *Server) handleGetPay(w http.ResponseWriter, r *http.Request) {
 // SSE: envia o status atual e, quando o webhook publicar "paid", empurra e encerra.
 func (s *Server) handlePayEvents(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
-	c, err := s.store.GetChargeByPublicToken(r.Context(), token)
+	status, err := s.chargeStatus(r.Context(), token)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "Cobrança não encontrada")
 		return
@@ -42,9 +42,9 @@ func (s *Server) handlePayEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 
 	// estado atual já resolve quem chega depois do pagamento
-	fmt.Fprintf(w, "event: status\ndata: %s\n\n", c.Status)
+	fmt.Fprintf(w, "event: status\ndata: %s\n\n", status)
 	flusher.Flush()
-	if c.Status != "pending" {
+	if status != "pending" {
 		return
 	}
 
@@ -54,8 +54,10 @@ func (s *Server) handlePayEvents(w http.ResponseWriter, r *http.Request) {
 
 	// Re-checa após assinar: fecha a janela de corrida em que o pagamento cai
 	// ENTRE o GetCharge inicial e o Subscribe (senão o evento publicado se perderia
-	// e o stream ficaria aberto pra sempre).
+	// e o stream ficaria aberto pra sempre). Re-checa direto no banco (ignora cache)
+	// para não confiar num valor "pending" potencialmente defasado nesta corrida.
 	if c2, err := s.store.GetChargeByPublicToken(r.Context(), token); err == nil && c2.Status != "pending" {
+		s.cacheChargeStatus(r.Context(), token, c2.Status)
 		fmt.Fprintf(w, "event: paid\ndata: paid\n\n")
 		flusher.Flush()
 		return
