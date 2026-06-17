@@ -20,7 +20,16 @@ const FORM_ID = "checkout-payer-form";
 export default function CheckoutPage() {
   const [lines, setLines] = useState<CartLine[] | null>(null);
   const [step, setStep] = useState<Step>("data");
-  const [payer, setPayer] = useState<PayerData>(emptyPayer);
+  const [payer, setPayer] = useState<PayerData>(() => {
+    // Pré-preenche com os dados salvos na última compra (se o usuário optou por salvar).
+    try {
+      const raw = localStorage.getItem("pay_payer");
+      if (raw) return { ...emptyPayer, ...(JSON.parse(raw) as Partial<PayerData>), save: true };
+    } catch {
+      /* ignora localStorage indisponível */
+    }
+    return emptyPayer;
+  });
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
   const [pixToken, setPixToken] = useState<string | null>(null);
@@ -58,6 +67,19 @@ export default function CheckoutPage() {
       );
       setPixToken(r.token);
       setStep("pix");
+      // Salva (ou limpa) os dados para as próximas compras conforme o checkbox.
+      try {
+        if (payer.save) {
+          localStorage.setItem(
+            "pay_payer",
+            JSON.stringify({ name: payer.name, email: payer.email, taxId: payer.taxId, phone: payer.phone }),
+          );
+        } else {
+          localStorage.removeItem("pay_payer");
+        }
+      } catch {
+        /* ignora localStorage indisponível */
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Erro ao gerar cobrança");
     } finally {

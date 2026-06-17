@@ -8,11 +8,12 @@ import { ShieldCheck } from "lucide-react";
 export function CheckoutShell({ left, right }: { left: ReactNode; right: ReactNode }) {
   return (
     <div className="min-h-screen w-full bg-white">
-      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col lg:flex-row">
+      <div className="flex min-h-screen w-full flex-col lg:flex-row">
         {/* Coluna esquerda — conteúdo da etapa (maior, branca).
-            No mobile fica EM CIMA (order-1); no desktop, à esquerda. */}
-        <main className="order-1 flex-1 px-6 py-8 sm:px-10 sm:py-12 lg:basis-[60%] lg:px-14 lg:py-14">
-          <div className="mx-auto w-full max-w-2xl">
+            No mobile fica EM CIMA (order-1); no desktop, à esquerda.
+            Conteúdo alinhado à direita (perto da divisa) no desktop. */}
+        <main className="order-1 flex-1 px-6 py-8 sm:px-10 sm:py-12 lg:basis-[55%] lg:px-14 lg:py-14">
+          <div className="mx-auto w-full max-w-2xl lg:ml-auto lg:mr-0">
             <header className="mb-10 flex items-center gap-3">
               <img src="/logo-santostech.svg" alt="Santos Tech" className="h-9 w-9" />
               <span className="text-lg font-bold tracking-tight text-[#0e2937]">Santos Tech</span>
@@ -23,8 +24,8 @@ export function CheckoutShell({ left, right }: { left: ReactNode; right: ReactNo
 
         {/* Coluna direita — resumo do pedido (cinza-claro), fundo preenchido por
             toda a coluna. No mobile fica EMBAIXO (order-2). */}
-        <aside className="order-2 border-t border-[#e3eaf0] bg-[#f5f8fa] px-6 py-8 sm:px-10 lg:basis-[40%] lg:border-t-0 lg:border-l lg:py-16">
-          <div className="mx-auto w-full max-w-sm lg:sticky lg:top-16">{right}</div>
+        <aside className="order-2 border-t border-[#e3eaf0] bg-[#eef2f6] px-6 py-8 sm:px-10 lg:basis-[45%] lg:border-t-0 lg:border-l lg:px-14 lg:py-16">
+          <div className="mx-auto w-full max-w-sm lg:mr-auto lg:ml-0 lg:sticky lg:top-16">{right}</div>
         </aside>
       </div>
     </div>
