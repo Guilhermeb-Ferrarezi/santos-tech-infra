@@ -1,5 +1,5 @@
 {
-  "name": "pay-web",
+  "name": "@santos-tech/pay-web",
   "private": true,
   "version": "0.0.0",
   "type": "module",

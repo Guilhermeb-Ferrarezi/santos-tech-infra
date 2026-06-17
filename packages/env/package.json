@@ -1,9 +1,0 @@
-{
-  "name": "@santos-tech/env",
-  "version": "0.0.1",
-  "private": true,
-  "main": "src/index.ts",
-  "dependencies": {
-    "zod": "^4.4.3"
-  }
-}
