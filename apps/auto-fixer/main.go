@@ -75,7 +75,7 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	httpSrv := &http.Server{Addr: ":" + cfg.Port, Handler: httpMux}
+	httpSrv := &http.Server{Addr: ":" + cfg.Port, Handler: requestLogger(httpMux)}
 	go func() {
 		slog.Info("auto-fixer ouvindo", "port", cfg.Port)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

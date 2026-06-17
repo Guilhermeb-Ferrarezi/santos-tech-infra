@@ -74,7 +74,7 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("POST /webhooks/dotfy", s.handleDotfyWebhook)
 
-	return s.cors(mux)
+	return requestLogger(s.cors(mux))
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {
