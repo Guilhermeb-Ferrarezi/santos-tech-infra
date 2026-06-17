@@ -8,10 +8,16 @@ import { ShieldCheck } from "lucide-react";
 export function CheckoutShell({ left, right }: { left: ReactNode; right: ReactNode }) {
   return (
     <div className="min-h-screen w-full bg-white">
-      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col lg:flex-row">
+      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col lg:flex-row">
         {/* Coluna esquerda — conteúdo da etapa (maior, branca) */}
-        <main className="order-2 flex-1 px-6 py-8 sm:px-10 sm:py-12 lg:order-1 lg:basis-[60%] lg:py-16">
-          <div className="mx-auto w-full max-w-lg">{left}</div>
+        <main className="order-2 flex-1 px-6 py-8 sm:px-10 sm:py-12 lg:order-1 lg:basis-[60%] lg:px-14 lg:py-14">
+          <div className="mx-auto w-full max-w-2xl">
+            <header className="mb-10 flex items-center gap-3">
+              <img src="/logo-santostech.svg" alt="Santos Tech" className="h-9 w-9" />
+              <span className="text-lg font-bold tracking-tight text-[#0e2937]">Santos Tech</span>
+            </header>
+            {left}
+          </div>
         </main>
 
         {/* Coluna direita — resumo do pedido (cinza-claro) */}
