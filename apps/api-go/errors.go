@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 )
@@ -28,12 +29,21 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, err error) {
+	rid := w.Header().Get("X-Request-Id")
 	if ae, ok := err.(*AppError); ok {
-		writeJSON(w, ae.Status, map[string]string{"code": ae.Code, "message": ae.Message})
+		body := map[string]string{"code": ae.Code, "message": ae.Message}
+		if rid != "" {
+			body["request_id"] = rid
+		}
+		writeJSON(w, ae.Status, body)
 		return
 	}
 	slog.Error("erro interno", "err", err)
+	msg := "Erro interno do servidor"
+	if rid != "" {
+		msg = fmt.Sprintf("Erro interno do servidor (ref: %s)", rid)
+	}
 	writeJSON(w, http.StatusInternalServerError, map[string]string{
-		"code": "INTERNAL_ERROR", "message": "Erro interno do servidor",
+		"code": "INTERNAL_ERROR", "message": msg,
 	})
 }
