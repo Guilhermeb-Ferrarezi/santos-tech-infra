@@ -1,7 +1,7 @@
 {
   "name": "santos-tech-infra",
   "private": true,
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": ["apps/*"],
   "scripts": {
     "dev": "docker compose -f infra/docker-compose.yml up --build",
     "dev:auth": "cd apps/api-go && go run .",

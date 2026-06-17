@@ -17,9 +17,9 @@ domínio `.santos-tech.com`, e qualquer serviço do ecossistema (portal, painel 
 email, etc.) valida o **mesmo** token.
 
 > **Nota histórica:** o projeto nasceu como monólito Bun + Fastify (`apps/api`).
-> O auth foi reescrito em **Go** (`apps/api-go`) e a API TS removida — `apps/api`
-> hoje só contém `node_modules` residual. Os pacotes TS em `packages/` são legados
-> daquela fase.
+> O auth foi reescrito em **Go** (`apps/api-go`) e a API TS removida. O diretório
+> `apps/api` e os pacotes TS legados em `packages/` (`env`, `contracts`) foram
+> removidos na limpeza de estrutura.
 
 ## Estrutura do repositório
 
@@ -29,10 +29,6 @@ apps/
   agent-go/    ← orquestra o Claude Code em container (api.santos-tech.com/claude) — ver apps/agent-go/CLAUDE.md
   mcp-go/      ← servidor MCP (Streamable HTTP) — gateway das APIs p/ clientes MCP (api.santos-tech.com/mcp)
   auth-web/    ← Frontend de login (React 19 + Vite + TanStack Router/Query + Tailwind 4)
-  api/         ← legado, esvaziado (auth migrado 100% pro Go)
-packages/
-  env/         ← validação de env (Zod) — legado TS
-  contracts/   ← tipos compartilhados — legado TS
 infra/
   docker-compose.yml      ← Postgres 16 + Redis 7 + API + agent-go + mcp-go
   Dockerfile.api-go
