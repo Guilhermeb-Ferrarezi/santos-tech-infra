@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/hibiken/asynq"
 )
 
 func main() {
@@ -43,6 +45,32 @@ func main() {
 	provider := newDotfyProvider(cfg)
 	srv := NewServer(cfg, db, rdb, provider)
 
+	// Fila durável (asynq) sobre o MESMO Redis. O client enfileira a notificação
+	// de pagamento; o server embutido processa com retry/backoff.
+	asynqRedis, err := asynq.ParseRedisURI(cfg.RedisURL)
+	if err != nil {
+		slog.Error("REDIS_URL (asynq) inválida", "err", err)
+		os.Exit(1)
+	}
+	asynqClient := asynq.NewClient(asynqRedis)
+	defer asynqClient.Close()
+	srv.queue = asynqClient
+
+	asynqSrv := asynq.NewServer(asynqRedis, asynq.Config{Concurrency: 5})
+	mux := asynq.NewServeMux()
+	mux.HandleFunc(TaskNotifyPaid, srv.HandleNotifyPaid)
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic na goroutine do asynq server", "panic", rec)
+			}
+		}()
+		if err := asynqSrv.Run(mux); err != nil {
+			slog.Error("asynq server parou", "err", err)
+			os.Exit(1)
+		}
+	}()
+
 	// Contexto cancelado em SIGINT/SIGTERM: derruba o loop de recorrência e
 	// dispara o graceful shutdown do servidor HTTP.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -72,9 +100,15 @@ func main() {
 	<-ctx.Done()
 	slog.Info("sinal recebido, encerrando graciosamente")
 
+	// Para de puxar tasks novas antes de drenar o HTTP.
+	asynqSrv.Stop()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("falha no graceful shutdown", "err", err)
 	}
+
+	// Aguarda as tasks em voo terminarem.
+	asynqSrv.Shutdown()
 }
