@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/oauth2"
@@ -28,8 +29,9 @@ type Server struct {
 	rdb      *redis.Client
 	email    *emailClient
 	google   *oauth2.Config
-	r2       *R2         // uploads (Cloudflare R2); nil = desabilitado
-	loki     *lokiClient // consulta de logs (Loki); nil = desabilitado
+	r2       *R2           // uploads (Cloudflare R2); nil = desabilitado
+	loki     *lokiClient   // consulta de logs (Loki); nil = desabilitado
+	queue    *asynq.Client // fila durável de emails; nil = sem fila (fallback fire-and-forget)
 }
 
 func NewServer(cfg Config, db, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
@@ -128,7 +130,7 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 // para resolver o token e injetar o userID; depois carrega o usuário e checa o role.
 func (s *Server) adminGuard(next http.HandlerFunc) http.HandlerFunc {
 	return s.authGuard(func(w http.ResponseWriter, r *http.Request) {
-		u, err := s.userByID(r.Context(), userIDFrom(r))
+		u, err := s.cachedUserByID(r.Context(), userIDFrom(r))
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -169,7 +171,7 @@ func (s *Server) resolveToken(ctx context.Context, token string) (int64, *User, 
 	if s.db == nil {
 		return uid, nil, nil
 	}
-	u, err := s.userByID(ctx, uid)
+	u, err := s.cachedUserByID(ctx, uid)
 	if err != nil {
 		return 0, nil, err
 	}
