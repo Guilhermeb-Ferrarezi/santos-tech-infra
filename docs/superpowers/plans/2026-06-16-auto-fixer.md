@@ -1166,10 +1166,10 @@ Os repos estão em **dois owners**: a conta pessoal `Guilhermeb-Ferrarezi` e a o
 - `github.go`: `GitHubApp` (JWT RS256 via golang-jwt/v5), `parseRepoURL`, `RepoToken`. `workers.go`: `repoToken()` usa o App e **cai pro `GITHUB_TOKEN` com WARN** quando o App não está configurado/falha. Envs: `GH_APP_ID`, `GH_APP_PRIVATE_KEY`.
 - **Falta (depende do usuário):** criar o GitHub App em github.com/settings/apps (Contents: Read & Write) e instalá-lo nos **dois** owners; preencher `GH_APP_ID`/`GH_APP_PRIVATE_KEY` no `.env`.
 
-### Task 11: Execução do Claude em container efêmero
-- `runClaudeFix` passa a orquestrar `docker run --rm` (imagem com `claude` + git) por incidente, em vez de `exec` no processo do fixer: rede restrita (`--network` só com o necessário p/ GitHub+API do Claude), sem montar segredos persistentes (token efêmero passado por env do container descartável), workspace montado como volume temporário.
-- O fixer precisa de acesso ao Docker socket (`/var/run/docker.sock`) — documentar no compose e no README a implicação (o socket é poder de root; manter o host do fixer dedicado).
-- Fallback: sem Docker disponível, cai pro `exec` direto e loga o downgrade.
+### Task 11: Execução do Claude em container efêmero — ✅ IMPLEMENTADA
+- `claude.go`: `claudeCommand()` escolhe entre `exec` direto (default) e `docker run --rm` (`CLAUDE_SANDBOX=docker`). `dockerRunArgs()` (pura, testada) monta o comando: `-v <WORKSPACE_VOLUME>:<WORKSPACE_ROOT>`, `-w <workdir>`, `-e CLAUDE_CODE_OAUTH_TOKEN` (só o OAuth — nenhum segredo do fixer entra no container), `--network` opcional, `--entrypoint <claude> <RUNNER_IMAGE>`.
+- `config.go`: valida que `CLAUDE_SANDBOX=docker` exige `CLAUDE_RUNNER_IMAGE`+`WORKSPACE_VOLUME`. `docker-compose.yml` + `.env.example` documentam o opt-in (socket `/var/run/docker.sock` = poder de root → host dedicado).
+- **Execução real (imagem/volume/socket) validada no e2e (Task 9).** Default continua exec direto, então não bloqueia.
 
 ## Self-Review
 

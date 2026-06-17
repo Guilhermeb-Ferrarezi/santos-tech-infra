@@ -72,8 +72,13 @@ para "log cru" se o JSON não casar, então degrada com graça.
   ambiente do processo do Claude (allowlist em `claudeEnv`, `claude.go`); o git
   (clone/commit/push) é todo do orquestrador via askpass com token escapado; argv do git
   validado contra argument-injection.
-- **Hardening pendente** (ver plano, Tasks 10–11): token efêmero escopado ao repo (GitHub
-  App) e execução do Claude em container `docker run --rm` descartável por incidente.
+- **Token efêmero (Task 10)**: o git usa um installation token do GitHub App escopado ao
+  repo do incidente (TTL ~1h), com fallback pro PAT. Requer o App instalado nos owners.
+- **Sandbox do Claude (Task 11)**: com `CLAUDE_SANDBOX=docker`, o Claude roda num container
+  `docker run --rm` descartável por incidente — só recebe o OAuth (nenhum segredo do fixer),
+  workspace por volume, rede opcionalmente restrita (`CLAUDE_DOCKER_NETWORK`). Exige o socket
+  Docker montado (ver `docker-compose.yml`). Vazio = exec direto. **A execução real (imagem,
+  volume, socket) é validada no e2e.**
 - O `docker-compose.yml` **não** referencia a rede da Coolify de propósito.
 
 ## Estrutura

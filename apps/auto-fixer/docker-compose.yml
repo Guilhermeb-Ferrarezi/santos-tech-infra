@@ -4,6 +4,7 @@
 services:
   auto-fixer:
     build: .
+    image: auto-fixer:latest # nome fixo p/ reuso como runner do Claude (sandbox)
     restart: unless-stopped
     env_file: .env
     environment:
@@ -14,6 +15,14 @@ services:
       - redis
     volumes:
       - workspaces:/data/workspaces
+      # ── Sandbox do Claude (Task 11) — OPCIONAL ──────────────────────────────
+      # Para rodar o Claude em container efêmero (CLAUDE_SANDBOX=docker no .env),
+      # descomente o socket abaixo e configure no .env:
+      #   CLAUDE_SANDBOX=docker
+      #   CLAUDE_RUNNER_IMAGE=auto-fixer:latest
+      #   WORKSPACE_VOLUME=auto-fixer_workspaces   # = <projeto>_workspaces
+      # O socket dá poder de root no host — mantenha o host do fixer dedicado.
+      # - /var/run/docker.sock:/var/run/docker.sock
 
   redis:
     image: redis:7-alpine

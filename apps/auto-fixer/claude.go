@@ -65,16 +65,51 @@ func claudeEnv(cfg Config) []string {
 	return append(env, "CLAUDE_CODE_OAUTH_TOKEN="+cfg.ClaudeOAuth)
 }
 
-func runClaudeFix(ctx context.Context, cfg Config, workdir, buildLogs, commitMsg string) (string, error) {
-	prompt := fmt.Sprintf(fixPromptTmpl, commitMsg, tailLines(buildLogs, 200))
-	args := []string{
+// claudeBaseArgs monta os flags do `claude` em modo headless (-p).
+func claudeBaseArgs(cfg Config, workdir string) []string {
+	return []string{
 		"-p", "--output-format", "stream-json", "--verbose",
 		"--model", cfg.ClaudeModel,
 		"--dangerously-skip-permissions", "--add-dir", workdir,
 	}
-	cmd := exec.CommandContext(ctx, cfg.ClaudeBin, args...)
+}
+
+// dockerRunArgs monta o `docker run` que executa o Claude num container efêmero
+// e descartável (Task 11): isolado do processo do fixer, com APENAS o OAuth do
+// Claude no ambiente (nenhum segredo do fixer), o workspace montado por volume,
+// e rede opcionalmente restrita. O git (clone/push) continua no orquestrador.
+func dockerRunArgs(cfg Config, workdir string) []string {
+	args := []string{
+		"run", "--rm", "-i",
+		"-v", cfg.WorkspaceVolume + ":" + cfg.WorkspaceRoot,
+		"-w", workdir,
+		"-e", "CLAUDE_CODE_OAUTH_TOKEN=" + cfg.ClaudeOAuth,
+	}
+	if cfg.ClaudeNetwork != "" {
+		args = append(args, "--network", cfg.ClaudeNetwork)
+	}
+	args = append(args, "--entrypoint", cfg.ClaudeBin, cfg.RunnerImage)
+	return append(args, claudeBaseArgs(cfg, workdir)...)
+}
+
+// claudeCommand devolve o *exec.Cmd para um turno do Claude, escolhendo entre
+// container efêmero (Sandbox=docker) e exec direto no processo do fixer.
+func claudeCommand(ctx context.Context, cfg Config, workdir string) *exec.Cmd {
+	if cfg.Sandbox == "docker" {
+		// O isolamento é o container: ele só recebe o que passamos via -e.
+		cmd := exec.CommandContext(ctx, "docker", dockerRunArgs(cfg, workdir)...)
+		cmd.Env = os.Environ() // ambiente do CLIENTE docker (não entra no container)
+		return cmd
+	}
+	cmd := exec.CommandContext(ctx, cfg.ClaudeBin, claudeBaseArgs(cfg, workdir)...)
 	cmd.Dir = workdir
-	cmd.Env = claudeEnv(cfg)
+	cmd.Env = claudeEnv(cfg) // allowlist: sem segredos do fixer
+	return cmd
+}
+
+func runClaudeFix(ctx context.Context, cfg Config, workdir, buildLogs, commitMsg string) (string, error) {
+	prompt := fmt.Sprintf(fixPromptTmpl, commitMsg, tailLines(buildLogs, 200))
+	cmd := claudeCommand(ctx, cfg, workdir)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Stderr = os.Stderr
 	stdout, err := cmd.StdoutPipe()

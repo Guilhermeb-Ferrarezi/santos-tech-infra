@@ -27,6 +27,13 @@ type Config struct {
 	WorkspaceRoot   string // WORKSPACE_ROOT (default /data/workspaces)
 	MaxFixAttempts  int    // MAX_FIX_ATTEMPTS (default 2)
 	RebuildTimeout  int    // REBUILD_TIMEOUT_MIN (default 15)
+	// Sandbox do Claude (Task 11). Sandbox="docker" roda o Claude num container
+	// `docker run --rm` descartável por incidente (isolado do processo do fixer);
+	// vazio = exec direto no processo do fixer.
+	Sandbox         string // CLAUDE_SANDBOX ("docker" | "")
+	RunnerImage     string // CLAUDE_RUNNER_IMAGE (imagem com o claude CLI; obrigatória se Sandbox=docker)
+	WorkspaceVolume string // WORKSPACE_VOLUME (named volume montado no runner, ex: auto-fixer_workspaces)
+	ClaudeNetwork   string // CLAUDE_DOCKER_NETWORK (rede do runner; vazio = default do docker)
 }
 
 func env(k, def string) string {
@@ -65,6 +72,13 @@ func loadConfig() (Config, error) {
 		WorkspaceRoot:   env("WORKSPACE_ROOT", "/data/workspaces"),
 		MaxFixAttempts:  atoiDef(os.Getenv("MAX_FIX_ATTEMPTS"), 2),
 		RebuildTimeout:  atoiDef(os.Getenv("REBUILD_TIMEOUT_MIN"), 15),
+		Sandbox:         os.Getenv("CLAUDE_SANDBOX"),
+		RunnerImage:     os.Getenv("CLAUDE_RUNNER_IMAGE"),
+		WorkspaceVolume: os.Getenv("WORKSPACE_VOLUME"),
+		ClaudeNetwork:   os.Getenv("CLAUDE_DOCKER_NETWORK"),
+	}
+	if c.Sandbox == "docker" && (c.RunnerImage == "" || c.WorkspaceVolume == "") {
+		return c, fmt.Errorf("config: CLAUDE_SANDBOX=docker exige CLAUDE_RUNNER_IMAGE e WORKSPACE_VOLUME")
 	}
 	for k, v := range map[string]string{
 		"REDIS_URL": c.RedisURL, "COOLIFY_API_URL": c.CoolifyAPIURL,
