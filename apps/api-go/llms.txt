@@ -182,6 +182,35 @@ com concorrência otimista via `sceneVersion`.
   usuário por email (email inexistente OU sem papel de staff → mesmo 404)
 - `DELETE /boards/{id}/members/{userId}` → 204
 
+## Social — Calendário Editorial — `api.santos-tech.com/social`
+
+Auth: admin (3)/professor (2) ou role 4 com permissão `social` (read/execute).
+Gestão de posts de redes sociais com **briefing pré-mastigado**: cada post carrega
+o conteúdo completo para o colaborador só executar a arte (formato, texto-da-arte
+por slide, legenda, hashtags, direção visual, specs). Notas e histórico de status;
+ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
+
+- `GET /social/posts` — `{posts:[SocialPost]}`
+- `POST /social/posts {SocialPostInput}` → 201 `{post}` · campo inválido → 400
+- `GET /social/posts/{id}` — `{post}` · inexistente → 404
+- `PUT /social/posts/{id} {SocialPostInput}` → `{post}`
+- `DELETE /social/posts/{id}` → 204
+- `PATCH /social/posts/{id}/status {status}` — registra histórico; `revisao` alerta o CEO
+- `GET /social/posts/{id}/history` — `{history:[{oldStatus,newStatus,changedBy,changedAt}]}`
+- `GET|POST /social/posts/{id}/notes` — comentários internos
+
+**SocialPost** (campos do briefing): `title` (interno), `caption` (legenda),
+`platform`, `pilar` (educacional|institucional|captacao|prova_social|bastidores|tech_mundo_real),
+`status` (ideia|planejado|em_producao|revisao|aprovado|agendado|publicado|arquivado),
+`scheduledAt`, `mediaUrl`, `referenceUrl` (link da foto ref),
+`formato` (estatico|carrossel|reel|story|video_longo|short|thumbnail|card_link),
+`objetivo` (alcance|engajamento|conversao|autoridade),
+`programa` (''|create|jr|camps|academies), `receita` (catálogo de composição:
+''|capa_gancho|hero_numero|versus|antes_depois|desenvolvimento|cta_fechamento|checklist|passo_a_passo|citacao_depoimento|poster_anuncio),
+`plataformasDestino[]` (repurposing), `copyArte[]` ({slide,headline,subtitulo,corpo,cta,hookOnScreen}),
+`hashtags[]`, `conceitoVisual`, `paleta` ({fundo,destaque,corPrograma}), `promptIa`,
+`specs` ({proporcao,largura,altura,safeZone,formatoArquivo,duracaoSeg}), `masterUrl`, `mandatorios`.
+
 ## Email — `mails.santos-tech.com/api`
 
 Contrato completo: `docs/openapi.yaml` no repo sg/email. Auth: sessão admin do
