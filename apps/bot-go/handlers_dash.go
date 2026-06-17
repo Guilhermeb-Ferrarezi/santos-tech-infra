@@ -533,6 +533,9 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// Invalida o cache de debounce_ms (config mudou). Fail-open: o TTL curto
+	// também garante consistência eventual se o DEL falhar.
+	s.tenantCache.InvalidateDebounce(ctx, string(tenantID))
 	jsonOK(w, map[string]bool{"ok": true})
 }
 

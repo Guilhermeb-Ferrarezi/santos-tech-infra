@@ -139,6 +139,11 @@ type Server struct {
 	// rdb pode ser nil — o dedupe de notificações cai pro fallback in-memory.
 	rdb         *redis.Client
 	notifDedupe *notifDedupe
+	// retryStream publica o ID do webhook ao marcá-lo 'failed', para reprocesso
+	// quase em tempo real (XADD). Pode ser nil (Redis ausente) → cai no polling.
+	retryStream *RetryStream
+	// tenantCache cacheia debounce_ms por tenant no Redis (fail-open p/ o banco).
+	tenantCache *TenantCache
 }
 
 // NewServer cria um Server com as dependências fornecidas.
@@ -162,6 +167,8 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		voice:       voice,
 		rdb:         rdb,
 		notifDedupe: newNotifDedupe(),
+		retryStream: NewRetryStream(rdb, cfg.RetryStreamKey, cfg.RetryStreamGroup, cfg.RetryStreamConsumer, logger),
+		tenantCache: NewTenantCache(rdb, cfg.DebounceCacheTTL, logger),
 	}
 }
 
@@ -371,7 +378,12 @@ func (s *Server) flushBurst(ctx context.Context, engine *ConversationEngine, key
 			for _, it := range items {
 				if markErr := s.webhook.MarkFailed(ctx, it.eventID, err.Error()); markErr != nil {
 					s.logger.Error("webhook.MarkFailed falhou", "id", it.eventID, "err", markErr)
+					continue
 				}
+				// Publica no stream para reprocesso quase em tempo real (XADD).
+				// Fail-open: se o XADD falhar, o polling do worker cobre o evento
+				// (ele já está persistido como 'failed' + next_retry_at no banco).
+				s.retryStream.Publish(ctx, it.eventID)
 			}
 		default:
 			for _, it := range items {
@@ -427,8 +439,19 @@ func bestText(c MessageContent) string {
 }
 
 // debounceWindow lê a janela de agrupamento configurada (tenant_config.debounce_ms).
-// Fallback de 1,5 s em erro; 0 desliga o agrupamento.
+// Hot path (uma vez por webhook): tenta o cache Redis primeiro e cai para o
+// Postgres em miss/erro (fail-open), repopulando o cache. Fallback de 1,5 s em
+// erro do banco; 0 desliga o agrupamento.
 func (s *Server) debounceWindow(ctx context.Context) time.Duration {
+	// 1. Cache (fail-open): hit → usa direto.
+	if ms, hit := s.tenantCache.GetDebounceMs(ctx, s.cfg.TenantID); hit {
+		if ms < 0 {
+			ms = 0
+		}
+		return time.Duration(ms) * time.Millisecond
+	}
+
+	// 2. Miss/erro → banco (fonte de verdade) e repopula o cache.
 	var ms int
 	if err := s.pool.QueryRow(ctx,
 		`SELECT debounce_ms FROM tenant_config WHERE tenant_id = $1`, s.cfg.TenantID,
@@ -438,6 +461,7 @@ func (s *Server) debounceWindow(ctx context.Context) time.Duration {
 	if ms < 0 {
 		ms = 0
 	}
+	s.tenantCache.SetDebounceMs(ctx, s.cfg.TenantID, ms)
 	return time.Duration(ms) * time.Millisecond
 }
 

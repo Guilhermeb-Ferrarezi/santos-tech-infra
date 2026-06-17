@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -50,6 +51,17 @@ type Config struct {
 	OutboxIdleIntervalMs int
 	OutboxMaxAttempts    int
 	FollowUpConcurrency  int
+
+	// Redis Stream de retries de webhook (reprocesso quase em tempo real).
+	// O polling do Postgres continua como safety net, mas com intervalo maior
+	// (RetryPollInterval) já que o stream cobre o caminho quente.
+	RetryStreamKey      string
+	RetryStreamGroup    string
+	RetryStreamConsumer string
+	RetryPollInterval   time.Duration
+
+	// Cache do debounce_ms por tenant (Redis). Fail-open p/ o banco.
+	DebounceCacheTTL time.Duration
 
 	// Follow-up templates Meta (fora da janela 24h)
 	FollowUpHasApprovedTemplates bool
@@ -113,6 +125,16 @@ func LoadConfig() Config {
 		OutboxMaxAttempts:    envInt("OUTBOX_MAX_ATTEMPTS", 5),
 		FollowUpConcurrency:  envInt("FOLLOW_UP_CONCURRENCY", 5),
 
+		RetryStreamKey:      getEnv("RETRY_STREAM_KEY", "bot-go:webhook-retries"),
+		RetryStreamGroup:    getEnv("RETRY_STREAM_GROUP", "bot-go-retry-workers"),
+		RetryStreamConsumer: getEnv("RETRY_STREAM_CONSUMER", hostnameOr("bot-go-1")),
+		// Safety net: com o stream cobrindo o caminho quente, o polling pode ser
+		// bem mais espaçado que os 60s antigos. Cobre eventos órfãos (stream fora,
+		// publish perdido) sem martelar o Postgres.
+		RetryPollInterval: time.Duration(envInt("RETRY_POLL_INTERVAL_SEC", 300)) * time.Second,
+
+		DebounceCacheTTL: time.Duration(envInt("DEBOUNCE_CACHE_TTL_SEC", 30)) * time.Second,
+
 		FollowUpHasApprovedTemplates: getEnv("FOLLOW_UP_HAS_APPROVED_TEMPLATES", "false") == "true",
 		FollowUpTemplateName:         getEnv("FOLLOW_UP_TEMPLATE_NAME", ""),
 		FollowUpTemplateLanguage:     getEnv("FOLLOW_UP_TEMPLATE_LANGUAGE", "pt_BR"),
@@ -147,6 +169,15 @@ func mustEnv(key string) string {
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+// hostnameOr devolve o hostname do processo (consumer name único por instância
+// para o consumer group do stream) ou um fallback se indisponível.
+func hostnameOr(fallback string) string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
 	}
 	return fallback
 }
