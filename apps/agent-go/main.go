@@ -9,10 +9,12 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/santos-tech/golog"
 )
 
 func main() {
-	initLogging()
+	golog.InitLogging()
 	cfg := LoadConfig()
 	ctx := context.Background()
 

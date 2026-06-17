@@ -1,6 +1,6 @@
 module github.com/santos-tech/auto-fixer
 
-go 1.24.0
+go 1.25
 
 require (
 	github.com/alicebob/miniredis/v2 v2.38.0
@@ -9,7 +9,10 @@ require (
 	github.com/hibiken/asynq v0.26.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.20.1
+	github.com/santos-tech/golog v0.0.0
 )
+
+replace github.com/santos-tech/golog => ../../packages/golog
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect

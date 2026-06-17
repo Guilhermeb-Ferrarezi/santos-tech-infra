@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"github.com/santos-tech/golog"
 )
 
 // ---------------------------------------------------------------------------
@@ -212,7 +213,7 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	return requestLogger(metricsMiddleware(mux))
+	return golog.RequestLogger(metricsMiddleware(mux))
 }
 
 // dashMiddleware adiciona CORS e verifica X-Dash-Key.

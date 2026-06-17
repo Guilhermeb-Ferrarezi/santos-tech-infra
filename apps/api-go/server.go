@@ -10,6 +10,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/santos-tech/golog"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -64,7 +65,7 @@ func (s *Server) Routes() http.Handler {
 	s.registerAuthRoutes(mux)
 	// metricsMiddleware fica DENTRO do mux (após o roteamento) para enxergar o
 	// padrão de rota casado (r.Pattern) e evitar explosão de cardinalidade.
-	return requestLogger(s.cors(s.globalRateLimit(metricsMiddleware(mux))))
+	return golog.RequestLogger(s.cors(s.globalRateLimit(metricsMiddleware(mux))))
 }
 
 // ── CORS (com credenciais, igual ao Fastify) ─────────────────────────────────
@@ -118,9 +119,9 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
-		logSetUserID(r.Context(), uid)
+		golog.SetUserID(r.Context(), uid)
 		if u != nil {
-			logSetUserName(r.Context(), u.Name)
+			golog.SetUserName(r.Context(), u.Name)
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), userIDKey, uid)))
 	}

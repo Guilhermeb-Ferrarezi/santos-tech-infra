@@ -1,4 +1,4 @@
-package main
+package golog
 
 import (
 	"bytes"
@@ -22,7 +22,7 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 
 func TestRequestLogger_CapturaStatusEChamaNext(t *testing.T) {
 	called := false
-	h := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RequestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusTeapot)
 		_, _ = w.Write([]byte("oi"))
@@ -41,8 +41,8 @@ func TestRequestLogger_CapturaStatusEChamaNext(t *testing.T) {
 }
 
 func TestRequestLogger_GeraRequestID(t *testing.T) {
-	h := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if requestIDFromContext(r.Context()) == "" {
+	h := RequestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if RequestIDFromContext(r.Context()) == "" {
 			t.Error("request id ausente no context dentro do handler")
 		}
 		w.WriteHeader(http.StatusOK)
@@ -57,8 +57,8 @@ func TestRequestLogger_GeraRequestID(t *testing.T) {
 func TestRequestLogger_PreservaRequestIDDeEntrada(t *testing.T) {
 	const rid = "rid-fixo-123"
 	var seen string
-	h := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen = requestIDFromContext(r.Context())
+	h := RequestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = RequestIDFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest("GET", "/x", nil)
@@ -74,7 +74,7 @@ func TestRequestLogger_PreservaRequestIDDeEntrada(t *testing.T) {
 }
 
 func TestRequestLogger_RecuperaPanic(t *testing.T) {
-	h := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RequestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("boom")
 	}))
 	rec := httptest.NewRecorder()
@@ -106,7 +106,7 @@ func TestLogRemoteIP_PrefereCloudflare(t *testing.T) {
 func TestBody_HandlerRecebeBodyCompletoEReadigeSenha(t *testing.T) {
 	buf := captureSlog(t)
 	var got string
-	h := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RequestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		got = string(b)
 		w.WriteHeader(http.StatusOK)
@@ -133,7 +133,7 @@ func TestBody_HandlerRecebeBodyCompletoEReadigeSenha(t *testing.T) {
 
 func TestBody_CapturaRespostaEReadige(t *testing.T) {
 	buf := captureSlog(t)
-	h := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RequestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"token":"jwt-abc-secreto","ok":true}`))
@@ -156,7 +156,7 @@ func TestBody_Trunca(t *testing.T) {
 	logBodyMaxBytes = 10
 	defer func() { logBodyMaxBytes = old }()
 	buf := captureSlog(t)
-	h := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RequestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -170,7 +170,7 @@ func TestBody_Trunca(t *testing.T) {
 
 func TestBody_PulaMultipart(t *testing.T) {
 	buf := captureSlog(t)
-	h := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RequestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	raw := "------x\r\nbinario-da-imagem\r\n------x--"
@@ -187,7 +187,7 @@ func TestBody_RespeitaLogBodiesDesligado(t *testing.T) {
 	logBodies = false
 	defer func() { logBodies = old }()
 	buf := captureSlog(t)
-	h := requestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RequestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
 	}))

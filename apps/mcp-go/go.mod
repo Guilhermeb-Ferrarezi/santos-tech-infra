@@ -5,7 +5,10 @@ go 1.25.0
 require (
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/prometheus/client_golang v1.23.2
+	github.com/santos-tech/golog v0.0.0
 )
+
+replace github.com/santos-tech/golog => ../../packages/golog
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect

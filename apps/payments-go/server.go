@@ -9,6 +9,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/santos-tech/golog"
 )
 
 type Server struct {
@@ -81,7 +82,7 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("POST /webhooks/dotfy", s.handleDotfyWebhook)
 
-	return requestLogger(s.cors(metricsMiddleware(mux)))
+	return golog.RequestLogger(s.cors(metricsMiddleware(mux)))
 }
 
 // handleReady verifica as dependências (Postgres e Redis) com timeout curto.

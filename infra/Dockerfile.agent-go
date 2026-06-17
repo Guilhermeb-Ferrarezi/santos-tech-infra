@@ -2,9 +2,12 @@
 # para rodar o `claude` CLI, os MCP servers (npx) e clonar repositórios.
 FROM golang:1.25-alpine AS build
 WORKDIR /src
-COPY apps/agent-go/go.mod apps/agent-go/go.sum ./
+# Pacote de log compartilhado, resolvido pelo `replace ../../packages/golog`.
+COPY packages/golog ./packages/golog
+COPY apps/agent-go/go.mod apps/agent-go/go.sum ./apps/agent-go/
+WORKDIR /src/apps/agent-go
 RUN go mod download
-COPY apps/agent-go/ .
+COPY apps/agent-go/ ./
 RUN CGO_ENABLED=0 go build -trimpath -o /agent-go .
 
 FROM node:22-bookworm-slim
