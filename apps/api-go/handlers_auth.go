@@ -108,6 +108,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ident := strings.TrimSpace(body.Identifier)
+	if strings.Contains(ident, "@") {
+		ident = strings.ToLower(ident)
+	}
 	// Lockout chaveado por (IP + identifier), NÃO só pelo identifier: senão
 	// qualquer um trancaria a vítima sabendo apenas o email (DoS de conta).
 	// Com o IP na chave, o atacante só "tranca" a si mesmo contra aquela conta;
