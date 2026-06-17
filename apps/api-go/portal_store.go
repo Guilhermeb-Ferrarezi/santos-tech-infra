@@ -723,7 +723,13 @@ func (s *Server) portalClassCronograma(ctx context.Context, classID int64) (*por
 	if err != nil {
 		return nil, nil, err
 	}
-	moduleID, _ := strconv.ParseInt(class.CurrentModuleID, 10, 64)
+	if class.CurrentModuleID == "" {
+		return class, map[string][]portalCronogramaPhase{}, nil
+	}
+	moduleID, err := strconv.ParseInt(class.CurrentModuleID, 10, 64)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ID de módulo inválido %q: %w", class.CurrentModuleID, err)
+	}
 	rows, err := s.portalDB.Query(ctx, `SELECT p.id::text, COALESCE(p.name,''), COALESCE(m.name,''), p.week_number
 		FROM phase p JOIN module m ON m.id = p.module_id
 		WHERE p.module_id=$1
@@ -818,7 +824,10 @@ func (s *Server) portalIniciarFases(ctx context.Context, classID int64, studentI
 	}
 
 	// desbloqueia a primeira fase (status 1 = em progresso; mantém 2 = concluído)
-	firstPhaseID, _ := strconv.ParseInt(phase.ID, 10, 64)
+	firstPhaseID, err := strconv.ParseInt(phase.ID, 10, 64)
+	if err != nil {
+		return nil, 0, fmt.Errorf("ID de fase inválido %q: %w", phase.ID, err)
+	}
 	if _, err := tx.Exec(ctx, `UPDATE progress_student_phase
 		SET status = CASE WHEN COALESCE(status,0) = 2 THEN 2 ELSE 1 END,
 		    unlocked_at = COALESCE(unlocked_at, NOW())
