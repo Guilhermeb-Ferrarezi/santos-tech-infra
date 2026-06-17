@@ -1161,11 +1161,10 @@ O `auto-fixer` roda `claude --dangerously-skip-permissions` **sem humano no loop
 
 **Já aplicado (Task 5):** validação de argv no git (`--` + regex `validRef`, só `https://`) e askpass com `printf`/aspas simples escapadas (sem command-injection).
 
-### Task 10: Token efêmero escopado ao repo (GitHub App)
-**Depende de credencial externa:** o usuário precisa criar um GitHub App na org Santos-Techrp com permissão `contents:write` e instalá-lo nos repos. Envs novas: `GH_APP_ID`, `GH_APP_PRIVATE_KEY`, `GH_APP_INSTALLATION_ID`.
-- Substituir o `GITHUB_TOKEN` amplo por um **installation token** gerado por incidente (`POST /app/installations/{id}/access_tokens`, opcionalmente com `repositories:[<repo>]`), TTL ~1h.
-- `runClaudeFix` e `cloneRepo`/`pushBranch` recebem esse token efêmero em vez do PAT do env. Se o Claude for sequestrado, o acesso se limita ao repo do incidente e expira sozinho.
-- Fallback: sem GitHub App configurado, cai pro `GITHUB_TOKEN` do env (degrada com graça) e **loga o downgrade de postura**.
+### Task 10: Token efêmero escopado ao repo (GitHub App) — ✅ IMPLEMENTADA
+Os repos estão em **dois owners**: a conta pessoal `Guilhermeb-Ferrarezi` e a org `Santos-Techrp` (confirmado via `gh`). Um único GitHub App instalado **nos dois** cobre tudo: o fixer extrai `(owner, repo)` da URL do repo, descobre a installation com `GET /repos/{owner}/{repo}/installation` (App JWT), e gera um installation token escopado (`POST /app/installations/{id}/access_tokens` com `repositories:[<repo>]` + `permissions.contents:write`), TTL ~1h.
+- `github.go`: `GitHubApp` (JWT RS256 via golang-jwt/v5), `parseRepoURL`, `RepoToken`. `workers.go`: `repoToken()` usa o App e **cai pro `GITHUB_TOKEN` com WARN** quando o App não está configurado/falha. Envs: `GH_APP_ID`, `GH_APP_PRIVATE_KEY`.
+- **Falta (depende do usuário):** criar o GitHub App em github.com/settings/apps (Contents: Read & Write) e instalá-lo nos **dois** owners; preencher `GH_APP_ID`/`GH_APP_PRIVATE_KEY` no `.env`.
 
 ### Task 11: Execução do Claude em container efêmero
 - `runClaudeFix` passa a orquestrar `docker run --rm` (imagem com `claude` + git) por incidente, em vez de `exec` no processo do fixer: rede restrita (`--network` só com o necessário p/ GitHub+API do Claude), sem montar segredos persistentes (token efêmero passado por env do container descartável), workspace montado como volume temporário.
