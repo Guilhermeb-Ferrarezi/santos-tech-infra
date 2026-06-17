@@ -126,6 +126,20 @@ CREATE TABLE IF NOT EXISTS social_post_notes (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_social_post_notes_post ON social_post_notes(post_id);
+-- Migração: normalizar valores antigos de plataforma/pilar para os corretos
+UPDATE social_posts SET platform='instagram' WHERE platform='youtube';
+UPDATE social_posts SET pilar='institucional' WHERE pilar='produto';
+UPDATE social_posts SET pilar='educacional'   WHERE pilar='engajamento';
+-- Recriar constraints com os valores do handoff (drop+add é idempotente)
+ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_platform_check;
+ALTER TABLE social_posts ADD CONSTRAINT social_posts_platform_check
+  CHECK (platform IN ('facebook','instagram','tiktok','twitter_x','threads','google_meu_negocio','blog','linkedin'));
+ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_pilar_check;
+ALTER TABLE social_posts ADD CONSTRAINT social_posts_pilar_check
+  CHECK (pilar IN ('educacional','institucional','captacao','prova_social','bastidores','tech_mundo_real'));
+ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_status_check;
+ALTER TABLE social_posts ADD CONSTRAINT social_posts_status_check
+  CHECK (status IN ('ideia','planejado','em_producao','revisao','aprovado','agendado','publicado','arquivado'));
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

@@ -45,17 +45,17 @@ type SocialPostInput struct {
 
 var validSocialPlatforms = map[string]bool{
 	"facebook": true, "instagram": true, "tiktok": true, "twitter_x": true,
-	"threads": true, "youtube": true, "linkedin": true,
+	"threads": true, "google_meu_negocio": true, "blog": true, "linkedin": true,
 }
 
 var validSocialPilares = map[string]bool{
-	"educacional": true, "institucional": true, "bastidores": true,
-	"produto": true, "engajamento": true,
+	"educacional": true, "institucional": true, "captacao": true,
+	"prova_social": true, "bastidores": true, "tech_mundo_real": true,
 }
 
 var validSocialStatuses = map[string]bool{
 	"ideia": true, "planejado": true, "em_producao": true,
-	"revisao": true, "agendado": true, "publicado": true,
+	"revisao": true, "aprovado": true, "agendado": true, "publicado": true, "arquivado": true,
 }
 
 const socialPostCols = `id::text, title, caption, platform, pilar, status,
