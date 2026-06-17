@@ -20,7 +20,7 @@ type Config struct {
 	ClaudeBin       string // CLAUDE_BIN (default "claude")
 	ClaudeModel     string // CLAUDE_DEFAULT_MODEL (default "sonnet")
 	ClaudeOAuth     string // CLAUDE_CODE_OAUTH_TOKEN
-	GithubToken     string // GITHUB_TOKEN (askpass + MCP)
+	GithubToken     string // GITHUB_TOKEN (só askpass do orquestrador: clone/push; nunca vai ao processo do Claude)
 	WorkspaceRoot   string // WORKSPACE_ROOT (default /data/workspaces)
 	MaxFixAttempts  int    // MAX_FIX_ATTEMPTS (default 2)
 	RebuildTimeout  int    // REBUILD_TIMEOUT_MIN (default 15)
