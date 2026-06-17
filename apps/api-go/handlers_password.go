@@ -69,6 +69,10 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "senha deve ter entre 8 e 128 caracteres"))
 		return
 	}
+	if !isValidResetToken(body.Token) {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_TOKEN", "Link de recuperação inválido ou expirado"))
+		return
+	}
 	hash := sha256Hex(body.Token)
 	// GetDel consome o token atomicamente: a chave é deletada junto com o Get,
 	// eliminando a janela TOCTOU em que dois requests simultâneos com o mesmo
