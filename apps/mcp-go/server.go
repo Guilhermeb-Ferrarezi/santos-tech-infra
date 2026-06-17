@@ -35,6 +35,7 @@ func (s *Server) MCP() *mcp.Server {
 	s.addEmailTools(srv)
 	s.addClaudeTools(srv)
 	s.addUploadTools(srv)
+	s.addBotTools(srv)
 	s.addResources(srv)
 	return srv
 }
@@ -68,7 +69,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /mcp/.well-known/oauth-protected-resource", prm)
 
 	mux.Handle("/", s.requireAuth(streamable))
-	return mux
+	return requestLogger(mux)
 }
 
 // originOf extrai scheme://host de uma URL (fallback: a própria string).
@@ -132,6 +133,18 @@ func (s *Server) proxyTimeout(ctx context.Context, req *mcp.CallToolRequest, met
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	status, raw, err := s.client.do(ctx, method, url, authorization(req.Extra), body)
+	return resultFrom(method, url, status, raw, err)
+}
+
+// proxyBot chama o dashboard API do bot-go com a DASH key de serviço (não o token
+// do usuário). Usado pelas tools read-only de agendamentos/leads/conversas.
+func (s *Server) proxyBot(ctx context.Context, method, url string, body any) (*mcp.CallToolResult, any, error) {
+	if s.cfg.BotAPIURL == "" || s.cfg.BotDashKey == "" {
+		return errResult("ferramenta indisponível: BOT_API_URL/BOT_DASH_KEY não configurados neste MCP."), nil, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
+	defer cancel()
+	status, raw, err := s.client.doBot(ctx, method, url, s.cfg.BotDashKey, body)
 	return resultFrom(method, url, status, raw, err)
 }
 

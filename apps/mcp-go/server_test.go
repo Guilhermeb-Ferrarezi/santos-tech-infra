@@ -278,6 +278,7 @@ func TestTodasAsToolsRegistradas(t *testing.T) {
 		"ecosystem_status", "mailbox_list", "mailbox_read", "mailbox_send",
 		"email_metrics", "email_logs", "agent_generate", "agent_conversations",
 		"upload_image",
+		"bookings_list", "leads_list", "conversations_list", "conversation_messages",
 	}
 	got := map[string]bool{}
 	for _, tl := range res.Tools {
