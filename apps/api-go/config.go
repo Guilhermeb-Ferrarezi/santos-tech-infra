@@ -71,7 +71,7 @@ func LoadConfig() Config {
 		NotificationsGatewayURL:   strings.TrimRight(getEnv("NOTIFICATIONS_PORTAL_API_URL", ""), "/"),
 		NotificationsSharedSecret: getEnv("NOTIFICATIONS_SHARED_SECRET", ""),
 
-		LokiURL:     strings.TrimRight(getEnv("LOKI_URL", ""), "/"),
+		LokiURL: strings.TrimRight(getEnv("LOKI_URL", ""), "/"),
 
 		R2AccountID: getEnv("CF_ACCOUNT_ID", ""),
 		R2AccessKey: getEnv("CF_R2_ACCESS_KEY", ""),

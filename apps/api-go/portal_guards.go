@@ -2,9 +2,47 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// customRolePermCacheTTL: permissões de cargo customizado ficam em cache por 2 min.
+// Cargos mudam raramente (só via painel admin); 2 min é uma janela aceitável.
+// O cache é invalidado explicitamente ao atualizar/deletar o cargo (handlers_admin_custom_roles.go).
+const customRolePermCacheTTL = 2 * time.Minute
+
+// cachedCustomRole carrega as permissões do cargo pelo Redis (cache) e, em caso de
+// miss ou erro, cai no banco. Fail-open: se o Redis falhar, a DB é usada diretamente.
+func (s *Server) cachedCustomRole(ctx context.Context, roleID string) (*CustomRole, error) {
+	cacheKey := "custom_role_perms:" + roleID
+	if raw, err := s.rdb.Get(ctx, cacheKey).Bytes(); err == nil {
+		var perms map[string][]string
+		if json.Unmarshal(raw, &perms) == nil {
+			return &CustomRole{ID: roleID, Permissions: perms}, nil
+		}
+	}
+	cr, err := s.getCustomRole(ctx, roleID)
+	if err != nil || cr == nil {
+		return cr, err
+	}
+	if b, merr := json.Marshal(cr.Permissions); merr == nil {
+		if serr := s.rdb.Set(ctx, cacheKey, b, customRolePermCacheTTL).Err(); serr != nil {
+			slog.Warn("custom_role_perms: falha ao gravar cache", "role", roleID, "err", serr)
+		}
+	}
+	return cr, nil
+}
+
+// invalidateCustomRoleCache remove a entrada de permissões do cargo do Redis.
+// Chamado em update/delete para encurtar a janela de dados desatualizados.
+func (s *Server) invalidateCustomRoleCache(ctx context.Context, roleID string) {
+	if err := s.rdb.Del(ctx, "custom_role_perms:"+roleID).Err(); err != nil {
+		slog.Warn("custom_role_perms: falha ao invalidar cache", "role", roleID, "err", err)
+	}
+}
 
 // permGuard libera a rota para admin (sempre), professor (se allowTeacher) e
 // cargos personalizados (role 4) cujo cargo tenha a permissão resource:action.
@@ -35,9 +73,9 @@ func (s *Server) permGuard(resource, action string, allowTeacher bool, next http
 	})
 }
 
-// customRoleHasPerm carrega o cargo e verifica se resource tem a ação.
+// customRoleHasPerm carrega o cargo (via cache Redis) e verifica se resource tem a ação.
 func (s *Server) customRoleHasPerm(ctx context.Context, roleID, resource, action string) bool {
-	cr, err := s.getCustomRole(ctx, roleID)
+	cr, err := s.cachedCustomRole(ctx, roleID)
 	if err != nil || cr == nil {
 		return false
 	}
@@ -83,7 +121,7 @@ func (s *Server) portalAnyRead(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			if u.Role == RoleCustom && u.CustomRoleID != nil {
-				if cr, err := s.getCustomRole(r.Context(), *u.CustomRoleID); err == nil && cr != nil {
+				if cr, err := s.cachedCustomRole(r.Context(), *u.CustomRoleID); err == nil && cr != nil {
 					for res, acts := range cr.Permissions {
 						if strings.HasPrefix(res, "portal_") {
 							for _, a := range acts {

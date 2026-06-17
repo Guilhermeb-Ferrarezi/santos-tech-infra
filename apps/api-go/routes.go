@@ -130,13 +130,13 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 
 func (s *Server) registerSocialRoutes(mux *http.ServeMux) {
 	const min = time.Minute
-	mux.HandleFunc("GET /social/posts",               s.permGuard("social", "read",    false, s.handleListSocialPosts))
-	mux.HandleFunc("GET /social/posts/{id}",          s.permGuard("social", "read",    false, s.handleGetSocialPost))
-	mux.HandleFunc("POST /social/posts",              s.rateLimit(20, min, s.adminGuard(s.handleCreateSocialPost)))
-	mux.HandleFunc("PUT /social/posts/{id}",          s.rateLimit(30, min, s.adminGuard(s.handleUpdateSocialPost)))
-	mux.HandleFunc("DELETE /social/posts/{id}",       s.adminGuard(s.handleDeleteSocialPost))
+	mux.HandleFunc("GET /social/posts", s.permGuard("social", "read", false, s.handleListSocialPosts))
+	mux.HandleFunc("GET /social/posts/{id}", s.permGuard("social", "read", false, s.handleGetSocialPost))
+	mux.HandleFunc("POST /social/posts", s.rateLimit(20, min, s.adminGuard(s.handleCreateSocialPost)))
+	mux.HandleFunc("PUT /social/posts/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateSocialPost)))
+	mux.HandleFunc("DELETE /social/posts/{id}", s.adminGuard(s.handleDeleteSocialPost))
 	mux.HandleFunc("PATCH /social/posts/{id}/status", s.rateLimit(30, min, s.permGuard("social", "execute", false, s.handleUpdateSocialPostStatus)))
-	mux.HandleFunc("GET /social/posts/{id}/notes",    s.permGuard("social", "read",    false, s.handleListSocialPostNotes))
-	mux.HandleFunc("POST /social/posts/{id}/notes",   s.rateLimit(30, min, s.permGuard("social", "execute", false, s.handleAddSocialPostNote)))
-	mux.HandleFunc("GET /social/posts/{id}/history",  s.permGuard("social", "read",    false, s.handleListSocialPostStatusHistory))
+	mux.HandleFunc("GET /social/posts/{id}/notes", s.permGuard("social", "read", false, s.handleListSocialPostNotes))
+	mux.HandleFunc("POST /social/posts/{id}/notes", s.rateLimit(30, min, s.permGuard("social", "execute", false, s.handleAddSocialPostNote)))
+	mux.HandleFunc("GET /social/posts/{id}/history", s.permGuard("social", "read", false, s.handleListSocialPostStatusHistory))
 }
