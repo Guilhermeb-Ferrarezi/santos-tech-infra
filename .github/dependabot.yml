@@ -1,6 +1,8 @@
 version: 2
 updates:
-  - package-ecosystem: npm
+  # bun: o Dependabot lê o bun.lock da raiz (suporte GA desde 2025). NÃO use "npm"
+  # aqui — esse ecossistema ignora bun.lock e não geraria nenhum PR neste monorepo.
+  - package-ecosystem: bun
     directory: /
     schedule:
       interval: weekly
@@ -27,3 +29,39 @@ updates:
       tanstack:
         patterns:
           - "@tanstack/*"
+  - package-ecosystem: gomod
+    directory: /apps/api-go
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+  - package-ecosystem: gomod
+    directory: /apps/agent-go
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+  - package-ecosystem: gomod
+    directory: /apps/bot-go
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+  - package-ecosystem: gomod
+    directory: /apps/payments-go
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+  - package-ecosystem: gomod
+    directory: /apps/mcp-go
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+  - package-ecosystem: gomod
+    directory: /apps/auto-fixer
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10

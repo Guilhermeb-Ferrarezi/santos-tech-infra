@@ -1,0 +1,56 @@
+name: go
+on:
+  push:
+    paths:
+      - "apps/api-go/**"
+      - "apps/agent-go/**"
+      - "apps/bot-go/**"
+      - "apps/payments-go/**"
+      - "apps/mcp-go/**"
+      - "apps/auto-fixer/**"
+      - ".github/workflows/go.yml"
+  pull_request:
+    paths:
+      - "apps/api-go/**"
+      - "apps/agent-go/**"
+      - "apps/bot-go/**"
+      - "apps/payments-go/**"
+      - "apps/mcp-go/**"
+      - "apps/auto-fixer/**"
+      - ".github/workflows/go.yml"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - api-go
+          - agent-go
+          - bot-go
+          - payments-go
+          - mcp-go
+          - auto-fixer
+    defaults:
+      run:
+        working-directory: apps/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: apps/${{ matrix.service }}/go.sum
+      - name: gofmt
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "Arquivos não formatados (rode gofmt -w .):"
+            echo "$files"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: go test
+        run: go test ./...
