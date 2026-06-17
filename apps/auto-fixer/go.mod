@@ -1,4 +1,4 @@
-module auto-fixer
+module github.com/santos-tech/auto-fixer
 
 go 1.24.0
 
