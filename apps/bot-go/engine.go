@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -648,6 +649,11 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			entry.Error = msg
 		}
 		go func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					e.deps.Logger.Error("engine: panic ao gravar log de processamento", "panic", rec, "stack", string(debug.Stack()))
+				}
+			}()
 			if insertErr := e.deps.LogRepo.Insert(context.Background(), entry); insertErr != nil {
 				e.deps.Logger.Error("engine: falha ao gravar log de processamento", "err", insertErr)
 				return
@@ -799,6 +805,11 @@ func (e *ConversationEngine) startTypingIndicator(ctx context.Context, messageID
 
 	done := make(chan struct{})
 	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				e.deps.Logger.Error("engine: panic no ticker de typing indicator", "panic", rec, "stack", string(debug.Stack()))
+			}
+		}()
 		ticker := time.NewTicker(20 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -979,6 +990,11 @@ func (e *ConversationEngine) logAction(tenantID TenantID, convID ConversationID,
 		Error:          errStr,
 	}
 	go func() {
+		defer func() {
+			if rec := recover(); rec != nil && e.deps.Logger != nil {
+				e.deps.Logger.Error("engine: panic ao gravar log de ação", "panic", rec, "stack", string(debug.Stack()))
+			}
+		}()
 		if err := e.deps.LogRepo.Insert(context.Background(), entry); err != nil {
 			if e.deps.Logger != nil {
 				e.deps.Logger.Error("engine: falha ao gravar log de ação", "err", err)

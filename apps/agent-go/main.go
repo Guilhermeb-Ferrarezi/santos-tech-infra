@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 func main() {
@@ -43,10 +47,45 @@ func main() {
 		slog.Warn("falha ao limpar estado órfão no boot", "err", err)
 	}
 
+	// Fecha as conexões com Postgres e Redis ao sair (após o Shutdown drenar o HTTP).
+	defer db.Close()
+	defer func() {
+		if err := rdb.Close(); err != nil {
+			slog.Warn("erro ao fechar Redis", "err", err)
+		}
+	}()
+
 	srv := NewServer(cfg, db, rdb)
-	slog.Info("agent-go ouvindo", "port", cfg.Port)
-	if err := http.ListenAndServe(":"+cfg.Port, srv.Routes()); err != nil {
-		slog.Error("erro no servidor", "err", err)
-		os.Exit(1)
+	httpSrv := &http.Server{
+		Addr:    ":" + cfg.Port,
+		Handler: srv.Routes(),
+		// ReadHeaderTimeout/ReadTimeout curtos mitigam slow-loris. WriteTimeout
+		// precisa cobrir o SSE de /generate/stream (timeout interno de 120s do
+		// claude) — fica acima disso p/ não cortar o stream no meio. O WebSocket
+		// usa Hijack, então o WriteTimeout não se aplica após o upgrade.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      150 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+
+	// Encerra o servidor ao receber SIGINT/SIGTERM (deploy/restart).
+	shutCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		slog.Info("agent-go ouvindo", "port", cfg.Port)
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("erro no servidor", "err", err)
+			os.Exit(1)
+		}
+	}()
+
+	<-shutCtx.Done()
+	slog.Info("encerrando agent-go (graceful shutdown)")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		slog.Warn("shutdown forçado", "err", err)
 	}
 }

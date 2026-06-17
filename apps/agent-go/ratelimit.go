@@ -40,7 +40,7 @@ func (s *Server) allow(ctx context.Context, key string, max int, window time.Dur
 // rateLimit limita por (rota + IP) — usar nas rotas sensíveis.
 func (s *Server) rateLimit(max int, window time.Duration, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		key := fmt.Sprintf("rl:%s:%s", r.URL.Path, clientIP(r))
+		key := fmt.Sprintf("agent-go:rl:%s:%s", r.URL.Path, clientIP(r))
 		if !s.allow(r.Context(), key, max, window) {
 			writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Muitas tentativas. Tente novamente em instantes."))
 			return
@@ -52,7 +52,13 @@ func (s *Server) rateLimit(max int, window time.Duration, next http.HandlerFunc)
 // globalRateLimit limita o total de requisições por IP (proteção geral).
 func (s *Server) globalRateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.allow(r.Context(), "rl:global:"+clientIP(r), 200, time.Minute) {
+		// Endpoints operacionais ficam fora do rate limit (probes/scrape frequentes).
+		switch r.URL.Path {
+		case "/claude/health", "/claude/ready", "/claude/metrics":
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.allow(r.Context(), "agent-go:rl:global:"+clientIP(r), 200, time.Minute) {
 			writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Muitas requisições. Aguarde um momento."))
 			return
 		}

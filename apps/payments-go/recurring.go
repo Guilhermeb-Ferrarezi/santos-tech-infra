@@ -13,6 +13,11 @@ func monthlyDueDate(year int, month time.Month, day int) string {
 
 // runRecurringLoop roda no boot: dispara já e depois 1x/dia.
 func (s *Server) runRecurringLoop(ctx context.Context) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic em runRecurringLoop", "panic", rec)
+		}
+	}()
 	s.generateMonthlyCharges(ctx) // roda no start (idempotente)
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()

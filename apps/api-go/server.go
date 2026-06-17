@@ -51,11 +51,18 @@ func NewServer(cfg Config, db, portalDB *pgxpool.Pool, rdb *redis.Client) *Serve
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	// Endpoints operacionais PÚBLICOS (sem auth, fora do rate limit): liveness,
+	// readiness e métricas. Necessário para healthcheck/scrape não quebrarem.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
+	mux.HandleFunc("GET /ready", s.handleReady)
+	mux.Handle("GET /metrics", metricsHandler())
+	registerPoolMetrics(s.db)
 	s.registerAuthRoutes(mux)
-	return requestLogger(s.cors(s.globalRateLimit(mux)))
+	// metricsMiddleware fica DENTRO do mux (após o roteamento) para enxergar o
+	// padrão de rota casado (r.Pattern) e evitar explosão de cardinalidade.
+	return requestLogger(s.cors(s.globalRateLimit(metricsMiddleware(mux))))
 }
 
 // ── CORS (com credenciais, igual ao Fastify) ─────────────────────────────────

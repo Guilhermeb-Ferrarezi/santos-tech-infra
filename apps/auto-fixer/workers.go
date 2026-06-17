@@ -39,11 +39,24 @@ func (w *Workers) repoToken(ctx context.Context, repoURL string) string {
 	return w.cfg.GithubToken
 }
 
+// evoTimeout limita cada chamada à Evolution (rede externa) para não pendurar o job.
+const evoTimeout = 10 * time.Second
+
+// sendText posta no grupo com timeout próprio (a chamada externa não deve pendurar
+// o job mesmo se o ctx do worker for longo).
+func (w *Workers) sendText(ctx context.Context, text, quoted string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, evoTimeout)
+	defer cancel()
+	return w.evo.SendText(ctx, w.cfg.GroupJID, text, quoted)
+}
+
 // react reage na mensagem-âncora, degradando com graça (a reação é cosmética).
 func (w *Workers) react(ctx context.Context, anchor, emoji string) {
 	if anchor == "" {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, evoTimeout)
+	defer cancel()
 	if err := w.evo.SendReaction(ctx, w.cfg.GroupJID, anchor, emoji); err != nil {
 		slog.Warn("falha ao reagir (segue)", "err", err, "emoji", emoji)
 	}
@@ -59,7 +72,7 @@ func (w *Workers) HandleIncidentCreate(ctx context.Context, t *asynq.Task) error
 
 	text := fmt.Sprintf("🔧 Build de *%s* falhou (commit %s). Vou tentar consertar…",
 		p.App, shortSHA(p.Commit))
-	anchor, err := w.evo.SendText(ctx, w.cfg.GroupJID, text, "")
+	anchor, err := w.sendText(ctx, text, "")
 	if err != nil {
 		// Sem âncora não há thread de status — ainda assim seguimos com o fix.
 		slog.Error("falha ao postar log-âncora (segue)", "err", err)
@@ -177,7 +190,7 @@ func (w *Workers) HandleNotifyFinal(ctx context.Context, t *asynq.Task) error {
 	if p.Outcome == "success" {
 		w.react(ctx, in.AnchorMsgID, "✅")
 		msg := fmt.Sprintf("✅ Corrigido em %s: %s", shortSHA(in.FixSHA), firstLine(in.LastSummary))
-		_, _ = w.evo.SendText(ctx, w.cfg.GroupJID, msg, in.AnchorMsgID)
+		_, _ = w.sendText(ctx, msg, in.AnchorMsgID)
 		in.Status = "done"
 	} else {
 		w.react(ctx, in.AnchorMsgID, "💀")
@@ -186,7 +199,7 @@ func (w *Workers) HandleNotifyFinal(ctx context.Context, t *asynq.Task) error {
 			reason = "não foi possível corrigir automaticamente"
 		}
 		msg := fmt.Sprintf("💀 Não consegui corrigir automaticamente (%s). Precisa de um humano.", reason)
-		_, _ = w.evo.SendText(ctx, w.cfg.GroupJID, msg, in.AnchorMsgID)
+		_, _ = w.sendText(ctx, msg, in.AnchorMsgID)
 		in.Status = "failed"
 	}
 	_ = w.store.Save(ctx, in)
@@ -209,7 +222,7 @@ func (w *Workers) HandleDeployTimeout(ctx context.Context, t *asynq.Task) error 
 	w.react(ctx, in.AnchorMsgID, "⏰")
 	msg := fmt.Sprintf("⏰ Empurrei o fix %s mas não recebi confirmação do rebuild em %dmin. Confere manualmente.",
 		shortSHA(in.FixSHA), w.cfg.RebuildTimeout)
-	_, _ = w.evo.SendText(ctx, w.cfg.GroupJID, msg, in.AnchorMsgID)
+	_, _ = w.sendText(ctx, msg, in.AnchorMsgID)
 	in.Status = "failed"
 	_ = w.store.Save(ctx, in)
 	return w.store.ClearActive(ctx, in.App)
@@ -219,7 +232,7 @@ func (w *Workers) HandleDeployTimeout(ctx context.Context, t *asynq.Task) error 
 func (w *Workers) fail(ctx context.Context, in *Incident, reason string) error {
 	w.react(ctx, in.AnchorMsgID, "💀")
 	msg := fmt.Sprintf("💀 Não consegui corrigir automaticamente (%s). Precisa de um humano.", reason)
-	_, _ = w.evo.SendText(ctx, w.cfg.GroupJID, msg, in.AnchorMsgID)
+	_, _ = w.sendText(ctx, msg, in.AnchorMsgID)
 	in.Status = "failed"
 	_ = w.store.Save(ctx, in)
 	return w.store.ClearActive(ctx, in.App)

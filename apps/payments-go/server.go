@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -37,6 +38,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("GET /ready", s.handleReady)  // público: pinga Postgres+Redis
+	mux.Handle("GET /metrics", metricsHandler()) // público: Prometheus
 
 	mux.HandleFunc("POST /students", s.requireAdmin(s.handleCreateStudent))
 	mux.HandleFunc("GET /students", s.requireAdmin(s.handleListStudents))
@@ -74,7 +77,28 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("POST /webhooks/dotfy", s.handleDotfyWebhook)
 
-	return requestLogger(s.cors(mux))
+	return requestLogger(s.cors(metricsMiddleware(mux)))
+}
+
+// handleReady verifica as dependências (Postgres e Redis) com timeout curto.
+// Responde 503 se alguma falhar — usado pelo readiness probe.
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	if s.db != nil {
+		if err := s.db.Ping(ctx); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "dependency": "postgres"})
+			return
+		}
+	}
+	if s.rdb != nil {
+		if err := s.rdb.Ping(ctx).Err(); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "dependency": "redis"})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {

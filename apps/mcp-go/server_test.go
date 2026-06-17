@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -118,6 +119,69 @@ func TestHealthSemAuth(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("health: esperava 200, veio %d", resp.StatusCode)
+	}
+}
+
+func TestReadyChecaDownstream(t *testing.T) {
+	// API central saudável → /ready 200.
+	okAuth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			w.WriteHeader(404)
+			return
+		}
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer okAuth.Close()
+
+	srvOK := httptest.NewServer(NewServer(Config{AuthBaseURL: okAuth.URL}, nil).Handler())
+	defer srvOK.Close()
+	resp, err := http.Get(srvOK.URL + "/ready") // público: sem Authorization
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/ready com downstream ok: esperava 200, veio %d", resp.StatusCode)
+	}
+
+	// API central com 5xx → /ready 503.
+	badAuth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer badAuth.Close()
+
+	srvBad := httptest.NewServer(NewServer(Config{AuthBaseURL: badAuth.URL}, nil).Handler())
+	defer srvBad.Close()
+	resp2, err := http.Get(srvBad.URL + "/ready")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("/ready com downstream 5xx: esperava 503, veio %d", resp2.StatusCode)
+	}
+}
+
+func TestMetricsPublico(t *testing.T) {
+	srv := httptest.NewServer(NewServer(Config{}, nil).Handler())
+	defer srv.Close()
+
+	// Uma requisição antes para semear a série http_requests_total no registry.
+	if r, err := http.Get(srv.URL + "/health"); err == nil {
+		r.Body.Close()
+	}
+
+	resp, err := http.Get(srv.URL + "/metrics") // público: sem Authorization
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/metrics: esperava 200, veio %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "http_requests_total") {
+		t.Fatal("/metrics sem coletor http_requests_total")
 	}
 }
 

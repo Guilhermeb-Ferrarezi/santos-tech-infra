@@ -58,13 +58,14 @@ func (s *Server) handleEmailVerifySend(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("email_verify_send: falha ao gravar cooldown", "uid", uid, "err", err)
 	}
 	html := emailCodeHTML(code, "Use o código abaixo para verificar o seu email:")
-	go func(to string) {
+	to := u.Email
+	safeGo("handleEmailVerifySend", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
 		if err := s.email.send(ctx, to, "Verifique seu email — Santos Tech", html); err != nil {
 			slog.Error("falha ao enviar email de verificação", "uid", uid, "err", err)
 		}
-	}(u.Email)
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
 
