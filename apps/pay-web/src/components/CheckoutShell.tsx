@@ -18,24 +18,6 @@ export function CheckoutShell({ left, right }: { left: ReactNode; right: ReactNo
               <span className="text-lg font-bold tracking-tight text-[#0e2937]">Santos Tech</span>
             </header>
             {left}
-            <footer className="mt-12 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#496b84]">
-              <a
-                href="https://santos-tech.com/termos"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-[#0067be] hover:underline"
-              >
-                Termos de Uso
-              </a>
-              <a
-                href="https://santos-tech.com/privacidade"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-[#0067be] hover:underline"
-              >
-                Política de Privacidade
-              </a>
-            </footer>
           </div>
         </main>
 

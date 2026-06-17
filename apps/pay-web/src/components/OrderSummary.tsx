@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Package, Image as ImageIcon } from "lucide-react";
+import { Package } from "lucide-react";
 import { formatBRL } from "../lib/format";
 import { SecuritySeal } from "./CheckoutShell";
 
@@ -28,19 +28,12 @@ export function OrderSummary({
     <div>
       <SecuritySeal />
 
-      {/* Foto do produto */}
-      <div className="mb-5 aspect-[16/10] w-full overflow-hidden rounded-2xl border border-[#e3eaf0] bg-white">
-        {main?.imageUrl ? (
+      {/* Foto do produto — só quando o produto tem imagem */}
+      {main?.imageUrl && (
+        <div className="mb-5 aspect-[16/10] w-full overflow-hidden rounded-2xl border border-[#e3eaf0] bg-white">
           <img src={main.imageUrl} alt={main.name} className="h-full w-full object-cover" />
-        ) : (
-          <div className="grid h-full w-full place-items-center text-[#9fb3c4]">
-            <div className="flex flex-col items-center gap-1.5">
-              <ImageIcon className="size-7" aria-hidden />
-              <span className="text-xs">Foto do produto</span>
-            </div>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Identificação do produto */}
       <div className="flex items-center gap-3">
