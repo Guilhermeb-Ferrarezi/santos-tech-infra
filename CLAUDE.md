@@ -189,6 +189,47 @@ responde 500).
 `main`. **Ao criar um serviço Go novo:** copie `logging.go`, plugue `requestLogger(...)`
 no handler raiz e chame `initLogging()` no `main`.
 
+## ⚠️ Padrões OBRIGATÓRIOS ao criar/alterar um serviço Go
+
+Todo serviço Go do repo (`api-go`, `agent-go`, `bot-go`, `mcp-go`, `payments-go`,
+`auto-fixer`, e qualquer novo) **deve** seguir os padrões abaixo. Não são opcionais:
+ao criar um serviço novo ou alterar um existente, garanta que todos estão presentes.
+
+1. **Graceful shutdown + timeouts no `http.Server`.** Nada de `http.ListenAndServe`
+   pelado. Construa um `&http.Server{}` com `ReadHeaderTimeout`, `ReadTimeout`,
+   `WriteTimeout` e `IdleTimeout` definidos (anti slow-loris / conexão pendurada).
+   No `main`, escute `SIGINT`/`SIGTERM` (`signal.NotifyContext`) e, ao receber,
+   chame `srv.Shutdown(ctx)` com timeout — drena requisições em voo, fecha o pool
+   do Postgres e o cliente Redis antes de sair. (SSE/WebSocket de longa duração:
+   feche-os explicitamente no shutdown.)
+
+2. **`/ready` distinto de `/health`.**
+   - `/health` (ou `/healthz`): **liveness** — responde 200 se o processo está vivo,
+     sem tocar dependências. É o que já existe e o que o log marca como `DEBUG`.
+   - `/ready` (readiness): **checa as dependências** (Postgres `Ping`, Redis `Ping`,
+     e o que mais for crítico) e só devolve 200 se tudo responde; 503 caso contrário.
+     É o endpoint que o orquestrador usa para decidir mandar tráfego.
+
+3. **`/metrics` Prometheus.** Exponha métricas no formato Prometheus em `/metrics`
+   (via `prometheus/client_golang` + `promhttp.Handler()`). No mínimo: latência e
+   contagem de requests HTTP por rota/status, e métricas do pool do Postgres. O
+   scrape é feito pela stack de observabilidade (ver memória
+   `observabilidade-wireguard-stack`).
+
+4. **Chaves de rate-limit prefixadas pelo nome do serviço.** O rate limit é no Redis,
+   compartilhado entre todos os serviços. Para não colidir entre serviços, **toda
+   chave de rate limit deve ser prefixada pelo nome do serviço** (ex.:
+   `api-go:rl:<rota>:<ip>`, `payments-go:rl:...`). Nunca use uma chave global sem
+   namespace — dois serviços com a mesma rota dividiriam o mesmo balde.
+
+5. **CI Go em `.github/workflows/go.yml`.** O pipeline de CI já roda `gofmt -l`,
+   `go vet`, `go build` e `go test` para os serviços Go. **Ao adicionar um serviço Go
+   novo, inclua-o na matriz do `go.yml`** para que ele passe pela mesma verificação.
+   (O gate local de pré-commit continua valendo — ver topo deste arquivo.)
+
+Endpoints operacionais (`/health`, `/ready`, `/metrics`) ficam **fora** de auth e fora
+do rate limit, e o `/health`/`/ready` não devem logar como `INFO` (ver tabela de logs).
+
 ## Testes
 
 ```bash
