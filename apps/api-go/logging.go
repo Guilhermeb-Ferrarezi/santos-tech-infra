@@ -58,6 +58,18 @@ var (
 // reqIDCtxKey é a chave do request-id no context (tipo próprio p/ não colidir).
 type reqIDCtxKey struct{}
 
+// userIDLogCtxKey guarda um *int64 mutável p/ o authGuard escrever o user_id
+// resolvido, que o requestLogger depois inclui no log de acesso.
+type userIDLogCtxKey struct{}
+
+// logSetUserID grava o user_id resolvido no contexto da requisição atual para
+// que o requestLogger o inclua no log de acesso. Deve ser chamado pelo authGuard.
+func logSetUserID(ctx context.Context, uid int64) {
+	if p, ok := ctx.Value(userIDLogCtxKey{}).(*int64); ok && p != nil {
+		*p = uid
+	}
+}
+
 // requestIDFromContext devolve o request-id desta requisição ("" se ausente).
 // Útil pra anexar o mesmo id em logs de negócio dentro dos handlers.
 func requestIDFromContext(ctx context.Context) string {
@@ -156,7 +168,11 @@ func requestLogger(next http.Handler) http.Handler {
 			rid = logGenRequestID()
 		}
 		w.Header().Set("X-Request-Id", rid)
-		r = r.WithContext(context.WithValue(r.Context(), reqIDCtxKey{}, rid))
+		// Ponteiro mutável de user_id: authGuard escreve, logger lê no defer.
+		var loggedUID int64
+		ctx := context.WithValue(r.Context(), reqIDCtxKey{}, rid)
+		ctx = context.WithValue(ctx, userIDLogCtxKey{}, &loggedUID)
+		r = r.WithContext(ctx)
 
 		// Captura o corpo do request ANTES de servir (restaura p/ o handler ler).
 		reqCT := r.Header.Get("Content-Type")
@@ -208,6 +224,9 @@ func requestLogger(next http.Handler) http.Handler {
 				slog.String("ua", r.UserAgent()),
 				slog.String("proto", r.Proto),
 				slog.String("host", r.Host),
+			}
+			if loggedUID != 0 {
+				attrs = append(attrs, slog.Int64("user_id", loggedUID))
 			}
 			if r.URL.RawQuery != "" {
 				attrs = append(attrs, slog.String("query", redactKV(r.URL.RawQuery)))

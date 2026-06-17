@@ -24,6 +24,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		Path:        strings.TrimSpace(q.Get("path")),
 		RequestID:   strings.TrimSpace(q.Get("request_id")),
 		Search:      strings.TrimSpace(q.Get("q")),
+		MinDurMs:    lokiAtoiOr(q.Get("min_dur"), 0),
 	}
 	dur, ok := lokiRangePresets[q.Get("range")]
 	if !ok {

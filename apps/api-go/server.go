@@ -109,6 +109,7 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
+		logSetUserID(r.Context(), uid)
 		next(w, r.WithContext(context.WithValue(r.Context(), userIDKey, uid)))
 	}
 }

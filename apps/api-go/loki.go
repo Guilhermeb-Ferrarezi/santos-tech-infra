@@ -66,6 +66,7 @@ type lokiQueryFilters struct {
 	Path        string
 	RequestID   string
 	Search      string
+	MinDurMs    int // filtra requisições com dur_ms >= este valor; 0 = sem filtro
 }
 
 var lokiRangePresets = map[string]time.Duration{
@@ -232,7 +233,7 @@ func buildLokiQL(q lokiQueryFilters, appLabel string) string {
 		sb.WriteString(` |= ` + lokiQuote(s))
 	}
 	needJSON := q.Level != "" || q.StatusClass != "" || q.StatusCode != 0 ||
-		q.Method != "" || strings.TrimSpace(q.Path) != "" || q.RequestID != ""
+		q.Method != "" || strings.TrimSpace(q.Path) != "" || q.RequestID != "" || q.MinDurMs > 0
 	if needJSON {
 		sb.WriteString(` | json`)
 		if lv := strings.TrimSpace(q.Level); lv != "" {
@@ -256,6 +257,9 @@ func buildLokiQL(q lokiQueryFilters, appLabel string) string {
 			sb.WriteString(` | status>=400 | status<500`)
 		case q.StatusClass == "5xx":
 			sb.WriteString(` | status>=500 | status<600`)
+		}
+		if q.MinDurMs > 0 {
+			sb.WriteString(` | dur_ms>=` + strconv.Itoa(q.MinDurMs))
 		}
 	}
 	return sb.String()
