@@ -55,7 +55,8 @@ func paymentReceiptEmailHTML(payerName string, amountCents int64) string {
 	return fmt.Sprintf(`<p>%s</p>
 <p>✅ Recebemos o seu pagamento de <b>R$ %.2f</b>. Obrigado!</p>
 <p>Este é o seu comprovante de confirmação. Qualquer dúvida, é só responder este email.</p>
-<p style="color:#496B84;font-size:12px">Equipe Santos Tech</p>`, greet, reais)
+<p style="color:#496B84;font-size:12px">Equipe Santos Tech</p>
+<p style="color:#496B84;font-size:12px"><a href="https://santos-tech.com/privacidade" style="color:#496B84">Política de Privacidade</a> · <a href="https://santos-tech.com/termos" style="color:#496B84">Termos de Uso</a></p>`, greet, reais)
 }
 
 // paymentPaidEmailHTML — aviso interno de pagamento confirmado (para o admin).
@@ -77,6 +78,7 @@ func paymentPaidEmailHTML(c *Charge) string {
 <tr><td style="padding:4px 12px 4px 0;color:#496B84">Cobrança</td><td>#%d</td></tr>
 <tr><td style="padding:4px 12px 4px 0;color:#496B84">Pago em</td><td>%s</td></tr>
 </table>
-<p style="color:#496B84;font-size:12px">Santos Tech · Pagamentos</p>`,
+<p style="color:#496B84;font-size:12px">Santos Tech · Pagamentos</p>
+<p style="color:#496B84;font-size:12px"><a href="https://santos-tech.com/privacidade" style="color:#496B84">Política de Privacidade</a> · <a href="https://santos-tech.com/termos" style="color:#496B84">Termos de Uso</a></p>`,
 		reais, payer, c.Kind, c.ID, when.Format("02/01/2006 15:04"))
 }
