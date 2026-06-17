@@ -5,7 +5,15 @@
 x-db-env: &db-env
   # Sobrescreve DATABASE_URL/REDIS_URL do .env para apontar pra rede interna do compose,
   # mantendo consistência com as senhas dos serviços postgres/redis abaixo.
-  DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-dev_only_change_me}@postgres:5432/santos_tech?sslmode=disable
+  #
+  # TOPOLOGIA DE DEV: as apps Go falam com o Postgres ATRAVÉS do PgBouncer
+  # (host `pgbouncer:6432`, mesmo banco/credenciais). O PgBouncer roda em
+  # TRANSACTION mode, então prepared statements no lado servidor não são
+  # suportados — por isso `DB_PREPARED_STATEMENTS=false`.
+  # EM PRODUÇÃO (Coolify) o PgBouncer é provisionado na infra e o DATABASE_URL
+  # já aponta para ele; este override é exclusivo do compose de DEV.
+  DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-dev_only_change_me}@pgbouncer:6432/santos_tech?sslmode=disable
+  DB_PREPARED_STATEMENTS: "false"
   REDIS_URL: redis://default:${REDIS_PASSWORD:-dev_only_change_me}@redis:6379
 
 services:
@@ -16,7 +24,7 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -43,7 +51,7 @@ services:
     ports:
       - "3336:3336"
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
     env_file:
       - ../.env
@@ -67,7 +75,7 @@ services:
     ports:
       - "3334:3334"
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -127,6 +135,43 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # PgBouncer em TRANSACTION mode na frente do Postgres — TOPOLOGIA DE DEV.
+  # As apps Go (api, agent-go, payments-go, bot-go) conectam aqui (pgbouncer:6432)
+  # em vez de direto no Postgres. Em produção (Coolify) o PgBouncer é provisionado
+  # na infra e o DATABASE_URL das apps já aponta para ele — este serviço existe só
+  # para reproduzir a mesma topologia localmente.
+  # NB: transaction mode não suporta prepared statements server-side; as apps usam
+  # DB_PREPARED_STATEMENTS=false (ver x-db-env acima).
+  pgbouncer:
+    image: edoburu/pgbouncer:1.23.1-p2
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: santos_tech
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-dev_only_change_me}
+      POOL_MODE: transaction
+      # md5 evita depender de SCRAM/handshake especial entre app→pgbouncer no dev.
+      AUTH_TYPE: md5
+      LISTEN_PORT: "6432"
+      MAX_CLIENT_CONN: "200"
+      DEFAULT_POOL_SIZE: "20"
+      # Usado só pelo healthcheck (psql -h 127.0.0.1 contra a base admin do pgbouncer).
+      PGPASSWORD: ${POSTGRES_PASSWORD:-dev_only_change_me}
+    ports:
+      - "6432:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # A imagem edoburu/pgbouncer traz psql; consulta a pseudo-base de admin do pgbouncer.
+      test: ["CMD-SHELL", "psql -h 127.0.0.1 -p 6432 -U postgres -d pgbouncer -tAc 'SHOW LISTS;' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
 
   redis:
     image: redis:7.4-alpine

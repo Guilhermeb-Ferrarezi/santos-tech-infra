@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -22,6 +23,16 @@ func newDB(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	cfg.MaxConns = 10                      // teto de conexões deste serviço
 	cfg.MaxConnLifetime = 30 * time.Minute // recicla conexões periodicamente
 	cfg.MaxConnIdleTime = 5 * time.Minute  // fecha conexões ociosas
+
+	// Compatibilidade com PgBouncer em TRANSACTION mode: o pooling por transação
+	// não suporta prepared statements nomeados persistentes (eles vivem na conexão
+	// do servidor, que é recompartilhada entre clientes). Com DB_PREPARED_STATEMENTS=false
+	// usamos o protocolo estendido com statements anônimos (QueryExecModeExec), que
+	// não persiste prepares no servidor. Sem a env (default), mantemos o comportamento
+	// atual (prepared statements normais) — sem penalizar quem conecta direto ao Postgres.
+	if os.Getenv("DB_PREPARED_STATEMENTS") == "false" {
+		cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
