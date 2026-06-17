@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -114,6 +115,23 @@ func TestHandleMFAEmailEnableBadBody(t *testing.T) {
 	s.handleMFAEmailEnable(w, httptest.NewRequest("POST", "/auth/mfa/email-enable", strings.NewReader("não-é-json")))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("code=%d (queria 400)", w.Code)
+	}
+}
+
+// TestHandleMFAEmailEnableTooManyAttempts: após 5 tentativas (pré-semeadas no Redis),
+// a 6ª deve retornar 429 TOO_MANY_ATTEMPTS antes de qualquer consulta ao banco.
+func TestHandleMFAEmailEnableTooManyAttempts(t *testing.T) {
+	s := testServerWithRedis(t, Config{})
+	// Simula 5 tentativas anteriores para uid=42 diretamente no Redis
+	if err := s.rdb.Set(context.Background(), "mfa_email_enable_attempts:42", "5", 0).Err(); err != nil {
+		t.Fatalf("set attempt counter: %v", err)
+	}
+	w := httptest.NewRecorder()
+	r := reqAs(httptest.NewRequest("POST", "/auth/mfa/email-enable",
+		strings.NewReader(`{"code":"123456"}`)), 42)
+	s.handleMFAEmailEnable(w, r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("6ª tentativa: code=%d (queria 429)", w.Code)
 	}
 }
 
