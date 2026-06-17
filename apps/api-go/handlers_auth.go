@@ -111,6 +111,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(ident, "@") {
 		ident = strings.ToLower(ident)
 	}
+	// Rejeita entradas claramente inválidas antes de qualquer I/O (Redis/DB/argon2id).
+	// Password > 128: argon2id na senha de 64 KB sem este guarda seria um vetor
+	// de CPU-DoS (cada tentativa é ~300 ms + memória do argon2; handleRegister já
+	// limita 8-128, logo nenhuma senha legítima passa disso). Identifier > 254:
+	// comprimento máximo de um endereço de email (RFC 5321) e evita chaves Redis
+	// de 64 KB no contador de lockout. Retornamos INVALID_CREDENTIALS (não
+	// VALIDATION_ERROR) para não revelar o motivo da rejeição ao atacante.
+	if ident == "" || len(ident) > 254 || len(body.Password) > 128 {
+		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_CREDENTIALS", "Email ou senha inválidos"))
+		return
+	}
 	// Lockout chaveado por (IP + identifier), NÃO só pelo identifier: senão
 	// qualquer um trancaria a vítima sabendo apenas o email (DoS de conta).
 	// Com o IP na chave, o atacante só "tranca" a si mesmo contra aquela conta;
