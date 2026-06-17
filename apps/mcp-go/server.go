@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const version = "0.1.0"
@@ -57,6 +58,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /mcp/health", health) // Traefik roteia /mcp sem strip
 
+	// /ready (público) testa a dependência downstream (a API central): sem ela
+	// este gateway não serve as tools. Não há Postgres/Redis aqui para pingar.
+	mux.HandleFunc("GET /ready", s.ready)
+	mux.HandleFunc("GET /mcp/ready", s.ready)
+
+	// /metrics (público) expõe os coletores Prometheus.
+	mux.Handle("GET /metrics", promhttp.Handler())
+
 	// Metadata RFC 9728 — clientes OAuth (claude.ai) descobrem por aqui qual
 	// authorization server protege este resource. Público e cross-origin.
 	prm := func(w http.ResponseWriter, _ *http.Request) {
@@ -69,7 +78,38 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /mcp/.well-known/oauth-protected-resource", prm)
 
 	mux.Handle("/", s.requireAuth(streamable))
-	return requestLogger(mux)
+	return requestLogger(metricsMiddleware(mux))
+}
+
+// ready pinga a API central (AuthBaseURL) com timeout curto: se ela não responder,
+// o gateway não tem o que servir, então devolve 503. /health continua respondendo
+// 200 (liveness) — só /ready reflete a dependência.
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.cfg.AuthBaseURL == "" {
+		w.Write([]byte(`{"status":"ok"}`)) // sem downstream configurado: nada a checar
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.AuthBaseURL+"/health", nil)
+	if err == nil {
+		var resp *http.Response
+		resp, err = s.client.http.Do(req)
+		if resp != nil {
+			defer resp.Body.Close()
+			if resp.StatusCode >= 500 {
+				err = fmt.Errorf("auth api HTTP %d", resp.StatusCode)
+			}
+		}
+	}
+	if err != nil {
+		// Não expõe err.Error() (pode vazar URL/infra) num endpoint público.
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"status":"unavailable","dependency":"auth-api"}`))
+		return
+	}
+	w.Write([]byte(`{"status":"ok"}`))
 }
 
 // originOf extrai scheme://host de uma URL (fallback: a própria string).

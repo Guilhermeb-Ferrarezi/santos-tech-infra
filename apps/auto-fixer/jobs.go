@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/hibiken/asynq"
 )
@@ -13,6 +14,13 @@ const (
 	TaskNotifyFinal    = "notify:final"
 	TaskDeployTimeout  = "deploy:timeout"
 )
+
+// Opções default por task: poucas retentativas (o fix é caro/idempotência frágil),
+// backoff exponencial entre elas e teto de execução por task.
+var taskDefaults = []asynq.Option{
+	asynq.MaxRetry(3),
+	asynq.Timeout(30 * time.Minute),
+}
 
 // IncidentPayload abre um incidente a partir de uma falha de deploy.
 type IncidentPayload struct {
@@ -39,5 +47,5 @@ type NotifyPayload struct {
 
 func newTask(name string, v any) *asynq.Task {
 	b, _ := json.Marshal(v)
-	return asynq.NewTask(name, b)
+	return asynq.NewTask(name, b, taskDefaults...)
 }

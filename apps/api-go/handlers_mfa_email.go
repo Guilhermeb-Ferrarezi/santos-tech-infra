@@ -30,13 +30,14 @@ func (s *Server) sendChallengeEmailCode(ctx context.Context, challenge, email st
 		return err
 	}
 	html := emailCodeHTML(code, "Use o código abaixo para concluir o seu login:")
-	go func(to string) {
+	to := email
+	safeGo("sendChallengeEmailCode", func() {
 		c, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
 		if err := s.email.send(c, to, "Seu código de verificação — Santos Tech", html); err != nil {
 			slog.Error("falha ao enviar código MFA por email (challenge)", "err", err)
 		}
-	}(email)
+	})
 	return nil
 }
 
@@ -83,13 +84,14 @@ func (s *Server) handleMFAEmailCode(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("falha ao gravar cooldown do código de email MFA", "uid", uid, "err", err)
 	}
 	html := emailCodeHTML(code, "Use o código abaixo para confirmar a alteração do 2FA da sua conta:")
-	go func(to string) {
+	to := u.Email
+	safeGo("handleMFAEmailCode", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
 		if err := s.email.send(ctx, to, "Seu código de verificação — Santos Tech", html); err != nil {
 			slog.Error("falha ao enviar código MFA por email (conta)", "uid", uid, "err", err)
 		}
-	}(u.Email)
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
 

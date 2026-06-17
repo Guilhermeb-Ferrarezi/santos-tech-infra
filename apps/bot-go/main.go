@@ -162,8 +162,12 @@ func main() {
 
 	// 15. Configura servidor HTTP
 	httpServer := &http.Server{
-		Addr:    ":" + cfg.Port,
-		Handler: server.Handler(),
+		Addr:              ":" + cfg.Port,
+		Handler:           server.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       30 * time.Second,
 	}
 
 	// 16. Inicia servidor HTTP em goroutine separada

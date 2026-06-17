@@ -4,7 +4,23 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"log/slog"
+	"runtime/debug"
 )
+
+// safeGo roda fn numa goroutine fire-and-forget com recover() como primeiro defer,
+// logando qualquer panic (com stack) em vez de derrubar o processo inteiro. Usado
+// para envios de email assíncronos e afins.
+func safeGo(name string, fn func()) {
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic em goroutine", "where", name, "panic", rec, "stack", string(debug.Stack()))
+			}
+		}()
+		fn()
+	}()
+}
 
 func randomToken(nbytes int) string {
 	b := make([]byte, nbytes)

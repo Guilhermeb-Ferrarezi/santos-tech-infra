@@ -36,6 +36,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	defer func() { _ = rdb.Close() }()
+
 	store := &Store{rdb: rdb}
 	evo := NewEvolutionClient(cfg.EvolutionURL, cfg.EvolutionKey, cfg.EvolutionInst)
 	cool := NewCoolifyClient(cfg.CoolifyAPIURL, cfg.CoolifyAPIToken)
@@ -61,6 +63,11 @@ func main() {
 	mux.HandleFunc(TaskNotifyFinal, workers.HandleNotifyFinal)
 	mux.HandleFunc(TaskDeployTimeout, workers.HandleDeployTimeout)
 	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic na goroutine do asynq server", "panic", rec)
+			}
+		}()
 		if err := asynqSrv.Run(mux); err != nil {
 			slog.Error("asynq server parou", "err", err)
 			os.Exit(1)
@@ -70,13 +77,39 @@ func main() {
 	wh := &WebhookHandler{cfg: cfg, client: client, store: store, cool: cool}
 	httpMux := http.NewServeMux()
 	httpMux.Handle("POST /webhooks/coolify", wh)
+	// /health, /ready e /metrics são públicos (sem auth) — senão o healthcheck quebra.
 	httpMux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	httpMux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		if err := rdb.Ping(ctx).Err(); err != nil {
+			slog.Warn("readiness: redis indisponível", "err", err)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("redis unavailable"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
+	})
+	httpMux.Handle("GET /metrics", metricsHandler())
 
-	httpSrv := &http.Server{Addr: ":" + cfg.Port, Handler: requestLogger(httpMux)}
+	httpSrv := &http.Server{
+		Addr:              ":" + cfg.Port,
+		Handler:           requestLogger(metricsMiddleware(httpMux)),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
 	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic na goroutine do http server", "panic", rec)
+			}
+		}()
 		slog.Info("auto-fixer ouvindo", "port", cfg.Port)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("http server parou", "err", err)
@@ -88,6 +121,8 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 	slog.Info("encerrando…")
+	// Para de puxar tasks novas, drena o HTTP e então aguarda as tasks em voo.
+	asynqSrv.Stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(ctx)

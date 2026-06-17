@@ -37,7 +37,7 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.cfg.AuthWebOrigin, token)
-		go s.sendResetEmail(email, resetURL)
+		safeGo("sendResetEmail", func() { s.sendResetEmail(email, resetURL) })
 	}
 	// resposta sempre igual (não vaza se o email existe)
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
@@ -112,7 +112,8 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		slog.Error("falha ao revogar sessões após reset de senha", "uid", uid, "err", err)
 	}
 	if firstPassword {
-		go s.sendWelcomeEmail(u.Email, u.Name)
+		welcomeEmail, welcomeName := u.Email, u.Name
+		safeGo("sendWelcomeEmail", func() { s.sendWelcomeEmail(welcomeEmail, welcomeName) })
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }
