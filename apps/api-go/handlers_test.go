@@ -81,6 +81,34 @@ func TestHandleLoginBadBody(t *testing.T) {
 	}
 }
 
+func TestHandleLoginValidation(t *testing.T) {
+	s := testServer(Config{})
+
+	// identifier vazio → 401 antes do banco/Redis
+	w := httptest.NewRecorder()
+	s.handleLogin(w, httptest.NewRequest("POST", "/auth/login",
+		strings.NewReader(`{"identifier":"","password":"senha123"}`)))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("identifier vazio: code=%d (queria 401)", w.Code)
+	}
+
+	// identifier muito longo (>254 chars) → 401 antes do banco/Redis
+	w2 := httptest.NewRecorder()
+	s.handleLogin(w2, httptest.NewRequest("POST", "/auth/login",
+		strings.NewReader(`{"identifier":"`+strings.Repeat("a", 255)+`@b.com","password":"senha123"}`)))
+	if w2.Code != http.StatusUnauthorized {
+		t.Fatalf("identifier longo: code=%d (queria 401)", w2.Code)
+	}
+
+	// password muito longa (>128 chars) → 401 antes do argon2id (evita CPU-DoS)
+	w3 := httptest.NewRecorder()
+	s.handleLogin(w3, httptest.NewRequest("POST", "/auth/login",
+		strings.NewReader(`{"identifier":"a@b.com","password":"`+strings.Repeat("a", 129)+`"}`)))
+	if w3.Code != http.StatusUnauthorized {
+		t.Fatalf("password longa: code=%d (queria 401)", w3.Code)
+	}
+}
+
 // TestDummyPasswordHashValid verifica que o hash sentinela de timing (usado para
 // normalizar o tempo de resposta do login quando o usuário não existe) é gerado
 // corretamente no boot e pode ser verificado pelo argon2id.
