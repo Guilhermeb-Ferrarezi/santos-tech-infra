@@ -222,6 +222,8 @@ func requestLogger(next http.Handler) http.Handler {
 			switch {
 			case strings.HasSuffix(r.URL.Path, "/health"):
 				level = slog.LevelDebug // health-checks (Coolify/uptime) são ruidosos
+			case lw.status == http.StatusNotFound && r.URL.Path == "/":
+				level = slog.LevelDebug // bots/probes batendo na raiz — noise
 			case lw.status >= 500:
 				level = slog.LevelError
 			case lw.status >= 400:
