@@ -21,10 +21,19 @@ export default function CheckoutPage() {
   const [lines, setLines] = useState<CartLine[] | null>(null);
   const [step, setStep] = useState<Step>("data");
   const [payer, setPayer] = useState<PayerData>(() => {
-    // Pré-preenche com os dados salvos na última compra (se o usuário optou por salvar).
+    // Pré-preenche com os dados salvos (se existirem e não estiverem expirados).
+    // O consentimento é re-afirmado a cada visita: o checkbox volta DESMARCADO
+    // (save: false) — o usuário decide de novo se quer manter os dados salvos.
     try {
       const raw = localStorage.getItem("pay_payer");
-      if (raw) return { ...emptyPayer, ...(JSON.parse(raw) as Partial<PayerData>), save: true };
+      if (raw) {
+        const d = JSON.parse(raw) as { name?: string; email?: string; taxId?: string; phone?: string; exp?: number };
+        if (d.exp && d.exp < Date.now()) {
+          localStorage.removeItem("pay_payer"); // expirado: descarta
+        } else {
+          return { ...emptyPayer, name: d.name ?? "", email: d.email ?? "", taxId: d.taxId ?? "", phone: d.phone ?? "", save: false };
+        }
+      }
     } catch {
       /* ignora localStorage indisponível */
     }
@@ -72,7 +81,10 @@ export default function CheckoutPage() {
         if (payer.save) {
           localStorage.setItem(
             "pay_payer",
-            JSON.stringify({ name: payer.name, email: payer.email, taxId: payer.taxId, phone: payer.phone }),
+            JSON.stringify({
+              name: payer.name, email: payer.email, taxId: payer.taxId, phone: payer.phone,
+              exp: Date.now() + 30 * 24 * 60 * 60 * 1000, // expira em 30 dias
+            }),
           );
         } else {
           localStorage.removeItem("pay_payer");
