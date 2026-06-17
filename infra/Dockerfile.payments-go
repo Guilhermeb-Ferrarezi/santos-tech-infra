@@ -5,7 +5,9 @@ RUN go mod download
 COPY apps/payments-go/ .
 RUN CGO_ENABLED=0 go build -trimpath -o /payments .
 
-FROM gcr.io/distroless/static-debian12
+# Tag :debug inclui um busybox (shell + wget) p/ o HEALTHCHECK do compose,
+# sem deixar de ser distroless (sem gerenciador de pacotes, roda non-root).
+FROM gcr.io/distroless/static-debian12:debug
 COPY --from=build /payments /payments
 EXPOSE 3336
 USER nonroot:nonroot
