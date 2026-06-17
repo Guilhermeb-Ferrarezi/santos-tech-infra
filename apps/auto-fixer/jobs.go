@@ -17,7 +17,9 @@ const (
 // IncidentPayload abre um incidente a partir de uma falha de deploy.
 type IncidentPayload struct {
 	App            string `json:"app"`
+	AppUUID        string `json:"app_uuid"`
 	DeploymentUUID string `json:"deployment_uuid"`
+	Repo           string `json:"repo"`
 	Branch         string `json:"branch"`
 	Commit         string `json:"commit"`
 	CommitMsg      string `json:"commit_msg"`

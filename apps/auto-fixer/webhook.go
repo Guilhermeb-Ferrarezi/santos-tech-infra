@@ -57,6 +57,8 @@ func (h *WebhookHandler) handleFailure(r *http.Request, payload map[string]any) 
 	app := coolifyAppName(payload)
 	du := coolifyString(payload, "deployment_uuid", "deployment_id", "deployment")
 	branch := coolifyString(payload, "git_branch", "branch", "ref")
+	appUUID := coolifyString(payload, "application_uuid", "app_uuid", "uuid")
+	repo := coolifyString(payload, "git_repository", "repository", "repo")
 
 	// Webhook duplicado (mesmo deployment) → ignora.
 	if du != "" {
@@ -95,7 +97,8 @@ func (h *WebhookHandler) handleFailure(r *http.Request, payload map[string]any) 
 	}
 
 	h.enqueue(TaskIncidentCreate, IncidentPayload{
-		App: app, DeploymentUUID: du, Branch: branch, Commit: commit, CommitMsg: cmsg,
+		App: app, AppUUID: appUUID, DeploymentUUID: du, Repo: repo,
+		Branch: branch, Commit: commit, CommitMsg: cmsg,
 	})
 }
 

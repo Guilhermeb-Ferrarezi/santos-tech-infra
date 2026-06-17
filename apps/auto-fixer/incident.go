@@ -11,6 +11,7 @@ import (
 type Incident struct {
 	ID             string `json:"id"`
 	App            string `json:"app"`
+	AppUUID        string `json:"app_uuid"`
 	Repo           string `json:"repo"`
 	Branch         string `json:"branch"`
 	Commit         string `json:"commit"`
@@ -19,6 +20,7 @@ type Incident struct {
 	Status         string `json:"status"`
 	Attempts       int    `json:"attempts"`
 	DeploymentUUID string `json:"deployment_uuid"`
+	LastSummary    string `json:"last_summary"`
 }
 
 type Store struct{ rdb *redis.Client }
