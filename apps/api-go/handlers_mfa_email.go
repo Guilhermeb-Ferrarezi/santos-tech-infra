@@ -95,17 +95,13 @@ func (s *Server) handleMFAEmailCode(w http.ResponseWriter, r *http.Request) {
 // consumeAcctEmailCode valida (tempo constante) e consome o código enviado pro email
 // da conta. One-shot: válido uma única vez.
 func (s *Server) consumeAcctEmailCode(ctx context.Context, uid int64, code string) bool {
-	want, err := s.rdb.Get(ctx, mfaEmailAcctKey(uid)).Result()
+	// GetDel é atômico: garante que duas chamadas concorrentes não consigam
+	// consumir o mesmo código (TOCTOU entre Get + Del separados).
+	want, err := s.rdb.GetDel(ctx, mfaEmailAcctKey(uid)).Result()
 	if err != nil || want == "" {
 		return false
 	}
-	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(code)), []byte(want)) != 1 {
-		return false
-	}
-	if err := s.rdb.Del(ctx, mfaEmailAcctKey(uid)).Err(); err != nil {
-		slog.Warn("falha ao remover código de email MFA após consumo", "uid", uid, "err", err)
-	}
-	return true
+	return subtle.ConstantTimeCompare([]byte(strings.TrimSpace(code)), []byte(want)) == 1
 }
 
 // POST /auth/mfa/email-enable {code} — ativa o 2FA por email: exige email verificado
