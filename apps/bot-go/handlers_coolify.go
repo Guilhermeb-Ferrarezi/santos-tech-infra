@@ -214,6 +214,21 @@ func (s *Server) sendCoolifyNotif(status string, payload map[string]any) {
 		return
 	}
 
+	// O webhook não traz commit/autor; busca via API da Coolify pelo deployment_uuid.
+	if du := coolifyString(payload, "deployment_uuid", "deployment_id", "deployment"); du != "" {
+		cool := NewCoolifyClient(s.cfg.CoolifyAPIURL, s.cfg.CoolifyAPIToken)
+		if cool.Enabled() {
+			if commit, cmsg, e := cool.DeploymentInfo(ctx, du); e == nil {
+				if commit != "" {
+					payload["commit"] = commit
+				}
+				if cmsg != "" {
+					payload["commit_message"] = cmsg
+				}
+			}
+		}
+	}
+
 	text := s.buildCoolifyMessage(status, appName, payload)
 
 	evo := NewEvolutionClient(s.cfg.EvolutionAPIURL, s.cfg.EvolutionAPIKey, instance)
@@ -238,6 +253,13 @@ func (s *Server) buildCoolifyMessage(status, appName string, payload map[string]
 	if commit := coolifyString(payload, "commit", "commit_sha", "git_commit_sha", "sha"); commit != "" {
 		b.WriteString("\nCommit: ")
 		b.WriteString(shortSHA(commit))
+		if cm := coolifyString(payload, "commit_message"); cm != "" {
+			if i := strings.IndexByte(cm, '\n'); i >= 0 {
+				cm = cm[:i] // só a primeira linha
+			}
+			b.WriteString(" — ")
+			b.WriteString(strings.TrimSpace(cm))
+		}
 	}
 	if url := coolifyString(payload, "deployment_url", "log_url", "url", "link"); url != "" {
 		b.WriteString("\nLog: ")

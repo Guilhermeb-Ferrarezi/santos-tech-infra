@@ -82,6 +82,23 @@ func (c *CoolifyClient) Deploy(ctx context.Context, uuid string) error {
 	return err
 }
 
+// DeploymentInfo retorna o commit (sha) e a mensagem do commit de um deployment.
+// O webhook de notificação não traz isso, mas a API do deployment sim.
+func (c *CoolifyClient) DeploymentInfo(ctx context.Context, uuid string) (commit, message string, err error) {
+	raw, err := c.do(ctx, http.MethodGet, "/api/v1/deployments/"+uuid)
+	if err != nil {
+		return "", "", err
+	}
+	var d struct {
+		Commit        string `json:"commit"`
+		CommitMessage string `json:"commit_message"`
+	}
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return "", "", err
+	}
+	return d.Commit, d.CommitMessage, nil
+}
+
 // DeploymentLogs retorna as últimas linhas de log de RUNTIME do container do app.
 // `uuid` é o UUID da APLICAÇÃO (não de um deployment). GET
 // /api/v1/applications/{uuid}/logs devolve {"logs":"<texto separado por \n>"}.
