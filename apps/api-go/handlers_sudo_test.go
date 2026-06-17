@@ -20,7 +20,7 @@ func TestSudoGuardSemElevacao(t *testing.T) {
 	}
 
 	// access comum (sem sudo_exp) → 403
-	access, _, err := generateTokens("s3cr3t", "r3fresh", 1, "a@b.com")
+	access, _, err := generateTokens("s3cr3t", "r3fresh", 1, "a@b.com", "")
 	if err != nil {
 		t.Fatal(err)
 	}

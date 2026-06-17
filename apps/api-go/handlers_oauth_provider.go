@@ -190,7 +190,7 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "refresh_token é obrigatório"))
 		return
 	}
-	if _, err := verifyToken(refresh, s.cfg.JWTRefreshSecret); err != nil {
+	if _, _, err := verifyToken(refresh, s.cfg.JWTRefreshSecret); err != nil {
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_GRANT", "refresh_token inválido"))
 		return
 	}
@@ -221,7 +221,7 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 
 // writeTokenResponse emite tokens + sessão e responde no formato OAuth.
 func (s *Server) writeTokenResponse(w http.ResponseWriter, r *http.Request, u *User) {
-	access, refresh, err := generateTokens(s.cfg.JWTSecret, s.cfg.JWTRefreshSecret, u.ID, u.Email)
+	access, refresh, err := generateTokens(s.cfg.JWTSecret, s.cfg.JWTRefreshSecret, u.ID, u.Email, u.Name)
 	if err != nil {
 		writeErr(w, err)
 		return

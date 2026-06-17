@@ -72,7 +72,7 @@ func TestAuthGuard(t *testing.T) {
 		t.Fatalf("sem token: code=%d", w.Code)
 	}
 
-	access, _, _ := generateTokens(cfg.JWTSecret, cfg.JWTRefreshSecret, 77, "a@b.com")
+	access, _, _ := generateTokens(cfg.JWTSecret, cfg.JWTRefreshSecret, 77, "a@b.com", "")
 
 	// cookie válido → 200 + uid no contexto
 	r := httptest.NewRequest("GET", "/x", nil)

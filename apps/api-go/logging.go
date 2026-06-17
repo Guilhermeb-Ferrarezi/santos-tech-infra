@@ -62,11 +62,23 @@ type reqIDCtxKey struct{}
 // resolvido, que o requestLogger depois inclui no log de acesso.
 type userIDLogCtxKey struct{}
 
+// userNameLogCtxKey guarda um *string mutável p/ o authGuard escrever o nome
+// do usuário, que o requestLogger depois inclui no log de acesso.
+type userNameLogCtxKey struct{}
+
 // logSetUserID grava o user_id resolvido no contexto da requisição atual para
 // que o requestLogger o inclua no log de acesso. Deve ser chamado pelo authGuard.
 func logSetUserID(ctx context.Context, uid int64) {
 	if p, ok := ctx.Value(userIDLogCtxKey{}).(*int64); ok && p != nil {
 		*p = uid
+	}
+}
+
+// logSetUserName grava o nome do usuário no contexto para que o requestLogger
+// o inclua no log de acesso junto com o user_id.
+func logSetUserName(ctx context.Context, name string) {
+	if p, ok := ctx.Value(userNameLogCtxKey{}).(*string); ok && p != nil {
+		*p = name
 	}
 }
 
@@ -168,10 +180,12 @@ func requestLogger(next http.Handler) http.Handler {
 			rid = logGenRequestID()
 		}
 		w.Header().Set("X-Request-Id", rid)
-		// Ponteiro mutável de user_id: authGuard escreve, logger lê no defer.
+		// Ponteiros mutáveis de user_id e user_name: authGuard escreve, logger lê no defer.
 		var loggedUID int64
+		var loggedName string
 		ctx := context.WithValue(r.Context(), reqIDCtxKey{}, rid)
 		ctx = context.WithValue(ctx, userIDLogCtxKey{}, &loggedUID)
+		ctx = context.WithValue(ctx, userNameLogCtxKey{}, &loggedName)
 		r = r.WithContext(ctx)
 
 		// Captura o corpo do request ANTES de servir (restaura p/ o handler ler).
@@ -227,6 +241,9 @@ func requestLogger(next http.Handler) http.Handler {
 			}
 			if loggedUID != 0 {
 				attrs = append(attrs, slog.Int64("user_id", loggedUID))
+			}
+			if loggedName != "" {
+				attrs = append(attrs, slog.String("user_name", loggedName))
 			}
 			if r.URL.RawQuery != "" {
 				attrs = append(attrs, slog.String("query", redactKV(r.URL.RawQuery)))

@@ -14,13 +14,16 @@ const (
 )
 
 // generateTokens cria access + refresh JWT (HS256), compatível com a versão jose/TS.
-func generateTokens(accessSecret, refreshSecret string, userID int64, email string) (access, refresh string, err error) {
+func generateTokens(accessSecret, refreshSecret string, userID int64, email, name string) (access, refresh string, err error) {
 	now := time.Now()
 	sub := strconv.FormatInt(userID, 10)
 
 	accessClaims := jwt.MapClaims{"sub": sub, "iat": now.Unix(), "exp": now.Add(accessTTL).Unix()}
 	if email != "" {
 		accessClaims["email"] = email
+	}
+	if name != "" {
+		accessClaims["name"] = name
 	}
 	access, err = jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims).SignedString([]byte(accessSecret))
 	if err != nil {
@@ -32,8 +35,9 @@ func generateTokens(accessSecret, refreshSecret string, userID int64, email stri
 	return
 }
 
-// verifyToken valida um JWT HS256 e retorna o userID (claim sub).
-func verifyToken(token, secret string) (int64, error) {
+// verifyToken valida um JWT HS256 e retorna o userID (claim sub) e o nome
+// (claim name, vazio se ausente — ex: refresh tokens não carregam nome).
+func verifyToken(token, secret string) (id int64, name string, err error) {
 	t, err := jwt.Parse(token, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok || t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 			return nil, errors.New("método de assinatura inesperado")
@@ -41,16 +45,17 @@ func verifyToken(token, secret string) (int64, error) {
 		return []byte(secret), nil
 	})
 	if err != nil || !t.Valid {
-		return 0, errors.New("token inválido")
+		return 0, "", errors.New("token inválido")
 	}
 	claims, ok := t.Claims.(jwt.MapClaims)
 	if !ok {
-		return 0, errors.New("claims inválidas")
+		return 0, "", errors.New("claims inválidas")
 	}
 	sub, _ := claims["sub"].(string)
-	id, err := strconv.ParseInt(sub, 10, 64)
+	id, err = strconv.ParseInt(sub, 10, 64)
 	if err != nil {
-		return 0, errors.New("sub inválido")
+		return 0, "", errors.New("sub inválido")
 	}
-	return id, nil
+	name, _ = claims["name"].(string)
+	return id, name, nil
 }

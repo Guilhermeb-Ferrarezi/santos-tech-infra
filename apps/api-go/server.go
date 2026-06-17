@@ -104,12 +104,15 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
 			return
 		}
-		uid, _, err := s.resolveToken(r.Context(), token)
+		uid, u, err := s.resolveToken(r.Context(), token)
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
 		logSetUserID(r.Context(), uid)
+		if u != nil {
+			logSetUserName(r.Context(), u.Name)
+		}
 		next(w, r.WithContext(context.WithValue(r.Context(), userIDKey, uid)))
 	}
 }
@@ -147,7 +150,7 @@ func (s *Server) resolveToken(ctx context.Context, token string) (int64, *User, 
 		}
 		return uid, nil, nil
 	}
-	uid, err := verifyToken(token, s.cfg.JWTSecret)
+	uid, _, err := verifyToken(token, s.cfg.JWTSecret)
 	if err != nil {
 		return 0, nil, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
 	}

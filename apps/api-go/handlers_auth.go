@@ -17,7 +17,7 @@ import (
 // anexa a sessão ao cookie multi-conta "accounts". replaceSIDs: sessões antigas
 // a tirar da lista (ex.: rotação de refresh).
 func (s *Server) issueSession(ctx context.Context, w http.ResponseWriter, r *http.Request, u *User, replaceSIDs ...string) error {
-	access, refresh, err := generateTokens(s.cfg.JWTSecret, s.cfg.JWTRefreshSecret, u.ID, u.Email)
+	access, refresh, err := generateTokens(s.cfg.JWTSecret, s.cfg.JWTRefreshSecret, u.ID, u.Email, u.Name)
 	if err != nil {
 		return err
 	}
@@ -296,7 +296,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Refresh token ausente"))
 		return
 	}
-	uid, err := verifyToken(c.Value, s.cfg.JWTRefreshSecret)
+	uid, _, err := verifyToken(c.Value, s.cfg.JWTRefreshSecret)
 	if err != nil {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Refresh token inválido"))
 		return
