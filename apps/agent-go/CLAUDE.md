@@ -1,5 +1,16 @@
 # agent-go
 
+## ⚠️ OBRIGATÓRIO — verificar build e lint antes de commitar/pushar/deployar
+
+**NUNCA** commite, faça push ou dispare deploy sem antes rodar a verificação de **build**
+e **lint** e confirmar que passam **sem erros**. Build quebrado = deploy quebrado.
+
+- **Frontend (React/Vite):** `bun run lint` **e** `bun run build` (o build faz o type-check `tsc`).
+- **Go:** `gofmt -l .` (saída vazia) · `go vet ./...` · `go build ./...` · `go test ./...`.
+
+Se qualquer etapa falhar, **corrija antes de prosseguir** — não pushe "pra ver se passa no CI".
+
+
 API em Go que **orquestra o Claude Code** rodando dentro do container. Faz spawn do
 `claude` CLI (modo `--dangerously-skip-permissions`), expõe um chat por **WebSocket**,
 persiste conversas no Postgres compartilhado e dá ao agente acesso a GitHub (MCP),

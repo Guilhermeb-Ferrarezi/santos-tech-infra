@@ -1,5 +1,16 @@
 # Santos Tech Infra
 
+## ⚠️ OBRIGATÓRIO — verificar build e lint antes de commitar/pushar/deployar
+
+**NUNCA** commite, faça push ou dispare deploy sem antes rodar a verificação de **build**
+e **lint** e confirmar que passam **sem erros**. Build quebrado = deploy quebrado.
+
+- **Frontend (React/Vite):** `bun run lint` **e** `bun run build` (o build faz o type-check `tsc`).
+- **Go:** `gofmt -l .` (saída vazia) · `go vet ./...` · `go build ./...` · `go test ./...`.
+
+Se qualquer etapa falhar, **corrija antes de prosseguir** — não pushe "pra ver se passa no CI".
+
+
 Auth central da **santos-tech.com**. Ponto único de login para todos os subdomínios
 (`*.santos-tech.com`): emite JWT (HS256) em cookies `httpOnly` compartilhados no
 domínio `.santos-tech.com`, e qualquer serviço do ecossistema (portal, painel de
