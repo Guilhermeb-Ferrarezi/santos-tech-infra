@@ -226,8 +226,13 @@ func requestLogger(next http.Handler) http.Handler {
 				level = slog.LevelError
 			case lw.status >= 400:
 				level = slog.LevelWarn
+			case r.Method == http.MethodOptions || r.Method == http.MethodHead:
+				level = slog.LevelDebug // CORS preflight e HEAD: sempre noise
 			case r.Method == http.MethodGet && lw.status >= 200 && lw.status < 300 && durMs < 5000:
-				level = slog.LevelDebug // GET 2xx rápido: sem valor diagnóstico, não vai pro Loki
+				level = slog.LevelDebug // GET 2xx rápido: sem valor diagnóstico
+			case lw.status >= 200 && lw.status < 300 &&
+				(r.URL.Path == "/auth/me" || r.URL.Path == "/auth/refresh"):
+				level = slog.LevelDebug // polling frequente do frontend: só interessa quando falha
 			}
 
 			attrs := []slog.Attr{
