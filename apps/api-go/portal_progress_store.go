@@ -29,7 +29,9 @@ func scanAnswer(row pgx.Row) (*portalAnswerDTO, error) {
 	}
 	dto.Options = []portalOptionDTO{}
 	if len(optionsJSON) > 0 {
-		_ = json.Unmarshal(optionsJSON, &dto.Options)
+		if err := json.Unmarshal(optionsJSON, &dto.Options); err != nil {
+			return nil, fmt.Errorf("unmarshal answer options: %w", err)
+		}
 	}
 	return &dto, nil
 }
