@@ -217,6 +217,7 @@ func requestLogger(next http.Handler) http.Handler {
 				)
 			}
 
+			durMs := time.Since(start).Milliseconds()
 			level := slog.LevelInfo
 			switch {
 			case strings.HasSuffix(r.URL.Path, "/health"):
@@ -225,6 +226,8 @@ func requestLogger(next http.Handler) http.Handler {
 				level = slog.LevelError
 			case lw.status >= 400:
 				level = slog.LevelWarn
+			case r.Method == http.MethodGet && lw.status >= 200 && lw.status < 300 && durMs < 5000:
+				level = slog.LevelDebug // GET 2xx rápido: sem valor diagnóstico, não vai pro Loki
 			}
 
 			attrs := []slog.Attr{
@@ -234,7 +237,7 @@ func requestLogger(next http.Handler) http.Handler {
 				slog.String("path", r.URL.Path),
 				slog.Int("status", lw.status),
 				slog.Int("bytes", lw.bytes),
-				slog.Int64("dur_ms", time.Since(start).Milliseconds()),
+				slog.Int64("dur_ms", durMs),
 				slog.String("ua", r.UserAgent()),
 				slog.String("proto", r.Proto),
 				slog.String("host", r.Host),
