@@ -43,6 +43,32 @@ docs/
   openapi.yaml            ← contrato OpenAPI 3.1 da Auth API (fonte de verdade dos endpoints)
 ```
 
+## ⚠️ Monorepo na Coolify — `watch_paths` ao adicionar um app novo
+
+Este repo é um **monorepo**: vários apps da Coolify apontam para ele. Sem `watch_paths`,
+**qualquer push redeploya TODOS os apps** (mesmo os que não mudaram). Cada app tem um
+`watch_paths` que restringe o auto-deploy ao seu próprio diretório.
+
+**Ao criar um app novo aqui, configure o `watch_paths` dele na hora.** Via API da Coolify
+(`PATCH /api/v1/applications/{uuid}`), padrão um glob por linha (`\n`):
+
+```
+apps/<novo-app>/**
+infra/Dockerfile.<novo-app>
+```
+
+Inclua também todo arquivo **compartilhado** que o build do app copia (ex.: `api-go` e
+`mcp-go` adicionam `docs/openapi.yaml`). Confira o que já existe:
+
+```bash
+# token e base URL: ver memória coolify-infra-apps / easypanel-api
+curl -s -H "Authorization: Bearer $COOLIFY_TOKEN" \
+  "$COOLIFY_API_URL/applications/$UUID" | jq -r .watch_paths
+```
+
+**Caveat:** arquivo compartilhado fora de qualquer `watch_paths` (ex.: algo na raiz) não
+dispara auto-deploy — nesse caso, deploy manual do app afetado.
+
 ## Stack (Auth API — `apps/api-go`)
 
 | Camada | Tecnologia |
