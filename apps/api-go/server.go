@@ -103,7 +103,7 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
 			return
 		}
-		uid, err := s.resolveToken(r.Context(), token)
+		uid, _, err := s.resolveToken(r.Context(), token)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -130,22 +130,24 @@ func (s *Server) adminGuard(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // resolveToken aceita tanto um JWT de sessão quanto um Personal Access Token
-// (prefixo "st_"), devolvendo o userID. Erros já vêm como *AppError prontos para
-// writeErr; uma falha de banco no caminho do PAT vira 500.
-func (s *Server) resolveToken(ctx context.Context, token string) (int64, error) {
+// (prefixo "st_"), devolvendo o userID e, para JWT, o *User já carregado do banco
+// (evitando um segundo SELECT no caller que precisar do perfil completo).
+// Para PATs o *User retornado é sempre nil — o caller busca quando necessário.
+// Erros já vêm como *AppError prontos para writeErr; falha de banco vira 500.
+func (s *Server) resolveToken(ctx context.Context, token string) (int64, *User, error) {
 	if strings.HasPrefix(token, "st_") {
 		uid, err := s.userIDByAPIKeyHash(ctx, sha256Hex(token))
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		if uid == 0 {
-			return 0, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
+			return 0, nil, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
 		}
-		return uid, nil
+		return uid, nil, nil
 	}
 	uid, err := verifyToken(token, s.cfg.JWTSecret)
 	if err != nil {
-		return 0, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
+		return 0, nil, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
 	}
 	// O access-token JWT é curto mas sobrevive à suspensão (a sessão/refresh é
 	// apagada, mas o JWT já emitido continua válido até expirar). Conferimos o
@@ -153,16 +155,16 @@ func (s *Server) resolveToken(ctx context.Context, token string) (int64, error) 
 	// de imediato, sem esperar o JWT vencer. Sem banco (modo degradado/teste) não
 	// há como checar suspensão: o JWT já é criptograficamente válido, então segue.
 	if s.db == nil {
-		return uid, nil
+		return uid, nil, nil
 	}
 	u, err := s.userByID(ctx, uid)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if u == nil || u.SuspendedAt != nil || u.LoginDisabled {
-		return 0, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
+		return 0, nil, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
 	}
-	return uid, nil
+	return uid, u, nil
 }
 
 func userIDFrom(r *http.Request) int64 {
