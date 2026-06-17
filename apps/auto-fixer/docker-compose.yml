@@ -1,0 +1,29 @@
+# auto-fixer + Redis dedicado. Roda no host Contabo, FORA da Coolify, para
+# permanecer de pé mesmo quando o build que ele conserta (ou a própria Coolify)
+# está quebrado. NÃO referencia a rede da Coolify de propósito.
+services:
+  auto-fixer:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "3340:3340"
+    depends_on:
+      - redis
+    volumes:
+      - workspaces:/data/workspaces
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF: a fila e o estado dos incidentes sobrevivem a restart (inclusive do
+    # próprio auto-fixer fazendo deploy de si mesmo).
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+
+volumes:
+  workspaces:
+  redisdata:
