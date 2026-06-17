@@ -9,19 +9,39 @@ export function CheckoutShell({ left, right }: { left: ReactNode; right: ReactNo
   return (
     <div className="min-h-screen w-full bg-white">
       <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col lg:flex-row">
-        {/* Coluna esquerda — conteúdo da etapa (maior, branca) */}
-        <main className="order-2 flex-1 px-6 py-8 sm:px-10 sm:py-12 lg:order-1 lg:basis-[60%] lg:px-14 lg:py-14">
+        {/* Coluna esquerda — conteúdo da etapa (maior, branca).
+            No mobile fica EM CIMA (order-1); no desktop, à esquerda. */}
+        <main className="order-1 flex-1 px-6 py-8 sm:px-10 sm:py-12 lg:basis-[60%] lg:px-14 lg:py-14">
           <div className="mx-auto w-full max-w-2xl">
             <header className="mb-10 flex items-center gap-3">
               <img src="/logo-santostech.svg" alt="Santos Tech" className="h-9 w-9" />
               <span className="text-lg font-bold tracking-tight text-[#0e2937]">Santos Tech</span>
             </header>
             {left}
+            <footer className="mt-12 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#496b84]">
+              <a
+                href="https://santos-tech.com/termos"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-[#0067be] hover:underline"
+              >
+                Termos de Uso
+              </a>
+              <a
+                href="https://santos-tech.com/privacidade"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-[#0067be] hover:underline"
+              >
+                Política de Privacidade
+              </a>
+            </footer>
           </div>
         </main>
 
-        {/* Coluna direita — resumo do pedido (cinza-claro) */}
-        <aside className="order-1 border-b border-[#e3eaf0] bg-[#f5f8fa] px-6 py-8 sm:px-10 lg:order-2 lg:basis-[40%] lg:border-b-0 lg:border-l lg:py-16">
+        {/* Coluna direita — resumo do pedido (cinza-claro), fundo preenchido por
+            toda a coluna. No mobile fica EMBAIXO (order-2). */}
+        <aside className="order-2 border-t border-[#e3eaf0] bg-[#f5f8fa] px-6 py-8 sm:px-10 lg:basis-[40%] lg:border-t-0 lg:border-l lg:py-16">
           <div className="mx-auto w-full max-w-sm lg:sticky lg:top-16">{right}</div>
         </aside>
       </div>

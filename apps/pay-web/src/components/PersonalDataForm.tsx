@@ -93,6 +93,27 @@ export function PersonalDataForm({
         />
         Salvar meus dados para as próximas compras
       </label>
+      <p className="text-xs text-[#496b84]">
+        Ao continuar, você concorda com os{" "}
+        <a
+          href="https://santos-tech.com/termos"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-[#0067be]"
+        >
+          Termos de Uso
+        </a>{" "}
+        e a{" "}
+        <a
+          href="https://santos-tech.com/privacidade"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-[#0067be]"
+        >
+          Política de Privacidade
+        </a>
+        .
+      </p>
     </form>
   );
 }
