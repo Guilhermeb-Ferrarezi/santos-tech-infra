@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -21,6 +22,14 @@ func newDB(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, err
+	}
+	// Compatibilidade com PgBouncer em transaction mode: ele não suporta prepared
+	// statements nomeados persistentes (cada query pode cair numa conexão diferente).
+	// Com DB_PREPARED_STATEMENTS=false usamos o protocolo estendido com statements
+	// anônimos (QueryExecModeExec), seguro sob transaction pooling. Sem a env, mantemos
+	// o comportamento padrão do pgx (prepared statements), ideal para conexão direta.
+	if os.Getenv("DB_PREPARED_STATEMENTS") == "false" {
+		cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
 	}
 	cfg.MaxConns = 10                      // teto de conexões simultâneas do pool
 	cfg.MaxConnLifetime = 30 * time.Minute // recicla conexões periodicamente
