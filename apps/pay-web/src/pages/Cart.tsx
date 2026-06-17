@@ -1,32 +1,63 @@
 import { useEffect, useState } from "react";
+import { ArrowRight, Loader2 } from "lucide-react";
 import { api, type CartLine } from "../lib/api";
-import { formatBRL } from "../lib/format";
-import { Card } from "../components/ui/card";
-import { PayerForm } from "../components/PayerForm";
-import { PixModal } from "../components/PixModal";
-import { Centered } from "./Product";
+import { Button } from "../components/ui/button";
+import { CheckoutShell } from "../components/CheckoutShell";
+import { OrderSummary, type OrderItem } from "../components/OrderSummary";
+import { PersonalDataForm } from "../components/PersonalDataForm";
+import { validatePayer, emptyPayer, type PayerData } from "../lib/payer";
+import { PixView, type PixStatus } from "../components/PixView";
+import { onlyDigits } from "../lib/format";
 
-export default function CartPage() {
+type Step = "data" | "pix";
+
+const FORM_ID = "checkout-payer-form";
+
+// Checkout público em 2 etapas, na MESMA página (a coluna direita/resumo permanece):
+//   1. "Dados Pessoais" — formulário; botão "Continuar →" no resumo.
+//   2. "Pagamento com PIX" — gera a cobrança (api.checkout) e exibe o QR + SSE.
+// Sem tela de conta/login no caminho: vai direto de Dados → Pix.
+export default function CheckoutPage() {
   const [lines, setLines] = useState<CartLine[] | null>(null);
-  const [err, setErr] = useState("");
+  const [step, setStep] = useState<Step>("data");
+  const [payer, setPayer] = useState<PayerData>(emptyPayer);
   const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState("");
   const [pixToken, setPixToken] = useState<string | null>(null);
+  const [pixStatus, setPixStatus] = useState<PixStatus>("loading");
 
-  function loadCart() {
-    api.cart().then(setLines).catch(() => { setErr("Não foi possível carregar sua conta."); setLines([]); });
-  }
-  useEffect(loadCart, []);
+  useEffect(() => {
+    api
+      .cart()
+      .then(setLines)
+      .catch(() => setLines([]));
+  }, []);
 
-  if (lines === null) return <Centered>Carregando…</Centered>;
+  const items: OrderItem[] = (lines ?? []).map((l) => ({
+    name: l.product.name,
+    priceCents: l.product.priceCents,
+    quantity: l.quantity,
+  }));
+  const totalCents = items.reduce((s, it) => s + it.priceCents * it.quantity, 0);
 
-  const total = lines.reduce((s, l) => s + l.product.priceCents * l.quantity, 0);
-
-  async function checkout(taxId: string, phone: string, name: string, email: string, save: boolean) {
-    setSubmitting(true);
+  async function generatePix() {
+    const v = validatePayer(payer);
+    if (v) {
+      setErr(v);
+      return;
+    }
     setErr("");
+    setSubmitting(true);
     try {
-      const r = await api.checkout(taxId, phone, name, email, save);
-      setPixToken(r.token); // abre o modal do Pix, sem trocar de rota
+      const r = await api.checkout(
+        onlyDigits(payer.taxId),
+        onlyDigits(payer.phone),
+        payer.name.trim(),
+        payer.email.trim(),
+        payer.save,
+      );
+      setPixToken(r.token);
+      setStep("pix");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Erro ao gerar cobrança");
     } finally {
@@ -34,28 +65,91 @@ export default function CartPage() {
     }
   }
 
-  return (
-    <Centered>
-      <Card className="p-6 max-w-md w-full space-y-4">
-        <h1 className="text-xl font-bold text-[#0e2937]">Sua conta</h1>
-        {lines.length === 0 ? (
-          <p className="text-slate-600 text-sm">Sua conta está vazia.</p>
+  // ── Coluna esquerda ───────────────────────────────────────────────────────
+  const left =
+    step === "data" ? (
+      <div>
+        <h1 className="text-2xl font-bold text-[#0e2937]">Dados Pessoais</h1>
+        <p className="mt-1 mb-8 text-sm text-[#496b84]">
+          Preencha seus dados para gerar o pagamento via PIX.
+        </p>
+        <PersonalDataForm
+          value={payer}
+          onChange={setPayer}
+          onSubmit={generatePix}
+          formId={FORM_ID}
+          disabled={submitting}
+        />
+        {err && <p className="mt-4 text-sm text-rose-600">{err}</p>}
+      </div>
+    ) : (
+      <div>
+        <h1 className="text-2xl font-bold text-[#0e2937]">Pagamento com PIX</h1>
+        <p className="mt-1 mb-8 text-sm text-[#496b84]">
+          Abra o app do seu banco e pague para confirmar a compra.
+        </p>
+        {pixToken && <PixView token={pixToken} onStatusChange={setPixStatus} />}
+        {err && <p className="mt-4 text-sm text-rose-600">{err}</p>}
+      </div>
+    );
+
+  // ── Coluna direita — ação principal ───────────────────────────────────────
+  const action =
+    step === "data" ? (
+      <Button
+        type="submit"
+        form={FORM_ID}
+        disabled={submitting}
+        className="h-12 w-full gap-2 bg-[#0db88f] text-base hover:bg-[#0aa17d]"
+      >
+        {submitting ? (
+          <>
+            <Loader2 className="size-5 animate-spin" /> Trabalhando nisso…
+          </>
         ) : (
           <>
-            {lines.map((l) => (
-              <div key={l.product.id} className="flex justify-between text-sm">
-                <span>{l.product.name} ×{l.quantity}</span><span>{formatBRL(l.product.priceCents * l.quantity)}</span>
-              </div>
-            ))}
-            <div className="flex justify-between font-bold border-t pt-2">
-              <span>Total</span><span>{formatBRL(total)}</span>
-            </div>
-            <PayerForm onSubmit={checkout} submitting={submitting} />
+            Continuar <ArrowRight className="size-5" />
           </>
         )}
-        {err && <p className="text-sm text-rose-600">{err}</p>}
-      </Card>
-      <PixModal token={pixToken} onClose={() => { setPixToken(null); loadCart(); }} />
-    </Centered>
+      </Button>
+    ) : (
+      <PixAction status={pixStatus} />
+    );
+
+  return (
+    <CheckoutShell
+      left={left}
+      right={<OrderSummary items={items} totalCents={totalCents} action={action} />}
+    />
+  );
+}
+
+// PixAction — botão/estado da coluna direita durante a etapa Pix.
+function PixAction({ status }: { status: PixStatus }) {
+  if (status === "paid") {
+    return (
+      <div className="rounded-xl bg-emerald-50 px-4 py-3 text-center text-sm font-medium text-emerald-700">
+        Pagamento confirmado ✓
+      </div>
+    );
+  }
+  if (status === "loading") {
+    return (
+      <Button disabled className="h-12 w-full gap-2 bg-[#0db88f] text-base">
+        <Loader2 className="size-5 animate-spin" /> Gerando seu Pix…
+      </Button>
+    );
+  }
+  if (status === "unavailable" || status === "error") {
+    return (
+      <div className="rounded-xl bg-slate-100 px-4 py-3 text-center text-sm text-[#496b84]">
+        Cobrança indisponível
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center justify-center gap-2 rounded-xl bg-amber-50 px-4 py-3 text-center text-sm font-medium text-amber-700">
+      <Loader2 className="size-4 animate-spin" /> Aguardando pagamento…
+    </div>
   );
 }

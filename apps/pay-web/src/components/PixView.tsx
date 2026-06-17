@@ -1,30 +1,56 @@
 import { useEffect, useState } from "react";
 import { Check, Copy, Loader2, XCircle } from "lucide-react";
 import { api, type PayData } from "../lib/api";
-import { formatBRL } from "../lib/format";
 import { Button } from "./ui/button";
 
-// PixView — conteúdo do pagamento Pix, reaproveitado pelo modal (checkout) e pela
-// rota /pay/:token (links diretos). Mostra o QR, um único botão de copiar o código,
-// e confirma o pagamento ao vivo via SSE.
-export function PixView({ token, onClose }: { token: string; onClose: () => void }) {
+// Estado externo do pagamento, reportado ao pai para refletir no botão do resumo.
+export type PixStatus = "loading" | "pending" | "paid" | "unavailable" | "error";
+
+// PixView — etapa "Pagamento com PIX" (coluna esquerda do checkout). Mostra o QR,
+// o botão "Copiar código PIX" e confirma o pagamento ao vivo via SSE. O valor/total
+// e a ação de fechar ficam na coluna direita (resumo); aqui é só o conteúdo do Pix.
+// Reaproveitado pela rota /pay/:token (links diretos) e pelo checkout em 2 etapas.
+export function PixView({
+  token,
+  onStatusChange,
+}: {
+  token: string;
+  onStatusChange?: (status: PixStatus) => void;
+}) {
   const [data, setData] = useState<PayData | null>(null);
   const [paid, setPaid] = useState(false);
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    api.pay(token)
-      .then((d) => { setData(d); setPaid(d.status === "paid"); })
+    api
+      .pay(token)
+      .then((d) => {
+        setData(d);
+        setPaid(d.status === "paid");
+      })
       .catch(() => setErr("Cobrança não encontrada ou expirada."));
   }, [token]);
 
   useEffect(() => {
     if (!data || paid || data.status !== "pending") return;
     const es = new EventSource(api.payEventsUrl(token), { withCredentials: true });
-    es.addEventListener("paid", () => { setPaid(true); es.close(); });
+    es.addEventListener("paid", () => {
+      setPaid(true);
+      es.close();
+    });
     return () => es.close();
   }, [token, paid, data]);
+
+  // Reporta o status ao pai (botão do resumo reage a isso).
+  useEffect(() => {
+    if (!onStatusChange) return;
+    if (err) return onStatusChange("error");
+    if (paid) return onStatusChange("paid");
+    if (!data) return onStatusChange("loading");
+    if (data.status === "expired" || data.status === "canceled") return onStatusChange("unavailable");
+    onStatusChange("pending");
+  }, [err, paid, data, onStatusChange]);
 
   function copy() {
     if (!data?.brCode) return;
@@ -35,10 +61,9 @@ export function PixView({ token, onClose }: { token: string; onClose: () => void
 
   if (err) {
     return (
-      <div className="space-y-5 py-4 text-center">
+      <div className="space-y-3 py-2 text-center">
         <XCircle className="mx-auto size-12 text-rose-400" />
         <p className="text-slate-600">{err}</p>
-        <Button variant="outline" className="w-full" onClick={onClose}>Fechar</Button>
       </div>
     );
   }
@@ -51,7 +76,6 @@ export function PixView({ token, onClose }: { token: string; onClose: () => void
         </div>
         <h3 className="text-lg font-bold text-[#0e2937]">Pagamento confirmado!</h3>
         <p className="text-sm text-slate-600">Obrigado. Tudo certo com a sua compra.</p>
-        <Button className="w-full bg-[#0db88f] hover:bg-[#0aa17d]" onClick={onClose}>Fechar</Button>
       </div>
     );
   }
@@ -66,31 +90,42 @@ export function PixView({ token, onClose }: { token: string; onClose: () => void
 
   if (data.status === "expired" || data.status === "canceled") {
     return (
-      <div className="space-y-5 py-4 text-center">
+      <div className="space-y-3 py-2 text-center">
         <XCircle className="mx-auto size-12 text-slate-300" />
         <p className="text-slate-600">Esta cobrança não está mais disponível para pagamento.</p>
-        <Button variant="outline" className="w-full" onClick={onClose}>Fechar</Button>
       </div>
     );
   }
 
   return (
-    <div className="space-y-5 text-center">
-      <div>
-        <div className="text-xs uppercase tracking-wide text-slate-400">Valor</div>
-        <div className="text-3xl font-bold text-[#0db88f]">{formatBRL(data.amountCents)}</div>
-      </div>
+    <div className="space-y-5">
       {data.qrCode && (
-        <img src={data.qrCode} alt="QR Code do Pix" className="mx-auto h-52 w-52 rounded-xl border border-slate-100" />
+        <img
+          src={data.qrCode}
+          alt="QR Code do Pix"
+          className="mx-auto h-56 w-56 rounded-xl border border-slate-100"
+        />
       )}
-      <p className="text-sm text-slate-500">Escaneie o QR ou copie o código no app do seu banco.</p>
-      <Button onClick={copy} className="h-12 w-full gap-2 bg-[#0db88f] text-base hover:bg-[#0aa17d]">
-        {copied ? <><Check className="size-5" /> Código copiado!</> : <><Copy className="size-5" /> Copiar código Pix</>}
+      <p className="text-center text-sm text-slate-500">
+        Escaneie o QR ou copie o código no app do seu banco.
+      </p>
+      <Button
+        onClick={copy}
+        className="h-12 w-full gap-2 bg-[#0db88f] text-base hover:bg-[#0aa17d]"
+      >
+        {copied ? (
+          <>
+            <Check className="size-5" /> Código copiado!
+          </>
+        ) : (
+          <>
+            <Copy className="size-5" /> Copiar código PIX
+          </>
+        )}
       </Button>
       <div className="flex items-center justify-center gap-2 text-sm text-amber-600">
         <Loader2 className="size-4 animate-spin" /> Aguardando pagamento…
       </div>
-      <Button variant="ghost" className="w-full text-slate-500" onClick={onClose}>Cancelar</Button>
     </div>
   );
 }
