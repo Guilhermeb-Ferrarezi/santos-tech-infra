@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/santos-tech/golog"
 )
 
 const version = "0.1.0"
@@ -78,7 +79,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /mcp/.well-known/oauth-protected-resource", prm)
 
 	mux.Handle("/", s.requireAuth(streamable))
-	return requestLogger(metricsMiddleware(mux))
+	return golog.RequestLogger(metricsMiddleware(mux))
 }
 
 // ready pinga a API central (AuthBaseURL) com timeout curto: se ela não responder,

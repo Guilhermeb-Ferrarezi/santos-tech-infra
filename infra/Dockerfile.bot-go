@@ -1,8 +1,10 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
-COPY apps/bot-go/go.mod apps/bot-go/go.sum ./
+COPY packages/golog ./packages/golog
+COPY apps/bot-go/go.mod apps/bot-go/go.sum ./apps/bot-go/
+WORKDIR /src/apps/bot-go
 RUN go mod download
-COPY apps/bot-go/ .
+COPY apps/bot-go/ ./
 RUN CGO_ENABLED=0 go build -trimpath -o /bot .
 
 FROM gcr.io/distroless/static-debian12

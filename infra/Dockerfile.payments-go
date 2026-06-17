@@ -1,6 +1,9 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
-COPY apps/payments-go/go.mod apps/payments-go/go.sum ./
+# Pacote compartilhado (replace local ../../packages/golog no go.mod do serviço).
+COPY packages/golog ./packages/golog
+COPY apps/payments-go/go.mod apps/payments-go/go.sum ./apps/payments-go/
+WORKDIR /src/apps/payments-go
 RUN go mod download
 COPY apps/payments-go/ .
 RUN CGO_ENABLED=0 go build -trimpath -o /payments .

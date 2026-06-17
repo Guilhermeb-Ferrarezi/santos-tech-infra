@@ -1,8 +1,11 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
-COPY apps/mcp-go/go.mod apps/mcp-go/go.sum ./
+# O replace local (../../packages/golog) resolve de /src/apps/mcp-go p/ /src/packages/golog.
+COPY packages/golog ./packages/golog
+COPY apps/mcp-go/go.mod apps/mcp-go/go.sum ./apps/mcp-go/
+WORKDIR /src/apps/mcp-go
 RUN go mod download
-COPY apps/mcp-go/ .
+COPY apps/mcp-go/ ./
 RUN CGO_ENABLED=0 go build -trimpath -o /mcp .
 
 # Tag :debug inclui um busybox (shell + wget) p/ o HEALTHCHECK do compose,

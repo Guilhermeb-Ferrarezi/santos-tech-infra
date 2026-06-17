@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/santos-tech/golog"
 )
 
 func main() {
-	initLogging()
+	golog.InitLogging()
 	cfg := LoadConfig()
 	ctx := context.Background()
 

@@ -3,7 +3,11 @@
 # está quebrado. NÃO referencia a rede da Coolify de propósito.
 services:
   auto-fixer:
-    build: .
+    # Contexto = RAIZ do repo (monorepo): o build copia packages/golog (replace
+    # local do go.mod). O Dockerfile fica em apps/auto-fixer/Dockerfile.
+    build:
+      context: ../..
+      dockerfile: apps/auto-fixer/Dockerfile
     image: auto-fixer:latest # nome fixo p/ reuso como runner do Claude (sandbox)
     restart: unless-stopped
     env_file: .env

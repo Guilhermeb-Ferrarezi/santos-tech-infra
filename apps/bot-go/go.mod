@@ -7,7 +7,10 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.20.1
+	github.com/santos-tech/golog v0.0.0
 )
+
+replace github.com/santos-tech/golog => ../../packages/golog
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect

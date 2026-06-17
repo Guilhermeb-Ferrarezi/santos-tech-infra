@@ -12,6 +12,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
+	"github.com/santos-tech/golog"
 )
 
 func main() {
@@ -98,7 +99,7 @@ func main() {
 
 	httpSrv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           requestLogger(metricsMiddleware(httpMux)),
+		Handler:           golog.RequestLogger(metricsMiddleware(httpMux)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      60 * time.Second,

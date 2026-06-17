@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/santos-tech/golog"
 )
 
 type ctxKey string
@@ -42,7 +43,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /claude/ready", s.handleReady)
 	mux.Handle("GET /claude/metrics", metricsHandler())
 	s.registerRoutes(mux)
-	return requestLogger(metricsMiddleware(s.cors(s.globalRateLimit(mux))))
+	return golog.RequestLogger(metricsMiddleware(s.cors(s.globalRateLimit(mux))))
 }
 
 // handleReady é o readiness probe: pinga Redis e Postgres com timeout curto e

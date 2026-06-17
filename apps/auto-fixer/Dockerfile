@@ -1,11 +1,16 @@
 # syntax=docker/dockerfile:1
 
 # ── build do binário Go ──────────────────────────────────────────────────────
+# Contexto de build = RAIZ do repo (monorepo). O replace local
+# `github.com/santos-tech/golog => ../../packages/golog` resolve de
+# /src/apps/auto-fixer para /src/packages/golog.
 FROM golang:1.25-alpine AS build
 WORKDIR /src
-COPY go.mod go.sum ./
+COPY packages/golog ./packages/golog
+COPY apps/auto-fixer/go.mod apps/auto-fixer/go.sum ./apps/auto-fixer/
+WORKDIR /src/apps/auto-fixer
 RUN go mod download
-COPY . .
+COPY apps/auto-fixer/ ./
 RUN CGO_ENABLED=0 go build -o /out/auto-fixer .
 
 # ── runtime: precisa do `claude` CLI + git (o fixer roda o Claude no clone) ───

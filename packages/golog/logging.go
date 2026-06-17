@@ -1,4 +1,6 @@
-package main
+// Package golog fornece o middleware de log de acesso HTTP estruturado
+// compartilhado por todos os serviços Go do ecossistema Santos Tech.
+package golog
 
 import (
 	"bufio"
@@ -39,7 +41,8 @@ import (
 // Recupera panics (loga stack + 500), preserva streaming (SSE) e upgrade de
 // conexão (WebSocket), e rebaixa health-checks para Debug pra não poluir.
 //
-// Este arquivo é idêntico em todos os serviços Go; só o ponto de plugue muda.
+// Este pacote era um arquivo logging.go idêntico em todos os serviços Go;
+// foi extraído para cá. Só o ponto de plugue muda em cada serviço.
 // ─────────────────────────────────────────────────────────────────────────────
 
 var (
@@ -59,42 +62,42 @@ var (
 type reqIDCtxKey struct{}
 
 // userIDLogCtxKey guarda um *int64 mutável p/ o authGuard escrever o user_id
-// resolvido, que o requestLogger depois inclui no log de acesso.
+// resolvido, que o RequestLogger depois inclui no log de acesso.
 type userIDLogCtxKey struct{}
 
 // userNameLogCtxKey guarda um *string mutável p/ o authGuard escrever o nome
-// do usuário, que o requestLogger depois inclui no log de acesso.
+// do usuário, que o RequestLogger depois inclui no log de acesso.
 type userNameLogCtxKey struct{}
 
-// logSetUserID grava o user_id resolvido no contexto da requisição atual para
-// que o requestLogger o inclua no log de acesso. Deve ser chamado pelo authGuard.
-func logSetUserID(ctx context.Context, uid int64) {
+// SetUserID grava o user_id resolvido no contexto da requisição atual para
+// que o RequestLogger o inclua no log de acesso. Deve ser chamado pelo authGuard.
+func SetUserID(ctx context.Context, uid int64) {
 	if p, ok := ctx.Value(userIDLogCtxKey{}).(*int64); ok && p != nil {
 		*p = uid
 	}
 }
 
-// logSetUserName grava o nome do usuário no contexto para que o requestLogger
+// SetUserName grava o nome do usuário no contexto para que o RequestLogger
 // o inclua no log de acesso junto com o user_id.
-func logSetUserName(ctx context.Context, name string) {
+func SetUserName(ctx context.Context, name string) {
 	if p, ok := ctx.Value(userNameLogCtxKey{}).(*string); ok && p != nil {
 		*p = name
 	}
 }
 
-// requestIDFromContext devolve o request-id desta requisição ("" se ausente).
+// RequestIDFromContext devolve o request-id desta requisição ("" se ausente).
 // Útil pra anexar o mesmo id em logs de negócio dentro dos handlers.
-func requestIDFromContext(ctx context.Context) string {
+func RequestIDFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(reqIDCtxKey{}).(string); ok {
 		return v
 	}
 	return ""
 }
 
-// initLogging configura o slog default como JSON no stdout (ideal p/ Loki).
+// InitLogging configura o slog default como JSON no stdout (ideal p/ Loki).
 // LOG_LEVEL controla o nível: debug | info | warn | error (default info).
 // Serviços que já configuram o slog (bot-go, auto-fixer) não precisam chamar.
-func initLogging() {
+func InitLogging() {
 	level := slog.LevelInfo
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL"))) {
 	case "debug":
@@ -168,9 +171,9 @@ func (w *logResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, http.ErrNotSupported
 }
 
-// requestLogger é o middleware de log de acesso. Deve ser o mais EXTERNO da
+// RequestLogger é o middleware de log de acesso. Deve ser o mais EXTERNO da
 // cadeia, pra medir tempo e status finais e recuperar panics de qualquer camada.
-func requestLogger(next http.Handler) http.Handler {
+func RequestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 

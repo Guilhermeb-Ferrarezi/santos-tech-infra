@@ -1,8 +1,11 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
-COPY apps/api-go/go.mod apps/api-go/go.sum ./
+# Pacote compartilhado (resolvido via `replace ../../packages/golog` no go.mod).
+COPY packages/golog ./packages/golog
+COPY apps/api-go/go.mod apps/api-go/go.sum ./apps/api-go/
+WORKDIR /src/apps/api-go
 RUN go mod download
-COPY apps/api-go/ .
+COPY apps/api-go/ ./
 RUN CGO_ENABLED=0 go build -trimpath -o /auth .
 
 # Tag :debug inclui um busybox (shell + wget) p/ o HEALTHCHECK do compose,
