@@ -1,0 +1,38 @@
+# auto-fixer + Redis dedicado. Roda no host Contabo, FORA da Coolify, para
+# permanecer de pé mesmo quando o build que ele conserta (ou a própria Coolify)
+# está quebrado. NÃO referencia a rede da Coolify de propósito.
+services:
+  auto-fixer:
+    build: .
+    image: auto-fixer:latest # nome fixo p/ reuso como runner do Claude (sandbox)
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "3340:3340"
+    depends_on:
+      - redis
+    volumes:
+      - workspaces:/data/workspaces
+      # ── Sandbox do Claude (Task 11) — OPCIONAL ──────────────────────────────
+      # Para rodar o Claude em container efêmero (CLAUDE_SANDBOX=docker no .env),
+      # descomente o socket abaixo e configure no .env:
+      #   CLAUDE_SANDBOX=docker
+      #   CLAUDE_RUNNER_IMAGE=auto-fixer:latest
+      #   WORKSPACE_VOLUME=auto-fixer_workspaces   # = <projeto>_workspaces
+      # O socket dá poder de root no host — mantenha o host do fixer dedicado.
+      # - /var/run/docker.sock:/var/run/docker.sock
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF: a fila e o estado dos incidentes sobrevivem a restart (inclusive do
+    # próprio auto-fixer fazendo deploy de si mesmo).
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+
+volumes:
+  workspaces:
+  redisdata:

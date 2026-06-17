@@ -43,6 +43,32 @@ docs/
   openapi.yaml            ← contrato OpenAPI 3.1 da Auth API (fonte de verdade dos endpoints)
 ```
 
+## ⚠️ Monorepo na Coolify — `watch_paths` ao adicionar um app novo
+
+Este repo é um **monorepo**: vários apps da Coolify apontam para ele. Sem `watch_paths`,
+**qualquer push redeploya TODOS os apps** (mesmo os que não mudaram). Cada app tem um
+`watch_paths` que restringe o auto-deploy ao seu próprio diretório.
+
+**Ao criar um app novo aqui, configure o `watch_paths` dele na hora.** Via API da Coolify
+(`PATCH /api/v1/applications/{uuid}`), padrão um glob por linha (`\n`):
+
+```
+apps/<novo-app>/**
+infra/Dockerfile.<novo-app>
+```
+
+Inclua também todo arquivo **compartilhado** que o build do app copia (ex.: `api-go` e
+`mcp-go` adicionam `docs/openapi.yaml`). Confira o que já existe:
+
+```bash
+# token e base URL: ver memória coolify-infra-apps / easypanel-api
+curl -s -H "Authorization: Bearer $COOLIFY_TOKEN" \
+  "$COOLIFY_API_URL/applications/$UUID" | jq -r .watch_paths
+```
+
+**Caveat:** arquivo compartilhado fora de qualquer `watch_paths` (ex.: algo na raiz) não
+dispara auto-deploy — nesse caso, deploy manual do app afetado.
+
 ## Stack (Auth API — `apps/api-go`)
 
 | Camada | Tecnologia |
@@ -132,6 +158,40 @@ Cole-o em qualquer viewer Swagger/Redoc para navegar.
 - **MFA:** login com MFA devolve `{ mfaRequired, challenge }` (10min); 2º passo em
   `/auth/mfa/verify` aceita TOTP, OTP por email ou recovery code.
 - **Emails** (reset, OTP) saem pela nossa API (`POST {EMAIL_API_URL}/send`), não Resend.
+
+## Logs de acesso (middleware comum)
+
+Todos os serviços Go (`api-go`, `agent-go`, `bot-go`, `mcp-go`, `payments-go`,
+`auto-fixer`) compartilham um middleware em `logging.go` (arquivo **idêntico**,
+`package main`), plugado como camada **mais externa** do handler raiz
+(`requestLogger(...)`). Cada requisição vira uma linha JSON no stdout → coletada pelo
+Grafana Alloy → **Loki** (Grafana em `grafana.santos-tech.com`).
+
+**Campos:** `time`, `level` (5xx=ERROR · 4xx=WARN · `/health`=DEBUG · resto=INFO),
+`request_id` (gerado ou propagado de `X-Request-Id`/`CF-Ray`; devolvido no header de
+resposta e disponível nos handlers via `requestIDFromContext(ctx)`), `ip`
+(`CF-Connecting-IP` → `X-Forwarded-For` → `RemoteAddr`), `method`, `path`, `query`,
+`status`, `bytes`, `dur_ms`, `ua`, `proto`, `host`, `req_body`, `resp_body`.
+
+**Payload:** request e response são capturados por inteiro. Valores sensíveis (senha,
+token, secret, cartão, cvv…) são **redigidos para `***`**. Uploads (multipart) e tipos
+binários não são capturados (só placeholder); **SSE e WebSocket são preservados**
+(`Flush`/`Hijack` delegados). Panics em qualquer camada são recuperados (loga stack +
+responde 500).
+
+**Configuração por env** (default entre parênteses):
+
+| Var | Default | Efeito |
+|-----|---------|--------|
+| `LOG_LEVEL` | `info` | nível mínimo: `debug`/`info`/`warn`/`error` |
+| `LOG_BODIES` | `1` | captura request+response (`0` desliga, vira access-log puro) |
+| `LOG_REDACT` | `1` | redige credenciais — **`0` loga cru, inclui senhas (não recomendado: LGPD)** |
+| `LOG_BODY_MAX_BYTES` | `16384` | bytes logados por payload (resto truncado) |
+| `LOG_BODY_HARD_CAP` | `1048576` | acima disso o request nem é bufferizado (anti-OOM) |
+
+`bot-go` e `auto-fixer` já configuravam o `slog`; os demais chamam `initLogging()` no
+`main`. **Ao criar um serviço Go novo:** copie `logging.go`, plugue `requestLogger(...)`
+no handler raiz e chame `initLogging()` no `main`.
 
 ## Testes
 

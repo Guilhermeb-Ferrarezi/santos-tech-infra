@@ -8,6 +8,7 @@ import (
 )
 
 func main() {
+	initLogging()
 	cfg := LoadConfig()
 
 	openapi, err := os.ReadFile(cfg.OpenAPIPath)

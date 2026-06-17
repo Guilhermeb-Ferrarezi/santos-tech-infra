@@ -36,22 +36,22 @@ export function OrderSummary({
       )}
 
       {/* Identificação do produto */}
-      <div className="flex items-center gap-3">
-        <div className="grid size-12 shrink-0 place-items-center rounded-xl bg-[#0db88f]/10 text-[#0db88f]">
-          <Package className="size-6" aria-hidden />
+      <div className="flex items-center gap-4 rounded-2xl border border-[#e3eaf0] bg-white p-5">
+        <div className="grid size-16 shrink-0 place-items-center rounded-2xl bg-[#0db88f]/10 text-[#0db88f]">
+          <Package className="size-8" aria-hidden />
         </div>
         <div className="min-w-0">
-          <div className="truncate font-semibold text-[#0e2937]">
+          <div className="truncate text-lg font-semibold text-[#0e2937]">
             {main ? main.name : "Compra Santos Tech"}
             {main && main.quantity > 1 ? ` ×${main.quantity}` : ""}
           </div>
           {extra > 0 && (
-            <div className="text-xs text-[#496b84]">
+            <div className="mt-0.5 text-sm text-[#496b84]">
               + {extra} {extra === 1 ? "outro item" : "outros itens"}
             </div>
           )}
         </div>
-        <div className="ml-auto whitespace-nowrap font-semibold text-[#0e2937]">
+        <div className="ml-auto whitespace-nowrap text-lg font-semibold text-[#0e2937]">
           {formatBRL(totalCents)}
         </div>
       </div>

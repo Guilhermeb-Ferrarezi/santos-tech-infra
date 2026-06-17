@@ -9,6 +9,7 @@ import (
 )
 
 func main() {
+	initLogging()
 	cfg := LoadConfig()
 	ctx := context.Background()
 

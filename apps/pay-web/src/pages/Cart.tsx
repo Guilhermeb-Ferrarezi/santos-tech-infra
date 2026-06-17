@@ -27,11 +27,12 @@ export default function CheckoutPage() {
     try {
       const raw = localStorage.getItem("pay_payer");
       if (raw) {
-        const d = JSON.parse(raw) as { name?: string; email?: string; taxId?: string; phone?: string; exp?: number };
+        const d = JSON.parse(raw) as { name?: string; email?: string; phone?: string; exp?: number };
         if (d.exp && d.exp < Date.now()) {
           localStorage.removeItem("pay_payer"); // expirado: descarta
         } else {
-          return { ...emptyPayer, name: d.name ?? "", email: d.email ?? "", taxId: d.taxId ?? "", phone: d.phone ?? "", save: false };
+          // CPF nunca é salvo (dado sensível) — só nome, e-mail e telefone.
+          return { ...emptyPayer, name: d.name ?? "", email: d.email ?? "", phone: d.phone ?? "", save: false };
         }
       }
     } catch {
@@ -82,7 +83,7 @@ export default function CheckoutPage() {
           localStorage.setItem(
             "pay_payer",
             JSON.stringify({
-              name: payer.name, email: payer.email, taxId: payer.taxId, phone: payer.phone,
+              name: payer.name, email: payer.email, phone: payer.phone, // sem CPF
               exp: Date.now() + 30 * 24 * 60 * 60 * 1000, // expira em 30 dias
             }),
           );

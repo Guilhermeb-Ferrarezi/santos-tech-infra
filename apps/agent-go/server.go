@@ -37,7 +37,7 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 	s.registerRoutes(mux)
-	return s.cors(s.globalRateLimit(mux))
+	return requestLogger(s.cors(s.globalRateLimit(mux)))
 }
 
 // ── CORS (com credenciais) ───────────────────────────────────────────────────

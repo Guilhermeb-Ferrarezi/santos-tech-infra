@@ -202,7 +202,7 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	return mux
+	return requestLogger(mux)
 }
 
 // dashMiddleware adiciona CORS e verifica X-Dash-Key.
