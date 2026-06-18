@@ -36,7 +36,7 @@ func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 	}
 	// Novo setup → zera o contador de tentativas para não bloquear o usuário que
 	// regenerou o QR code após exceder o limite em handleMFAEnable.
-	if err := s.rdb.Del(r.Context(), "mfa_enable_attempts:"+uidStr).Err(); err != nil {
+	if err := s.rdb.Del(r.Context(), "api-go:mfa_enable_attempts:"+uidStr).Err(); err != nil {
 		slog.Warn("mfa_setup: falha ao resetar contador de tentativas", "uid", uid, "err", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"secret": key.Secret(), "otpauthUrl": key.URL()})
@@ -64,7 +64,7 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 	// limitado apenas pelo rate-limit por IP (bypassável com múltiplos IPs/VPNs).
 	// fail-closed: se o Redis falhar, não sabemos quantas tentativas houve; rejeitar
 	// é mais seguro do que deixar passar e permite ao usuário tentar novamente em instantes.
-	attemptKey := "mfa_enable_attempts:" + uidStr
+	attemptKey := "api-go:mfa_enable_attempts:" + uidStr
 	enableAttemptsCmd := s.rdb.Incr(r.Context(), attemptKey)
 	if enableAttemptsCmd.Err() != nil {
 		slog.Warn("mfa_enable_attempts: redis error; rejecting to fail closed", "uid", uid, "err", enableAttemptsCmd.Err())
@@ -137,7 +137,7 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 	// sem isso, desabilitar o MFA viraria um ponto de brute-force do 2º fator
 	// (TOTP/recovery/OTP de email) limitado só pelo rate-limit por IP. Conta a
 	// tentativa ANTES de validar; zera ao desativar com sucesso (mais abaixo).
-	attemptKey := "mfa_disable_attempts:" + strconv.FormatInt(uid, 10)
+	attemptKey := "api-go:mfa_disable_attempts:" + strconv.FormatInt(uid, 10)
 	disableAttemptsCmd := s.rdb.Incr(r.Context(), attemptKey)
 	if disableAttemptsCmd.Err() != nil {
 		slog.Warn("mfa_disable_attempts: redis error; rejecting to fail closed", "uid", uid, "err", disableAttemptsCmd.Err())
@@ -245,18 +245,18 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	// retentável até o limite por IP (burlável). Após N falhas, invalida o desafio.
 	// fail-closed: se o Redis falhar, não sabemos quantas tentativas já houve;
 	// rejeitar é mais seguro do que deixar passar (OTP de e-mail tem apenas 10⁶ combinações).
-	attemptsCmd := s.rdb.Incr(r.Context(), "mfa_attempts:"+body.Challenge)
+	attemptsCmd := s.rdb.Incr(r.Context(), "api-go:mfa_attempts:"+body.Challenge)
 	if attemptsCmd.Err() != nil {
 		slog.Warn("mfa_attempts: redis error; rejecting to fail closed", "challenge", body.Challenge, "err", attemptsCmd.Err())
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
 		return
 	}
 	attempts := attemptsCmd.Val()
-	if err := s.rdb.ExpireNX(r.Context(), "mfa_attempts:"+body.Challenge, 10*time.Minute).Err(); err != nil {
+	if err := s.rdb.ExpireNX(r.Context(), "api-go:mfa_attempts:"+body.Challenge, 10*time.Minute).Err(); err != nil {
 		slog.Warn("mfa_attempts: ExpireNX falhou; contador pode não expirar", "challenge", body.Challenge, "err", err)
 	}
 	if attempts > 5 {
-		if err := s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "mfa_attempts:"+body.Challenge).Err(); err != nil {
+		if err := s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "api-go:mfa_attempts:"+body.Challenge).Err(); err != nil {
 			slog.Warn("mfa_verify: falha ao invalidar desafio após excesso de tentativas", "challenge", body.Challenge, "err", err)
 		}
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Faça login novamente."))
@@ -287,7 +287,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	// 10 min, permitindo replay com um novo código válido (TOTP ou OTP de email
 	// que ainda não foi removido). Padrão consistente com o fail-closed do Incr
 	// acima (linha ~216): Redis instável → rejeitar é mais seguro que deixar passar.
-	if err := s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "mfa_attempts:"+body.Challenge).Err(); err != nil {
+	if err := s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "api-go:mfa_attempts:"+body.Challenge).Err(); err != nil {
 		slog.Error("mfa_verify: falha ao invalidar desafio após autenticação bem-sucedida", "challenge", body.Challenge, "err", err)
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao finalizar autenticação. Tente novamente."))
 		return

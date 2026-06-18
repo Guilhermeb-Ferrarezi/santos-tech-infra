@@ -111,7 +111,7 @@ func (s *Server) handleMFAEmailEnable(w http.ResponseWriter, r *http.Request) {
 	// rate-limit por IP — bypassável com múltiplos IPs/VPNs. Conta a tentativa ANTES
 	// de validar; zera ao ativar com sucesso (mais abaixo). fail-closed: Redis
 	// indisponível → rejeitar é mais seguro que deixar passar.
-	attemptKey := "mfa_email_enable_attempts:" + strconv.FormatInt(uid, 10)
+	attemptKey := "api-go:mfa_email_enable_attempts:" + strconv.FormatInt(uid, 10)
 	attemptsCmd := s.rdb.Incr(r.Context(), attemptKey)
 	if attemptsCmd.Err() != nil {
 		slog.Warn("mfa_email_enable_attempts: redis error; rejecting to fail closed", "uid", uid, "err", attemptsCmd.Err())

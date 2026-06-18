@@ -127,7 +127,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Com o IP na chave, o atacante só "tranca" a si mesmo contra aquela conta;
 	// a proteção contra credential-stuffing distribuído continua vindo do
 	// rate-limit por IP da rota (routes.go) + do limite global.
-	lockKey := "login_fail:" + clientIP(r) + ":" + strings.ToLower(ident)
+	lockKey := "api-go:login_fail:" + clientIP(r) + ":" + strings.ToLower(ident)
 	lockN, lockErr := s.rdb.Get(r.Context(), lockKey).Int()
 	if lockErr != nil && !errors.Is(lockErr, redis.Nil) {
 		// Redis indisponível: fail-closed — não permitir tentativa sem confirmar o contador.
