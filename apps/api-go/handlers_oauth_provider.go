@@ -103,7 +103,7 @@ func (s *Server) handleOAuthConfirm(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "SESSION_EXPIRED", "Sessão expirada — entre novamente"))
 		return
 	}
-	if u.SuspendedAt != nil {
+	if u.SuspendedAt != nil || u.LoginDisabled {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta suspensa"))
 		return
 	}
@@ -177,7 +177,7 @@ func (s *Server) oauthTokenCode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if u == nil || u.SuspendedAt != nil {
+	if u == nil || u.SuspendedAt != nil || u.LoginDisabled {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta indisponível"))
 		return
 	}
@@ -204,7 +204,7 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if u == nil || u.SuspendedAt != nil {
+	if u == nil || u.SuspendedAt != nil || u.LoginDisabled {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta indisponível"))
 		return
 	}
