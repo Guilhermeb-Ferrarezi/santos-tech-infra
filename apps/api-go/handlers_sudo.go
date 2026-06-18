@@ -18,7 +18,7 @@ import (
 const sudoTTL = 15 * time.Minute
 
 // generateSudoAccess re-emite um access token com o claim sudo_exp.
-func generateSudoAccess(secret string, userID int64, email string, sudoExp time.Time) (string, error) {
+func generateSudoAccess(secret string, userID int64, email, name string, sudoExp time.Time) (string, error) {
 	now := time.Now()
 	claims := jwt.MapClaims{
 		"sub":      strconv.FormatInt(userID, 10),
@@ -28,6 +28,9 @@ func generateSudoAccess(secret string, userID int64, email string, sudoExp time.
 	}
 	if email != "" {
 		claims["email"] = email
+	}
+	if name != "" {
+		claims["name"] = name
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
 }
@@ -142,7 +145,7 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sudoExp := time.Now().Add(sudoTTL)
-	access, err := generateSudoAccess(s.cfg.JWTSecret, u.ID, u.Email, sudoExp)
+	access, err := generateSudoAccess(s.cfg.JWTSecret, u.ID, u.Email, u.Name, sudoExp)
 	if err != nil {
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao elevar a sessão"))
 		return

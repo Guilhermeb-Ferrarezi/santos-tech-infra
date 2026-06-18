@@ -37,7 +37,7 @@ func TestSudoGuardSemElevacao(t *testing.T) {
 
 func TestSudoGuardComElevacao(t *testing.T) {
 	s := testServer(Config{JWTSecret: "s3cr3t"})
-	access, err := generateSudoAccess("s3cr3t", 1, "a@b.com", time.Now().Add(10*time.Minute))
+	access, err := generateSudoAccess("s3cr3t", 1, "a@b.com", "", time.Now().Add(10*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestSudoGuardComElevacao(t *testing.T) {
 
 func TestSudoGuardElevacaoExpirada(t *testing.T) {
 	s := testServer(Config{JWTSecret: "s3cr3t"})
-	access, err := generateSudoAccess("s3cr3t", 1, "a@b.com", time.Now().Add(-time.Minute))
+	access, err := generateSudoAccess("s3cr3t", 1, "a@b.com", "", time.Now().Add(-time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestSudoGuardElevacaoExpirada(t *testing.T) {
 }
 
 func TestTokenSudoUntilSecretErrado(t *testing.T) {
-	access, _ := generateSudoAccess("s3cr3t", 1, "a@b.com", time.Now().Add(10*time.Minute))
+	access, _ := generateSudoAccess("s3cr3t", 1, "a@b.com", "", time.Now().Add(10*time.Minute))
 	if !tokenSudoUntil(access, "outro-secret").IsZero() {
 		t.Fatal("sudo_exp não pode valer com secret errado")
 	}
