@@ -30,7 +30,7 @@ func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client, provider Payment
 		cfg:      cfg,
 		db:       db,
 		rdb:      rdb,
-		store:    &Store{db: db},
+		store:    newStore(db),
 		cart:     &CartStore{rdb: rdb},
 		provider: provider,
 		email:    newEmailClient(cfg),

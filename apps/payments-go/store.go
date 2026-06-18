@@ -2,102 +2,166 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	paydb "github.com/santos-tech/payments/db"
 )
 
-type Store struct{ db *pgxpool.Pool }
+type Store struct {
+	db *pgxpool.Pool
+	q  *paydb.Queries
+}
+
+func newStore(db *pgxpool.Pool) *Store {
+	return &Store{db: db, q: paydb.New(db)}
+}
+
+// tsToTime converte pgtype.Timestamptz para time.Time (zero se inválido).
+func tsToTime(ts pgtype.Timestamptz) time.Time {
+	if !ts.Valid {
+		return time.Time{}
+	}
+	return ts.Time
+}
+
+// tsToTimePtr converte pgtype.Timestamptz para *time.Time (nil se inválido).
+func tsToTimePtr(ts pgtype.Timestamptz) *time.Time {
+	if !ts.Valid {
+		return nil
+	}
+	t := ts.Time
+	return &t
+}
 
 // ── Students ──────────────────────────────────────────────────────────────
 
 func (s *Store) CreateStudent(ctx context.Context, st *Student) error {
-	return s.db.QueryRow(ctx,
-		`INSERT INTO pay_students (name, tax_id, email, phone) VALUES ($1,$2,$3,$4) RETURNING id, created_at`,
-		st.Name, st.TaxID, st.Email, st.Phone).Scan(&st.ID, &st.CreatedAt)
+	row, err := s.q.CreateStudent(ctx, paydb.CreateStudentParams{
+		Name:  st.Name,
+		TaxID: st.TaxID,
+		Email: st.Email,
+		Phone: st.Phone,
+	})
+	if err != nil {
+		return err
+	}
+	st.ID = row.ID
+	st.CreatedAt = tsToTime(row.CreatedAt)
+	return nil
 }
 
 func (s *Store) ListStudents(ctx context.Context) ([]Student, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, name, tax_id, email, phone, created_at FROM pay_students ORDER BY name`)
+	rows, err := s.q.ListStudents(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Student{}
-	for rows.Next() {
-		var st Student
-		if err := rows.Scan(&st.ID, &st.Name, &st.TaxID, &st.Email, &st.Phone, &st.CreatedAt); err != nil {
-			return nil, err
+	out := make([]Student, len(rows))
+	for i, r := range rows {
+		out[i] = Student{
+			ID:        r.ID,
+			Name:      r.Name,
+			TaxID:     r.TaxID,
+			Email:     r.Email,
+			Phone:     r.Phone,
+			CreatedAt: tsToTime(r.CreatedAt),
 		}
-		out = append(out, st)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) GetStudent(ctx context.Context, id int64) (*Student, error) {
-	var st Student
-	err := s.db.QueryRow(ctx,
-		`SELECT id, name, tax_id, email, phone, created_at FROM pay_students WHERE id=$1`, id).
-		Scan(&st.ID, &st.Name, &st.TaxID, &st.Email, &st.Phone, &st.CreatedAt)
+	r, err := s.q.GetStudent(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return &st, nil
+	return &Student{
+		ID:        r.ID,
+		Name:      r.Name,
+		TaxID:     r.TaxID,
+		Email:     r.Email,
+		Phone:     r.Phone,
+		CreatedAt: tsToTime(r.CreatedAt),
+	}, nil
 }
 
 // ── Plans ─────────────────────────────────────────────────────────────────
 
 func (s *Store) CreatePlan(ctx context.Context, p *Plan) error {
-	return s.db.QueryRow(ctx,
-		`INSERT INTO pay_plans (name, amount_cents, due_day) VALUES ($1,$2,$3) RETURNING id, active`,
-		p.Name, p.AmountCents, p.DueDay).Scan(&p.ID, &p.Active)
+	row, err := s.q.CreatePlan(ctx, paydb.CreatePlanParams{
+		Name:        p.Name,
+		AmountCents: p.AmountCents,
+		DueDay:      int32(p.DueDay),
+	})
+	if err != nil {
+		return err
+	}
+	p.ID = row.ID
+	p.Active = row.Active
+	return nil
 }
 
 func (s *Store) ListPlans(ctx context.Context) ([]Plan, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, name, amount_cents, due_day, active FROM pay_plans ORDER BY name`)
+	rows, err := s.q.ListPlans(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Plan{}
-	for rows.Next() {
-		var p Plan
-		if err := rows.Scan(&p.ID, &p.Name, &p.AmountCents, &p.DueDay, &p.Active); err != nil {
-			return nil, err
+	out := make([]Plan, len(rows))
+	for i, r := range rows {
+		out[i] = Plan{
+			ID:          r.ID,
+			Name:        r.Name,
+			AmountCents: r.AmountCents,
+			DueDay:      int(r.DueDay),
+			Active:      r.Active,
 		}
-		out = append(out, p)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ── Subscriptions ─────────────────────────────────────────────────────────
 
 func (s *Store) CreateSubscription(ctx context.Context, sub *Subscription) error {
-	return s.db.QueryRow(ctx,
-		`INSERT INTO pay_subscriptions (student_id, plan_id, amount_cents, due_day) VALUES ($1,$2,$3,$4) RETURNING id, status`,
-		sub.StudentID, sub.PlanID, sub.AmountCents, sub.DueDay).Scan(&sub.ID, &sub.Status)
+	row, err := s.q.CreateSubscription(ctx, paydb.CreateSubscriptionParams{
+		StudentID:   sub.StudentID,
+		PlanID:      sub.PlanID,
+		AmountCents: sub.AmountCents,
+		DueDay:      int32(sub.DueDay),
+	})
+	if err != nil {
+		return err
+	}
+	sub.ID = row.ID
+	sub.Status = row.Status
+	return nil
 }
 
 func (s *Store) ListSubscriptions(ctx context.Context) ([]Subscription, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, student_id, plan_id, amount_cents, due_day, status FROM pay_subscriptions ORDER BY id`)
+	rows, err := s.q.ListSubscriptions(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Subscription{}
-	for rows.Next() {
-		var sub Subscription
-		if err := rows.Scan(&sub.ID, &sub.StudentID, &sub.PlanID, &sub.AmountCents, &sub.DueDay, &sub.Status); err != nil {
-			return nil, err
+	out := make([]Subscription, len(rows))
+	for i, r := range rows {
+		out[i] = Subscription{
+			ID:          r.ID,
+			StudentID:   r.StudentID,
+			PlanID:      r.PlanID,
+			AmountCents: r.AmountCents,
+			DueDay:      int(r.DueDay),
+			Status:      r.Status,
 		}
-		out = append(out, sub)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) SetSubscriptionStatus(ctx context.Context, id int64, status string) error {
-	_, err := s.db.Exec(ctx, `UPDATE pay_subscriptions SET status=$2 WHERE id=$1`, id, status)
-	return err
+	return s.q.SetSubscriptionStatus(ctx, paydb.SetSubscriptionStatusParams{
+		ID:     id,
+		Status: status,
+	})
 }
 
 // SubDue agrupa uma assinatura a cobrar com o aluno correspondente (usado pela recorrência).
@@ -108,46 +172,38 @@ type SubDue struct {
 
 // SubscriptionsDueToday: ativas cujo due_day == dia atual e sem charge no reference_month.
 func (s *Store) SubscriptionsDueToday(ctx context.Context, day int, refMonth string) ([]SubDue, error) {
-	rows, err := s.db.Query(ctx, `
-		SELECT sub.id, sub.student_id, sub.plan_id, sub.amount_cents, sub.due_day, sub.status,
-		       st.id, st.name, st.tax_id, st.email, st.phone, st.created_at
-		FROM pay_subscriptions sub
-		JOIN pay_students st ON st.id = sub.student_id
-		WHERE sub.status='active' AND sub.due_day=$1
-		  AND NOT EXISTS (
-		    SELECT 1 FROM pay_charges c
-		    WHERE c.subscription_id = sub.id AND c.reference_month = $2
-		  )`, day, refMonth)
+	rows, err := s.q.SubscriptionsDueToday(ctx, paydb.SubscriptionsDueTodayParams{
+		DueDay:         int32(day),
+		ReferenceMonth: &refMonth,
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []SubDue{}
-	for rows.Next() {
-		var row SubDue
-		if err := rows.Scan(&row.Sub.ID, &row.Sub.StudentID, &row.Sub.PlanID, &row.Sub.AmountCents,
-			&row.Sub.DueDay, &row.Sub.Status, &row.Student.ID, &row.Student.Name, &row.Student.TaxID,
-			&row.Student.Email, &row.Student.Phone, &row.Student.CreatedAt); err != nil {
-			return nil, err
+	out := make([]SubDue, len(rows))
+	for i, r := range rows {
+		out[i] = SubDue{
+			Sub: Subscription{
+				ID:          r.ID,
+				StudentID:   r.StudentID,
+				PlanID:      r.PlanID,
+				AmountCents: r.AmountCents,
+				DueDay:      int(r.DueDay),
+				Status:      r.Status,
+			},
+			Student: Student{
+				ID:        r.StudentID2,
+				Name:      r.StudentName,
+				TaxID:     r.StudentTaxID,
+				Email:     r.StudentEmail,
+				Phone:     r.StudentPhone,
+				CreatedAt: tsToTime(r.StudentCreatedAt),
+			},
 		}
-		out = append(out, row)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ── Charges ───────────────────────────────────────────────────────────────
-
-func (s *Store) InsertCharge(ctx context.Context, c *Charge) error {
-	return s.db.QueryRow(ctx, `
-		INSERT INTO pay_charges
-		  (kind, subscription_id, student_id, customer_id, amount_cents, due_date, reference_month,
-		   provider, provider_charge_id, correlation_id, public_token, payer_tax_id, br_code, qr_code)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-		RETURNING id, status, created_at`,
-		c.Kind, c.SubscriptionID, c.StudentID, c.CustomerID, c.AmountCents, c.DueDate, c.ReferenceMonth,
-		c.Provider, c.ProviderChargeID, c.CorrelationID, nullStr(c.PublicToken), nullStr(c.payerTaxID), c.BRCode, c.QRCode).
-		Scan(&c.ID, &c.Status, &c.CreatedAt)
-}
 
 func nullStr(s string) any {
 	if s == "" {
@@ -156,6 +212,52 @@ func nullStr(s string) any {
 	return s
 }
 
+// nullStrPtr converte string para *string (nil se vazia).
+func nullStrPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// dateToPgtype converte string "YYYY-MM-DD" para pgtype.Date.
+func dateToPgtype(dateStr string) pgtype.Date {
+	t, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return pgtype.Date{}
+	}
+	return pgtype.Date{Time: t, Valid: true}
+}
+
+func (s *Store) InsertCharge(ctx context.Context, c *Charge) error {
+	row, err := s.q.InsertCharge(ctx, paydb.InsertChargeParams{
+		Kind:             c.Kind,
+		SubscriptionID:   c.SubscriptionID,
+		StudentID:        c.StudentID,
+		CustomerID:       c.CustomerID,
+		AmountCents:      c.AmountCents,
+		DueDate:          dateToPgtype(c.DueDate),
+		ReferenceMonth:   c.ReferenceMonth,
+		Provider:         c.Provider,
+		ProviderChargeID: nullStrPtr(c.ProviderChargeID),
+		CorrelationID:    c.CorrelationID,
+		PublicToken:      nullStrPtr(c.PublicToken),
+		PayerTaxID:       nullStrPtr(c.payerTaxID),
+		BrCode:           nullStrPtr(c.BRCode),
+		QrCode:           nullStrPtr(c.QRCode),
+	})
+	if err != nil {
+		return err
+	}
+	c.ID = row.ID
+	c.Status = row.Status
+	c.CreatedAt = tsToTime(row.CreatedAt)
+	return nil
+}
+
+// ListCharges filtra opcionalmente por status e studentID.
+// Não migrada para sqlc: usa SQL com filtros condicionais inline ($1=” e $2=0
+// significam "sem filtro"), o que não é suportado estaticamente pelo sqlc.
 func (s *Store) ListCharges(ctx context.Context, status string, studentID int64) ([]Charge, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT c.id, c.kind, c.subscription_id, c.student_id, c.amount_cents, c.due_date::text, c.reference_month,
@@ -184,6 +286,8 @@ func (s *Store) ListCharges(ctx context.Context, status string, studentID int64)
 	return out, rows.Err()
 }
 
+// GetStats usa SQL com fragmento dinâmico (cláusula WHERE montada em runtime).
+// Não migrada para sqlc: duas chamadas para o mesmo scan com WHERE diferente.
 func (s *Store) GetStats(ctx context.Context) (StatsResult, error) {
 	var r StatsResult
 	scan := func(p *StatsPeriod, where string) error {
@@ -208,47 +312,54 @@ func (s *Store) GetStats(ctx context.Context) (StatsResult, error) {
 }
 
 func (s *Store) GetCharge(ctx context.Context, id int64) (*Charge, error) {
-	var c Charge
-	err := s.db.QueryRow(ctx, `
-		SELECT id, kind, subscription_id, student_id, amount_cents, due_date::text, reference_month,
-		       status, provider, COALESCE(provider_charge_id,''), correlation_id,
-		       COALESCE(br_code,''), COALESCE(qr_code,''), paid_at, created_at
-		FROM pay_charges WHERE id=$1`, id).
-		Scan(&c.ID, &c.Kind, &c.SubscriptionID, &c.StudentID, &c.AmountCents, &c.DueDate,
-			&c.ReferenceMonth, &c.Status, &c.Provider, &c.ProviderChargeID, &c.CorrelationID,
-			&c.BRCode, &c.QRCode, &c.PaidAt, &c.CreatedAt)
+	r, err := s.q.GetCharge(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return &c, nil
+	return &Charge{
+		ID:               r.ID,
+		Kind:             r.Kind,
+		SubscriptionID:   r.SubscriptionID,
+		StudentID:        r.StudentID,
+		AmountCents:      r.AmountCents,
+		DueDate:          r.DueDate,
+		ReferenceMonth:   r.ReferenceMonth,
+		Status:           r.Status,
+		Provider:         r.Provider,
+		ProviderChargeID: r.ProviderChargeID,
+		CorrelationID:    r.CorrelationID,
+		BRCode:           r.BrCode,
+		QRCode:           r.QrCode,
+		PaidAt:           tsToTimePtr(r.PaidAt),
+		CreatedAt:        tsToTime(r.CreatedAt),
+	}, nil
 }
 
 func (s *Store) MarkChargePaid(ctx context.Context, correlationID string) error {
-	_, err := s.db.Exec(ctx, `UPDATE pay_charges SET status='paid', paid_at=now() WHERE correlation_id=$1 AND status='pending'`, correlationID)
-	return err
+	return s.q.MarkChargePaid(ctx, correlationID)
 }
 
 func (s *Store) MarkChargeExpired(ctx context.Context, correlationID string) error {
-	_, err := s.db.Exec(ctx, `UPDATE pay_charges SET status='expired' WHERE correlation_id=$1 AND status='pending'`, correlationID)
-	return err
+	return s.q.MarkChargeExpired(ctx, correlationID)
 }
 
 // ── Webhook idempotência ──────────────────────────────────────────────────
 
 // MarkWebhookSeen retorna true se é a 1ª vez que vemos este evento (deve processar).
 func (s *Store) MarkWebhookSeen(ctx context.Context, id, typ string, payload []byte) (bool, error) {
-	tag, err := s.db.Exec(ctx,
-		`INSERT INTO pay_webhook_events (id, type, payload) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING`,
-		id, typ, payload)
+	n, err := s.q.MarkWebhookSeen(ctx, paydb.MarkWebhookSeenParams{
+		ID:      id,
+		Type:    typ,
+		Payload: payload,
+	})
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() == 1, nil
+	return n == 1, nil
 }
 
 func (s *Store) PublicTokenByCorrelation(ctx context.Context, correlationID string) (string, error) {
-	var tok *string
-	err := s.db.QueryRow(ctx, `SELECT public_token FROM pay_charges WHERE correlation_id=$1`, correlationID).Scan(&tok)
+	tok, err := s.q.PublicTokenByCorrelation(ctx, correlationID)
 	if err != nil || tok == nil {
 		return "", err
 	}
@@ -258,71 +369,92 @@ func (s *Store) PublicTokenByCorrelation(ctx context.Context, correlationID stri
 // ── Products ──────────────────────────────────────────────────────────────
 
 func (s *Store) CreateProduct(ctx context.Context, p *Product) error {
-	return s.db.QueryRow(ctx,
-		`INSERT INTO pay_products (slug, name, description, price_cents) VALUES ($1,$2,$3,$4) RETURNING id, active`,
-		p.Slug, p.Name, p.Description, p.PriceCents).Scan(&p.ID, &p.Active)
-}
-
-func (s *Store) ListProducts(ctx context.Context) ([]Product, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, slug, name, description, price_cents, active FROM pay_products ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []Product{}
-	for rows.Next() {
-		var p Product
-		if err := rows.Scan(&p.ID, &p.Slug, &p.Name, &p.Description, &p.PriceCents, &p.Active); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) GetProductBySlug(ctx context.Context, slug string) (*Product, error) {
-	var p Product
-	err := s.db.QueryRow(ctx,
-		`SELECT id, slug, name, description, price_cents, active FROM pay_products WHERE slug=$1 AND active=true`, slug).
-		Scan(&p.ID, &p.Slug, &p.Name, &p.Description, &p.PriceCents, &p.Active)
-	if err != nil {
-		return nil, err
-	}
-	return &p, nil
-}
-
-// GetProductByID retorna só produtos ATIVOS — usado no carrinho e no checkout, para
-// não exibir nem cobrar item desativado depois de já ter entrado no carrinho.
-func (s *Store) GetProductByID(ctx context.Context, id int64) (*Product, error) {
-	var p Product
-	err := s.db.QueryRow(ctx,
-		`SELECT id, slug, name, description, price_cents, active FROM pay_products WHERE id=$1 AND active=true`, id).
-		Scan(&p.ID, &p.Slug, &p.Name, &p.Description, &p.PriceCents, &p.Active)
-	if err != nil {
-		return nil, err
-	}
-	return &p, nil
-}
-
-func (s *Store) DeleteProduct(ctx context.Context, id int64) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM pay_products WHERE id=$1`, id)
+	row, err := s.q.CreateProduct(ctx, paydb.CreateProductParams{
+		Slug:        p.Slug,
+		Name:        p.Name,
+		Description: p.Description,
+		PriceCents:  p.PriceCents,
+	})
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	p.ID = row.ID
+	p.Active = row.Active
+	return nil
+}
+
+func (s *Store) ListProducts(ctx context.Context) ([]Product, error) {
+	rows, err := s.q.ListProducts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Product, len(rows))
+	for i, r := range rows {
+		out[i] = Product{
+			ID:          r.ID,
+			Slug:        r.Slug,
+			Name:        r.Name,
+			Description: r.Description,
+			PriceCents:  r.PriceCents,
+			Active:      r.Active,
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) GetProductBySlug(ctx context.Context, slug string) (*Product, error) {
+	r, err := s.q.GetProductBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	return &Product{
+		ID:          r.ID,
+		Slug:        r.Slug,
+		Name:        r.Name,
+		Description: r.Description,
+		PriceCents:  r.PriceCents,
+		Active:      r.Active,
+	}, nil
+}
+
+func (s *Store) GetProductByID(ctx context.Context, id int64) (*Product, error) {
+	r, err := s.q.GetProductByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &Product{
+		ID:          r.ID,
+		Slug:        r.Slug,
+		Name:        r.Name,
+		Description: r.Description,
+		PriceCents:  r.PriceCents,
+		Active:      r.Active,
+	}, nil
+}
+
+func (s *Store) DeleteProduct(ctx context.Context, id int64) error {
+	n, err := s.q.DeleteProduct(ctx, id)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return pgx.ErrNoRows
 	}
 	return nil
 }
 
 func (s *Store) UpdateProduct(ctx context.Context, p *Product) error {
-	tag, err := s.db.Exec(ctx,
-		`UPDATE pay_products SET name=$2, description=$3, price_cents=$4, active=$5 WHERE id=$1`,
-		p.ID, p.Name, p.Description, p.PriceCents, p.Active)
+	n, err := s.q.UpdateProduct(ctx, paydb.UpdateProductParams{
+		ID:          p.ID,
+		Name:        p.Name,
+		Description: p.Description,
+		PriceCents:  p.PriceCents,
+		Active:      p.Active,
+	})
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	if n == 0 {
 		return pgx.ErrNoRows
 	}
 	return nil
@@ -330,47 +462,57 @@ func (s *Store) UpdateProduct(ctx context.Context, p *Product) error {
 
 // ── Customers ─────────────────────────────────────────────────────────────
 
-// UpsertCustomer garante o registro do cliente SEM sobrescrever dados já preenchidos.
-// O DO UPDATE é um no-op (re-grava o próprio user_id) só para o RETURNING devolver a
-// linha existente — tax_id/phone/name/email persistidos não são tocados.
 func (s *Store) UpsertCustomer(ctx context.Context, userID int64) (*Customer, error) {
-	var c Customer
-	err := s.db.QueryRow(ctx, `
-		INSERT INTO pay_customers (user_id) VALUES ($1)
-		ON CONFLICT (user_id) DO UPDATE SET user_id=EXCLUDED.user_id
-		RETURNING id, user_id, tax_id, phone, name, email`,
-		userID).Scan(&c.ID, &c.UserID, &c.TaxID, &c.Phone, &c.Name, &c.Email)
+	r, err := s.q.UpsertCustomer(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	return &c, nil
+	return &Customer{
+		ID:     r.ID,
+		UserID: r.UserID,
+		TaxID:  r.TaxID,
+		Phone:  r.Phone,
+		Name:   r.Name,
+		Email:  r.Email,
+	}, nil
 }
 
 func (s *Store) GetCustomerByUserID(ctx context.Context, userID int64) (*Customer, error) {
-	var c Customer
-	err := s.db.QueryRow(ctx,
-		`SELECT id, user_id, tax_id, phone, name, email FROM pay_customers WHERE user_id=$1`, userID).
-		Scan(&c.ID, &c.UserID, &c.TaxID, &c.Phone, &c.Name, &c.Email)
+	r, err := s.q.GetCustomerByUserID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	return &c, nil
+	return &Customer{
+		ID:     r.ID,
+		UserID: r.UserID,
+		TaxID:  r.TaxID,
+		Phone:  r.Phone,
+		Name:   r.Name,
+		Email:  r.Email,
+	}, nil
 }
 
 func (s *Store) UpdateCustomerData(ctx context.Context, userID int64, taxID, phone, name, email string) error {
-	_, err := s.db.Exec(ctx,
-		`UPDATE pay_customers SET tax_id=$2, phone=$3, name=$4, email=$5 WHERE user_id=$1`,
-		userID, taxID, phone, name, email)
-	return err
+	return s.q.UpdateCustomerData(ctx, paydb.UpdateCustomerDataParams{
+		UserID: userID,
+		TaxID:  taxID,
+		Phone:  phone,
+		Name:   name,
+		Email:  email,
+	})
 }
 
 // ── Charge items + charges por token/cliente ──────────────────────────────
 
 func (s *Store) InsertChargeItems(ctx context.Context, chargeID int64, items []ChargeItem) error {
 	for _, it := range items {
-		if _, err := s.db.Exec(ctx,
-			`INSERT INTO pay_charge_items (charge_id, product_id, name, price_cents, quantity) VALUES ($1,$2,$3,$4,$5)`,
-			chargeID, it.ProductID, it.Name, it.PriceCents, it.Quantity); err != nil {
+		if err := s.q.InsertChargeItem(ctx, paydb.InsertChargeItemParams{
+			ChargeID:   chargeID,
+			ProductID:  it.ProductID,
+			Name:       it.Name,
+			PriceCents: it.PriceCents,
+			Quantity:   int32(it.Quantity),
+		}); err != nil {
 			return err
 		}
 	}
@@ -378,49 +520,52 @@ func (s *Store) InsertChargeItems(ctx context.Context, chargeID int64, items []C
 }
 
 func (s *Store) GetChargeByPublicToken(ctx context.Context, token string) (*Charge, error) {
-	var c Charge
-	err := s.db.QueryRow(ctx, `
-		SELECT id, kind, student_id, customer_id, amount_cents, due_date::text, status,
-		       COALESCE(br_code,''), COALESCE(qr_code,''), correlation_id, paid_at, created_at
-		FROM pay_charges WHERE public_token=$1`, token).
-		Scan(&c.ID, &c.Kind, &c.StudentID, &c.CustomerID, &c.AmountCents, &c.DueDate, &c.Status,
-			&c.BRCode, &c.QRCode, &c.CorrelationID, &c.PaidAt, &c.CreatedAt)
+	r, err := s.q.GetChargeByPublicToken(ctx, &token)
 	if err != nil {
 		return nil, err
 	}
-	return &c, nil
+	return &Charge{
+		ID:            r.ID,
+		Kind:          r.Kind,
+		StudentID:     r.StudentID,
+		CustomerID:    r.CustomerID,
+		AmountCents:   r.AmountCents,
+		DueDate:       r.DueDate,
+		Status:        r.Status,
+		BRCode:        r.BrCode,
+		QRCode:        r.QrCode,
+		CorrelationID: r.CorrelationID,
+		PaidAt:        tsToTimePtr(r.PaidAt),
+		CreatedAt:     tsToTime(r.CreatedAt),
+	}, nil
 }
 
-// PayerEmailByCharge retorna nome e email de quem paga a cobrança — do aluno
-// (student_id) ou do cliente (customer_id). LEFT JOIN nos dois: a cobrança pode
-// não ter aluno/cliente correspondente (ex.: vinda do pay-web), e ainda assim
-// queremos a linha (com email vazio) em vez de "no rows".
 func (s *Store) PayerEmailByCharge(ctx context.Context, chargeID int64) (name, email string, err error) {
-	err = s.db.QueryRow(ctx, `
-		SELECT COALESCE(NULLIF(st.name,''),  cu.name, ''),
-		       COALESCE(NULLIF(st.email,''), cu.email, '')
-		FROM pay_charges c
-		LEFT JOIN pay_students  st ON st.id = c.student_id
-		LEFT JOIN pay_customers cu ON cu.id = c.customer_id
-		WHERE c.id=$1`, chargeID).Scan(&name, &email)
-	return
+	r, err := s.q.PayerEmailByCharge(ctx, chargeID)
+	if err != nil {
+		return "", "", err
+	}
+	return r.Name, r.Email, nil
 }
 
 func (s *Store) ListChargesByCustomer(ctx context.Context, customerID int64) ([]Charge, error) {
-	rows, err := s.db.Query(ctx, `
-		SELECT id, kind, amount_cents, due_date::text, status, COALESCE(br_code,''), correlation_id, paid_at, created_at
-		FROM pay_charges WHERE customer_id=$1 ORDER BY created_at DESC`, customerID)
+	rows, err := s.q.ListChargesByCustomer(ctx, &customerID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Charge{}
-	for rows.Next() {
-		var c Charge
-		if err := rows.Scan(&c.ID, &c.Kind, &c.AmountCents, &c.DueDate, &c.Status, &c.BRCode, &c.CorrelationID, &c.PaidAt, &c.CreatedAt); err != nil {
-			return nil, err
+	out := make([]Charge, len(rows))
+	for i, r := range rows {
+		out[i] = Charge{
+			ID:            r.ID,
+			Kind:          r.Kind,
+			AmountCents:   r.AmountCents,
+			DueDate:       r.DueDate,
+			Status:        r.Status,
+			BRCode:        r.BrCode,
+			CorrelationID: r.CorrelationID,
+			PaidAt:        tsToTimePtr(r.PaidAt),
+			CreatedAt:     tsToTime(r.CreatedAt),
 		}
-		out = append(out, c)
 	}
-	return out, rows.Err()
+	return out, nil
 }
