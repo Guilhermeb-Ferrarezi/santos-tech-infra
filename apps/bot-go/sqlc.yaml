@@ -1,0 +1,38 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "db/query/"
+    schema: "db/schema.sql"
+    gen:
+      go:
+        package: "db"
+        out: "db/"
+        emit_pointers_for_null_types: true
+        emit_sql_as_comment: false
+        overrides:
+          - db_type: "uuid"
+            go_type: "string"
+          - db_type: "timestamptz"
+            go_type:
+              import: "time"
+              type: "Time"
+          - db_type: "pg_catalog.timestamptz"
+            go_type:
+              import: "time"
+              type: "Time"
+          - db_type: "jsonb"
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"
+          - db_type: "bytea"
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"
+          - db_type: "integer"
+            go_type: "int"
+          - db_type: "pg_catalog.int4"
+            go_type: "int"
+          - db_type: "bigint"
+            go_type: "int64"
+          - db_type: "pg_catalog.int8"
+            go_type: "int64"
