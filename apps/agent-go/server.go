@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/santos-tech/agent/db"
 	"github.com/santos-tech/golog"
 )
 
@@ -21,13 +22,14 @@ const userIDKey ctxKey = "userID"
 type Server struct {
 	cfg  Config
 	db   *pgxpool.Pool
+	q    *db.Queries
 	rdb  *redis.Client
 	mgr  *SessionManager
 	auth *claudeAuth
 }
 
-func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: db, rdb: rdb}
+func NewServer(cfg Config, pool *pgxpool.Pool, rdb *redis.Client) *Server {
+	s := &Server{cfg: cfg, db: pool, q: db.New(pool), rdb: rdb}
 	s.mgr = newSessionManager(s)
 	s.auth = newClaudeAuth(cfg)
 	return s

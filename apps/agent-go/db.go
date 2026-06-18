@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	agentdb "github.com/santos-tech/agent/db"
 )
 
 func newDB(ctx context.Context, url string) (*pgxpool.Pool, error) {
@@ -117,11 +119,59 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	return err
 }
 
+// ── helpers de conversão pgtype ↔ tipos do serviço ──────────────────────────
+
+// uuidFromStr converte uma string UUID para pgtype.UUID.
+func uuidFromStr(s string) pgtype.UUID {
+	var u pgtype.UUID
+	_ = u.Scan(s)
+	return u
+}
+
+// convFromGetRow converte uma GetConversationRow gerada pelo sqlc para *Conversation.
+func convFromGetRow(r agentdb.GetConversationRow) *Conversation {
+	return &Conversation{
+		ID:             r.ID,
+		UserID:         r.UserID,
+		Title:          r.Title,
+		Repo:           r.Repo,
+		Workdir:        r.Workdir,
+		Model:          r.Model,
+		Status:         r.Status,
+		SessionID:      r.SessionID,
+		SessionStarted: r.SessionStarted,
+		ToolsDisabled:  r.ToolsDisabled,
+		Effort:         r.Effort,
+		WebSearch:      r.WebSearch,
+		CreatedAt:      r.CreatedAt.Time,
+		UpdatedAt:      r.UpdatedAt.Time,
+	}
+}
+
+// convFromListRow converte uma ListConversationsRow para Conversation.
+func convFromListRow(r agentdb.ListConversationsRow) Conversation {
+	return Conversation{
+		ID:             r.ID,
+		UserID:         r.UserID,
+		Title:          r.Title,
+		Repo:           r.Repo,
+		Workdir:        r.Workdir,
+		Model:          r.Model,
+		Status:         r.Status,
+		SessionID:      r.SessionID,
+		SessionStarted: r.SessionStarted,
+		ToolsDisabled:  r.ToolsDisabled,
+		Effort:         r.Effort,
+		WebSearch:      r.WebSearch,
+		CreatedAt:      r.CreatedAt.Time,
+		UpdatedAt:      r.UpdatedAt.Time,
+	}
+}
+
 // ── Papel do usuário (para o admin guard) ────────────────────────────────────
 
 func (s *Server) userRole(ctx context.Context, userID int64) (int16, error) {
-	var role int16
-	err := s.db.QueryRow(ctx, `SELECT role FROM users WHERE id=$1`, userID).Scan(&role)
+	role, err := s.q.UserRole(ctx, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
 	}
@@ -132,113 +182,110 @@ func (s *Server) userRole(ctx context.Context, userID int64) (int16, error) {
 // com o auth) pelo hash: devolve o user_id se válido e não expirado, marcando o
 // último uso. (0, nil) significa token inválido/expirado.
 func (s *Server) userIDByAPIKeyHash(ctx context.Context, hash string) (int64, error) {
-	var userID int64
-	err := s.db.QueryRow(ctx,
-		`UPDATE api_keys SET last_used_at=now()
-		 WHERE key_hash=$1 AND (expires_at IS NULL OR expires_at > now())
-		 RETURNING user_id`, hash).Scan(&userID)
+	uid, err := s.q.UserIDByAPIKeyHash(ctx, hash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
 	}
-	return userID, err
+	return int64(uid), err
 }
 
 // ── Conversas ────────────────────────────────────────────────────────────────
 
-const convCols = `id::text, user_id, title, repo, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at`
-
-func scanConversation(row pgx.Row) (*Conversation, error) {
-	var c Conversation
-	err := row.Scan(&c.ID, &c.UserID, &c.Title, &c.Repo, &c.Workdir, &c.Model, &c.Status,
-		&c.SessionID, &c.SessionStarted, &c.ToolsDisabled, &c.Effort, &c.WebSearch, &c.CreatedAt, &c.UpdatedAt)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &c, nil
-}
-
 func (s *Server) insertConversation(ctx context.Context, c *Conversation) error {
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO claude_conversations (id, user_id, title, repo, workdir, model, status, session_id, session_started, tools_disabled, effort, web_search)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-		c.ID, c.UserID, c.Title, c.Repo, c.Workdir, c.Model, c.Status, c.SessionID, c.SessionStarted, c.ToolsDisabled, c.Effort, c.WebSearch)
-	return err
+	return s.q.InsertConversation(ctx, agentdb.InsertConversationParams{
+		ID:             uuidFromStr(c.ID),
+		UserID:         c.UserID,
+		Title:          c.Title,
+		Repo:           c.Repo,
+		Workdir:        c.Workdir,
+		Model:          c.Model,
+		Status:         c.Status,
+		SessionID:      uuidFromStr(c.SessionID),
+		SessionStarted: c.SessionStarted,
+		ToolsDisabled:  c.ToolsDisabled,
+		Effort:         c.Effort,
+		WebSearch:      c.WebSearch,
+	})
 }
 
 func (s *Server) conversationByID(ctx context.Context, id string, userID int64) (*Conversation, error) {
-	return scanConversation(s.db.QueryRow(ctx,
-		`SELECT `+convCols+` FROM claude_conversations WHERE id=$1 AND user_id=$2`, id, userID))
-}
-
-func (s *Server) listConversations(ctx context.Context, userID int64) ([]Conversation, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT `+convCols+` FROM claude_conversations WHERE user_id=$1 ORDER BY updated_at DESC`, userID)
+	row, err := s.q.GetConversation(ctx, agentdb.GetConversationParams{
+		Column1: uuidFromStr(id),
+		UserID:  userID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Conversation{}
-	for rows.Next() {
-		c, err := scanConversation(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *c)
+	return convFromGetRow(row), nil
+}
+
+func (s *Server) listConversations(ctx context.Context, userID int64) ([]Conversation, error) {
+	rows, err := s.q.ListConversations(ctx, userID)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	out := make([]Conversation, len(rows))
+	for i, r := range rows {
+		out[i] = convFromListRow(r)
+	}
+	return out, nil
 }
 
 func (s *Server) deleteConversation(ctx context.Context, id string, userID int64) (bool, error) {
-	tag, err := s.db.Exec(ctx, `DELETE FROM claude_conversations WHERE id=$1 AND user_id=$2`, id, userID)
-	return tag.RowsAffected() > 0, err
+	n, err := s.q.DeleteConversation(ctx, agentdb.DeleteConversationParams{
+		Column1: uuidFromStr(id),
+		UserID:  userID,
+	})
+	return n > 0, err
 }
 
 func (s *Server) updateConversationModel(ctx context.Context, id string, userID int64, model string) error {
-	_, err := s.db.Exec(ctx,
-		`UPDATE claude_conversations SET model=$1, updated_at=now() WHERE id=$2 AND user_id=$3`,
-		model, id, userID)
-	return err
+	return s.q.UpdateConversationModel(ctx, agentdb.UpdateConversationModelParams{
+		Model:   model,
+		Column2: uuidFromStr(id),
+		UserID:  userID,
+	})
 }
 
 func (s *Server) updateConversationTitle(ctx context.Context, id string, userID int64, title string) error {
-	_, err := s.db.Exec(ctx,
-		`UPDATE claude_conversations SET title=$1, updated_at=now() WHERE id=$2 AND user_id=$3`,
-		title, id, userID)
-	return err
+	return s.q.UpdateConversationTitle(ctx, agentdb.UpdateConversationTitleParams{
+		Title:   &title,
+		Column2: uuidFromStr(id),
+		UserID:  userID,
+	})
 }
 
 // setTitleIfEmpty define o título só se ainda estiver vazio (usado pelo auto-título).
 func (s *Server) setTitleIfEmpty(ctx context.Context, id, title string) error {
-	_, err := s.db.Exec(ctx,
-		`UPDATE claude_conversations SET title=$1, updated_at=now()
-		 WHERE id=$2 AND (title IS NULL OR title = '')`, title, id)
-	return err
+	return s.q.SetTitleIfEmpty(ctx, agentdb.SetTitleIfEmptyParams{
+		Title:   &title,
+		Column2: uuidFromStr(id),
+	})
 }
 
 func (s *Server) setConversationStatus(ctx context.Context, id, status string) error {
-	_, err := s.db.Exec(ctx,
-		`UPDATE claude_conversations SET status=$1, updated_at=now() WHERE id=$2`, status, id)
-	return err
+	return s.q.SetConversationStatus(ctx, agentdb.SetConversationStatusParams{
+		Status:  status,
+		Column2: uuidFromStr(id),
+	})
 }
 
 // markSessionStarted marca que o 1º turno da sessão atual já rodou (próximos usam --resume).
 func (s *Server) markSessionStarted(ctx context.Context, id string) error {
-	_, err := s.db.Exec(ctx,
-		`UPDATE claude_conversations SET session_started=true, updated_at=now() WHERE id=$1`, id)
-	return err
+	return s.q.MarkSessionStarted(ctx, uuidFromStr(id))
 }
 
 // rotateSession gera um novo claude session_id e zera o "started" — contexto novo.
 // Preserva o id (PK) e as mensagens. Usado por /clear e /compact.
 func (s *Server) rotateSession(ctx context.Context, id string, userID int64, newSessionID string) error {
-	_, err := s.db.Exec(ctx,
-		`UPDATE claude_conversations SET session_id=$1, session_started=false, updated_at=now()
-		 WHERE id=$2 AND user_id=$3`,
-		newSessionID, id, userID)
-	return err
+	return s.q.RotateSession(ctx, agentdb.RotateSessionParams{
+		Column1: uuidFromStr(newSessionID),
+		Column2: uuidFromStr(id),
+		UserID:  userID,
+	})
 }
 
 // ── Mensagens ────────────────────────────────────────────────────────────────
@@ -249,62 +296,54 @@ func (s *Server) insertMessage(ctx context.Context, m *Message) error {
 	if m.Usage != nil {
 		usage, _ = json.Marshal(m.Usage)
 	}
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO claude_messages (conversation_id, role, kind, content, usage)
-		 VALUES ($1,$2,$3,$4,$5)`,
-		m.ConversationID, m.Role, m.Kind, content, usage)
-	return err
+	return s.q.InsertMessage(ctx, agentdb.InsertMessageParams{
+		Column1: uuidFromStr(m.ConversationID),
+		Role:    m.Role,
+		Kind:    m.Kind,
+		Content: content,
+		Usage:   usage,
+	})
 }
 
 func (s *Server) listMessages(ctx context.Context, convID string) ([]Message, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT id, conversation_id::text, role, kind, content, usage, created_at
-		 FROM claude_messages WHERE conversation_id=$1 ORDER BY id`, convID)
+	rows, err := s.q.ListMessages(ctx, uuidFromStr(convID))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Message{}
-	for rows.Next() {
+	out := make([]Message, 0, len(rows))
+	for _, r := range rows {
 		var m Message
-		var content []byte
-		var usage []byte
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Kind, &content, &usage, &m.CreatedAt); err != nil {
-			return nil, err
-		}
-		_ = json.Unmarshal(content, &m.Content)
-		if len(usage) > 0 {
-			_ = json.Unmarshal(usage, &m.Usage)
+		m.ID = r.ID
+		m.ConversationID = r.ConversationID
+		m.Role = r.Role
+		m.Kind = r.Kind
+		m.CreatedAt = r.CreatedAt.Time
+		_ = json.Unmarshal(r.Content, &m.Content)
+		if len(r.Usage) > 0 {
+			_ = json.Unmarshal(r.Usage, &m.Usage)
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ── Credenciais OAuth do Claude (identidade única do agente) ──────────────────
 
 func (s *Server) saveOAuthToken(ctx context.Context, enc []byte) error {
-	_, err := s.db.Exec(ctx,
-		`UPDATE claude_credentials SET oauth_token_enc=$1, status='logged_in', updated_at=now() WHERE id=1`, enc)
-	return err
+	return s.q.SaveOAuthToken(ctx, enc)
 }
 
 func (s *Server) clearOAuthToken(ctx context.Context) error {
-	_, err := s.db.Exec(ctx,
-		`UPDATE claude_credentials SET oauth_token_enc=NULL, status='logged_out', updated_at=now() WHERE id=1`)
-	return err
+	return s.q.ClearOAuthToken(ctx)
 }
 
 func (s *Server) oauthStatus(ctx context.Context) (string, error) {
-	var status string
-	err := s.db.QueryRow(ctx, `SELECT status FROM claude_credentials WHERE id=1`).Scan(&status)
-	return status, err
+	return s.q.GetOAuthStatus(ctx)
 }
 
 // oauthToken retorna o token OAuth decifrado, ou "" se deslogado.
 func (s *Server) oauthToken(ctx context.Context) (string, error) {
-	var enc []byte
-	err := s.db.QueryRow(ctx, `SELECT oauth_token_enc FROM claude_credentials WHERE id=1`).Scan(&enc)
+	enc, err := s.q.GetOAuthToken(ctx)
 	if err != nil || len(enc) == 0 {
 		return "", err
 	}
@@ -314,25 +353,9 @@ func (s *Server) oauthToken(ctx context.Context) (string, error) {
 // ── Push tokens (Expo) ───────────────────────────────────────────────────────
 
 func (s *Server) savePushToken(ctx context.Context, userID int64, token string) error {
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO claude_push_tokens (token, user_id) VALUES ($1,$2)
-		 ON CONFLICT (token) DO UPDATE SET user_id=$2`, token, userID)
-	return err
+	return s.q.SavePushToken(ctx, agentdb.SavePushTokenParams{Token: token, UserID: userID})
 }
 
 func (s *Server) pushTokensForUser(ctx context.Context, userID int64) ([]string, error) {
-	rows, err := s.db.Query(ctx, `SELECT token FROM claude_push_tokens WHERE user_id=$1`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
+	return s.q.PushTokensForUser(ctx, userID)
 }
