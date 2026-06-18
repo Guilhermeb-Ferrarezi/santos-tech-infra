@@ -59,22 +59,25 @@ func (s *Server) handleMFAEmailCode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusConflict, "EMAIL_NOT_VERIFIED", "Verifique seu email antes de usá-lo como 2º fator"))
 		return
 	}
-	n, errCD := s.rdb.Exists(r.Context(), mfaEmailAcctCDKey(uid)).Result()
+	// SetNX é atômico: exatamente uma requisição concorrente "adquire" o slot de
+	// envio. O par Exists + Set não-atômico deixava uma janela onde duas chamadas
+	// simultâneas ambas passavam pelo check e enviavam dois OTPs, sobrescrevendo o
+	// código no Redis (segunda requisiçao sempre ganhava; OTP da primeira era inválido).
+	acquired, errCD := s.rdb.SetNX(r.Context(), mfaEmailAcctCDKey(uid), "1", mfaEmailAcctCooldown).Result()
 	if errCD != nil {
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao verificar cooldown"))
 		return
 	}
-	if n == 1 {
+	if !acquired {
 		writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Aguarde um pouco antes de reenviar"))
 		return
 	}
 	code := emailCode()
 	if err := s.rdb.Set(r.Context(), mfaEmailAcctKey(uid), code, mfaEmailAcctTTL).Err(); err != nil {
+		// Desfaz o cooldown para que o usuário possa retentar imediatamente.
+		_ = s.rdb.Del(r.Context(), mfaEmailAcctCDKey(uid))
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao gerar o código"))
 		return
-	}
-	if err := s.rdb.Set(r.Context(), mfaEmailAcctCDKey(uid), "1", mfaEmailAcctCooldown).Err(); err != nil {
-		slog.Warn("falha ao gravar cooldown do código de email MFA", "uid", uid, "err", err)
 	}
 	html := emailCodeHTML(code, "Use o código abaixo para confirmar a alteração do 2FA da sua conta:")
 	s.enqueueEmail("handleMFAEmailCode", u.Email, "Seu código de verificação — Santos Tech", html)
