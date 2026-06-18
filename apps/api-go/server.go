@@ -10,6 +10,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/santos-tech/auth/db"
 	"github.com/santos-tech/golog"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -22,6 +23,10 @@ const userIDKey ctxKey = "userID"
 type Server struct {
 	cfg Config
 	db  *pgxpool.Pool
+	// q: camada de acesso ao banco via sqlc (gerado em db/). Todas as queries
+	// estáticas do auth (users, sessions, api_keys, etc.) migram para cá.
+	// O pool s.db continua necessário para Begin/Ping/Close.
+	q *db.Queries
 	// portalDB: pool do banco do domínio do portal (/portal/*). Hoje aponta pra
 	// um banco separado do auth; os handlers de portal usam ESTE pool, enquanto
 	// auth/guards/users seguem no `db`. Se não houver banco separado, é o mesmo
@@ -35,10 +40,10 @@ type Server struct {
 	queue    *asynq.Client // fila durável de emails; nil = sem fila (fallback fire-and-forget)
 }
 
-func NewServer(cfg Config, db, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: db, portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), loki: newLokiClient(cfg.LokiURL)}
+func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
+	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), loki: newLokiClient(cfg.LokiURL)}
 	if s.portalDB == nil {
-		s.portalDB = db
+		s.portalDB = authDB
 	}
 	if cfg.GoogleClientID != "" {
 		s.google = &oauth2.Config{
