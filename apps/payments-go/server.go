@@ -20,6 +20,7 @@ type Server struct {
 	analytics analyticsSource
 	cart      *CartStore
 	provider  PaymentProvider
+	efi       efiOps
 	email     *emailClient
 	// queue enfileira tasks asynq (notificação de pagamento). Pode ser nil em
 	// testes que não montam a fila — os callers tratam o nil com fallback.
@@ -28,7 +29,7 @@ type Server struct {
 
 func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client, provider PaymentProvider) *Server {
 	st := newStore(db)
-	return &Server{
+	s := &Server{
 		cfg:       cfg,
 		db:        db,
 		rdb:       rdb,
@@ -38,6 +39,11 @@ func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client, provider Payment
 		provider:  provider,
 		email:     newEmailClient(cfg),
 	}
+	// O *efiProvider satisfaz tanto PaymentProvider quanto efiOps.
+	if ep, ok := provider.(*efiProvider); ok {
+		s.efi = ep
+	}
+	return s
 }
 
 func (s *Server) Routes() http.Handler {
@@ -85,6 +91,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /pay/{token}/events", s.handlePayEvents)
 
 	mux.HandleFunc("POST /webhooks/efi/pix", s.handleWebhook)
+
+	mux.HandleFunc("GET /efi/balance", s.requireAdmin(s.handleEfiBalance))
 
 	return golog.RequestLogger(s.cors(metricsMiddleware(mux)))
 }

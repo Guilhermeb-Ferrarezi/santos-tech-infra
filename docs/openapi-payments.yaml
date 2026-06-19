@@ -474,6 +474,30 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Analytics" }
         "500": { description: falha no banco, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /efi/balance:
+    get:
+      summary: Saldo disponível na conta Efí
+      tags: [Efí]
+      description: >
+        Retorna o saldo disponível na conta Efí/Pix em centavos, consultado
+        diretamente em `GET /v2/gn/saldo` da API Efí. Requer role=3 (Admin).
+      responses:
+        "200":
+          description: Saldo retornado com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [availableCents]
+                properties:
+                  availableCents:
+                    type: integer
+                    format: int64
+                    description: Saldo em centavos (ex. 10000 = R$ 100,00)
+                    example: 10000
+        "401": { description: não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: acesso proibido (não é admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: falha ao consultar a Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /webhooks/efi/pix:
     post:
       summary: Webhook da Efí — notificações PIX (público, idempotente)

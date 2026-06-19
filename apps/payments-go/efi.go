@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"sync"
@@ -145,6 +146,25 @@ func (p *efiProvider) do(ctx context.Context, method, path string, body any) ([]
 		return nil, fmt.Errorf("efi %s %s: status %d: %s", method, path, res.StatusCode, data)
 	}
 	return data, nil
+}
+
+// GetBalance consulta o saldo disponível da conta Efí (em centavos).
+func (p *efiProvider) GetBalance(ctx context.Context) (int64, error) {
+	data, err := p.do(ctx, http.MethodGet, "/v2/gn/saldo", nil)
+	if err != nil {
+		return 0, err
+	}
+	var r struct {
+		Saldo string `json:"saldo"` // reais, ex "100.00"
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return 0, err
+	}
+	v, err := strconv.ParseFloat(r.Saldo, 64)
+	if err != nil {
+		return 0, fmt.Errorf("efi saldo inválido %q: %w", r.Saldo, err)
+	}
+	return int64(math.Round(v * 100)), nil
 }
 
 // efiCobResp — resposta de /v2/cob/{txid}.

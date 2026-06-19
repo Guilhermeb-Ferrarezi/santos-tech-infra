@@ -10,6 +10,40 @@ import (
 	"time"
 )
 
+// TestEfiBalanceSmoke consulta o saldo real da conta Efí (homologação) via GET /v2/gn/saldo.
+// Valida que o path e o shape da resposta estão corretos.
+//
+// Rodar com:
+//
+//	set -a && . ./.env && set +a && EFI_SMOKE=1 go test -run TestEfiBalanceSmoke -v
+func TestEfiBalanceSmoke(t *testing.T) {
+	if os.Getenv("EFI_SMOKE") != "1" {
+		t.Skip("EFI_SMOKE!=1; pulando smoke test de saldo da Efí")
+	}
+	cert, err := loadClientCert(os.Getenv("EFI_CERT_P12_BASE64"), os.Getenv("EFI_CERT_PASSWORD"))
+	if err != nil {
+		t.Fatalf("loadClientCert: %v", err)
+	}
+	p := &efiProvider{
+		base:         strings.TrimRight(os.Getenv("EFI_BASE_URL"), "/"),
+		clientID:     os.Getenv("EFI_CLIENT_ID"),
+		clientSecret: os.Getenv("EFI_CLIENT_SECRET"),
+		pixKey:       os.Getenv("EFI_PIX_KEY"),
+		client: &http.Client{
+			Timeout:   20 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert}}},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cents, err := p.GetBalance(ctx)
+	if err != nil {
+		t.Fatalf("GetBalance: %v", err)
+	}
+	t.Logf("saldo Efí (homolog): %d centavos (R$ %.2f)", cents, float64(cents)/100)
+}
+
 // TestEfiSmokeHomolog exercita a API Pix REAL da Efí (homologação): mTLS +
 // OAuth + criar uma cobrança + consultar. Valida que os nomes de campo
 // assumidos no efiProvider batem com a resposta real do gateway.

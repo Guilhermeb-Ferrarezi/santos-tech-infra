@@ -517,6 +517,10 @@ GET    /analytics?range=7d|30d|90d|12m|all  (default 30d)
             byStatus:[{key,total,count}], byKind:[{key,total,count}], topProducts:[{key,total,count}]}
          Valores monetários em centavos. deltaPaidPct compara com período anterior de mesmo tamanho.
 
+Dashboard Efí (admin — role=3):
+GET    /efi/balance        saldo disponível na conta Efí em centavos.
+         Resposta: `{availableCents: int64}`. Consulta `GET /v2/gn/saldo` na Efí.
+
 Webhook (público, verificado/idempotente):
 POST   /webhooks/efi/pix   notificações PIX da Efí. Autenticação via query param
          `?token=<EFI_WEBHOOK_SECRET>` (a Efí appenda `/pix` ao URL base registrado).
