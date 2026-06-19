@@ -152,11 +152,10 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) oauthTokenCode(w http.ResponseWriter, r *http.Request) {
 	code := r.PostFormValue("code")
-	clientID := r.PostFormValue("client_id")
 	redirectURI := r.PostFormValue("redirect_uri")
 	verifier := r.PostFormValue("code_verifier")
-	if code == "" || clientID == "" || redirectURI == "" || verifier == "" {
-		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "code, client_id, redirect_uri e code_verifier são obrigatórios"))
+	if code == "" || redirectURI == "" || verifier == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "code, redirect_uri e code_verifier são obrigatórios"))
 		return
 	}
 	// GETDEL: o code é de uso único — a segunda troca falha sempre.
@@ -170,7 +169,13 @@ func (s *Server) oauthTokenCode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if ac.ClientID != clientID || ac.RedirectURI != redirectURI || !verifyPKCE(verifier, ac.CodeChallenge) {
+	// client_id é opcional no body para clients públicos (PKCE — RFC 7636 §4.5).
+	// Se fornecido, deve conferir com o code; se ausente, o code já identifica o client.
+	if clientID := r.PostFormValue("client_id"); clientID != "" && ac.ClientID != clientID {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_GRANT", "Parâmetros não conferem com o code"))
+		return
+	}
+	if ac.RedirectURI != redirectURI || !verifyPKCE(verifier, ac.CodeChallenge) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_GRANT", "Parâmetros não conferem com o code"))
 		return
 	}
