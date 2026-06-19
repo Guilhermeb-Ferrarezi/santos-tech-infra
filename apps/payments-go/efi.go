@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 
@@ -24,10 +23,6 @@ func loadClientCert(p12Base64, password string) (tls.Certificate, error) {
 		Certificate: [][]byte{leaf.Raw},
 		PrivateKey:  key,
 		Leaf:        leaf,
-	}
-	// Garante que a chave casa com o leaf (e popula campos internos do tls).
-	if _, err := x509.ParseCertificate(leaf.Raw); err != nil {
-		return tls.Certificate{}, fmt.Errorf("efi: certificado inválido: %w", err)
 	}
 	return cert, nil
 }

@@ -10,6 +10,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.20.1
 	github.com/santos-tech/golog v0.0.0
+	software.sslmate.com/src/go-pkcs12 v0.7.2
 )
 
 replace github.com/santos-tech/golog => ../../packages/golog
@@ -36,5 +37,4 @@ require (
 	golang.org/x/text v0.29.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
-	software.sslmate.com/src/go-pkcs12 v0.7.2 // indirect
 )
