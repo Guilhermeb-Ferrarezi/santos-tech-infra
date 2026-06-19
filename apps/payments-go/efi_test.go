@@ -1,13 +1,20 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,5 +63,85 @@ func TestLoadClientCert(t *testing.T) {
 func TestLoadClientCertRejeitaBase64Invalido(t *testing.T) {
 	if _, err := loadClientCert("não é base64 @@@", ""); err == nil {
 		t.Fatal("esperava erro com base64 inválido")
+	}
+}
+
+// --- Provider tests (Task 3) ---
+
+// newTestEfi monta um efiProvider apontando para um servidor de teste (sem mTLS).
+func newTestEfi(base string) *efiProvider {
+	return &efiProvider{
+		base:         strings.TrimRight(base, "/"),
+		clientID:     "cid",
+		clientSecret: "csec",
+		pixKey:       "chave@pix",
+		client:       &http.Client{},
+	}
+}
+
+func TestEfiCreateChargeAndTokenCache(t *testing.T) {
+	var tokenHits int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&tokenHits, 1)
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "tok123", "expires_in": 3600})
+	})
+	mux.HandleFunc("/v2/cob/", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer tok123" {
+			t.Errorf("auth header: %q", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"txid":          strings.TrimPrefix(r.URL.Path, "/v2/cob/"),
+			"status":        "ATIVA",
+			"pixCopiaECola": "00020126BR-CODE",
+			"loc":           map[string]any{"id": 42},
+		})
+	})
+	mux.HandleFunc("/v2/loc/42/qrcode", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"qrcode": "00020126BR-CODE", "imagemQrcode": "data:image/png;base64,AAAA"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	p := newTestEfi(srv.URL)
+	req := ChargeRequest{CorrelationID: "stpay0123456789abcdef0123456789", AmountCents: 1000, Description: "x", ExpiresAt: ""}
+	res, err := p.CreateCharge(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateCharge: %v", err)
+	}
+	if res.BRCode != "00020126BR-CODE" || res.QRCode != "data:image/png;base64,AAAA" {
+		t.Fatalf("resultado inesperado: %+v", res)
+	}
+	if res.ProviderChargeID != req.CorrelationID {
+		t.Fatalf("txid esperado %q, veio %q", req.CorrelationID, res.ProviderChargeID)
+	}
+	if res.Status != "pending" {
+		t.Fatalf("status esperado pending, veio %q", res.Status)
+	}
+	// Segunda cobrança reusa o token cacheado.
+	if _, err := p.CreateCharge(context.Background(), req); err != nil {
+		t.Fatalf("CreateCharge 2: %v", err)
+	}
+	if n := atomic.LoadInt32(&tokenHits); n != 1 {
+		t.Fatalf("token deveria ser buscado 1x (cache), veio %d", n)
+	}
+}
+
+func TestEfiCreateChargeProviderError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "t", "expires_in": 3600})
+	})
+	mux.HandleFunc("/v2/cob/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]any{"nome": "valor_invalido", "mensagem": "Valor não permitido"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	p := newTestEfi(srv.URL)
+	_, err := p.CreateCharge(context.Background(), ChargeRequest{CorrelationID: "stpay0123456789abcdef0123456789", AmountCents: 1})
+	var pe *ProviderError
+	if err == nil || !errors.As(err, &pe) || pe.Message != "Valor não permitido" {
+		t.Fatalf("esperava ProviderError com a mensagem da Efí, veio %v", err)
 	}
 }
