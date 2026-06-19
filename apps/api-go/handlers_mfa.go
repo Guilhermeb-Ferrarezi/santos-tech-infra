@@ -55,6 +55,11 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
+	code := strings.TrimSpace(body.Code)
+	if len(code) != 6 {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
+		return
+	}
 	uidStr := strconv.FormatInt(uid, 10)
 	secret, err := s.rdb.Get(r.Context(), "mfa_setup:"+uidStr).Result()
 	if err != nil || secret == "" {
@@ -86,7 +91,6 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Gere um novo QR code."))
 		return
 	}
-	code := strings.TrimSpace(body.Code)
 	if !totp.Validate(code, secret) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
 		return

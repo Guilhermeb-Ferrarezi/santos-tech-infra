@@ -100,6 +100,26 @@ func TestHandleMFAEnableBadBody(t *testing.T) {
 	}
 }
 
+// TestHandleMFAEnableInvalidCodeLength: código com comprimento fora de 6 é rejeitado
+// antes de qualquer chamada ao Redis ou banco.
+func TestHandleMFAEnableInvalidCodeLength(t *testing.T) {
+	s := testServer(Config{})
+	for _, bad := range []string{
+		"",
+		"12345",                              // 5 chars
+		"1234567",                            // 7 chars
+		strings.Repeat("a", recoveryCodeLen), // recovery code (13 chars) não é aceito aqui
+	} {
+		w := httptest.NewRecorder()
+		r := reqAs(httptest.NewRequest("POST", "/auth/mfa/enable",
+			strings.NewReader(`{"code":"`+bad+`"}`)), 42)
+		s.handleMFAEnable(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("code=%q (len=%d): status=%d (queria 400)", bad, len(bad), w.Code)
+		}
+	}
+}
+
 func TestHandleMFADisableBadBody(t *testing.T) {
 	s := testServer(Config{})
 	w := httptest.NewRecorder()
