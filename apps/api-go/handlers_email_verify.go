@@ -36,25 +36,27 @@ func (s *Server) handleEmailVerifySend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusConflict, "ALREADY_VERIFIED", "Este email já foi verificado"))
 		return
 	}
-	nCD, errCD := s.rdb.Exists(r.Context(), emailVerifyCDKey(uid)).Result()
+	// SetNX é atômico: exatamente uma requisição concorrente "adquire" o slot de
+	// envio. O par Exists + Set não-atômico deixava uma janela onde duas chamadas
+	// simultâneas passavam pelo check e enviavam dois emails, sobrescrevendo o código.
+	acquired, errCD := s.rdb.SetNX(r.Context(), emailVerifyCDKey(uid), "1", emailVerifyCooldown).Result()
 	if errCD != nil {
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao verificar cooldown"))
 		return
 	}
-	if nCD == 1 {
+	if !acquired {
 		writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Aguarde um pouco antes de reenviar"))
 		return
 	}
 	code := emailCode()
 	if err := s.rdb.Set(r.Context(), emailVerifyKey(uid), code, emailVerifyTTL).Err(); err != nil {
+		// Desfaz o cooldown para que o usuário possa retentar imediatamente.
+		_ = s.rdb.Del(r.Context(), emailVerifyCDKey(uid))
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao gerar o código"))
 		return
 	}
 	if err := s.rdb.Del(r.Context(), emailVerifyAttKey(uid)).Err(); err != nil {
 		slog.Warn("email_verify_send: falha ao limpar contador de tentativas no Redis", "uid", uid, "err", err)
-	}
-	if err := s.rdb.Set(r.Context(), emailVerifyCDKey(uid), "1", emailVerifyCooldown).Err(); err != nil {
-		slog.Warn("email_verify_send: falha ao gravar cooldown", "uid", uid, "err", err)
 	}
 	html := emailCodeHTML(code, "Use o código abaixo para verificar o seu email:")
 	s.enqueueEmail("handleEmailVerifySend", u.Email, "Verifique seu email — Santos Tech", html)
