@@ -520,6 +520,10 @@ GET    /analytics?range=7d|30d|90d|12m|all  (default 30d)
 Dashboard Efí (admin — role=3):
 GET    /efi/balance        saldo disponível na conta Efí em centavos.
          Resposta: `{availableCents: int64}`. Consulta `GET /v2/gn/saldo` na Efí.
+GET    /charges/{id}/receipt   comprovante PDF da cobrança paga.
+         Requer cobrança com status=paid. Responde application/pdf (bytes crus)
+         com Content-Disposition: attachment; filename="comprovante-{id}.pdf".
+         Erros: 404 não encontrada · 409 not_paid · 502 efi_error.
 
 Webhook (público, verificado/idempotente):
 POST   /webhooks/efi/pix   notificações PIX da Efí. Autenticação via query param
