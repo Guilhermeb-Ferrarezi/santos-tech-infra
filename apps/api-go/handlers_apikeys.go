@@ -10,6 +10,7 @@ import (
 // handleCreateAPIKey cria um Personal Access Token para o usuário logado. O segredo
 // completo só é devolvido aqui (não dá pra recuperar depois — guardamos só o hash).
 func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Name          string `json:"name"`

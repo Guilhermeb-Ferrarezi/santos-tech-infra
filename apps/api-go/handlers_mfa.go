@@ -18,6 +18,7 @@ import (
 
 // POST /auth/mfa/setup — gera um secret TOTP pendente + otpauth URL (QR).
 func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	uid := userIDFrom(r)
 	u, err := s.userByID(r.Context(), uid)
 	if err != nil || u == nil {
@@ -44,6 +45,7 @@ func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 
 // POST /auth/mfa/enable {code} — confirma o TOTP e ativa o MFA, devolve recovery codes.
 func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	uid := userIDFrom(r)
 	var body struct {
