@@ -14,6 +14,11 @@ type efiOps interface {
 	GetReceipt(ctx context.Context, txid string) (contentType string, body []byte, err error)
 }
 
+// chargeReader isola o acesso a cobranças no banco (o *Store em prod, fake nos testes).
+type chargeReader interface {
+	GetCharge(ctx context.Context, id int64) (*Charge, error)
+}
+
 func (s *Server) handleEfiBalance(w http.ResponseWriter, r *http.Request) {
 	cents, err := s.efi.GetBalance(r.Context())
 	if err != nil {
@@ -24,12 +29,8 @@ func (s *Server) handleEfiBalance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReceipt(w http.ResponseWriter, r *http.Request) {
-	if s.store == nil {
-		writeError(w, http.StatusNotFound, "not_found", "Cobrança não encontrada")
-		return
-	}
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	c, err := s.store.GetCharge(r.Context(), id)
+	c, err := s.charges.GetCharge(r.Context(), id)
 	if err != nil || c == nil {
 		writeError(w, http.StatusNotFound, "not_found", "Cobrança não encontrada")
 		return
@@ -45,6 +46,5 @@ func (s *Server) handleReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Content-Disposition", `attachment; filename="comprovante-`+r.PathValue("id")+`.pdf"`)
-	w.WriteHeader(http.StatusOK)
 	w.Write(body) //nolint:errcheck
 }

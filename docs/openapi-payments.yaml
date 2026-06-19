@@ -474,6 +474,34 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Analytics" }
         "500": { description: falha no banco, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /charges/{id}/receipt:
+    get:
+      summary: Comprovante Pix da cobrança (PDF)
+      tags: [Efí]
+      description: >
+        Baixa o comprovante Pix da cobrança no formato PDF (bytes crus), consultado
+        diretamente em `GET /v2/gn/pix/comprovantes?txid=<correlationId>` da API Efí.
+        Requer a cobrança no status `paid`; status diferente retorna 409 `not_paid`.
+        Requer role=3 (Admin).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer }, description: ID da cobrança }
+      responses:
+        "200":
+          description: Comprovante em PDF
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "401": { description: não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: acesso proibido (não é admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: cobrança não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409":
+          description: cobrança ainda não paga (not_paid)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502": { description: falha ao obter comprovante na Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /efi/balance:
     get:
       summary: Saldo disponível na conta Efí

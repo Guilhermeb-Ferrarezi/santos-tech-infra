@@ -18,6 +18,7 @@ type Server struct {
 	rdb       *redis.Client
 	store     *Store
 	analytics analyticsSource
+	charges   chargeReader
 	cart      *CartStore
 	provider  PaymentProvider
 	efi       efiOps
@@ -35,6 +36,7 @@ func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client, provider Payment
 		rdb:       rdb,
 		store:     st,
 		analytics: st,
+		charges:   st,
 		cart:      &CartStore{rdb: rdb},
 		provider:  provider,
 		email:     newEmailClient(cfg),

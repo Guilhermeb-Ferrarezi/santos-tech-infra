@@ -151,8 +151,7 @@ func (p *efiProvider) do(ctx context.Context, method, path string, body any) ([]
 
 // GetReceipt baixa o comprovante de um Pix pelo txid (= correlationID da cobrança).
 // A Efí aceita e2eId|idEnvio|rtrId|txid no query; usamos txid, que já guardamos.
-// O smoke (TestEfiReceiptSmoke) confirmou que o endpoint retorna a resposta como
-// bytes crus — format decision documentada no report.
+// Endpoint desabilitado em homologação; formato assumido como PDF cru (padrão BCB Pix). Verificar em produção (pode vir JSON com URL/base64).
 func (p *efiProvider) GetReceipt(ctx context.Context, txid string) (string, []byte, error) {
 	data, err := p.do(ctx, http.MethodGet, "/v2/gn/pix/comprovantes?txid="+url.QueryEscape(txid), nil)
 	if err != nil {

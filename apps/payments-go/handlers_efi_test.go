@@ -15,6 +15,16 @@ func (fakeEfiOps) GetReceipt(_ context.Context, _ string) (string, []byte, error
 	return "application/pdf", []byte("%PDF-1.4 fake"), nil
 }
 
+// fakeChargeReader implementa chargeReader para testes unitários.
+type fakeChargeReader struct {
+	charge *Charge
+	err    error
+}
+
+func (f fakeChargeReader) GetCharge(_ context.Context, _ int64) (*Charge, error) {
+	return f.charge, f.err
+}
+
 func TestHandleEfiBalance(t *testing.T) {
 	s := &Server{efi: fakeEfiOps{}}
 	w := httptest.NewRecorder()
@@ -25,27 +35,83 @@ func TestHandleEfiBalance(t *testing.T) {
 	var out struct {
 		AvailableCents int64 `json:"availableCents"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &out)
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if out.AvailableCents != 12345 {
 		t.Fatalf("availableCents=%d", out.AvailableCents)
 	}
 }
 
-// TestHandleReceipt_StoreNil: sem store configurado → 404.
-func TestHandleReceipt_StoreNil(t *testing.T) {
-	s := &Server{efi: fakeEfiOps{}}
+// TestHandleReceiptNotFound: chargeReader retorna (nil, nil) → 404 not_found.
+func TestHandleReceiptNotFound(t *testing.T) {
+	s := &Server{
+		charges: fakeChargeReader{charge: nil, err: nil},
+		efi:     fakeEfiOps{},
+	}
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/charges/99/receipt", nil)
 	req.SetPathValue("id", "99")
 	s.handleReceipt(w, req)
 	if w.Code != http.StatusNotFound {
-		t.Fatalf("esperado 404 com store nil, veio %d", w.Code)
+		t.Fatalf("esperado 404, veio %d", w.Code)
 	}
 	var out struct {
 		Code string `json:"code"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &out)
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if out.Code != "not_found" {
 		t.Fatalf("code esperado not_found, veio %q", out.Code)
+	}
+}
+
+// TestHandleReceiptNotPaid: cobrança com status "pending" → 409 not_paid.
+func TestHandleReceiptNotPaid(t *testing.T) {
+	s := &Server{
+		charges: fakeChargeReader{charge: &Charge{Status: "pending"}, err: nil},
+		efi:     fakeEfiOps{},
+	}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/charges/42/receipt", nil)
+	req.SetPathValue("id", "42")
+	s.handleReceipt(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("esperado 409, veio %d", w.Code)
+	}
+	var out struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Code != "not_paid" {
+		t.Fatalf("code esperado not_paid, veio %q", out.Code)
+	}
+}
+
+// TestHandleReceiptHappy: cobrança paid + GetReceipt retorna PDF → 200 application/pdf.
+func TestHandleReceiptHappy(t *testing.T) {
+	s := &Server{
+		charges: fakeChargeReader{
+			charge: &Charge{Status: "paid", CorrelationID: "stpayX"},
+			err:    nil,
+		},
+		efi: fakeEfiOps{},
+	}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/charges/7/receipt", nil)
+	req.SetPathValue("id", "7")
+	s.handleReceipt(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d", w.Code)
+	}
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/pdf" {
+		t.Fatalf("Content-Type esperado application/pdf, veio %q", ct)
+	}
+	if w.Body.Len() == 0 {
+		t.Fatal("body vazio, esperado conteúdo PDF")
 	}
 }
