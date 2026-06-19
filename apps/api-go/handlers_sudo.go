@@ -103,7 +103,7 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 	// a verificação de sudo checa TOTP/recovery/OTP de email (ou senha) sem teto
 	// próprio, o que permitiria brute-force do 2º fator limitado só pelo IP. Conta
 	// a tentativa ANTES de validar; zera ao confirmar com sucesso (mais abaixo).
-	attemptKey := "sudo_attempts:" + strconv.FormatInt(uid, 10)
+	attemptKey := "api-go:sudo_attempts:" + strconv.FormatInt(uid, 10)
 	sudoAttemptsCmd := s.rdb.Incr(r.Context(), attemptKey)
 	if sudoAttemptsCmd.Err() != nil {
 		slog.Warn("sudo_attempts: redis error; rejecting to fail closed", "uid", uid, "err", sudoAttemptsCmd.Err())
