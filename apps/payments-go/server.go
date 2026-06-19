@@ -97,6 +97,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /efi/balance", s.requireAdmin(s.handleEfiBalance))
 	mux.HandleFunc("GET /efi/med", s.requireAdmin(s.handleEfiMED))
 	mux.HandleFunc("GET /charges/{id}/receipt", s.requireAdmin(s.handleReceipt))
+	mux.HandleFunc("POST /efi/reports", s.requireAdmin(s.handleReportRequest))
+	mux.HandleFunc("GET /efi/reports/{id}", s.requireAdmin(s.handleReportGet))
 
 	return golog.RequestLogger(s.cors(metricsMiddleware(mux)))
 }

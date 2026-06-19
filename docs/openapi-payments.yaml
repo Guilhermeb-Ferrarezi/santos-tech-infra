@@ -577,6 +577,85 @@ paths:
         "401": { description: não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "403": { description: acesso proibido (não é admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "502": { description: falha ao consultar a Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /efi/reports:
+    post:
+      summary: Solicitar relatório de extrato de conciliação Pix
+      tags: [Efí]
+      description: >
+        Solicita a geração de um relatório de extrato de conciliação Pix via
+        `POST /v2/gn/relatorios/extrato-conciliacao`. A Efí processa de forma assíncrona
+        e retorna um `reportId`. Use `GET /efi/reports/{id}` para consultar o status e
+        baixar o CSV quando pronto. Schema confirmado: `tipoRegistros.pixRecebido=true`.
+        Endpoint desabilitado em homologação (500 "Funcionalidade desabilitada") — ativo em produção.
+        Requer role=3 (Admin).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [date]
+              properties:
+                date:
+                  type: string
+                  format: date
+                  example: "2025-06-18"
+                  description: Data do movimento no formato YYYY-MM-DD
+      responses:
+        "200":
+          description: ID do relatório solicitado (a Efí processa de forma assíncrona)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reportId]
+                properties:
+                  reportId:
+                    type: string
+                    description: ID do relatório para consultar via GET /efi/reports/{id}
+        "400": { description: data inválida ou ausente, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: acesso proibido (não é admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: falha ao consultar a Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /efi/reports/{id}:
+    get:
+      summary: Consultar status/conteúdo de relatório de conciliação
+      tags: [Efí]
+      description: >
+        Consulta o status de um relatório de extrato de conciliação via
+        `GET /v2/gn/relatorios/{id}`. Quando pronto (200 na Efí), retorna o CSV
+        com `Content-Disposition: attachment`. Enquanto processa (202 na Efí),
+        retorna `{"status":"processing"}`. Requer role=3 (Admin).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: ID do relatório retornado por POST /efi/reports
+      responses:
+        "200":
+          description: >
+            CSV pronto (Content-Type: text/csv, Content-Disposition: attachment)
+            ou JSON `{"status":"processing"}` se ainda processando.
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+                description: Arquivo CSV de extrato de conciliação
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [processing]
+        "400": { description: ID ausente, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: acesso proibido (não é admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: falha ao consultar a Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
   /webhooks/efi/pix:
     post:
       summary: Webhook da Efí — notificações PIX (público, idempotente)

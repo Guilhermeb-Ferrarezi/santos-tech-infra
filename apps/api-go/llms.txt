@@ -530,6 +530,14 @@ GET    /charges/{id}/receipt   comprovante PDF da cobrança paga.
          Requer cobrança com status=paid. Responde application/pdf (bytes crus)
          com Content-Disposition: attachment; filename="comprovante-{id}.pdf".
          Erros: 404 não encontrada · 409 not_paid · 502 efi_error.
+POST   /efi/reports            solicita geração de extrato de conciliação Pix (assíncrono).
+         Body: `{"date":"YYYY-MM-DD"}`. Chama `POST /v2/gn/relatorios/extrato-conciliacao`
+         com `tipoRegistros.pixRecebido=true`. Retorna `{"reportId":"..."}` (Efí processa
+         de forma assíncrona e retorna 202 com o id). Desabilitado em homolog (500).
+GET    /efi/reports/{id}       consulta status/CSV do relatório de conciliação.
+         Chama `GET /v2/gn/relatorios/{id}`. Se pronto (200 Efí): responde text/csv
+         com Content-Disposition: attachment; filename="extrato-conciliacao-{id}.csv".
+         Se processando (202 Efí): responde `{"status":"processing"}`.
 
 Webhook (público, verificado/idempotente):
 POST   /webhooks/efi/pix   notificações PIX da Efí. Autenticação via query param

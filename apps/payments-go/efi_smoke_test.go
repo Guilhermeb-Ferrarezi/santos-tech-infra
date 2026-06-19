@@ -159,6 +159,68 @@ func TestEfiMEDSmoke(t *testing.T) {
 	t.Logf("PASS — path /v2/gn/infracoes + auth + parse confirmados (infracoes=%d)", len(items))
 }
 
+// TestEfiReportSmoke solicita um relatório de extrato de conciliação (RequestReport)
+// e tenta consultar o status (GetReport). O endpoint /v2/gn/relatorios pode estar
+// desabilitado em homologação (como outros endpoints /v2/gn/*). A leitura é puramente
+// observacional — qualquer resultado é logado e o teste não falha por timeout/disabled.
+//
+// Rodar com:
+//
+//	set -a && . ./.env && set +a && EFI_SMOKE=1 PATH=$PATH:$HOME/.local/bin go test -run TestEfiReportSmoke -v -timeout 60s
+func TestEfiReportSmoke(t *testing.T) {
+	if os.Getenv("EFI_SMOKE") != "1" {
+		t.Skip("EFI_SMOKE!=1; pulando smoke test de relatórios da Efí")
+	}
+	cert, err := loadClientCert(os.Getenv("EFI_CERT_P12_BASE64"), os.Getenv("EFI_CERT_PASSWORD"))
+	if err != nil {
+		t.Fatalf("loadClientCert: %v", err)
+	}
+	p := &efiProvider{
+		base:         strings.TrimRight(os.Getenv("EFI_BASE_URL"), "/"),
+		clientID:     os.Getenv("EFI_CLIENT_ID"),
+		clientSecret: os.Getenv("EFI_CLIENT_SECRET"),
+		pixKey:       os.Getenv("EFI_PIX_KEY"),
+		client: &http.Client{
+			Timeout:   20 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert}}},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
+	defer cancel()
+
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	t.Logf("RequestReport dataMovimento=%s", yesterday)
+
+	reportID, err := p.RequestReport(ctx, yesterday)
+	if err != nil {
+		t.Logf("OBSERVAÇÃO: RequestReport retornou erro: %v", err)
+		t.Logf("(endpoint /v2/gn/relatorios/extrato-conciliacao pode estar desabilitado em homolog)")
+		return
+	}
+	t.Logf("RequestReport OK → reportId=%s", reportID)
+
+	// Tenta consultar o status algumas vezes com intervalo curto.
+	for i := range 3 {
+		time.Sleep(2 * time.Second)
+		status, ct, body, gerr := p.GetReport(ctx, reportID)
+		if gerr != nil {
+			t.Logf("GetReport tentativa %d: erro=%v", i+1, gerr)
+			break
+		}
+		t.Logf("GetReport tentativa %d: status=%s contentType=%q bodyLen=%d", i+1, status, ct, len(body))
+		if len(body) > 0 && len(body) <= 300 {
+			t.Logf("  body: %s", string(body))
+		} else if len(body) > 300 {
+			t.Logf("  body[:300]: %s", string(body[:300]))
+		}
+		if status == "done" {
+			t.Logf("PASS — relatório pronto e CSV recebido (%d bytes)", len(body))
+			return
+		}
+	}
+	t.Logf("OBSERVAÇÃO — relatório ainda processando ou não disponível em homolog (resultado observacional)")
+}
+
 // TestEfiReceiptSmoke observa o que GET /v2/gn/pix/comprovantes?txid=... devolve
 // para um txid conhecido (de uma cobrança homolog — normalmente não paga, então
 // o objetivo é ver o status HTTP, Content-Type e prefixo do corpo para decidir

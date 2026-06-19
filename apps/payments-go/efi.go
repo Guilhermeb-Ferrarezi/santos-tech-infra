@@ -106,35 +106,40 @@ func (p *efiProvider) accessToken(ctx context.Context) (string, error) {
 	return p.token, nil
 }
 
-func (p *efiProvider) do(ctx context.Context, method, path string, body any) ([]byte, error) {
+// doRaw executa um request autenticado e devolve status HTTP, content-type e body.
+// Erros de rede e status >= 300 são tratados aqui (exceção: 202 não é erro).
+// Os callers que precisam distinguir 200 vs 202 (relatórios) usam doRaw diretamente;
+// os demais usam do(), que delega aqui e trata 202 como erro.
+func (p *efiProvider) doRaw(ctx context.Context, method, path string, body any) (int, string, []byte, error) {
 	tok, err := p.accessToken(ctx)
 	if err != nil {
-		return nil, err
+		return 0, "", nil, err
 	}
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return nil, err
+			return 0, "", nil, err
 		}
 		rdr = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, p.base+path, rdr)
 	if err != nil {
-		return nil, err
+		return 0, "", nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	res, err := p.client.Do(req)
 	if err != nil {
-		return nil, err
+		return 0, "", nil, err
 	}
 	defer res.Body.Close()
+	ct := res.Header.Get("Content-Type")
 	data, readErr := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if res.StatusCode >= 300 {
 		if readErr != nil {
-			return nil, fmt.Errorf("efi %s %s: status %d", method, path, res.StatusCode)
+			return res.StatusCode, ct, nil, fmt.Errorf("efi %s %s: status %d", method, path, res.StatusCode)
 		}
 		// Erro da Efí: {"nome","mensagem","violacoes":[...]} — repassa a mensagem amigável.
 		var ee struct {
@@ -142,11 +147,60 @@ func (p *efiProvider) do(ctx context.Context, method, path string, body any) ([]
 			Mensagem string `json:"mensagem"`
 		}
 		if json.Unmarshal(data, &ee) == nil && ee.Mensagem != "" {
-			return nil, &ProviderError{Message: ee.Mensagem, Status: res.StatusCode}
+			return res.StatusCode, ct, data, &ProviderError{Message: ee.Mensagem, Status: res.StatusCode}
 		}
-		return nil, fmt.Errorf("efi %s %s: status %d: %s", method, path, res.StatusCode, data)
+		return res.StatusCode, ct, data, fmt.Errorf("efi %s %s: status %d: %s", method, path, res.StatusCode, data)
 	}
-	return data, nil
+	return res.StatusCode, ct, data, nil
+}
+
+func (p *efiProvider) do(ctx context.Context, method, path string, body any) ([]byte, error) {
+	_, _, data, err := p.doRaw(ctx, method, path, body)
+	return data, err
+}
+
+// RequestReport solicita a geração de um relatório de extrato de conciliação Pix.
+// Retorna o ID do relatório (campo "id" da resposta 202 da Efí).
+//
+// Schema confirmado em homologação: tipoRegistros aceita apenas {pixRecebido:bool}.
+// O campo pixEnviado não existe no schema da Efí (retorna 400 schema inválido).
+// Em homolog o endpoint retorna 500 "Funcionalidade desabilitada" (endpoint existe
+// mas está desativado); em produção deve retornar 202 com o ID do relatório.
+func (p *efiProvider) RequestReport(ctx context.Context, dataMovimento string) (string, error) {
+	payload := map[string]any{
+		"dataMovimento": dataMovimento,
+		"tipoRegistros": map[string]bool{
+			"pixRecebido": true,
+		},
+	}
+	_, _, data, err := p.doRaw(ctx, http.MethodPost, "/v2/gn/relatorios/extrato-conciliacao", payload)
+	if err != nil {
+		return "", err
+	}
+	var r struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return "", fmt.Errorf("efi relatorio: parse resposta: %w", err)
+	}
+	if r.ID == "" {
+		return "", fmt.Errorf("efi relatorio: id vazio na resposta: %s", data)
+	}
+	return r.ID, nil
+}
+
+// GetReport consulta o status de um relatório de extrato de conciliação.
+// Retorna ("done", contentType, csvBytes, nil) quando 200 (pronto),
+// ou ("processing", "", nil, nil) quando 202 (ainda processando).
+func (p *efiProvider) GetReport(ctx context.Context, id string) (string, string, []byte, error) {
+	status, ct, data, err := p.doRaw(ctx, http.MethodGet, "/v2/gn/relatorios/"+id, nil)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if status == http.StatusAccepted {
+		return "processing", "", nil, nil
+	}
+	return "done", ct, data, nil
 }
 
 // GetReceipt baixa o comprovante de um Pix pelo txid (= correlationID da cobrança).

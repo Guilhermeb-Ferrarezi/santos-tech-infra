@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -19,6 +20,10 @@ func (fakeEfiOps) ListMED(_ context.Context, _, _ time.Time) ([]MEDInfraction, e
 	return []MEDInfraction{
 		{ID: "inf001", EndToEndID: "E00000000", Status: "pendente", Razao: "razao teste", ValueCents: 1500, DataTransacao: "2025-01-01T00:00:00Z"},
 	}, nil
+}
+func (fakeEfiOps) RequestReport(_ context.Context, _ string) (string, error) { return "rep-1", nil }
+func (fakeEfiOps) GetReport(_ context.Context, _ string) (string, string, []byte, error) {
+	return "done", "text/csv", []byte("a,b\n1,2"), nil
 }
 
 // fakeChargeReader implementa chargeReader para testes unitários.
@@ -119,6 +124,47 @@ func TestHandleReceiptHappy(t *testing.T) {
 	}
 	if w.Body.Len() == 0 {
 		t.Fatal("body vazio, esperado conteúdo PDF")
+	}
+}
+
+// TestHandleReportRequest: POST /efi/reports com {date} → 200 {reportId:"rep-1"}.
+func TestHandleReportRequest(t *testing.T) {
+	s := &Server{efi: fakeEfiOps{}}
+	body := strings.NewReader(`{"date":"2025-06-18"}`)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/efi/reports", body)
+	req.Header.Set("Content-Type", "application/json")
+	s.handleReportRequest(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		ReportID string `json:"reportId"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.ReportID != "rep-1" {
+		t.Fatalf("reportId esperado rep-1, veio %q", out.ReportID)
+	}
+}
+
+// TestHandleReportGetDone: GET /efi/reports/{id} quando status="done" → 200 text/csv.
+func TestHandleReportGetDone(t *testing.T) {
+	s := &Server{efi: fakeEfiOps{}}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/efi/reports/rep-1", nil)
+	req.SetPathValue("id", "rep-1")
+	s.handleReportGet(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	ct := w.Header().Get("Content-Type")
+	if ct != "text/csv" {
+		t.Fatalf("Content-Type esperado text/csv, veio %q", ct)
+	}
+	if w.Body.Len() == 0 {
+		t.Fatal("body vazio, esperado CSV")
 	}
 }
 
