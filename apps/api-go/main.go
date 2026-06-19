@@ -105,11 +105,12 @@ func main() {
 	}()
 
 	srv2 := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      srv.Routes(),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 60 * time.Second, // folgado p/ respostas longas (ex.: status agregado)
-		IdleTimeout:  30 * time.Second,
+		Addr:              ":" + cfg.Port,
+		Handler:           srv.Routes(),
+		ReadHeaderTimeout: 10 * time.Second, // anti slow-loris
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      60 * time.Second, // folgado p/ respostas longas (ex.: status agregado)
+		IdleTimeout:       30 * time.Second,
 	}
 
 	go func() {
