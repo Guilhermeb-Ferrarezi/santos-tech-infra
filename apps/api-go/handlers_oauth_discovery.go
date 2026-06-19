@@ -47,6 +47,7 @@ func (s *Server) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"authorization_endpoint":                o + "/oauth/authorize",
 		"token_endpoint":                        o + "/oauth/token",
 		"userinfo_endpoint":                     o + "/auth/me",
+		"jwks_uri":                              o + "/.well-known/jwks.json",
 		"registration_endpoint":                 o + "/oauth/register",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
@@ -56,6 +57,15 @@ func (s *Server) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"token_endpoint_auth_methods_supported": []string{"none"},
 		"scopes_supported":                      []string{"openid", "email", "profile"},
 		"claims_supported":                      []string{"sub", "email", "name", "id"},
+	})
+}
+
+// GET /.well-known/jwks.json — JSON Web Key Set (RFC 7517).
+// Usamos HS256 (chave simétrica), que não tem representação pública em JWKS.
+// O endpoint existe para satisfazer clientes OIDC que exigem jwks_uri no discovery.
+func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request) {
+	writePublicJSON(w, http.StatusOK, map[string]any{
+		"keys": []any{},
 	})
 }
 

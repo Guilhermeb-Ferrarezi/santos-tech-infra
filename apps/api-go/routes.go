@@ -124,6 +124,7 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Descoberta OAuth + DCR (clientes MCP, ex.: claude.ai) — públicos
 	mux.HandleFunc("GET /.well-known/oauth-authorization-server", s.handleOAuthASMetadata)
 	mux.HandleFunc("GET /.well-known/openid-configuration", s.handleOIDCDiscovery)
+	mux.HandleFunc("GET /.well-known/jwks.json", s.handleJWKS)
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource", s.handleProtectedResourceMCP)
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", s.handleProtectedResourceMCP)
 	mux.HandleFunc("POST /oauth/register", s.rateLimit(10, min, s.handleOAuthRegister))
