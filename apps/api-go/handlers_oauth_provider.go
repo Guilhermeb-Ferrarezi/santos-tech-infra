@@ -124,7 +124,9 @@ func (s *Server) handleOAuthConfirm(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	s.rdb.Del(r.Context(), authReqKey(body.RequestID)) // consome só após sucesso
+	if err := s.rdb.Del(r.Context(), authReqKey(body.RequestID)).Err(); err != nil { // consome só após sucesso
+		slog.Warn("oauth_confirm: falha ao consumir requestId após sucesso", "requestId", body.RequestID, "err", err)
+	}
 
 	dest, _ := url.Parse(req.RedirectURI)
 	qq := dest.Query()
