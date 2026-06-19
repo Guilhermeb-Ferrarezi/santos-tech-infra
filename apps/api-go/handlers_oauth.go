@@ -14,9 +14,33 @@ import (
 // (lado servidor), validado e consumido no callback.
 func oauthStateKey(state string) string { return "oauth_state:" + state }
 
-// GET /auth/google?return_to=/caminho — redireciona pro consentimento do Google.
-// return_to (opcional, só caminho relativo) é devolvido pelo callback — usado
-// pelo fluxo OAuth provider pra voltar ao chooser com o request_id.
+// parseReturnTo valida return_to para evitar open-redirect.
+// Aceita caminhos relativos ("/x") e URLs absolutas de *.santos-tech.com (https).
+// Em dev (não-production) também aceita http://localhost.
+func (s *Server) parseReturnTo(rt string) string {
+	if rt == "" {
+		return ""
+	}
+	if strings.HasPrefix(rt, "/") && !strings.HasPrefix(rt, "//") {
+		return rt
+	}
+	u, err := url.Parse(rt)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	host := u.Hostname()
+	if u.Scheme == "https" && (host == "santos-tech.com" || strings.HasSuffix(host, ".santos-tech.com")) {
+		return rt
+	}
+	if !s.cfg.Production && u.Scheme == "http" && host == "localhost" {
+		return rt
+	}
+	return ""
+}
+
+// GET /auth/google?return_to=<destino> — redireciona pro consentimento do Google.
+// return_to (opcional) é devolvido pelo callback após login bem-sucedido.
+// Aceita caminhos relativos ("/x") ou URLs absolutas de *.santos-tech.com.
 func (s *Server) handleGoogleStart(w http.ResponseWriter, r *http.Request) {
 	if s.google == nil {
 		writeErr(w, appErr(http.StatusInternalServerError, "OAUTH_DISABLED", "OAuth não configurado"))
@@ -24,8 +48,7 @@ func (s *Server) handleGoogleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	state := randomToken(16)
 	cookieVal := state
-	// Só caminho relativo ("/x"), nunca "//host" — evita open-redirect.
-	if rt := r.URL.Query().Get("return_to"); strings.HasPrefix(rt, "/") && !strings.HasPrefix(rt, "//") {
+	if rt := s.parseReturnTo(r.URL.Query().Get("return_to")); rt != "" {
 		cookieVal = state + "|" + rt
 	}
 	// Guarda o state no servidor (Redis, TTL curto) além do cookie. O callback
@@ -160,7 +183,12 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	dest := origin
 	if returnTo != "" {
-		dest = origin + returnTo
+		// URL absoluta já validada no start: usa direto; caminho relativo: prefixo com origin.
+		if strings.HasPrefix(returnTo, "http://") || strings.HasPrefix(returnTo, "https://") {
+			dest = returnTo
+		} else {
+			dest = origin + returnTo
+		}
 	}
 	http.Redirect(w, r, dest, http.StatusFound)
 }

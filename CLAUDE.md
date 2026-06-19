@@ -227,6 +227,17 @@ ao criar um serviço novo ou alterar um existente, garanta que todos estão pres
    novo, inclua-o na matriz do `go.yml`** para que ele passe pela mesma verificação.
    (O gate local de pré-commit continua valendo — ver topo deste arquivo.)
 
+6. **sqlc para acesso a banco.** Todo SQL fica em arquivos `.sql` versionados — nunca
+   escreva `pool.Query(...)` / `pool.Exec(...)` / `pool.QueryRow(...)` inline em handlers.
+   Estrutura padrão por serviço:
+   - `db/schema.sql` — schema completo das tabelas usadas pelo serviço
+   - `db/query/*.sql` — queries anotadas (`-- name: X :one` / `:many` / `:exec` / `:execrows`)
+   - `db/` — código gerado pelo sqlc (`package db`, `sql_driver: "pgx/v5"`)
+   - `sqlc.yaml` na raiz do serviço
+   Callers: `q := db.New(pool)` → `q.SomeQuery(ctx, ...)`. Transações: `db.New(tx)`.
+   Geração: `/home/guilherme/.local/bin/sqlc generate` (rodar na raiz do serviço).
+   Compatibilidade PgBouncer (`QueryExecModeExec`) é transparente — o pool já trata.
+
 Endpoints operacionais (`/health`, `/ready`, `/metrics`) ficam **fora** de auth e fora
 do rate limit, e o `/health`/`/ready` não devem logar como `INFO` (ver tabela de logs).
 
