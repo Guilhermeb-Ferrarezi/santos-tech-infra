@@ -124,6 +124,11 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
+	code := strings.TrimSpace(body.Code)
+	if len(code) != 6 && len(code) != recoveryCodeLen {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
+		return
+	}
 	u, err := s.userByID(r.Context(), uid)
 	if err != nil || u == nil {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
@@ -154,7 +159,6 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 	}
 	// Aceita qualquer fator válido da conta: TOTP, código de recuperação ou o código
 	// enviado pro email (/auth/mfa/email-code) — necessário p/ contas só com email-2FA.
-	code := strings.TrimSpace(body.Code)
 	valid := u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret)
 	if !valid && len(code) == recoveryCodeLen {
 		valid = s.consumeRecoveryCode(r.Context(), uid, sha256Hex(strings.ToUpper(code)))
@@ -227,6 +231,11 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
 		return
 	}
+	code := strings.TrimSpace(body.Code)
+	if len(code) != 6 && len(code) != recoveryCodeLen {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
+		return
+	}
 	uid, ok := s.challengeUser(r.Context(), body.Challenge)
 	if !ok {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
@@ -262,7 +271,6 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Faça login novamente."))
 		return
 	}
-	code := strings.TrimSpace(body.Code)
 	valid := false
 	if u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret) {
 		valid = true

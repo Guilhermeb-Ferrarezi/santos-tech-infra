@@ -109,12 +109,73 @@ func TestHandleMFADisableBadBody(t *testing.T) {
 	}
 }
 
+// TestHandleMFAVerifyInvalidCodeLength: código com comprimento fora de 6 (OTP/TOTP) ou
+// recoveryCodeLen (13 chars) é rejeitado antes de qualquer chamada ao Redis ou banco.
+func TestHandleMFAVerifyInvalidCodeLength(t *testing.T) {
+	s := testServer(Config{})
+	validChallenge := strings.Repeat("a", 48)
+	for _, bad := range []string{
+		"",
+		"12345",                                // 5 chars
+		"1234567",                              // 7 chars
+		strings.Repeat("a", recoveryCodeLen-1), // 12 chars
+		strings.Repeat("a", recoveryCodeLen+1), // 14 chars
+	} {
+		w := httptest.NewRecorder()
+		s.handleMFAVerify(w, httptest.NewRequest("POST", "/auth/mfa/verify",
+			strings.NewReader(`{"challenge":"`+validChallenge+`","code":"`+bad+`"}`)))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("code=%q (len=%d): status=%d (queria 400)", bad, len(bad), w.Code)
+		}
+	}
+}
+
+// TestHandleMFADisableInvalidCodeLength: código com comprimento fora do esperado é
+// rejeitado logo após o parse do corpo, sem tocar no banco ou Redis.
+func TestHandleMFADisableInvalidCodeLength(t *testing.T) {
+	s := testServer(Config{})
+	for _, bad := range []string{
+		"",
+		"12345",                                // 5 chars
+		"1234567",                              // 7 chars
+		strings.Repeat("a", recoveryCodeLen-1), // 12 chars
+		strings.Repeat("a", recoveryCodeLen+1), // 14 chars
+	} {
+		w := httptest.NewRecorder()
+		r := reqAs(httptest.NewRequest("POST", "/auth/mfa/disable",
+			strings.NewReader(`{"code":"`+bad+`"}`)), 42)
+		s.handleMFADisable(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("code=%q (len=%d): status=%d (queria 400)", bad, len(bad), w.Code)
+		}
+	}
+}
+
 func TestHandleMFAEmailEnableBadBody(t *testing.T) {
 	s := testServer(Config{})
 	w := httptest.NewRecorder()
 	s.handleMFAEmailEnable(w, httptest.NewRequest("POST", "/auth/mfa/email-enable", strings.NewReader("não-é-json")))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("code=%d (queria 400)", w.Code)
+	}
+}
+
+// TestHandleMFAEmailEnableInvalidCodeLength: código com comprimento ≠ 6 é rejeitado
+// antes do contador de tentativas e de qualquer chamada ao Redis ou banco.
+func TestHandleMFAEmailEnableInvalidCodeLength(t *testing.T) {
+	s := testServer(Config{})
+	for _, bad := range []string{
+		"",
+		"12345",   // 5 chars
+		"1234567", // 7 chars
+	} {
+		w := httptest.NewRecorder()
+		r := reqAs(httptest.NewRequest("POST", "/auth/mfa/email-enable",
+			strings.NewReader(`{"code":"`+bad+`"}`)), 42)
+		s.handleMFAEmailEnable(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("code=%q (len=%d): status=%d (queria 400)", bad, len(bad), w.Code)
+		}
 	}
 }
 
