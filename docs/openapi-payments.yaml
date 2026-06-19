@@ -1,12 +1,12 @@
 openapi: 3.1.0
 info:
-  title: Santos Tech — Pagamentos (Pix/Dotfy)
+  title: Santos Tech — Pagamentos (Pix/Efí)
   version: "1.0.0"
   description: >
     API de pagamentos da Santos Tech (apps/payments-go). Cobra mensalidades
-    (recorrência própria) e matrículas/avulsos via Pix pelo gateway Dotfy.
-    Valores sempre em centavos. Auth: JWT HS256 do ecossistema; rotas admin
-    exigem role=3. Erros no padrão `{code,message}`.
+    (recorrência própria) e matrículas/avulsos via Pix pelo gateway Efí
+    (efipay). Valores sempre em centavos. Auth: JWT HS256 do ecossistema;
+    rotas admin exigem role=3. Erros no padrão `{code,message}`.
 servers:
   - url: https://api.santos-tech.com/payments
   - url: http://localhost:3336
@@ -341,7 +341,7 @@ paths:
       summary: Fecha o carrinho e gera a cobrança Pix
       description: >
         Recalcula o total a partir do catálogo (preço sempre do servidor),
-        cria a cobrança Dotfy, persiste os itens, esvazia o carrinho e
+        cria a cobrança Efí, persiste os itens, esvazia o carrinho e
         devolve o token público + brCode/qrCode.
       requestBody:
         required: true
@@ -404,13 +404,23 @@ paths:
       responses:
         "200": { description: stream SSE (text/event-stream) }
         "404": { description: não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-  /webhooks/dotfy:
+  /webhooks/efi/pix:
     post:
-      summary: Webhook do Dotfy (público, idempotente)
+      summary: Webhook da Efí — notificações PIX (público, idempotente)
       security: []
       description: >
-        Recebe CHARGE_PAID (dá baixa), CHARGE_EXPIRED (marca inadimplência) e
-        CHARGE_CREATED (no-op). Idempotência por id do evento.
+        Recebe notificações PIX da Efí (pagamento confirmado / cobrança expirada).
+        Autenticação via parâmetro de query `?token=<EFI_WEBHOOK_SECRET>` — a Efí
+        appenda `/pix` ao URL base registrado e envia o secret como query param
+        `token`. Dá baixa em `CHARGE_PAID` (publica no Redis para SSE),
+        marca inadimplência em `CHARGE_EXPIRED`. Idempotência por txid do evento
+        em pay_webhook_events.
+      parameters:
+        - name: token
+          in: query
+          required: false
+          schema: { type: string }
+          description: Secret compartilhado (EFI_WEBHOOK_SECRET); validado pelo handler.
       responses:
         "200": { description: processado/duplicado }
         "400": { description: webhook inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }

@@ -22,7 +22,7 @@ type Config struct {
 	EFICertPassword  string
 	EFIPixKey        string
 	EFIWebhookSecret string
-	EFIWebhookURL    string // URL pública a registrar no webhook da Efí (sem ?hmac)
+	EFIWebhookURL    string // URL pública a registrar no webhook da Efí (sem ?token)
 	Production       bool
 }
 

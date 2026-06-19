@@ -12,7 +12,7 @@
 | Auth central | `https://api.santos-tech.com/auth` | santos-tech-infra/apps/api-go |
 | Claude Agent | `https://api.santos-tech.com/claude` | santos-tech-infra/apps/agent-go |
 | MCP (gateway p/ agentes) | `https://api.santos-tech.com/mcp` | santos-tech-infra/apps/mcp-go |
-| Pagamentos (Pix/Dotfy) | `https://api.santos-tech.com/payments` | santos-tech-infra/apps/payments-go |
+| Pagamentos (Pix/Efí) | `https://api.santos-tech.com/payments` | santos-tech-infra/apps/payments-go |
 | Email (envio/leads/campanhas) | `https://mails.santos-tech.com/api` | sg/email (api/) |
 | Tela de login/perfil (UI) | `https://auth.santos-tech.com` | santos-tech-infra/apps/auth-web |
 
@@ -456,11 +456,12 @@ Activity logs (auditoria; staff):
 GET    /portal/activity-logs?action=&entityType=&actorId=&actorGroup=user|staff&q=&from=&to=&limit=&offset=
          → {items:[{id,actor:{id,name,email,role},action,entityType,entityId,method,endpoint,metadata,createdAt}],total}
 
-## Pagamentos (apps/payments-go) — Pix via Dotfy
+## Pagamentos (apps/payments-go) — Pix via Efí
 
 Serviço Go autônomo (porta 3336). Cobra mensalidades (recorrência própria) e
-matrículas/avulsos via Pix. Gateway: Dotfy (`https://app.dotfy.com.br`,
-`Authorization: Bearer <DOTFY_API_KEY>`). Dotfy é Pix puro e SEM recorrência
+matrículas/avulsos via Pix. Gateway: Efí (`https://pix-h.api.efipay.com.br` em
+homologação; `https://pix.api.efipay.com.br` em produção; autenticação OAuth2
+client_credentials com certificado mTLS p12). A Efí é Pix puro e SEM recorrência
 nativa — a mensalidade é gerada por um job diário in-process (1 cobrança/mês por
 assinatura ativa, idempotente por `(subscription_id, reference_month)`). Valores
 sempre em centavos. Auth: JWT HS256 do ecossistema; rotas admin exigem role=3.
@@ -496,7 +497,7 @@ GET    /me/cart                                                 → [{product,qu
 POST   /me/cart             body {slug}                         → {ok:true} (soma quantidade)
 DELETE /me/cart/{productId}                                     → {ok:true}
 POST   /me/cart/checkout    body {taxId,phone?,save?}           → 201 {token,brCode,qrCode,amountCents}
-         (recalcula total pelo catálogo, cria cobrança Dotfy, grava itens, esvazia o carrinho)
+         (recalcula total pelo catálogo, cria cobrança Efí, grava itens, esvazia o carrinho)
 GET    /me/charges                                              → [charges do customer]
 
 Pagamento público (sem auth) — tela de Pix pelo token público da cobrança:
@@ -509,18 +510,19 @@ stream empurra `event: paid` e encerra. Cobranças de cliente usam `customer_id`
 `public_token` (student_id é nullable). Preço SEMPRE recalculado no servidor.
 
 Webhook (público, verificado/idempotente):
-POST   /webhooks/dotfy   eventos CHARGE_PAID (baixa + publica no Redis p/ SSE) /
-         CHARGE_EXPIRED (inadimplência) / CHARGE_CREATED (no-op). Idempotência por
-         id do evento em pay_webhook_events.
+POST   /webhooks/efi/pix   notificações PIX da Efí. Autenticação via query param
+         `?token=<EFI_WEBHOOK_SECRET>` (a Efí appenda `/pix` ao URL base registrado).
+         Eventos: `pix` (pagamento confirmado — baixa + publica no Redis p/ SSE) e
+         expiração (inadimplência). Idempotência por txid em pay_webhook_events.
 
 Tabelas próprias (mesmo Postgres `santos_tech`, prefixo pay_): pay_students,
 pay_plans, pay_subscriptions, pay_charges, pay_webhook_events, pay_products,
 pay_customers, pay_charge_items.
 Env extra (Fase 2): REDIS_URL (carrinho + pub/sub do SSE).
 
-Dotfy (confirmado contra app.dotfy.com.br): POST /api/charges com body
-{correlationID,value,payerName,payerTaxId,description,expiresAt} — ATENÇÃO `value`
-em REAIS (não centavos); resposta envelopada {success,data:{id,chargeId,
-correlationID,qrCode(=copia-e-cola),qrCodeImage,paymentLink,value(centavos)}}.
-O Dotfy IGNORA o correlationID enviado e gera o próprio — guardamos o retornado
-para reconciliar o webhook. Reconciliação por correlation_id (valor do Dotfy).
+Efí (API Pix): autenticação OAuth2 client_credentials (`EFI_CLIENT_ID` /
+`EFI_CLIENT_SECRET`) com mTLS usando certificado p12 (`EFI_CERT_P12_BASE64` +
+`EFI_CERT_PASSWORD`). Cria cobrança imediata (`cob`) via `POST /v2/cob` com
+`{calendario,devedor,valor,chave,solicitacaoPagador}` — `valor.original` em REAIS
+com 2 casas; resposta inclui `{txid,pixCopiaECola,location}`. Chave Pix:
+`EFI_PIX_KEY`. Reconciliação por `txid`.
