@@ -36,19 +36,3 @@ func TestCreateCharge_Validacao(t *testing.T) {
 		t.Fatalf("esperava 400, veio %d", rec.Code)
 	}
 }
-
-func TestWebhook_Responde200SemStore(t *testing.T) {
-	s := &Server{provider: &dotfyProvider{}}
-	rec := httptest.NewRecorder()
-	body := `{"event":"CHARGE_PAID","data":{"id":"ch_1","correlationID":"stpay_abc"}}`
-	req := httptest.NewRequest("POST", "/webhooks/dotfy", strings.NewReader(body))
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("handler panicou: %v", r)
-		}
-	}()
-	s.handleDotfyWebhook(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("esperava 200, veio %d", rec.Code)
-	}
-}

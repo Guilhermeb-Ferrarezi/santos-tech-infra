@@ -22,7 +22,7 @@ type ChargeRequest struct {
 
 type ChargeResult struct {
 	ProviderChargeID string
-	CorrelationID    string // correlationID efetivo do gateway (o Dotfy gera o seu próprio)
+	CorrelationID    string // correlationID efetivo do gateway (o nosso txid stpay... na Efí)
 	BRCode           string // Pix copia-e-cola
 	QRCode           string // imagem (base64/data-uri) ou URL
 	PaymentLink      string // link de checkout hospedado pelo gateway
@@ -37,9 +37,9 @@ type WebhookEvent struct {
 	Raw              []byte
 }
 
-// PaymentProvider isola o núcleo do gateway. Fase 1: dotfyProvider. Fase 2: stripeProvider.
+// PaymentProvider isola o núcleo do gateway. Fase atual: efiProvider.
 type PaymentProvider interface {
 	CreateCharge(ctx context.Context, req ChargeRequest) (ChargeResult, error)
 	GetCharge(ctx context.Context, providerChargeID string) (ChargeResult, error)
-	ParseWebhook(headers map[string][]string, body []byte) (WebhookEvent, error)
+	ParseWebhook(headers map[string][]string, body []byte) ([]WebhookEvent, error)
 }

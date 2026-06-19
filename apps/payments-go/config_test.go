@@ -10,13 +10,12 @@ func TestLoadConfigEFIDefaults(t *testing.T) {
 	os.Setenv("DATABASE_URL", "postgres://x")
 	os.Setenv("REDIS_URL", "redis://x")
 	os.Setenv("JWT_SECRET", "s")
-	os.Setenv("DOTFY_API_KEY", "x")
 	os.Setenv("EFI_CLIENT_ID", "cid")
 	os.Setenv("EFI_CLIENT_SECRET", "csec")
 	os.Setenv("EFI_CERT_P12_BASE64", "YWJj")
 	os.Setenv("EFI_PIX_KEY", "chave@pix")
 	defer func() {
-		for _, k := range []string{"EFI_CLIENT_ID", "EFI_CLIENT_SECRET", "EFI_CERT_P12_BASE64", "EFI_PIX_KEY", "DOTFY_API_KEY"} {
+		for _, k := range []string{"EFI_CLIENT_ID", "EFI_CLIENT_SECRET", "EFI_CERT_P12_BASE64", "EFI_PIX_KEY"} {
 			os.Unsetenv(k)
 		}
 	}()

@@ -12,9 +12,9 @@ import (
 )
 
 func newCorrelationID() string {
-	b := make([]byte, 16)
+	b := make([]byte, 14)
 	_, _ = rand.Read(b)
-	return "stpay_" + hex.EncodeToString(b)
+	return "stpay" + hex.EncodeToString(b) // 5 + 28 = 33 chars alnum (txid Efí: 26–35)
 }
 
 func newPublicToken() string {
@@ -61,7 +61,7 @@ func (s *Server) handleCreateCharge(w http.ResponseWriter, r *http.Request) {
 	}
 	c := &Charge{
 		Kind: in.Kind, StudentID: &st.ID, AmountCents: in.AmountCents,
-		DueDate: in.DueDate, Provider: "dotfy", CorrelationID: newCorrelationID(),
+		DueDate: in.DueDate, Provider: "efi", CorrelationID: newCorrelationID(),
 	}
 	if err := s.createAndPersistCharge(r.Context(), c, st, in.Description); err != nil {
 		var pe *ProviderError
@@ -91,8 +91,8 @@ func (s *Server) createAndPersistCharge(ctx context.Context, c *Charge, st *Stud
 		return err
 	}
 	c.ProviderChargeID, c.BRCode, c.QRCode = res.ProviderChargeID, res.BRCode, res.QRCode
-	// O Dotfy gera o próprio correlationID e é ELE que volta no webhook — então
-	// gravamos esse valor para a reconciliação do CHARGE_PAID/EXPIRED casar.
+	// O gateway pode devolver o correlationID efetivo (txid) que volta no webhook —
+	// gravamos esse valor para a reconciliação do CHARGE_PAID casar.
 	if res.CorrelationID != "" {
 		c.CorrelationID = res.CorrelationID
 	}

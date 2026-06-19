@@ -80,7 +80,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /pay/{token}", s.handleGetPay)
 	mux.HandleFunc("GET /pay/{token}/events", s.handlePayEvents)
 
-	mux.HandleFunc("POST /webhooks/dotfy", s.handleDotfyWebhook)
+	mux.HandleFunc("POST /webhooks/efi/pix", s.handleWebhook)
 
 	return golog.RequestLogger(s.cors(metricsMiddleware(mux)))
 }

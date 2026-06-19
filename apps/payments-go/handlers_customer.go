@@ -177,10 +177,10 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	c := &Charge{
 		Kind: "avulso", CustomerID: &cid, AmountCents: total,
 		DueDate:  time.Now().AddDate(0, 0, 1).Format("2006-01-02"),
-		Provider: "dotfy", CorrelationID: newCorrelationID(),
+		Provider: "efi", CorrelationID: newCorrelationID(),
 		PublicToken: newPublicToken(), payerTaxID: in.TaxID,
 	}
-	st := &Student{Name: in.Name, TaxID: in.TaxID, Email: in.Email} // payerName/payerTaxId p/ o Dotfy
+	st := &Student{Name: in.Name, TaxID: in.TaxID, Email: in.Email} // payerName/payerTaxId p/ o gateway
 	if err := s.createAndPersistCharge(r.Context(), c, st, "Compra Santos Tech"); err != nil {
 		// 422 (não 502): o Cloudflare/Traefik substitui respostas 5xx do origin por uma
 		// página de erro HTML sem CORS, escondendo a mensagem. Com 4xx o cliente recebe o JSON.
@@ -195,7 +195,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.InsertChargeItems(r.Context(), c.ID, chargeItems); err != nil {
-		// não falha o pagamento (cobrança já válida no Dotfy), mas registra para auditoria
+		// não falha o pagamento (cobrança já válida na Efí), mas registra para auditoria
 		slog.Warn("falha ao gravar itens da cobrança", "charge_id", c.ID, "err", err)
 	}
 	_ = s.cart.Clear(r.Context(), uid)

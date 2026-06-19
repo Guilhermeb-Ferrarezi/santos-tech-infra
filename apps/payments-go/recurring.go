@@ -47,7 +47,7 @@ func (s *Server) generateMonthlyCharges(ctx context.Context) {
 		c := &Charge{
 			Kind: "mensalidade", SubscriptionID: &subID, StudentID: &student.ID,
 			AmountCents: row.Sub.AmountCents, DueDate: monthlyDueDate(now.Year(), now.Month(), row.Sub.DueDay),
-			ReferenceMonth: &ref, Provider: "dotfy", CorrelationID: newCorrelationID(),
+			ReferenceMonth: &ref, Provider: "efi", CorrelationID: newCorrelationID(),
 		}
 		if err := s.createAndPersistCharge(ctx, c, &student, "Mensalidade "+refMonth); err != nil {
 			slog.Error("recorrência: falha ao gerar cobrança", "sub", subID, "err", err)

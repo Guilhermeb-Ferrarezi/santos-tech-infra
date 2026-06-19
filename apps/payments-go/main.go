@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,6 +20,26 @@ func main() {
 	cfg := LoadConfig()
 	ctx := context.Background()
 
+	// Subcomando operacional: registra o webhook na Efí e sai (sem subir o servidor).
+	registerWebhook := flag.Bool("register-webhook", false, "registra o webhook na Efí e sai")
+	flag.Parse()
+	if *registerWebhook {
+		if cfg.EFIWebhookURL == "" {
+			slog.Error("EFI_WEBHOOK_URL ausente — defina a URL pública do webhook")
+			os.Exit(1)
+		}
+		url := cfg.EFIWebhookURL
+		if cfg.EFIWebhookSecret != "" {
+			url += "?hmac=" + cfg.EFIWebhookSecret
+		}
+		if err := newEfiProvider(cfg).RegisterWebhook(ctx, url); err != nil {
+			slog.Error("falha ao registrar webhook na Efí", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("webhook registrado na Efí", "url", cfg.EFIWebhookURL)
+		return
+	}
+
 	db, err := newDB(ctx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("falha ao conectar no Postgres", "err", err)
@@ -30,10 +51,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	if cfg.Production && cfg.DotfyWebhookSecret == "" {
+	if cfg.Production && cfg.EFIWebhookSecret == "" {
 		// Não trava o boot (as cobranças ainda funcionam), mas o webhook fica fail-closed:
-		// nenhum CHARGE_PAID/EXPIRED será processado até configurar o secret HMAC.
-		slog.Error("DOTFY_WEBHOOK_SECRET ausente em produção: webhooks serão RECUSADOS até configurar")
+		// nenhum CHARGE_PAID será processado até configurar o secret.
+		slog.Error("EFI_WEBHOOK_SECRET ausente em produção: webhooks serão RECUSADOS até configurar")
 	}
 
 	rdb, err := newRedis(cfg.RedisURL)
@@ -43,7 +64,7 @@ func main() {
 	}
 	defer rdb.Close()
 	registerDBMetrics(db)
-	provider := newDotfyProvider(cfg)
+	provider := newEfiProvider(cfg)
 	srv := NewServer(cfg, db, rdb, provider)
 
 	// Fila durável (asynq) sobre o MESMO Redis. O client enfileira a notificação
