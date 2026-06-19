@@ -10,19 +10,28 @@ import (
 	"time"
 )
 
-type fakeEfiOps struct{}
+type fakeEfiOps struct {
+	reportStatus string // "done" (default) ou "processing"
+}
 
-func (fakeEfiOps) GetBalance(context.Context) (int64, error) { return 12345, nil }
-func (fakeEfiOps) GetReceipt(_ context.Context, _ string) (string, []byte, error) {
+func (f fakeEfiOps) GetBalance(context.Context) (int64, error) { return 12345, nil }
+func (f fakeEfiOps) GetReceipt(_ context.Context, _ string) (string, []byte, error) {
 	return "application/pdf", []byte("%PDF-1.4 fake"), nil
 }
-func (fakeEfiOps) ListMED(_ context.Context, _, _ time.Time) ([]MEDInfraction, error) {
+func (f fakeEfiOps) ListMED(_ context.Context, _, _ time.Time) ([]MEDInfraction, error) {
 	return []MEDInfraction{
 		{ID: "inf001", EndToEndID: "E00000000", Status: "pendente", Razao: "razao teste", ValueCents: 1500, DataTransacao: "2025-01-01T00:00:00Z"},
 	}, nil
 }
-func (fakeEfiOps) RequestReport(_ context.Context, _ string) (string, error) { return "rep-1", nil }
-func (fakeEfiOps) GetReport(_ context.Context, _ string) (string, string, []byte, error) {
+func (f fakeEfiOps) RequestReport(_ context.Context, _ string) (string, error) { return "rep-1", nil }
+func (f fakeEfiOps) GetReport(_ context.Context, _ string) (string, string, []byte, error) {
+	status := f.reportStatus
+	if status == "" {
+		status = "done"
+	}
+	if status == "processing" {
+		return "processing", "", nil, nil
+	}
 	return "done", "text/csv", []byte("a,b\n1,2"), nil
 }
 
@@ -165,6 +174,53 @@ func TestHandleReportGetDone(t *testing.T) {
 	}
 	if w.Body.Len() == 0 {
 		t.Fatal("body vazio, esperado CSV")
+	}
+}
+
+// TestHandleReportGetProcessing: GET /efi/reports/{id} quando status="processing" → 200 {"status":"processing"}.
+func TestHandleReportGetProcessing(t *testing.T) {
+	s := &Server{efi: fakeEfiOps{reportStatus: "processing"}}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/efi/reports/rep-proc", nil)
+	req.SetPathValue("id", "rep-proc")
+	s.handleReportGet(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Status != "processing" {
+		t.Fatalf("status esperado processing, veio %q", out.Status)
+	}
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Fatalf("Content-Type esperado application/json, veio %q", ct)
+	}
+}
+
+// TestHandleReportRequestBadDate: POST com date inválido → 400 invalid_request.
+func TestHandleReportRequestBadDate(t *testing.T) {
+	s := &Server{efi: fakeEfiOps{}}
+	body := strings.NewReader(`{"date":"nao-e-data"}`)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/efi/reports", body)
+	req.Header.Set("Content-Type", "application/json")
+	s.handleReportRequest(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("esperado 400, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Code != "invalid_request" {
+		t.Fatalf("code esperado invalid_request, veio %q", out.Code)
 	}
 }
 

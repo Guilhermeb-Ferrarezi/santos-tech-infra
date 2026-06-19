@@ -82,6 +82,10 @@ func (s *Server) handleReportRequest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Campo date obrigatório (YYYY-MM-DD)")
 		return
 	}
+	if _, err := time.Parse("2006-01-02", req.Date); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Campo date deve ser YYYY-MM-DD")
+		return
+	}
 	id, err := s.efi.RequestReport(r.Context(), req.Date)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "efi_error", "Falha ao solicitar relatório na Efí")
