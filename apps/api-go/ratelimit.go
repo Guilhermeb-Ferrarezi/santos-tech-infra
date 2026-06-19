@@ -151,7 +151,12 @@ func (s *Server) allow(ctx context.Context, key string, max int, window time.Dur
 // degrada o serviço de qualquer forma.)
 func (s *Server) rateLimit(max int, window time.Duration, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		key := fmt.Sprintf("api-go:rl:%s:%s", r.URL.Path, clientIP(r))
+		// r.Pattern é o padrão casado pelo mux (ex.: "POST /auth/admin/users/{id}"),
+		// não o caminho real da requisição. Usar r.URL.Path criaria um balde
+		// separado por ID concreto, permitindo contornar o limite ciclando IDs
+		// (ex.: /boards/1, /boards/2, …). r.Pattern agrupa todas as chamadas
+		// à mesma rota no mesmo balde, independentemente dos path params.
+		key := fmt.Sprintf("api-go:rl:%s:%s", r.Pattern, clientIP(r))
 		if !s.allow(r.Context(), key, max, window, true) {
 			writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Muitas tentativas. Tente novamente em instantes."))
 			return
