@@ -83,17 +83,18 @@ func parseRange(s string) AnalyticsRange {
 // início do dia/mês — casando com o to_char(date_trunc(...)) do SQL do timeseries.
 func bucketDates(r AnalyticsRange) []string {
 	var out []string
+	f, t := r.From.UTC(), r.To.UTC() // alinhar com date_trunc(... AT TIME ZONE 'UTC') do SQL
 	if r.Bucket == "month" {
-		d := time.Date(r.From.Year(), r.From.Month(), 1, 0, 0, 0, 0, time.UTC)
-		end := time.Date(r.To.Year(), r.To.Month(), 1, 0, 0, 0, 0, time.UTC)
+		d := time.Date(f.Year(), f.Month(), 1, 0, 0, 0, 0, time.UTC)
+		end := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 		for !d.After(end) {
 			out = append(out, d.Format("2006-01-02"))
 			d = d.AddDate(0, 1, 0)
 		}
 		return out
 	}
-	d := time.Date(r.From.Year(), r.From.Month(), r.From.Day(), 0, 0, 0, 0, time.UTC)
-	end := time.Date(r.To.Year(), r.To.Month(), r.To.Day(), 0, 0, 0, 0, time.UTC)
+	d := time.Date(f.Year(), f.Month(), f.Day(), 0, 0, 0, 0, time.UTC)
+	end := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 	for !d.After(end) {
 		out = append(out, d.Format("2006-01-02"))
 		d = d.AddDate(0, 0, 1)

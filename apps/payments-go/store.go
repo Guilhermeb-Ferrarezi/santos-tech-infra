@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -605,7 +606,9 @@ func (s *Store) GetAnalytics(ctx context.Context, r AnalyticsRange) (Analytics, 
 	if out.KPIs.prevPaidTotal > 0 {
 		out.KPIs.DeltaPaidPct = float64(out.KPIs.PaidTotal-out.KPIs.prevPaidTotal) / float64(out.KPIs.prevPaidTotal)
 	}
-	_ = s.db.QueryRow(ctx, `SELECT COUNT(*) FROM pay_subscriptions WHERE status='active'`).Scan(&out.KPIs.ActiveSubscriptions)
+	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM pay_subscriptions WHERE status='active'`).Scan(&out.KPIs.ActiveSubscriptions); err != nil {
+		slog.Warn("analytics: falha ao contar assinaturas ativas", "err", err)
+	}
 
 	// Timeseries: DUAS agregações independentes (recebido por paid_at, emitido por
 	// created_at), merjadas em Go sobre a lista de buckets. Evita o bug de uma cobrança
