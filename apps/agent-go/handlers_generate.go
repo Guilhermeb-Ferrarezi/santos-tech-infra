@@ -259,9 +259,9 @@ func (s *Server) generateOnceWithTrace(ctx context.Context, prompt, model string
 	}
 	defer os.RemoveAll(dir)
 
-	timeout := 90 * time.Second
+	timeout := 180 * time.Second
 	if web {
-		timeout = 240 * time.Second
+		timeout = 300 * time.Second
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

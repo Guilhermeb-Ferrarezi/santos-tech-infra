@@ -62,12 +62,12 @@ func main() {
 		Addr:    ":" + cfg.Port,
 		Handler: srv.Routes(),
 		// ReadHeaderTimeout/ReadTimeout curtos mitigam slow-loris. WriteTimeout
-		// precisa cobrir o SSE de /generate/stream (timeout interno de 120s do
-		// claude) — fica acima disso p/ não cortar o stream no meio. O WebSocket
-		// usa Hijack, então o WriteTimeout não se aplica após o upgrade.
+		// precisa cobrir o pior caso de geração síncrona (chat/completions com
+		// prompts longos → até 300s). O WebSocket usa Hijack, então o
+		// WriteTimeout não se aplica após o upgrade.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      150 * time.Second,
+		WriteTimeout:      360 * time.Second,
 		IdleTimeout:       30 * time.Second,
 	}
 
