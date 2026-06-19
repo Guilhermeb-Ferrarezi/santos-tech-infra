@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import AuthLayout from '@/components/AuthLayout'
@@ -8,6 +8,7 @@ import { ApiError } from '@/lib/api'
 // Chooser de contas do fluxo OAuth ("Entrar com Santos Tech"), estilo Google:
 // lista as contas logadas neste navegador; escolher uma emite o code e volta
 // pro app. "Usar outra conta" vai pro login preservando o request_id.
+// Se não houver contas logadas, redireciona direto pro login.
 export default function OAuthChoosePage() {
   const requestId = new URLSearchParams(window.location.search).get('request_id')
   const queryClient = useQueryClient()
@@ -19,6 +20,14 @@ export default function OAuthChoosePage() {
     queryFn: listAccounts,
     enabled: !!requestId,
   })
+
+  const loginUrl = `/?request_id=${encodeURIComponent(requestId ?? '')}`
+
+  useEffect(() => {
+    if (!isLoading && data && (data.accounts ?? []).length === 0) {
+      window.location.replace(loginUrl)
+    }
+  }, [isLoading, data, loginUrl])
 
   const confirm = useMutation({
     mutationFn: (sessionId: string) => confirmAuthorize(requestId!, sessionId),
@@ -42,8 +51,6 @@ export default function OAuthChoosePage() {
     mutationFn: removeAccount,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['accounts'] }),
   })
-
-  const loginUrl = `/?request_id=${encodeURIComponent(requestId ?? '')}`
 
   if (!requestId || expired) {
     return (
