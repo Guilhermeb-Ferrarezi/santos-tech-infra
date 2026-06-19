@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Label } from '@radix-ui/react-label'
 import AuthLayout from '@/components/AuthLayout'
 import PasswordInput from '@/components/PasswordInput'
+import OtpInput from '@/components/OtpInput'
 import { me, sudoVerify, sendAccountEmailCode, getSafeRedirect } from '@/lib/auth'
 import { ApiError } from '@/lib/api'
 
@@ -19,6 +20,7 @@ export default function ConfirmAccessPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [emailSent, setEmailSent] = useState(false)
+  const [useRecovery, setUseRecovery] = useState(false)
   // Método em uso na tela; inicia no preferido da conta quando o perfil chega.
   const [method, setMethod] = useState<'totp' | 'email' | null>(null)
 
@@ -99,23 +101,25 @@ export default function ConfirmAccessPage() {
         {mfaOn ? (
           <>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="code" className="text-sm font-semibold text-[#0E2937]">
-                {method === 'email' ? 'Código enviado por email' : 'Código do app autenticador'}
+              <Label className="text-sm font-semibold text-[#0E2937] text-center">
+                {useRecovery ? 'Código de recuperação' : method === 'email' ? 'Código enviado por email' : 'Código do app autenticador'}
               </Label>
-              {method === 'email' && emailSent && (
-                <p className="text-xs text-green-700">Código enviado para o seu email.</p>
+              {method === 'email' && emailSent && !useRecovery && (
+                <p className="text-xs text-green-700 text-center">Código enviado para o seu email.</p>
               )}
-              <input
-                id="code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                autoFocus
-                value={code}
-                onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 8))}
-                placeholder="000000"
-                required
-                className="w-full px-4 py-3.5 border border-gray-200 rounded-xl bg-[#F5F8FA] text-center text-2xl font-mono tracking-[0.4em] focus:outline-none focus:border-[#187ABF] focus:bg-white transition-colors"
-              />
+              {useRecovery ? (
+                <input
+                  type="text"
+                  autoFocus
+                  value={code}
+                  onChange={e => setCode(e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 12))}
+                  placeholder="XXXXXXXX"
+                  required
+                  className="w-full px-4 py-3.5 border border-gray-200 rounded-xl bg-[#F5F8FA] text-center text-xl font-mono tracking-widest focus:outline-none focus:border-[#187ABF] focus:bg-white transition-colors"
+                />
+              ) : (
+                <OtpInput value={code} onChange={setCode} autoFocus />
+              )}
             </div>
 
             {error && <p className="text-sm text-red-600">{error}</p>}
@@ -168,9 +172,27 @@ export default function ConfirmAccessPage() {
                     </li>
                   </>
                 )}
-                <li className="text-[#496B84]">
-                  Sem acesso? Use um dos seus <span className="font-medium">códigos de recuperação</span> no campo acima.
-                </li>
+                {!useRecovery ? (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => { setCode(''); setError(''); setUseRecovery(true) }}
+                      className="text-[#187ABF] hover:underline"
+                    >
+                      Usar código de recuperação
+                    </button>
+                  </li>
+                ) : (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => { setCode(''); setError(''); setUseRecovery(false) }}
+                      className="text-[#187ABF] hover:underline"
+                    >
+                      Voltar para o código de 6 dígitos
+                    </button>
+                  </li>
+                )}
               </ul>
             </div>
           </>

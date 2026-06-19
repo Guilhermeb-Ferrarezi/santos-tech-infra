@@ -5,6 +5,7 @@ import { Label } from '@radix-ui/react-label'
 import AuthLayout from '@/components/AuthLayout'
 import GoogleButton from '@/components/GoogleButton'
 import PasswordInput from '@/components/PasswordInput'
+import OtpInput from '@/components/OtpInput'
 import { login, me, getSafeRedirect, verifyMfa, sendMfaEmail } from '@/lib/auth'
 import { ApiError } from '@/lib/api'
 
@@ -40,6 +41,7 @@ export default function LoginPage() {
     () => (new URLSearchParams(window.location.search).get('mfa_methods') ?? '').split(',').filter(Boolean),
   )
   const [code, setCode] = useState('')
+  const [useRecovery, setUseRecovery] = useState(false)
   const [emailSent, setEmailSent] = useState(
     () => new URLSearchParams(window.location.search).get('mfa_method') === 'email',
   )
@@ -55,12 +57,22 @@ export default function LoginPage() {
     },
   })
 
+  function isSafeReturnTo(s: string): boolean {
+    if (s.startsWith('/') && !s.startsWith('//')) return true
+    try {
+      const u = new URL(s)
+      const okScheme = u.protocol === 'https:' || (import.meta.env.DEV && u.protocol === 'http:')
+      const okHost = u.hostname === 'santos-tech.com' || u.hostname.endsWith('.santos-tech.com') || (import.meta.env.DEV && u.hostname === 'localhost')
+      return okScheme && okHost
+    } catch { return false }
+  }
+
   function finishLogin() {
     if (requestId) {
       window.location.href = `/oauth/choose?request_id=${encodeURIComponent(requestId)}`
       return
     }
-    if (mfaReturnTo && mfaReturnTo.startsWith('/') && !mfaReturnTo.startsWith('//')) {
+    if (mfaReturnTo && isSafeReturnTo(mfaReturnTo)) {
       window.location.href = mfaReturnTo
       return
     }
@@ -119,6 +131,7 @@ export default function LoginPage() {
     setCode('')
     setEmailSent(false)
     setError('')
+    setUseRecovery(false)
   }
 
   return (
@@ -162,18 +175,22 @@ export default function LoginPage() {
 
           <form onSubmit={handleVerify} className="flex flex-col gap-5">
             <div className="flex flex-col gap-2">
-              <Label htmlFor="code" className="text-sm font-semibold text-[#0E2937]">Código de verificação</Label>
-              <input
-                id="code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                autoFocus
-                value={code}
-                onChange={e => setCode(e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 8))}
-                placeholder="000000"
-                required
-                className="w-full px-4 py-3.5 border border-gray-200 rounded-xl bg-[#F5F8FA] text-center text-2xl font-mono tracking-[0.4em] focus:outline-none focus:border-[#187ABF] focus:bg-white transition-colors"
-              />
+              <Label className="text-sm font-semibold text-[#0E2937] text-center">
+                {useRecovery ? 'Código de recuperação' : 'Código de verificação'}
+              </Label>
+              {useRecovery ? (
+                <input
+                  type="text"
+                  autoFocus
+                  value={code}
+                  onChange={e => setCode(e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 12))}
+                  placeholder="XXXXXXXX"
+                  required
+                  className="w-full px-4 py-3.5 border border-gray-200 rounded-xl bg-[#F5F8FA] text-center text-xl font-mono tracking-widest focus:outline-none focus:border-[#187ABF] focus:bg-white transition-colors"
+                />
+              ) : (
+                <OtpInput value={code} onChange={setCode} autoFocus />
+              )}
             </div>
 
             {error && <p className="text-sm text-red-600">{error}</p>}
@@ -226,9 +243,27 @@ export default function LoginPage() {
                     </li>
                   </>
                 )}
-                <li className="text-[#496B84]">
-                  Sem acesso? Use um dos seus <span className="font-medium">códigos de recuperação</span> no campo acima.
-                </li>
+                {!useRecovery ? (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => { setCode(''); setError(''); setUseRecovery(true) }}
+                      className="text-[#187ABF] hover:underline"
+                    >
+                      Usar código de recuperação
+                    </button>
+                  </li>
+                ) : (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => { setCode(''); setError(''); setUseRecovery(false) }}
+                      className="text-[#187ABF] hover:underline"
+                    >
+                      Voltar para o código de 6 dígitos
+                    </button>
+                  </li>
+                )}
               </ul>
             </div>
 
@@ -292,7 +327,7 @@ export default function LoginPage() {
         <div className="flex-1 h-px bg-gray-200" />
       </div>
 
-      <GoogleButton returnTo={requestId ? `/oauth/choose?request_id=${requestId}` : undefined} />
+      <GoogleButton returnTo={requestId ? `/oauth/choose?request_id=${requestId}` : rawRedirect} />
       </>
       )}
     </AuthLayout>
