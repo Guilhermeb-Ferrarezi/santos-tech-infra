@@ -526,6 +526,57 @@ paths:
         "401": { description: não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "403": { description: acesso proibido (não é admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "502": { description: falha ao consultar a Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /efi/med:
+    get:
+      summary: Infrações MED (disputas Pix) da conta Efí
+      tags: [Efí]
+      description: >
+        Lista infrações MED (disputas Pix) da conta Efí via `GET /v2/gn/infracoes`.
+        A janela de tempo é controlada pelo parâmetro `range` (mesmo formato do `/analytics`).
+        Scope necessário: `gn.infractions.read`. Requer role=3 (Admin).
+        Nota: endpoint indisponível em homologação (timeout); comportamento confirmado documentado.
+      parameters:
+        - name: range
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["7d", "30d", "90d", "12m", "all"]
+            default: "30d"
+          description: Janela de tempo (padrão 30d)
+      responses:
+        "200":
+          description: Lista de infrações MED (array vazio [] se não houver)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [id, endToEndId, status, razao, valueCents, dataTransacao]
+                  properties:
+                    id:
+                      type: string
+                      description: ID da infração (idInfracao na Efí)
+                    endToEndId:
+                      type: string
+                      description: Identificador end-to-end do Pix
+                    status:
+                      type: string
+                      description: Status da infração na Efí
+                    razao:
+                      type: string
+                      description: Razão/motivo da infração
+                    valueCents:
+                      type: integer
+                      format: int64
+                      description: Valor em centavos
+                    dataTransacao:
+                      type: string
+                      description: Data/hora da transação (ISO 8601)
+        "401": { description: não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: acesso proibido (não é admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: falha ao consultar a Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /webhooks/efi/pix:
     post:
       summary: Webhook da Efí — notificações PIX (público, idempotente)

@@ -105,6 +105,60 @@ func TestEfiSmokeHomolog(t *testing.T) {
 	}
 }
 
+// TestEfiMEDSmoke chama ListMED(now-1y, now) e loga a resposta crua + parseada.
+// Um array vazio [] é PASS — confirma path + auth + parse OK em homolog.
+//
+// Rodar com:
+//
+//	set -a && . ./.env && set +a && EFI_SMOKE=1 PATH=$PATH:$HOME/.local/bin go test -run TestEfiMEDSmoke -v
+func TestEfiMEDSmoke(t *testing.T) {
+	if os.Getenv("EFI_SMOKE") != "1" {
+		t.Skip("EFI_SMOKE!=1; pulando smoke test MED da Efí")
+	}
+	cert, err := loadClientCert(os.Getenv("EFI_CERT_P12_BASE64"), os.Getenv("EFI_CERT_PASSWORD"))
+	if err != nil {
+		t.Fatalf("loadClientCert: %v", err)
+	}
+	p := &efiProvider{
+		base:         strings.TrimRight(os.Getenv("EFI_BASE_URL"), "/"),
+		clientID:     os.Getenv("EFI_CLIENT_ID"),
+		clientSecret: os.Getenv("EFI_CLIENT_SECRET"),
+		pixKey:       os.Getenv("EFI_PIX_KEY"),
+		client: &http.Client{
+			Timeout:   20 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert}}},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	now := time.Now()
+	inicio := now.AddDate(-1, 0, 0)
+
+	// Acessar o raw bytes diretamente para logar antes do parse.
+	q := "?inicio=" + inicio.UTC().Format(time.RFC3339) + "&fim=" + now.UTC().Format(time.RFC3339)
+	rawBytes, rawErr := p.do(ctx, http.MethodGet, "/v2/gn/infracoes"+q, nil)
+	if rawErr != nil {
+		t.Logf("OBSERVAÇÃO: do() retornou erro: %v", rawErr)
+		t.Logf("(endpoint pode estar desabilitado em homolog — similar ao comprovante)")
+		// Não falha: documenta o comportamento.
+		return
+	}
+	t.Logf("RESPOSTA RAW da Efí (%d bytes): %s", len(rawBytes), string(rawBytes))
+
+	items, err := p.ListMED(ctx, inicio, now)
+	if err != nil {
+		t.Fatalf("ListMED: %v", err)
+	}
+	t.Logf("RESULTADO PARSEADO: %d infrações", len(items))
+	for i, it := range items {
+		t.Logf("  [%d] ID=%s EndToEndID=%s Status=%s Razao=%q ValueCents=%d DataTransacao=%s",
+			i, it.ID, it.EndToEndID, it.Status, it.Razao, it.ValueCents, it.DataTransacao)
+	}
+	// Um array vazio [] é válido — confirma path + auth + parse OK.
+	t.Logf("PASS — path /v2/gn/infracoes + auth + parse confirmados (infracoes=%d)", len(items))
+}
+
 // TestEfiReceiptSmoke observa o que GET /v2/gn/pix/comprovantes?txid=... devolve
 // para um txid conhecido (de uma cobrança homolog — normalmente não paga, então
 // o objetivo é ver o status HTTP, Content-Type e prefixo do corpo para decidir

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 type fakeEfiOps struct{}
@@ -13,6 +14,11 @@ type fakeEfiOps struct{}
 func (fakeEfiOps) GetBalance(context.Context) (int64, error) { return 12345, nil }
 func (fakeEfiOps) GetReceipt(_ context.Context, _ string) (string, []byte, error) {
 	return "application/pdf", []byte("%PDF-1.4 fake"), nil
+}
+func (fakeEfiOps) ListMED(_ context.Context, _, _ time.Time) ([]MEDInfraction, error) {
+	return []MEDInfraction{
+		{ID: "inf001", EndToEndID: "E00000000", Status: "pendente", Razao: "razao teste", ValueCents: 1500, DataTransacao: "2025-01-01T00:00:00Z"},
+	}, nil
 }
 
 // fakeChargeReader implementa chargeReader para testes unitários.
@@ -113,5 +119,29 @@ func TestHandleReceiptHappy(t *testing.T) {
 	}
 	if w.Body.Len() == 0 {
 		t.Fatal("body vazio, esperado conteúdo PDF")
+	}
+}
+
+// TestHandleMED: fake retorna 1 infração; espera 200 e array com 1 item.
+func TestHandleMED(t *testing.T) {
+	s := &Server{efi: fakeEfiOps{}}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/efi/med?range=30d", nil)
+	s.handleEfiMED(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out []MEDInfraction
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("esperado 1 infração, veio %d", len(out))
+	}
+	if out[0].ID != "inf001" {
+		t.Fatalf("ID esperado inf001, veio %q", out[0].ID)
+	}
+	if out[0].ValueCents != 1500 {
+		t.Fatalf("ValueCents esperado 1500, veio %d", out[0].ValueCents)
 	}
 }

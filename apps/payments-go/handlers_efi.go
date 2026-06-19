@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 // efiOps isola as operações Efí expostas via dashboard (o *efiProvider em prod, fake nos testes).
@@ -12,11 +13,26 @@ type efiOps interface {
 	// GetReceipt baixa o comprovante de um Pix pelo txid (= correlationID da cobrança).
 	// Retorna o content-type e os bytes do comprovante.
 	GetReceipt(ctx context.Context, txid string) (contentType string, body []byte, err error)
+	// ListMED lista infrações MED (disputas Pix) na janela [inicio, fim].
+	ListMED(ctx context.Context, inicio, fim time.Time) ([]MEDInfraction, error)
 }
 
 // chargeReader isola o acesso a cobranças no banco (o *Store em prod, fake nos testes).
 type chargeReader interface {
 	GetCharge(ctx context.Context, id int64) (*Charge, error)
+}
+
+func (s *Server) handleEfiMED(w http.ResponseWriter, r *http.Request) {
+	rng := parseRange(r.URL.Query().Get("range"))
+	items, err := s.efi.ListMED(r.Context(), rng.From, rng.To)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "efi_error", "Falha ao consultar infrações MED na Efí")
+		return
+	}
+	if items == nil {
+		items = []MEDInfraction{}
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) handleEfiBalance(w http.ResponseWriter, r *http.Request) {

@@ -520,6 +520,12 @@ GET    /analytics?range=7d|30d|90d|12m|all  (default 30d)
 Dashboard Efí (admin — role=3):
 GET    /efi/balance        saldo disponível na conta Efí em centavos.
          Resposta: `{availableCents: int64}`. Consulta `GET /v2/gn/saldo` na Efí.
+GET    /efi/med            lista infrações MED (disputas Pix) na janela de tempo.
+         Query: `?range=7d|30d|90d|12m|all` (padrão 30d). Consulta
+         `GET /v2/gn/infracoes?inicio=&fim=` na Efí (scope gn.infractions.read).
+         Resposta: array `[{id, endToEndId, status, razao, valueCents, dataTransacao}]`
+         (`[]` quando vazio). Nota: endpoint indisponível em homolog (timeout — igual
+         ao comprovante); mapeamento de campos confirmado pela documentação Efí.
 GET    /charges/{id}/receipt   comprovante PDF da cobrança paga.
          Requer cobrança com status=paid. Responde application/pdf (bytes crus)
          com Content-Disposition: attachment; filename="comprovante-{id}.pdf".

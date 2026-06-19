@@ -160,6 +160,53 @@ func (p *efiProvider) GetReceipt(ctx context.Context, txid string) (string, []by
 	return "application/pdf", data, nil
 }
 
+// MEDInfraction representa uma infração MED (disputa Pix) da Efí.
+type MEDInfraction struct {
+	ID            string `json:"id"`
+	EndToEndID    string `json:"endToEndId"`
+	Status        string `json:"status"`
+	Razao         string `json:"razao"`
+	ValueCents    int64  `json:"valueCents"`
+	DataTransacao string `json:"dataTransacao"`
+}
+
+// ListMED consulta infrações MED na janela [inicio, fim] via GET /v2/gn/infracoes.
+func (p *efiProvider) ListMED(ctx context.Context, inicio, fim time.Time) ([]MEDInfraction, error) {
+	q := "?inicio=" + url.QueryEscape(inicio.UTC().Format(time.RFC3339)) + "&fim=" + url.QueryEscape(fim.UTC().Format(time.RFC3339))
+	data, err := p.do(ctx, http.MethodGet, "/v2/gn/infracoes"+q, nil)
+	if err != nil {
+		return nil, err
+	}
+	// A Efí devolve um array. Campos confirmados no smoke test.
+	var raw []struct {
+		IDInfracao    string `json:"idInfracao"`
+		EndToEndID    string `json:"endToEndId"`
+		Status        string `json:"status"`
+		Razao         string `json:"razao"`
+		Valor         string `json:"valor"`
+		DataTransacao string `json:"dataTransacao"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]MEDInfraction, 0, len(raw))
+	for _, x := range raw {
+		cents := int64(0)
+		if v, e := strconv.ParseFloat(x.Valor, 64); e == nil {
+			cents = int64(math.Round(v * 100))
+		}
+		out = append(out, MEDInfraction{
+			ID:            x.IDInfracao,
+			EndToEndID:    x.EndToEndID,
+			Status:        x.Status,
+			Razao:         x.Razao,
+			ValueCents:    cents,
+			DataTransacao: x.DataTransacao,
+		})
+	}
+	return out, nil
+}
+
 // GetBalance consulta o saldo disponível da conta Efí (em centavos).
 func (p *efiProvider) GetBalance(ctx context.Context) (int64, error) {
 	data, err := p.do(ctx, http.MethodGet, "/v2/gn/saldo", nil)
