@@ -28,6 +28,14 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome é muito longo (máx. 100 caracteres)"))
 		return
 	}
+	// 0 = sem expiração; negativo ou > 3650 (10 anos) é inválido. Sem o teto
+	// superior, valores gigantes (> ~106 751 dias) causariam overflow de
+	// time.Duration e gerariam uma expiração no passado — chave inútil criada
+	// silenciosamente em vez de erro claro.
+	if body.ExpiresInDays < 0 || body.ExpiresInDays > 3650 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "expiresInDays deve ser 0 (sem expiração) ou entre 1 e 3650 dias"))
+		return
+	}
 
 	var expires *time.Time
 	if body.ExpiresInDays > 0 {
