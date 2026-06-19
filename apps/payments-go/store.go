@@ -569,3 +569,140 @@ func (s *Store) ListChargesByCustomer(ctx context.Context, customerID int64) ([]
 	}
 	return out, nil
 }
+
+// GetAnalytics agrega os dados do dashboard num único batch. Tudo sobre pay_charges,
+// mais um COUNT de assinaturas ativas. Datas: "recebido" por paid_at, "emitido" por created_at.
+func (s *Store) GetAnalytics(ctx context.Context, r AnalyticsRange) (Analytics, error) {
+	out := Analytics{Range: r.Key}
+
+	// KPIs num único SELECT.
+	err := s.db.QueryRow(ctx, `
+		SELECT
+			COALESCE(SUM(amount_cents) FILTER (WHERE status='paid' AND paid_at >= $1 AND paid_at < $2), 0),
+			COALESCE(COUNT(*)          FILTER (WHERE status='paid' AND paid_at >= $1 AND paid_at < $2), 0),
+			COALESCE(SUM(amount_cents) FILTER (WHERE status='pending'), 0),
+			COALESCE(COUNT(*)          FILTER (WHERE status='pending'), 0),
+			COALESCE(SUM(amount_cents) FILTER (WHERE status='pending' AND due_date < current_date), 0),
+			COALESCE(COUNT(*)          FILTER (WHERE status='pending' AND due_date < current_date), 0),
+			COALESCE(COUNT(*)          FILTER (WHERE status='expired'  AND created_at >= $1 AND created_at < $2), 0),
+			COALESCE(COUNT(*)          FILTER (WHERE status='canceled' AND created_at >= $1 AND created_at < $2), 0),
+			COALESCE(COUNT(*)          FILTER (WHERE created_at >= $1 AND created_at < $2), 0),
+			COALESCE(SUM(amount_cents) FILTER (WHERE status='paid' AND paid_at >= $3 AND paid_at < $4), 0)
+		FROM pay_charges`,
+		r.From, r.To, r.PrevFrom, r.PrevTo).
+		Scan(&out.KPIs.PaidTotal, &out.KPIs.PaidCount, &out.KPIs.PendingTotal, &out.KPIs.PendingCount,
+			&out.KPIs.OverdueTotal, &out.KPIs.OverdueCount, &out.KPIs.ExpiredCount, &out.KPIs.CanceledCount,
+			&out.KPIs.emittedCount, &out.KPIs.prevPaidTotal)
+	if err != nil {
+		return out, err
+	}
+	if out.KPIs.PaidCount > 0 {
+		out.KPIs.AvgTicketCents = out.KPIs.PaidTotal / out.KPIs.PaidCount
+	}
+	if out.KPIs.emittedCount > 0 {
+		out.KPIs.ConversionRate = float64(out.KPIs.PaidCount) / float64(out.KPIs.emittedCount)
+	}
+	if out.KPIs.prevPaidTotal > 0 {
+		out.KPIs.DeltaPaidPct = float64(out.KPIs.PaidTotal-out.KPIs.prevPaidTotal) / float64(out.KPIs.prevPaidTotal)
+	}
+	_ = s.db.QueryRow(ctx, `SELECT COUNT(*) FROM pay_subscriptions WHERE status='active'`).Scan(&out.KPIs.ActiveSubscriptions)
+
+	// Timeseries: DUAS agregações independentes (recebido por paid_at, emitido por
+	// created_at), merjadas em Go sobre a lista de buckets. Evita o bug de uma cobrança
+	// criada num bucket e paga noutro ser contada no "pago" do bucket errado.
+	truncSQL := "day"
+	if r.Bucket == "month" {
+		truncSQL = "month"
+	}
+	paidByB, err := s.bucketSeries(ctx, `
+		SELECT to_char(date_trunc($3, paid_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD'), COALESCE(SUM(amount_cents),0), COUNT(*)
+		FROM pay_charges WHERE status='paid' AND paid_at >= $1 AND paid_at < $2 GROUP BY 1`, r.From, r.To, truncSQL)
+	if err != nil {
+		return out, err
+	}
+	emitByB, err := s.bucketSeries(ctx, `
+		SELECT to_char(date_trunc($3, created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD'), COALESCE(SUM(amount_cents),0), COUNT(*)
+		FROM pay_charges WHERE created_at >= $1 AND created_at < $2 GROUP BY 1`, r.From, r.To, truncSQL)
+	if err != nil {
+		return out, err
+	}
+	for _, d := range bucketDates(r) {
+		p, e := paidByB[d], emitByB[d]
+		out.Timeseries = append(out.Timeseries, TimePoint{
+			Date: d, PaidTotal: p.Total, PaidCount: p.Count, EmittedTotal: e.Total, EmittedCount: e.Count,
+		})
+	}
+
+	// byStatus (no período, por created_at).
+	out.ByStatus, err = s.bucketQuery(ctx, `
+		SELECT status, COALESCE(SUM(amount_cents),0), COUNT(*)
+		FROM pay_charges WHERE created_at >= $1 AND created_at < $2 GROUP BY status`, r.From, r.To)
+	if err != nil {
+		return out, err
+	}
+	// byKind (receita paga no período).
+	out.ByKind, err = s.bucketQuery(ctx, `
+		SELECT kind, COALESCE(SUM(amount_cents),0), COUNT(*)
+		FROM pay_charges WHERE status='paid' AND paid_at >= $1 AND paid_at < $2 GROUP BY kind`, r.From, r.To)
+	if err != nil {
+		return out, err
+	}
+	// topProducts (itens de cobranças pagas no período, top 5 por receita).
+	out.TopProducts, err = s.bucketQuery(ctx, `
+		SELECT i.name, COALESCE(SUM(i.price_cents*i.quantity),0), COUNT(*)
+		FROM pay_charge_items i JOIN pay_charges c ON c.id=i.charge_id
+		WHERE c.status='paid' AND c.paid_at >= $1 AND c.paid_at < $2
+		GROUP BY i.name ORDER BY 2 DESC LIMIT 5`, r.From, r.To)
+	if err != nil {
+		return out, err
+	}
+	if out.Timeseries == nil {
+		out.Timeseries = []TimePoint{}
+	}
+	if out.ByStatus == nil {
+		out.ByStatus = []Bucket{}
+	}
+	if out.ByKind == nil {
+		out.ByKind = []Bucket{}
+	}
+	if out.TopProducts == nil {
+		out.TopProducts = []Bucket{}
+	}
+	return out, nil
+}
+
+// bucketQuery roda uma agregação (key, total, count) e devolve os buckets.
+func (s *Store) bucketQuery(ctx context.Context, sql string, args ...any) ([]Bucket, error) {
+	rows, err := s.db.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Bucket
+	for rows.Next() {
+		var b Bucket
+		if err := rows.Scan(&b.Key, &b.Total, &b.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// bucketSeries é como bucketQuery mas indexa por data (chave = 1ª coluna) para o merge do timeseries.
+func (s *Store) bucketSeries(ctx context.Context, sql string, args ...any) (map[string]Bucket, error) {
+	rows, err := s.db.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]Bucket{}
+	for rows.Next() {
+		var b Bucket
+		if err := rows.Scan(&b.Key, &b.Total, &b.Count); err != nil {
+			return nil, err
+		}
+		out[b.Key] = b
+	}
+	return out, rows.Err()
+}
