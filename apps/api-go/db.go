@@ -364,6 +364,14 @@ func (s *Server) updatePassword(ctx context.Context, userID int64, hash string) 
 	return err
 }
 
+func (s *Server) setEmailVerified(ctx context.Context, userID int64) error {
+	_, err := s.db.Exec(ctx, `UPDATE users SET email_verified_at = now() WHERE id = $1`, userID)
+	if err == nil {
+		s.invalidateUserCache(userID)
+	}
+	return err
+}
+
 func (s *Server) updateAvatarURL(ctx context.Context, userID int64, url string) error {
 	_, err := s.db.Exec(ctx, `UPDATE users SET avatar_url=$1 WHERE id=$2`, url, userID)
 	if err == nil {
