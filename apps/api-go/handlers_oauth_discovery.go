@@ -37,6 +37,28 @@ func (s *Server) handleOAuthASMetadata(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GET /.well-known/openid-configuration — OIDC Discovery (OpenID Connect Core §4).
+// Permite que clientes OIDC (ex.: Better Auth SSO) descubram os endpoints sem
+// configuração manual. Mesmos dados do AS metadata + campos exigidos pelo OIDC.
+func (s *Server) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
+	o := s.cfg.PublicOrigin
+	writePublicJSON(w, http.StatusOK, map[string]any{
+		"issuer":                                o,
+		"authorization_endpoint":                o + "/oauth/authorize",
+		"token_endpoint":                        o + "/oauth/token",
+		"userinfo_endpoint":                     o + "/auth/me",
+		"registration_endpoint":                 o + "/oauth/register",
+		"response_types_supported":              []string{"code"},
+		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+		"subject_types_supported":               []string{"public"},
+		"id_token_signing_alg_values_supported": []string{"HS256"},
+		"code_challenge_methods_supported":      []string{"S256"},
+		"token_endpoint_auth_methods_supported": []string{"none"},
+		"scopes_supported":                      []string{"openid", "email", "profile"},
+		"claims_supported":                      []string{"sub", "email", "name", "id"},
+	})
+}
+
 // GET /.well-known/oauth-protected-resource[/mcp] — descreve o MCP como
 // resource protegido por este authorization server (RFC 9728; clientes MCP
 // inserem o well-known entre host e path do resource, daí a variante /mcp).
