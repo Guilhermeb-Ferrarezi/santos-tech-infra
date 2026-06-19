@@ -30,7 +30,7 @@ func main() {
 		}
 		url := cfg.EFIWebhookURL
 		if cfg.EFIWebhookSecret != "" {
-			url += "?hmac=" + cfg.EFIWebhookSecret
+			url += "?token=" + cfg.EFIWebhookSecret
 		}
 		if err := newEfiProvider(cfg).RegisterWebhook(ctx, url); err != nil {
 			slog.Error("falha ao registrar webhook na Efí", "err", err)

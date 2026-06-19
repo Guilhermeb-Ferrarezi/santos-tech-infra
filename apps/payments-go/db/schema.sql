@@ -68,7 +68,7 @@ CREATE TABLE pay_charges (
   due_date           DATE NOT NULL,
   reference_month    TEXT,
   status             TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','paid','expired','canceled')),
-  provider           TEXT NOT NULL DEFAULT 'dotfy',
+  provider           TEXT NOT NULL DEFAULT 'efi',
   provider_charge_id TEXT,
   correlation_id     TEXT NOT NULL UNIQUE,
   public_token       TEXT,

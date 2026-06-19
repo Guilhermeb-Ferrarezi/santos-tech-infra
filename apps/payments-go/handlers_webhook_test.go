@@ -26,7 +26,7 @@ func (efiStub) ParseWebhook(_ map[string][]string, body []byte) ([]WebhookEvent,
 
 func TestHandleWebhookSegredoErrado(t *testing.T) {
 	s := &Server{cfg: Config{Production: true, EFIWebhookSecret: "right"}, provider: efiStub{}}
-	r := httptest.NewRequest("POST", "/webhooks/efi/pix?hmac=wrong", strings.NewReader(`{"pix":[]}`))
+	r := httptest.NewRequest("POST", "/webhooks/efi/pix?token=wrong", strings.NewReader(`{"pix":[]}`))
 	w := httptest.NewRecorder()
 	s.handleWebhook(w, r)
 	if w.Code != http.StatusUnauthorized {
@@ -36,7 +36,7 @@ func TestHandleWebhookSegredoErrado(t *testing.T) {
 
 func TestHandleWebhookSegredoCerto(t *testing.T) {
 	s := &Server{cfg: Config{EFIWebhookSecret: "right"}, provider: efiStub{}} // store nil → 200 cedo
-	r := httptest.NewRequest("POST", "/webhooks/efi/pix?hmac=right", strings.NewReader(`{"pix":[{"txid":"stpayAAA"}]}`))
+	r := httptest.NewRequest("POST", "/webhooks/efi/pix?token=right", strings.NewReader(`{"pix":[{"txid":"stpayAAA"}]}`))
 	w := httptest.NewRecorder()
 	s.handleWebhook(w, r)
 	if w.Code != http.StatusOK {

@@ -18,7 +18,10 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.cfg.EFIWebhookSecret != "" {
-		if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("hmac")), []byte(s.cfg.EFIWebhookSecret)) != 1 {
+		// O parâmetro se chama "token" (não "hmac") para que o request logger o
+		// redija automaticamente: o redactor cobre chaves contendo "token"/"secret",
+		// mas não "hmac" — usar "hmac" vazaria o segredo no Loki em texto puro.
+		if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(s.cfg.EFIWebhookSecret)) != 1 {
 			slog.Warn("webhook efi rejeitado: segredo inválido")
 			writeError(w, http.StatusUnauthorized, "webhook_rejected", "Webhook não autenticado")
 			return
