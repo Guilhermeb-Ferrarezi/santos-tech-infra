@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -217,6 +219,39 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeTokenResponse(w, r, u)
+}
+
+// GET /oauth/userinfo — OIDC UserInfo endpoint (OpenID Connect Core §5.3).
+// Recebe o Bearer access_token emitido em /oauth/token e devolve os claims
+// do usuário no formato flat exigido pelo OIDC (sub, email, name).
+func (s *Server) handleOAuthUserinfo(w http.ResponseWriter, r *http.Request) {
+	token := ""
+	if after, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+		token = strings.TrimSpace(after)
+	}
+	if token == "" {
+		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Bearer token ausente"))
+		return
+	}
+	uid, u, err := s.resolveToken(r.Context(), token)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if u == nil {
+		u, err = s.userByID(r.Context(), uid)
+		if err != nil || u == nil {
+			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Usuário não encontrado"))
+			return
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writePublicJSON(w, http.StatusOK, map[string]any{
+		"sub":   strconv.FormatInt(u.ID, 10),
+		"id":    u.ID,
+		"email": u.Email,
+		"name":  u.Name,
+	})
 }
 
 // writeTokenResponse emite tokens + sessão e responde no formato OAuth.

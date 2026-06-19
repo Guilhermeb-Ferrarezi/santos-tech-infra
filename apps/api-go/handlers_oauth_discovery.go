@@ -46,7 +46,7 @@ func (s *Server) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"issuer":                                o,
 		"authorization_endpoint":                o + "/oauth/authorize",
 		"token_endpoint":                        o + "/oauth/token",
-		"userinfo_endpoint":                     o + "/auth/me",
+		"userinfo_endpoint":                     o + "/oauth/userinfo",
 		"jwks_uri":                              o + "/.well-known/jwks.json",
 		"registration_endpoint":                 o + "/oauth/register",
 		"response_types_supported":              []string{"code"},
