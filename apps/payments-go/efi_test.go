@@ -145,3 +145,29 @@ func TestEfiCreateChargeProviderError(t *testing.T) {
 		t.Fatalf("esperava ProviderError com a mensagem da Efí, veio %v", err)
 	}
 }
+
+func TestEfiParseWebhookMultiplosPix(t *testing.T) {
+	p := newTestEfi("http://x")
+	body := []byte(`{"pix":[{"endToEndId":"E1","txid":"stpayAAA"},{"endToEndId":"E2","txid":"stpayBBB"}]}`)
+	evs, err := p.ParseWebhook(nil, body)
+	if err != nil {
+		t.Fatalf("ParseWebhook: %v", err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("esperava 2 eventos, veio %d", len(evs))
+	}
+	if evs[0].Type != "CHARGE_PAID" || evs[0].ID != "E1" || evs[0].CorrelationID != "stpayAAA" {
+		t.Fatalf("evento 0 inesperado: %+v", evs[0])
+	}
+}
+
+func TestEfiParseWebhookPingDeTeste(t *testing.T) {
+	p := newTestEfi("http://x")
+	evs, err := p.ParseWebhook(nil, []byte(`{"evento":"teste_webhook"}`))
+	if err != nil {
+		t.Fatalf("ping não deveria dar erro: %v", err)
+	}
+	if len(evs) != 0 {
+		t.Fatalf("ping deveria render 0 eventos, veio %d", len(evs))
+	}
+}

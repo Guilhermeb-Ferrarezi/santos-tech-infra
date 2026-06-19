@@ -231,3 +231,65 @@ func (p *efiProvider) GetCharge(ctx context.Context, providerChargeID string) (C
 		Status:           efiStatusToApp(r.Status),
 	}, nil
 }
+
+type efiPixItem struct {
+	EndToEndID string `json:"endToEndId"`
+	Txid       string `json:"txid"`
+}
+
+// ParseWebhook mapeia o payload Pix da Efí ({"pix":[...]}) em eventos CHARGE_PAID.
+// Corpo sem itens (ping de teste do registro) → slice vazio, sem erro.
+// A autenticação (segredo na URL) é feita no handler, não aqui.
+func (p *efiProvider) ParseWebhook(headers map[string][]string, body []byte) ([]WebhookEvent, error) {
+	var wh struct {
+		Pix []efiPixItem `json:"pix"`
+	}
+	if err := json.Unmarshal(body, &wh); err != nil {
+		return nil, err
+	}
+	out := make([]WebhookEvent, 0, len(wh.Pix))
+	for _, it := range wh.Pix {
+		if it.Txid == "" {
+			continue
+		}
+		id := it.EndToEndID
+		if id == "" {
+			id = it.Txid
+		}
+		out = append(out, WebhookEvent{
+			ID:               id,
+			Type:             "CHARGE_PAID",
+			CorrelationID:    it.Txid,
+			ProviderChargeID: it.Txid,
+			Raw:              body,
+		})
+	}
+	return out, nil
+}
+
+// RegisterWebhook registra a URL do webhook na chave Pix, pulando a validação mTLS
+// de volta (necessário atrás de Cloudflare/Traefik).
+func (p *efiProvider) RegisterWebhook(ctx context.Context, webhookURL string) error {
+	tok, err := p.accessToken(ctx)
+	if err != nil {
+		return err
+	}
+	b, _ := json.Marshal(map[string]string{"webhookUrl": webhookURL})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, p.base+"/v2/webhook/"+p.pixKey, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-skip-mtls-checking", "true")
+	res, err := p.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode >= 300 {
+		return fmt.Errorf("efi register webhook: status %d: %s", res.StatusCode, data)
+	}
+	return nil
+}
