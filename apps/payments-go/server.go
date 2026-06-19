@@ -13,27 +13,30 @@ import (
 )
 
 type Server struct {
-	cfg      Config
-	db       *pgxpool.Pool
-	rdb      *redis.Client
-	store    *Store
-	cart     *CartStore
-	provider PaymentProvider
-	email    *emailClient
+	cfg       Config
+	db        *pgxpool.Pool
+	rdb       *redis.Client
+	store     *Store
+	analytics analyticsSource
+	cart      *CartStore
+	provider  PaymentProvider
+	email     *emailClient
 	// queue enfileira tasks asynq (notificação de pagamento). Pode ser nil em
 	// testes que não montam a fila — os callers tratam o nil com fallback.
 	queue *asynq.Client
 }
 
 func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client, provider PaymentProvider) *Server {
+	st := newStore(db)
 	return &Server{
-		cfg:      cfg,
-		db:       db,
-		rdb:      rdb,
-		store:    newStore(db),
-		cart:     &CartStore{rdb: rdb},
-		provider: provider,
-		email:    newEmailClient(cfg),
+		cfg:       cfg,
+		db:        db,
+		rdb:       rdb,
+		store:     st,
+		analytics: st,
+		cart:      &CartStore{rdb: rdb},
+		provider:  provider,
+		email:     newEmailClient(cfg),
 	}
 }
 
@@ -59,6 +62,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PATCH /subscriptions/{id}", s.requireAdmin(s.handlePatchSubscription))
 
 	mux.HandleFunc("GET /stats", s.requireAdmin(s.handleStats))
+	mux.HandleFunc("GET /analytics", s.requireAdmin(s.handleAnalytics))
 	mux.HandleFunc("POST /charges", s.requireAdmin(s.handleCreateCharge))
 	mux.HandleFunc("GET /charges", s.requireAdmin(s.handleListCharges))
 	mux.HandleFunc("GET /charges/{id}", s.requireAdmin(s.handleGetCharge))

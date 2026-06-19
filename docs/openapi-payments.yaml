@@ -93,6 +93,52 @@ components:
       properties:
         productId: { type: integer }
         quantity: { type: integer }
+    Bucket:
+      type: object
+      properties:
+        key: { type: string }
+        total: { type: integer, description: "soma em centavos" }
+        count: { type: integer }
+    TimePoint:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        paidTotal: { type: integer }
+        paidCount: { type: integer }
+        emittedTotal: { type: integer }
+        emittedCount: { type: integer }
+    AnalyticsKPIs:
+      type: object
+      properties:
+        paidTotal: { type: integer, description: "receita paga no período (centavos)" }
+        paidCount: { type: integer }
+        pendingTotal: { type: integer }
+        pendingCount: { type: integer }
+        overdueTotal: { type: integer }
+        overdueCount: { type: integer }
+        expiredCount: { type: integer }
+        canceledCount: { type: integer }
+        avgTicketCents: { type: integer }
+        conversionRate: { type: number, format: float }
+        activeSubscriptions: { type: integer }
+        deltaPaidPct: { type: number, format: float, description: "variação % vs período anterior" }
+    Analytics:
+      type: object
+      properties:
+        range: { type: string, enum: [7d, 30d, 90d, 12m, all] }
+        kpis: { $ref: "#/components/schemas/AnalyticsKPIs" }
+        timeseries:
+          type: array
+          items: { $ref: "#/components/schemas/TimePoint" }
+        byStatus:
+          type: array
+          items: { $ref: "#/components/schemas/Bucket" }
+        byKind:
+          type: array
+          items: { $ref: "#/components/schemas/Bucket" }
+        topProducts:
+          type: array
+          items: { $ref: "#/components/schemas/Bucket" }
 paths:
   /health:
     get:
@@ -404,6 +450,30 @@ paths:
       responses:
         "200": { description: stream SSE (text/event-stream) }
         "404": { description: não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /analytics:
+    get:
+      summary: Dashboard financeiro — KPIs + séries temporais + distribuições (admin)
+      description: >
+        Agrega cobranças de `pay_charges` no período `range` e devolve KPIs,
+        timeseries por dia/mês, distribuição por status e por tipo, e top produtos.
+        Campos monetários sempre em centavos. `deltaPaidPct` compara o período atual
+        com o anterior de mesmo tamanho.
+      parameters:
+        - name: range
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [7d, 30d, 90d, 12m, all]
+            default: 30d
+          description: Janela de tempo do dashboard.
+      responses:
+        "200":
+          description: analytics calculados
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Analytics" }
+        "500": { description: falha no banco, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /webhooks/efi/pix:
     post:
       summary: Webhook da Efí — notificações PIX (público, idempotente)

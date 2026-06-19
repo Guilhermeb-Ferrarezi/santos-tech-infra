@@ -509,6 +509,14 @@ usa Redis pub/sub: o webhook CHARGE_PAID publica no canal `pay:charge:{token}` e
 stream empurra `event: paid` e encerra. Cobranças de cliente usam `customer_id` +
 `public_token` (student_id é nullable). Preço SEMPRE recalculado no servidor.
 
+Dashboard financeiro (admin):
+GET    /analytics?range=7d|30d|90d|12m|all  (default 30d)
+         → {range, kpis:{paidTotal,paidCount,pendingTotal,pendingCount,overdueTotal,overdueCount,
+              expiredCount,canceledCount,avgTicketCents,conversionRate,activeSubscriptions,deltaPaidPct},
+            timeseries:[{date,paidTotal,paidCount,emittedTotal,emittedCount}],
+            byStatus:[{key,total,count}], byKind:[{key,total,count}], topProducts:[{key,total,count}]}
+         Valores monetários em centavos. deltaPaidPct compara com período anterior de mesmo tamanho.
+
 Webhook (público, verificado/idempotente):
 POST   /webhooks/efi/pix   notificações PIX da Efí. Autenticação via query param
          `?token=<EFI_WEBHOOK_SECRET>` (a Efí appenda `/pix` ao URL base registrado).
