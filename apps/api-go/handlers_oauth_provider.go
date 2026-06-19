@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -107,6 +108,10 @@ func (s *Server) handleOAuthConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	if u.SuspendedAt != nil || u.LoginDisabled {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta suspensa"))
+		return
+	}
+	if !s.canAuthorizeOAuthClient(r.Context(), u, req.ClientID) {
+		writeErr(w, appErr(http.StatusForbidden, "FORBIDDEN", "Sem permissão para acessar este aplicativo"))
 		return
 	}
 
@@ -275,4 +280,37 @@ func (s *Server) writeTokenResponse(w http.ResponseWriter, r *http.Request, u *U
 		"access_token": access, "refresh_token": refresh,
 		"token_type": "Bearer", "expires_in": int(accessTTL.Seconds()),
 	})
+}
+
+// canAuthorizeOAuthClient verifica se o usuário tem permissão para autorizar
+// o client OAuth. Regras:
+//   - Admin (role=3) → sempre permitido.
+//   - Custom role (role=4) → permitido se permissions.oauth_clients contém o
+//     clientID ou "*" (wildcard).
+//   - Student / Teacher → negado por padrão.
+func (s *Server) canAuthorizeOAuthClient(ctx context.Context, u *User, clientID string) bool {
+	if u.Role == RoleAdmin {
+		return true
+	}
+	if u.Role != RoleCustom || u.CustomRoleID == nil {
+		return false
+	}
+	var raw []byte
+	if err := s.db.QueryRow(ctx,
+		`SELECT permissions FROM custom_roles WHERE id=$1`, *u.CustomRoleID,
+	).Scan(&raw); err != nil || len(raw) == 0 {
+		return false
+	}
+	var perms struct {
+		OAuthClients []string `json:"oauth_clients"`
+	}
+	if err := json.Unmarshal(raw, &perms); err != nil {
+		return false
+	}
+	for _, c := range perms.OAuthClients {
+		if c == "*" || c == clientID {
+			return true
+		}
+	}
+	return false
 }
