@@ -43,4 +43,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /claude/auth/callback", s.authGuard(s.handleClaudeAuthCallback))
 	mux.HandleFunc("POST /claude/auth/logout", s.authGuard(s.handleClaudeAuthLogout))
 	mux.HandleFunc("GET /claude/auth/status", s.authGuard(s.handleClaudeAuthStatus))
+
+	// Compatibilidade OpenAI — permite usar o agent-go como provider no Santosfy
+	// e ferramentas similares. URL base: https://api.santos-tech.com/claude
+	mux.HandleFunc("GET /claude/models", s.authGuardUser(s.handleOAIModels))
+	mux.HandleFunc("POST /claude/chat/completions", s.rateLimit(10, min, s.authGuardUser(s.handleOAIChatCompletions)))
 }
