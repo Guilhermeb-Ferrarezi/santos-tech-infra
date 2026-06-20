@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/jackc/pgx/v5"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 type payDTO struct {
@@ -30,6 +31,25 @@ func (s *Server) handleGetPay(w http.ResponseWriter, r *http.Request) {
 		AmountCents: c.AmountCents, Method: methodOrPix(c.Method), BRCode: c.BRCode, QRCode: c.QRCode,
 		PDFURL: c.PDFURL, Barcode: c.Barcode, Status: c.Status, DueDate: c.DueDate,
 	})
+}
+
+// handlePayQR serve o PNG do QR Code de uma cobrança PIX pelo token público — usado
+// para EMBUTIR o QR no e-mail de cobrança (data-uri é bloqueado pelo Gmail; precisa ser
+// uma URL hospedada). Só PIX; boleto não tem QR.
+func (s *Server) handlePayQR(w http.ResponseWriter, r *http.Request) {
+	c, err := s.store.GetChargeByPublicToken(r.Context(), r.PathValue("token"))
+	if err != nil || methodOrPix(c.Method) != "pix" || c.BRCode == "" {
+		writeError(w, http.StatusNotFound, "not_found", "QR não disponível")
+		return
+	}
+	png, err := qrcode.Encode(c.BRCode, qrcode.Medium, 360)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "qr_error", "Falha ao gerar QR")
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Write(png) //nolint:errcheck
 }
 
 // SSE: envia o status atual e, quando o webhook publicar "paid", empurra e encerra.

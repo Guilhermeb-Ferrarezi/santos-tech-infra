@@ -111,6 +111,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /me/recurrences", s.authGuard(s.handleMeRecurrences))
 
 	mux.HandleFunc("GET /pay/{token}", s.handleGetPay)
+	mux.HandleFunc("GET /pay/{token}/qr.png", s.handlePayQR) // PNG do QR p/ embutir no e-mail
 	mux.HandleFunc("GET /pay/{token}/events", s.handlePayEvents)
 	mux.HandleFunc("POST /pay/{token}/cancel", s.handleCancelPay)
 	mux.HandleFunc("GET /pay/{token}/receipt", s.handlePayReceipt)
