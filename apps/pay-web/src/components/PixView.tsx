@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, Loader2, XCircle } from "lucide-react";
-import { api, type PayData } from "../lib/api";
+import { Check, Copy, Download, Loader2, XCircle } from "lucide-react";
+import { api, downloadPayReceipt, type PayData } from "../lib/api";
 import { Button } from "./ui/button";
 
 // Estado externo do pagamento, reportado ao pai para refletir no botão do resumo.
@@ -19,8 +19,11 @@ export function PixView({
 }) {
   const [data, setData] = useState<PayData | null>(null);
   const [paid, setPaid] = useState(false);
+  const [canceled, setCanceled] = useState(false);
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [actionErr, setActionErr] = useState("");
 
   useEffect(() => {
     api
@@ -28,35 +31,66 @@ export function PixView({
       .then((d) => {
         setData(d);
         setPaid(d.status === "paid");
+        setCanceled(d.status === "canceled" || d.status === "expired");
       })
       .catch(() => setErr("Cobrança não encontrada ou expirada."));
   }, [token]);
 
   useEffect(() => {
-    if (!data || paid || data.status !== "pending") return;
+    if (!data || paid || canceled || data.status !== "pending") return;
     const es = new EventSource(api.payEventsUrl(token), { withCredentials: true });
     es.addEventListener("paid", () => {
       setPaid(true);
       es.close();
     });
+    es.addEventListener("canceled", () => {
+      setCanceled(true);
+      es.close();
+    });
     return () => es.close();
-  }, [token, paid, data]);
+  }, [token, paid, canceled, data]);
 
   // Reporta o status ao pai (botão do resumo reage a isso).
   useEffect(() => {
     if (!onStatusChange) return;
     if (err) return onStatusChange("error");
     if (paid) return onStatusChange("paid");
+    if (canceled) return onStatusChange("unavailable");
     if (!data) return onStatusChange("loading");
     if (data.status === "expired" || data.status === "canceled") return onStatusChange("unavailable");
     onStatusChange("pending");
-  }, [err, paid, data, onStatusChange]);
+  }, [err, paid, canceled, data, onStatusChange]);
 
   function copy() {
     if (!data?.brCode) return;
     navigator.clipboard.writeText(data.brCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
+  }
+
+  async function baixarComprovante() {
+    setBusy(true);
+    setActionErr("");
+    try {
+      await downloadPayReceipt(token);
+    } catch {
+      setActionErr("O comprovante ainda não está disponível. Tente novamente em instantes.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelar() {
+    setBusy(true);
+    setActionErr("");
+    try {
+      await api.cancelPay(token);
+      setCanceled(true);
+    } catch {
+      setActionErr("Não foi possível cancelar. Tente novamente.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (err) {
@@ -70,12 +104,22 @@ export function PixView({
 
   if (paid) {
     return (
-      <div className="space-y-3 py-6 text-center">
+      <div className="space-y-4 py-6 text-center">
         <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-emerald-100">
           <Check className="size-8 text-emerald-600" />
         </div>
         <h3 className="text-lg font-bold text-[#0e2937]">Pagamento confirmado!</h3>
         <p className="text-sm text-slate-600">Obrigado. Tudo certo com a sua compra.</p>
+        <Button
+          variant="outline"
+          className="mx-auto h-11 gap-2"
+          onClick={baixarComprovante}
+          disabled={busy}
+        >
+          {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+          {busy ? "Gerando…" : "Baixar comprovante"}
+        </Button>
+        {actionErr && <p className="text-sm text-amber-600">{actionErr}</p>}
       </div>
     );
   }
@@ -88,7 +132,7 @@ export function PixView({
     );
   }
 
-  if (data.status === "expired" || data.status === "canceled") {
+  if (canceled || data.status === "expired" || data.status === "canceled") {
     return (
       <div className="space-y-3 py-2 text-center">
         <XCircle className="mx-auto size-12 text-slate-300" />
@@ -126,6 +170,14 @@ export function PixView({
       <div className="flex items-center justify-center gap-2 text-sm text-amber-600">
         <Loader2 className="size-4 animate-spin" /> Aguardando pagamento…
       </div>
+      <button
+        onClick={cancelar}
+        disabled={busy}
+        className="mx-auto block text-sm text-slate-400 underline-offset-2 hover:text-slate-600 hover:underline disabled:opacity-50"
+      >
+        Cancelar pagamento
+      </button>
+      {actionErr && <p className="text-center text-sm text-amber-600">{actionErr}</p>}
     </div>
   );
 }

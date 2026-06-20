@@ -44,6 +44,22 @@ export const api = {
       { method: "POST", body: JSON.stringify({ taxId, phone, name, email, save }) }),
   pay: (token: string) => req<PayData>(`/pay/${seg(token)}`),
   payEventsUrl: (token: string) => `${BASE}/pay/${seg(token)}/events`,
+  cancelPay: (token: string) => req<{ status: string }>(`/pay/${seg(token)}/cancel`, { method: "POST" }),
   history: () => req<unknown[]>(`/me/charges`),
 };
+
+/** Baixa o comprovante PDF da cobrança paga pelo token público (pagador, sem login). */
+export async function downloadPayReceipt(token: string): Promise<void> {
+  const res = await fetch(`${BASE}/pay/${seg(token)}/receipt`, { credentials: "include" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "comprovante.pdf";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 export { BASE };
