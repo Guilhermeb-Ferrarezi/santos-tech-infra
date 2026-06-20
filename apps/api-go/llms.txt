@@ -470,9 +470,11 @@ GET    /portal/activity-logs?action=&entityType=&actorId=&actorGroup=user|staff&
 Serviço Go autônomo (porta 3336). Cobra mensalidades (recorrência própria) e
 matrículas/avulsos via Pix. Gateway: Efí (`https://pix-h.api.efipay.com.br` em
 homologação; `https://pix.api.efipay.com.br` em produção; autenticação OAuth2
-client_credentials com certificado mTLS p12). A Efí é Pix puro e SEM recorrência
-nativa — a mensalidade é gerada por um job diário in-process (1 cobrança/mês por
-assinatura ativa, idempotente por `(subscription_id, reference_month)`). Valores
+client_credentials com certificado mTLS p12). Duas formas de mensalidade: (a) PIX
+Automático (recorrência BACEN via `/v2/rec` + `/v2/cobr`, o pagador autoriza uma vez —
+ver bloco abaixo); (b) recorrência própria (job diário in-process que gera 1 cobrança
+imediata/mês por assinatura ativa, idempotente por `(subscription_id, reference_month)`).
+Valores
 sempre em centavos. Auth: JWT HS256 do ecossistema; rotas admin exigem role=3.
 Erros no padrão `{code,message}`. Multi-provider (cartão/Stripe planejado p/ Fase 2).
 
@@ -492,6 +494,27 @@ POST   /charges   body {kind:matricula|avulso,studentId,amountCents,description?
          → 201 {id,...,brCode,qrCode,correlationId,status} (cria no Dotfy + envia email do Pix)
 GET    /charges?status=&student_id=                             → [{...}]
 GET    /charges/{id}                                            → {...}
+
+PIX Automático (recorrência BACEN via Efí — admin, role=3):
+Débito recorrente padrão BACEN: o pagador AUTORIZA uma vez (jornada 2: o QR/copia-e-cola
+só autoriza, sem débito na hora) e os ciclos seguintes viram cobranças `kind=recorrente`
+debitadas no `dueDay`. Endpoints Efí distintos: `/v2/rec` (contrato) e `/v2/cobr/{txid}`
+(cobrança de cada ciclo). Fase 1: só mensalidade (vinculada a uma assinatura).
+POST   /recurrences   body {subscriptionId,amountCents,payerTaxId,payerName,dueDay(1-28),startDate?,endDate?}
+         → 201 {id,status,brCode,qrCode}. Persiste `pending_auth`, cria `POST /v2/rec` na Efí
+         e devolve o copia-e-cola/QR de AUTORIZAÇÃO. Status vira `active` pelo webhook rec
+         após o pagador autorizar. Erros: 400 invalid_body · 422 provider_error (Efí).
+GET    /recurrences                                            → [{id,subscriptionId,payerTaxId,payerName,
+         amountCents,periodicity,dueDay,startDate,endDate,journey,efiIdRec,brCode,qrCode,status,createdAt}]
+GET    /recurrences/{id}                                       → {recurrence:{...}, cycles:[charge kind=recorrente]}
+POST   /recurrences/{id}/cancel                                → {status:"canceled"}
+         (PATCH /v2/rec/{idRec} na Efí best-effort + status local; o loop só cobra contratos `active`).
+Status do contrato: pending_auth | active | rejected | expired | canceled.
+Loop de ciclos: job diário in-process (`runRecurrenceCycleLoop`) busca recorrências `active`
+com ciclo vencendo hoje, cria a cobr na Efí (`PUT /v2/cobr/{txid}`) e grava `pay_charges`
+(`kind=recorrente`, `recurrence_id`, `correlation_id=txid`). Idempotente por
+`(recurrence_id, reference_month)`. O DÉBITO confirmado chega no webhook PIX normal
+(`/webhooks/efi/pix`), resolvido por `correlation_id` — não no webhook rec.
 
 Clientes (admin) — quem comprou no checkout:
 GET    /customers                                               → [{id,userId,name,email,taxId,phone,createdAt,chargesCount,paidCount,paidTotalCents,lastChargeAt}]  (1 linha por CPF; agregados consolidados de todas as contas com aquele CPF)
@@ -556,11 +579,16 @@ GET    /efi/reports/{id}       consulta status/CSV do relatório de conciliaçã
          com Content-Disposition: attachment; filename="extrato-conciliacao-{id}.csv".
          Se processando (202 Efí): responde `{"status":"processing"}`.
 
-Webhook (público, verificado/idempotente):
+Webhooks (públicos, verificados/idempotentes):
 POST   /webhooks/efi/pix   notificações PIX da Efí. Autenticação via query param
          `?token=<EFI_WEBHOOK_SECRET>` (a Efí appenda `/pix` ao URL base registrado).
          Eventos: `pix` (pagamento confirmado — baixa + publica no Redis p/ SSE) e
          expiração (inadimplência). Idempotência por txid em pay_webhook_events.
+         Também dá baixa nos ciclos de PIX Automático (cobr) por `correlation_id`.
+POST   /webhooks/efi/rec   mudanças de status dos contratos de PIX Automático (separado
+         do webhook de débito). Mesma auth `?token=<EFI_WEBHOOK_SECRET>`. Resolve o
+         contrato por `idRec` e atualiza o status local (pending_auth/active/rejected/
+         expired/canceled). 401 se o segredo não bater.
 
 Tabelas próprias (mesmo Postgres `santos_tech`, prefixo pay_): pay_students,
 pay_plans, pay_subscriptions, pay_charges, pay_webhook_events, pay_products,

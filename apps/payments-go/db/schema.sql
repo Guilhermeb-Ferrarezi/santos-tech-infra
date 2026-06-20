@@ -59,10 +59,35 @@ CREATE TABLE pay_customers (
   CONSTRAINT uq_pay_customers_user_tax UNIQUE (user_id, tax_id)
 );
 
+CREATE TABLE pay_recurrences (
+  id              BIGSERIAL PRIMARY KEY,
+  subscription_id BIGINT REFERENCES pay_subscriptions(id) ON DELETE SET NULL,
+  product_id      BIGINT REFERENCES pay_products(id),
+  customer_id     BIGINT REFERENCES pay_customers(id),
+  payer_tax_id    TEXT NOT NULL,
+  payer_name      TEXT NOT NULL,
+  amount_cents    BIGINT NOT NULL CHECK (amount_cents > 0),
+  periodicity     TEXT NOT NULL DEFAULT 'MENSAL'
+                    CHECK (periodicity IN ('SEMANAL','MENSAL','TRIMESTRAL','SEMESTRAL','ANUAL')),
+  due_day         INT,
+  start_date      DATE NOT NULL,
+  end_date        DATE,
+  journey         SMALLINT NOT NULL DEFAULT 2,
+  efi_id_rec      TEXT,
+  br_code         TEXT,
+  qr_code         TEXT,
+  status          TEXT NOT NULL DEFAULT 'pending_auth'
+                    CHECK (status IN ('pending_auth','active','rejected','expired','canceled')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_pay_recurrences_status ON pay_recurrences(status);
+
 CREATE TABLE pay_charges (
   id                 BIGSERIAL PRIMARY KEY,
-  kind               TEXT NOT NULL CHECK (kind IN ('mensalidade','matricula','avulso')),
+  kind               TEXT NOT NULL CHECK (kind IN ('mensalidade','matricula','avulso','recorrente')),
   subscription_id    BIGINT REFERENCES pay_subscriptions(id) ON DELETE SET NULL,
+  recurrence_id      BIGINT REFERENCES pay_recurrences(id) ON DELETE SET NULL,
   student_id         BIGINT REFERENCES pay_students(id),
   customer_id        BIGINT REFERENCES pay_customers(id),
   amount_cents       BIGINT NOT NULL CHECK (amount_cents > 0),

@@ -54,8 +54,9 @@ components:
       type: object
       properties:
         id: { type: integer }
-        kind: { type: string, enum: [mensalidade, matricula, avulso] }
+        kind: { type: string, enum: [mensalidade, matricula, avulso, recorrente] }
         subscriptionId: { type: integer, nullable: true }
+        recurrenceId: { type: integer, nullable: true, description: "contrato de PIX Automático (ciclos kind=recorrente)" }
         studentId: { type: integer, nullable: true }
         customerId: { type: integer, nullable: true }
         amountCents: { type: integer }
@@ -69,6 +70,30 @@ components:
         brCode: { type: string, description: "Pix copia-e-cola" }
         qrCode: { type: string, description: "imagem do QR (base64/data-uri) ou URL" }
         paidAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    Recurrence:
+      type: object
+      description: >
+        Contrato de PIX Automático (recorrência BACEN) via Efí. O pagador autoriza
+        uma vez (jornada 2: o QR/copia-e-cola só AUTORIZA, sem débito imediato) e os
+        ciclos seguintes viram cobranças `kind=recorrente` debitadas no `dueDay`.
+      properties:
+        id: { type: integer }
+        subscriptionId: { type: integer, nullable: true, description: "assinatura vinculada (fase 1: mensalidade)" }
+        productId: { type: integer, nullable: true, description: "reservado p/ fase 2 (checkout recorrente)" }
+        customerId: { type: integer, nullable: true, description: "reservado p/ fase 2" }
+        payerTaxId: { type: string, description: "CPF do pagador (11 dígitos)" }
+        payerName: { type: string }
+        amountCents: { type: integer, description: "valor fixo do ciclo" }
+        periodicity: { type: string, enum: [SEMANAL, MENSAL, TRIMESTRAL, SEMESTRAL, ANUAL] }
+        dueDay: { type: integer, nullable: true, minimum: 1, maximum: 28 }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date, nullable: true }
+        journey: { type: integer, description: "jornada Efí (2 = só autoriza)" }
+        efiIdRec: { type: string, description: "idRec do contrato na Efí" }
+        brCode: { type: string, description: "Pix copia-e-cola de AUTORIZAÇÃO" }
+        qrCode: { type: string, description: "imagem do QR de autorização (data-uri) ou URL" }
+        status: { type: string, enum: [pending_auth, active, rejected, expired, canceled] }
         createdAt: { type: string, format: date-time }
     Product:
       type: object
@@ -273,6 +298,87 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Charge" } } } }
+        "404": { description: não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /recurrences:
+    post:
+      tags: [PIX Automático]
+      summary: Cria contrato de PIX Automático de mensalidade (jornada 2)
+      description: >
+        Cria a recorrência (admin) e gera o QR/copia-e-cola que **só autoriza** o
+        débito — nenhuma cobrança na hora; o 1º débito cai no `dueDay` do próximo
+        ciclo. Persiste como `pending_auth`, chama `POST /v2/rec` na Efí e devolve o
+        `brCode`/`qrCode` de autorização. A transição para `active` chega pelo webhook
+        de recorrência após o pagador autorizar.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subscriptionId, amountCents, payerTaxId, payerName, dueDay]
+              properties:
+                subscriptionId: { type: integer, description: "assinatura vinculada (> 0)" }
+                amountCents: { type: integer, description: "valor fixo do ciclo (> 0)" }
+                payerTaxId: { type: string, description: "CPF do pagador (11 dígitos)" }
+                payerName: { type: string }
+                dueDay: { type: integer, minimum: 1, maximum: 28 }
+                startDate: { type: string, format: date, description: "default: hoje" }
+                endDate: { type: string, format: date, description: "opcional" }
+      responses:
+        "201":
+          description: criada (status, brCode/qrCode de autorização)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  status: { type: string, enum: [pending_auth, active, rejected, expired, canceled] }
+                  brCode: { type: string }
+                  qrCode: { type: string }
+        "400": { description: inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: falha no gateway Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    get:
+      tags: [PIX Automático]
+      summary: Lista contratos de recorrência (admin)
+      responses:
+        "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Recurrence" } } } } }
+  /recurrences/{id}:
+    get:
+      tags: [PIX Automático]
+      summary: Detalhe do contrato + ciclos (cobranças vinculadas)
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  recurrence: { $ref: "#/components/schemas/Recurrence" }
+                  cycles: { type: array, items: { $ref: "#/components/schemas/Charge" } }
+        "400": { description: id inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /recurrences/{id}/cancel:
+    post:
+      tags: [PIX Automático]
+      summary: Cancela o contrato de recorrência
+      description: >
+        Cancela na Efí (`PATCH /v2/rec/{idRec}`, best-effort) e marca o contrato como
+        `canceled` localmente — o loop de ciclos só cobra contratos `active`, então o
+        cancelamento local basta mesmo se a Efí falhar.
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200":
+          description: cancelado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [canceled] }
+        "400": { description: id inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /products:
     post:
@@ -676,3 +782,25 @@ paths:
       responses:
         "200": { description: processado/duplicado }
         "400": { description: webhook inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /webhooks/efi/rec:
+    post:
+      tags: [PIX Automático]
+      summary: Webhook da Efí — status de recorrências (público)
+      security: []
+      description: >
+        Recebe mudanças de status dos contratos de PIX Automático (separado do webhook
+        PIX de débito). Autenticação via `?token=<EFI_WEBHOOK_SECRET>`, mesmo esquema do
+        webhook PIX. Resolve o contrato por `idRec` e atualiza o status local
+        (`pending_auth`/`active`/`rejected`/`expired`/`canceled`). O **débito** de cada
+        ciclo NÃO chega aqui — ele cai no webhook PIX (`/webhooks/efi/pix`), pois o ciclo
+        é uma cobrança `kind=recorrente` resolvida por `correlationId` (txid da cobr).
+      parameters:
+        - name: token
+          in: query
+          required: false
+          schema: { type: string }
+          description: Secret compartilhado (EFI_WEBHOOK_SECRET); validado pelo handler.
+      responses:
+        "200": { description: processado }
+        "400": { description: webhook inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: segredo inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }

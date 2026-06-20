@@ -12,6 +12,7 @@ type PayCharge struct {
 	ID               int64
 	Kind             string
 	SubscriptionID   *int64
+	RecurrenceID     *int64
 	StudentID        *int64
 	CustomerID       *int64
 	AmountCents      int64
@@ -65,6 +66,26 @@ type PayProduct struct {
 	PriceCents  int64
 	Active      bool
 	CreatedAt   pgtype.Timestamptz
+}
+
+type PayRecurrence struct {
+	ID             int64
+	SubscriptionID *int64
+	ProductID      *int64
+	CustomerID     *int64
+	PayerTaxID     string
+	PayerName      string
+	AmountCents    int64
+	Periodicity    string
+	DueDay         *int32
+	StartDate      pgtype.Date
+	EndDate        pgtype.Date
+	Journey        int16
+	EfiIDRec       *string
+	BrCode         *string
+	QrCode         *string
+	Status         string
+	CreatedAt      pgtype.Timestamptz
 }
 
 type PayStudent struct {

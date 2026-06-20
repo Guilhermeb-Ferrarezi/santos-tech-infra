@@ -171,3 +171,61 @@ func TestEfiParseWebhookPingDeTeste(t *testing.T) {
 		t.Fatalf("ping deveria render 0 eventos, veio %d", len(evs))
 	}
 }
+
+// --- PIX Automático (recorrência) ---
+
+// TestEfiRecStatusToApp cobre o mapeamento status Efí → vocabulário do app.
+func TestEfiRecStatusToApp(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"APROVADA", "active"},
+		{"REJEITADA", "rejected"},
+		{"EXPIRADA", "expired"},
+		{"CANCELADA", "canceled"},
+		{"CRIADA", "pending_auth"},
+		{"", "pending_auth"},         // estado desconhecido → ainda aguardando autorização
+		{"QUALQUER", "pending_auth"}, // default
+	}
+	for _, tc := range cases {
+		if got := efiRecStatusToApp(tc.in); got != tc.want {
+			t.Errorf("efiRecStatusToApp(%q) = %q, esperado %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestEfiParseRecWebhook: payload com vários itens → um RecEvent por idRec, status mapeado.
+func TestEfiParseRecWebhookMultiplos(t *testing.T) {
+	p := newTestEfi("http://x")
+	body := []byte(`{"rec":[{"idRec":"rec-1","status":"APROVADA"},{"idRec":"rec-2","status":"CANCELADA"}]}`)
+	evs, err := p.ParseRecWebhook(nil, body)
+	if err != nil {
+		t.Fatalf("ParseRecWebhook: %v", err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("esperava 2 eventos, veio %d", len(evs))
+	}
+	if evs[0].EfiIDRec != "rec-1" || evs[0].Status != "active" {
+		t.Fatalf("evento 0 inesperado: %+v", evs[0])
+	}
+	if evs[1].EfiIDRec != "rec-2" || evs[1].Status != "canceled" {
+		t.Fatalf("evento 1 inesperado: %+v", evs[1])
+	}
+}
+
+// TestEfiParseRecWebhook: itens sem idRec são ignorados; ping/vazio → 0 eventos.
+func TestEfiParseRecWebhookIgnoraSemIDRec(t *testing.T) {
+	p := newTestEfi("http://x")
+	evs, err := p.ParseRecWebhook(nil, []byte(`{"rec":[{"status":"APROVADA"}]}`))
+	if err != nil {
+		t.Fatalf("ParseRecWebhook: %v", err)
+	}
+	if len(evs) != 0 {
+		t.Fatalf("item sem idRec deveria ser ignorado, veio %d eventos", len(evs))
+	}
+	evs, err = p.ParseRecWebhook(nil, []byte(`{"rec":[]}`))
+	if err != nil {
+		t.Fatalf("payload vazio não deveria dar erro: %v", err)
+	}
+	if len(evs) != 0 {
+		t.Fatalf("payload vazio deveria render 0 eventos, veio %d", len(evs))
+	}
+}

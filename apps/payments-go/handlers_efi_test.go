@@ -35,6 +35,18 @@ func (f fakeEfiOps) GetReport(_ context.Context, _ string) (string, string, []by
 	}
 	return "done", "text/csv", []byte("a,b\n1,2"), nil
 }
+func (f fakeEfiOps) CreateRecurrence(_ context.Context, _ RecurrenceRequest) (RecurrenceResult, error) {
+	return RecurrenceResult{EfiIDRec: "rec-fake-1", BRCode: "00020101br-code", QRCode: "data:image/png;base64,fake", Status: "pending_auth"}, nil
+}
+func (f fakeEfiOps) GetRecurrence(_ context.Context, _ string) (string, error) { return "active", nil }
+func (f fakeEfiOps) CancelRecurrence(_ context.Context, _ string) error        { return nil }
+func (f fakeEfiOps) CreateRecurringCharge(_ context.Context, _ RecurringChargeRequest) (ChargeResult, error) {
+	return ChargeResult{ProviderChargeID: "stpaycycle1", BRCode: "00020101cobr", Status: "pending"}, nil
+}
+func (f fakeEfiOps) ParseRecWebhook(_ map[string][]string, body []byte) ([]RecEvent, error) {
+	return []RecEvent{{EfiIDRec: "rec-fake-1", Status: "active", Raw: body}}, nil
+}
+func (f fakeEfiOps) RegisterRecWebhook(_ context.Context, _ string) error { return nil }
 
 // fakeChargeReader implementa chargeReader para testes unitários.
 type fakeChargeReader struct {

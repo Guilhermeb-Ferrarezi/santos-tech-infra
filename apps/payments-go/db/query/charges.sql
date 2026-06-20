@@ -5,6 +5,15 @@ INSERT INTO pay_charges
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 RETURNING id, status, created_at;
 
+-- name: InsertRecurrenceCharge :one
+-- Cobrança de um ciclo de PIX Automático (kind='recorrente'), vinculada à recorrência.
+-- O txid da cobr da Efí vai em provider_charge_id; reference_month garante a anti-duplicidade.
+INSERT INTO pay_charges
+  (kind, recurrence_id, customer_id, amount_cents, due_date, reference_month,
+   provider, provider_charge_id, correlation_id, payer_tax_id, br_code, qr_code)
+VALUES ('recorrente', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+RETURNING id, status, created_at;
+
 -- name: GetCharge :one
 SELECT id, kind, subscription_id, student_id, amount_cents, due_date::text, reference_month,
        status, provider, COALESCE(provider_charge_id, ''), correlation_id,
@@ -59,6 +68,14 @@ FROM pay_charge_items ci
 JOIN pay_charges c ON c.id = ci.charge_id
 WHERE c.customer_id = $1
 ORDER BY ci.charge_id;
+
+-- name: ListChargesByRecurrence :many
+-- Ciclos (cobranças) de uma recorrência de PIX Automático, mais recentes primeiro.
+SELECT id, kind, amount_cents, due_date::text, reference_month, status,
+       COALESCE(br_code, ''), correlation_id, paid_at, created_at
+FROM pay_charges
+WHERE recurrence_id = $1
+ORDER BY created_at DESC;
 
 -- name: ListChargesByTaxID :many
 -- Cobranças de TODAS as contas com um mesmo CPF (detalhe consolidado por pessoa).

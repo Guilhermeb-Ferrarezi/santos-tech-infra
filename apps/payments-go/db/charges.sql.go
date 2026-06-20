@@ -197,6 +197,55 @@ func (q *Queries) InsertCharge(ctx context.Context, arg InsertChargeParams) (Ins
 	return i, err
 }
 
+const insertRecurrenceCharge = `-- name: InsertRecurrenceCharge :one
+INSERT INTO pay_charges
+  (kind, recurrence_id, customer_id, amount_cents, due_date, reference_month,
+   provider, provider_charge_id, correlation_id, payer_tax_id, br_code, qr_code)
+VALUES ('recorrente', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+RETURNING id, status, created_at
+`
+
+type InsertRecurrenceChargeParams struct {
+	RecurrenceID     *int64
+	CustomerID       *int64
+	AmountCents      int64
+	DueDate          pgtype.Date
+	ReferenceMonth   *string
+	Provider         string
+	ProviderChargeID *string
+	CorrelationID    string
+	PayerTaxID       *string
+	BrCode           *string
+	QrCode           *string
+}
+
+type InsertRecurrenceChargeRow struct {
+	ID        int64
+	Status    string
+	CreatedAt pgtype.Timestamptz
+}
+
+// Cobrança de um ciclo de PIX Automático (kind='recorrente'), vinculada à recorrência.
+// O txid da cobr da Efí vai em provider_charge_id; reference_month garante a anti-duplicidade.
+func (q *Queries) InsertRecurrenceCharge(ctx context.Context, arg InsertRecurrenceChargeParams) (InsertRecurrenceChargeRow, error) {
+	row := q.db.QueryRow(ctx, insertRecurrenceCharge,
+		arg.RecurrenceID,
+		arg.CustomerID,
+		arg.AmountCents,
+		arg.DueDate,
+		arg.ReferenceMonth,
+		arg.Provider,
+		arg.ProviderChargeID,
+		arg.CorrelationID,
+		arg.PayerTaxID,
+		arg.BrCode,
+		arg.QrCode,
+	)
+	var i InsertRecurrenceChargeRow
+	err := row.Scan(&i.ID, &i.Status, &i.CreatedAt)
+	return i, err
+}
+
 const listChargeItemsByCustomer = `-- name: ListChargeItemsByCustomer :many
 SELECT ci.charge_id, ci.product_id, ci.name, ci.price_cents, ci.quantity
 FROM pay_charge_items ci
@@ -318,6 +367,59 @@ func (q *Queries) ListChargesByCustomer(ctx context.Context, customerID *int64) 
 			&i.Kind,
 			&i.AmountCents,
 			&i.DueDate,
+			&i.Status,
+			&i.BrCode,
+			&i.CorrelationID,
+			&i.PaidAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChargesByRecurrence = `-- name: ListChargesByRecurrence :many
+SELECT id, kind, amount_cents, due_date::text, reference_month, status,
+       COALESCE(br_code, ''), correlation_id, paid_at, created_at
+FROM pay_charges
+WHERE recurrence_id = $1
+ORDER BY created_at DESC
+`
+
+type ListChargesByRecurrenceRow struct {
+	ID             int64
+	Kind           string
+	AmountCents    int64
+	DueDate        string
+	ReferenceMonth *string
+	Status         string
+	BrCode         string
+	CorrelationID  string
+	PaidAt         pgtype.Timestamptz
+	CreatedAt      pgtype.Timestamptz
+}
+
+// Ciclos (cobranças) de uma recorrência de PIX Automático, mais recentes primeiro.
+func (q *Queries) ListChargesByRecurrence(ctx context.Context, recurrenceID *int64) ([]ListChargesByRecurrenceRow, error) {
+	rows, err := q.db.Query(ctx, listChargesByRecurrence, recurrenceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChargesByRecurrenceRow
+	for rows.Next() {
+		var i ListChargesByRecurrenceRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.AmountCents,
+			&i.DueDate,
+			&i.ReferenceMonth,
 			&i.Status,
 			&i.BrCode,
 			&i.CorrelationID,

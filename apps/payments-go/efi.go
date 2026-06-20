@@ -410,6 +410,196 @@ func (p *efiProvider) ParseWebhook(headers map[string][]string, body []byte) ([]
 	return out, nil
 }
 
+// ---------------------------------------------------------------------------
+// PIX Automático (recorrência BACEN): /v2/rec (contrato) e /v2/cobr/{txid} (ciclo).
+// ---------------------------------------------------------------------------
+
+// efiPeriodicidade mapeia o vocabulário do app para o da Efí. A Efí documenta
+// MENSAL|ANUAL para PIX Automático; as demais periodicidades são repassadas como
+// estão (a Efí valida no schema).
+// TODO: validar payload contra Efí em homolog — confirmar quais periodicidades além
+// de MENSAL/ANUAL o /v2/rec aceita (SEMANAL/TRIMESTRAL/SEMESTRAL).
+func efiPeriodicidade(p string) string {
+	if p == "" {
+		return "MENSAL"
+	}
+	return p
+}
+
+// efiRecStatusToApp mapeia o status da recorrência Efí para o vocabulário do app
+// (pending_auth/active/rejected/expired/canceled), análogo a efiStatusToApp.
+func efiRecStatusToApp(s string) string {
+	switch s {
+	case "APROVADA":
+		return "active"
+	case "REJEITADA":
+		return "rejected"
+	case "EXPIRADA":
+		return "expired"
+	case "CANCELADA":
+		return "canceled"
+	default: // CRIADA e quaisquer estados intermediários: ainda aguardando autorização.
+		return "pending_auth"
+	}
+}
+
+// efiRecResp — resposta de /v2/rec e /v2/rec/{idRec}.
+// TODO: validar payload contra Efí em homolog — confirmar nome dos campos de QR
+// (dadosQR.pixCopiaECola) e onde vem a imagem do QR na jornada 2.
+type efiRecResp struct {
+	IDRec   string `json:"idRec"`
+	Status  string `json:"status"`
+	DadosQR struct {
+		PixCopiaECola string `json:"pixCopiaECola"`
+		ImagemQrcode  string `json:"imagemQrcode"`
+	} `json:"dadosQR"`
+}
+
+// CreateRecurrence cria o contrato de recorrência na Efí (POST /v2/rec). Jornada 2:
+// só autoriza, sem débito imediato — devolve o copia-e-cola/QR de autorização.
+func (p *efiProvider) CreateRecurrence(ctx context.Context, req RecurrenceRequest) (RecurrenceResult, error) {
+	valor := strconv.FormatFloat(float64(req.AmountCents)/100, 'f', 2, 64)
+	calendario := map[string]any{
+		"dataInicial":   req.StartDate,
+		"periodicidade": efiPeriodicidade(req.Periodicity),
+	}
+	if req.EndDate != "" {
+		calendario["dataFinal"] = req.EndDate
+	}
+	rec := map[string]any{
+		"vinculo": map[string]any{
+			"contrato": req.Contract,
+			"devedor":  map[string]any{"nome": req.PayerName, "cpf": req.PayerTaxID},
+			"objeto":   req.Object,
+		},
+		"calendario": calendario,
+		"valor":      map[string]any{"valorRec": valor},
+		// TODO: validar payload contra Efí em homolog — política de retentativa default.
+		"politicaRetentativa": "PERMITE_3R_7D",
+	}
+	data, err := p.do(ctx, http.MethodPost, "/v2/rec", rec)
+	if err != nil {
+		return RecurrenceResult{}, err
+	}
+	var r efiRecResp
+	if err := json.Unmarshal(data, &r); err != nil {
+		return RecurrenceResult{}, err
+	}
+	return RecurrenceResult{
+		EfiIDRec: r.IDRec,
+		BRCode:   r.DadosQR.PixCopiaECola,
+		QRCode:   r.DadosQR.ImagemQrcode,
+		Status:   efiRecStatusToApp(r.Status),
+	}, nil
+}
+
+// GetRecurrence consulta o status do contrato de recorrência (GET /v2/rec/{idRec}).
+func (p *efiProvider) GetRecurrence(ctx context.Context, idRec string) (string, error) {
+	data, err := p.do(ctx, http.MethodGet, "/v2/rec/"+url.PathEscape(idRec), nil)
+	if err != nil {
+		return "", err
+	}
+	var r efiRecResp
+	if err := json.Unmarshal(data, &r); err != nil {
+		return "", err
+	}
+	return efiRecStatusToApp(r.Status), nil
+}
+
+// CancelRecurrence cancela o contrato de recorrência (PATCH /v2/rec/{idRec}).
+// Best-effort no caller (uma recorrência já cancelada/expirada devolve erro do gateway).
+// TODO: validar payload contra Efí em homolog — confirmar o campo/valor de cancelamento.
+func (p *efiProvider) CancelRecurrence(ctx context.Context, idRec string) error {
+	body := map[string]any{"status": "CANCELADA"}
+	_, err := p.do(ctx, http.MethodPatch, "/v2/rec/"+url.PathEscape(idRec), body)
+	return err
+}
+
+// CreateRecurringCharge cria a cobrança de um ciclo (PUT /v2/cobr/{txid}), vinculada
+// ao contrato via idRec. Reusa ChargeResult (mesmo fluxo de status/SSE/webhook do pix).
+func (p *efiProvider) CreateRecurringCharge(ctx context.Context, req RecurringChargeRequest) (ChargeResult, error) {
+	valor := strconv.FormatFloat(float64(req.AmountCents)/100, 'f', 2, 64)
+	cobr := map[string]any{
+		"idRec":      req.EfiIDRec,
+		"calendario": map[string]any{"dataDeVencimento": req.DueDate},
+		"valor":      map[string]any{"original": valor},
+	}
+	if req.PayerTaxID != "" {
+		cobr["devedor"] = map[string]any{"nome": req.PayerName, "cpf": req.PayerTaxID}
+	}
+	data, err := p.do(ctx, http.MethodPut, "/v2/cobr/"+req.CorrelationID, cobr)
+	if err != nil {
+		return ChargeResult{}, err
+	}
+	var r efiCobResp
+	if err := json.Unmarshal(data, &r); err != nil {
+		return ChargeResult{}, err
+	}
+	return ChargeResult{
+		ProviderChargeID: r.Txid,
+		BRCode:           r.PixCopiaECola,
+		Status:           efiStatusToApp(r.Status),
+	}, nil
+}
+
+// ParseRecWebhook mapeia o payload de mudança de status de recorrências da Efí em RecEvents.
+// Corpo sem itens (ping de teste do registro) → slice vazio, sem erro.
+// A autenticação (segredo na URL) é feita no handler, não aqui.
+// TODO: validar payload contra Efí em homolog — confirmar o envelope ({"rec":[...]}) e os
+// nomes dos campos (idRec/status) do webhook de recorrência.
+func (p *efiProvider) ParseRecWebhook(headers map[string][]string, body []byte) ([]RecEvent, error) {
+	var wh struct {
+		Rec []struct {
+			IDRec  string `json:"idRec"`
+			Status string `json:"status"`
+		} `json:"rec"`
+	}
+	if err := json.Unmarshal(body, &wh); err != nil {
+		return nil, err
+	}
+	out := make([]RecEvent, 0, len(wh.Rec))
+	for _, it := range wh.Rec {
+		if it.IDRec == "" {
+			continue
+		}
+		out = append(out, RecEvent{
+			EfiIDRec: it.IDRec,
+			Status:   efiRecStatusToApp(it.Status),
+			Raw:      body,
+		})
+	}
+	return out, nil
+}
+
+// RegisterRecWebhook registra a URL do webhook de recorrências (PUT /v2/webhookrec),
+// pulando a validação mTLS de volta (necessário atrás de Cloudflare/Traefik), análogo
+// a RegisterWebhook.
+// TODO: validar payload contra Efí em homolog — confirmar a rota (/v2/webhookrec) e o corpo.
+func (p *efiProvider) RegisterRecWebhook(ctx context.Context, webhookURL string) error {
+	tok, err := p.accessToken(ctx)
+	if err != nil {
+		return err
+	}
+	b, _ := json.Marshal(map[string]string{"webhookUrl": webhookURL})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, p.base+"/v2/webhookrec", bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-skip-mtls-checking", "true")
+	res, err := p.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode >= 300 {
+		return fmt.Errorf("efi register webhookrec: status %d: %s", res.StatusCode, data)
+	}
+	return nil
+}
+
 // RegisterWebhook registra a URL do webhook na chave Pix, pulando a validação mTLS
 // de volta (necessário atrás de Cloudflare/Traefik).
 func (p *efiProvider) RegisterWebhook(ctx context.Context, webhookURL string) error {

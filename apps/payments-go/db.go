@@ -134,6 +134,34 @@ ALTER TABLE pay_charges ALTER COLUMN student_id DROP NOT NULL;
 ALTER TABLE pay_charge_items DROP CONSTRAINT IF EXISTS pay_charge_items_product_id_fkey;
 ALTER TABLE pay_charge_items ADD CONSTRAINT pay_charge_items_product_id_fkey
   FOREIGN KEY (product_id) REFERENCES pay_products(id) ON DELETE SET NULL;
+-- PIX Automático (recorrência BACEN): contrato de recorrência + ciclos vinculados.
+CREATE TABLE IF NOT EXISTS pay_recurrences (
+  id              BIGSERIAL PRIMARY KEY,
+  subscription_id BIGINT REFERENCES pay_subscriptions(id) ON DELETE SET NULL,
+  product_id      BIGINT REFERENCES pay_products(id),
+  customer_id     BIGINT REFERENCES pay_customers(id),
+  payer_tax_id    TEXT NOT NULL,
+  payer_name      TEXT NOT NULL,
+  amount_cents    BIGINT NOT NULL CHECK (amount_cents > 0),
+  periodicity     TEXT NOT NULL DEFAULT 'MENSAL'
+                    CHECK (periodicity IN ('SEMANAL','MENSAL','TRIMESTRAL','SEMESTRAL','ANUAL')),
+  due_day         INT,
+  start_date      DATE NOT NULL,
+  end_date        DATE,
+  journey         SMALLINT NOT NULL DEFAULT 2,
+  efi_id_rec      TEXT,
+  br_code         TEXT,
+  qr_code         TEXT,
+  status          TEXT NOT NULL DEFAULT 'pending_auth'
+                    CHECK (status IN ('pending_auth','active','rejected','expired','canceled')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_pay_recurrences_status ON pay_recurrences(status);
+ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS recurrence_id BIGINT REFERENCES pay_recurrences(id) ON DELETE SET NULL;
+-- kind ganha 'recorrente' (ciclos de PIX Automático): recria o CHECK incluindo-o.
+ALTER TABLE pay_charges DROP CONSTRAINT IF EXISTS pay_charges_kind_check;
+ALTER TABLE pay_charges ADD CONSTRAINT pay_charges_kind_check
+  CHECK (kind IN ('mensalidade','matricula','avulso','recorrente'));
 `
 
 func migrate(ctx context.Context, db *pgxpool.Pool) error {

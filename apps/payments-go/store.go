@@ -204,6 +204,217 @@ func (s *Store) SubscriptionsDueToday(ctx context.Context, day int, refMonth str
 	return out, nil
 }
 
+// ── Recurrences (PIX Automático) ──────────────────────────────────────────
+
+// int32PtrFromInt converte *int → *int32 (nil preservado), p/ colunas INT opcionais.
+func int32PtrFromInt(p *int) *int32 {
+	if p == nil {
+		return nil
+	}
+	v := int32(*p)
+	return &v
+}
+
+// intPtrFromInt32 é o inverso (coluna sqlc *int32 → *int do model).
+func intPtrFromInt32(p *int32) *int {
+	if p == nil {
+		return nil
+	}
+	v := int(*p)
+	return &v
+}
+
+// optDateToPgtype converte string opcional "YYYY-MM-DD" para pgtype.Date (inválida se vazia).
+func optDateToPgtype(dateStr string) pgtype.Date {
+	if dateStr == "" {
+		return pgtype.Date{}
+	}
+	return dateToPgtype(dateStr)
+}
+
+func (s *Store) CreateRecurrence(ctx context.Context, r *Recurrence) error {
+	row, err := s.q.CreateRecurrence(ctx, paydb.CreateRecurrenceParams{
+		SubscriptionID: r.SubscriptionID,
+		ProductID:      r.ProductID,
+		CustomerID:     r.CustomerID,
+		PayerTaxID:     r.PayerTaxID,
+		PayerName:      r.PayerName,
+		AmountCents:    r.AmountCents,
+		Periodicity:    r.Periodicity,
+		DueDay:         int32PtrFromInt(r.DueDay),
+		StartDate:      optDateToPgtype(r.StartDate),
+		EndDate:        optDateToPgtype(r.EndDate),
+		Journey:        int16(r.Journey),
+	})
+	if err != nil {
+		return err
+	}
+	r.ID = row.ID
+	r.Status = row.Status
+	r.CreatedAt = tsToTime(row.CreatedAt)
+	return nil
+}
+
+func (s *Store) GetRecurrence(ctx context.Context, id int64) (*Recurrence, error) {
+	r, err := s.q.GetRecurrence(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &Recurrence{
+		ID:             r.ID,
+		SubscriptionID: r.SubscriptionID,
+		ProductID:      r.ProductID,
+		CustomerID:     r.CustomerID,
+		PayerTaxID:     r.PayerTaxID,
+		PayerName:      r.PayerName,
+		AmountCents:    r.AmountCents,
+		Periodicity:    r.Periodicity,
+		DueDay:         intPtrFromInt32(r.DueDay),
+		StartDate:      r.StartDate,
+		EndDate:        r.EndDate,
+		Journey:        int(r.Journey),
+		EfiIDRec:       r.EfiIDRec,
+		BRCode:         r.BrCode,
+		QRCode:         r.QrCode,
+		Status:         r.Status,
+		CreatedAt:      tsToTime(r.CreatedAt),
+	}, nil
+}
+
+func (s *Store) GetRecurrenceByEfiID(ctx context.Context, efiIDRec string) (*Recurrence, error) {
+	r, err := s.q.GetRecurrenceByEfiID(ctx, &efiIDRec)
+	if err != nil {
+		return nil, err
+	}
+	return &Recurrence{
+		ID:             r.ID,
+		SubscriptionID: r.SubscriptionID,
+		ProductID:      r.ProductID,
+		CustomerID:     r.CustomerID,
+		PayerTaxID:     r.PayerTaxID,
+		PayerName:      r.PayerName,
+		AmountCents:    r.AmountCents,
+		Periodicity:    r.Periodicity,
+		DueDay:         intPtrFromInt32(r.DueDay),
+		StartDate:      r.StartDate,
+		EndDate:        r.EndDate,
+		Journey:        int(r.Journey),
+		EfiIDRec:       r.EfiIDRec,
+		BRCode:         r.BrCode,
+		QRCode:         r.QrCode,
+		Status:         r.Status,
+		CreatedAt:      tsToTime(r.CreatedAt),
+	}, nil
+}
+
+func (s *Store) ListRecurrences(ctx context.Context) ([]Recurrence, error) {
+	rows, err := s.q.ListRecurrences(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Recurrence, len(rows))
+	for i, r := range rows {
+		out[i] = Recurrence{
+			ID:             r.ID,
+			SubscriptionID: r.SubscriptionID,
+			ProductID:      r.ProductID,
+			CustomerID:     r.CustomerID,
+			PayerTaxID:     r.PayerTaxID,
+			PayerName:      r.PayerName,
+			AmountCents:    r.AmountCents,
+			Periodicity:    r.Periodicity,
+			DueDay:         intPtrFromInt32(r.DueDay),
+			StartDate:      r.StartDate,
+			EndDate:        r.EndDate,
+			Journey:        int(r.Journey),
+			EfiIDRec:       r.EfiIDRec,
+			BRCode:         r.BrCode,
+			QRCode:         r.QrCode,
+			Status:         r.Status,
+			CreatedAt:      tsToTime(r.CreatedAt),
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) SetRecurrenceStatus(ctx context.Context, id int64, status string) error {
+	return s.q.SetRecurrenceStatus(ctx, paydb.SetRecurrenceStatusParams{
+		ID:     id,
+		Status: status,
+	})
+}
+
+// UpdateRecurrenceAuth grava o resultado da criação na Efí (idRec + QR/copia-e-cola) e o status.
+func (s *Store) UpdateRecurrenceAuth(ctx context.Context, id int64, efiIDRec, brCode, qrCode, status string) error {
+	return s.q.UpdateRecurrenceAuth(ctx, paydb.UpdateRecurrenceAuthParams{
+		ID:       id,
+		EfiIDRec: nullStrPtr(efiIDRec),
+		BrCode:   nullStrPtr(brCode),
+		QrCode:   nullStrPtr(qrCode),
+		Status:   status,
+	})
+}
+
+// RecurrencesDueToday: 'active' cujo due_day == dia atual, dentro da vigência, e sem
+// cobrança no reference_month do ciclo (anti-duplicidade, espelha SubscriptionsDueToday).
+func (s *Store) RecurrencesDueToday(ctx context.Context, day int, refMonth string) ([]Recurrence, error) {
+	rows, err := s.q.RecurrencesDueToday(ctx, paydb.RecurrencesDueTodayParams{
+		DueDay:         int32PtrFromInt(&day),
+		ReferenceMonth: &refMonth,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Recurrence, len(rows))
+	for i, r := range rows {
+		out[i] = Recurrence{
+			ID:             r.ID,
+			SubscriptionID: r.SubscriptionID,
+			ProductID:      r.ProductID,
+			CustomerID:     r.CustomerID,
+			PayerTaxID:     r.PayerTaxID,
+			PayerName:      r.PayerName,
+			AmountCents:    r.AmountCents,
+			Periodicity:    r.Periodicity,
+			DueDay:         intPtrFromInt32(r.DueDay),
+			StartDate:      r.StartDate,
+			EndDate:        r.EndDate,
+			Journey:        int(r.Journey),
+			EfiIDRec:       r.EfiIDRec,
+			BRCode:         r.BrCode,
+			QRCode:         r.QrCode,
+			Status:         r.Status,
+			CreatedAt:      tsToTime(r.CreatedAt),
+		}
+	}
+	return out, nil
+}
+
+// InsertRecurrenceCharge cria a pay_charges de um ciclo (kind='recorrente'), vinculada
+// à recorrência. provider_charge_id guarda o txid da cobr da Efí.
+func (s *Store) InsertRecurrenceCharge(ctx context.Context, c *Charge) error {
+	row, err := s.q.InsertRecurrenceCharge(ctx, paydb.InsertRecurrenceChargeParams{
+		RecurrenceID:     c.RecurrenceID,
+		CustomerID:       c.CustomerID,
+		AmountCents:      c.AmountCents,
+		DueDate:          dateToPgtype(c.DueDate),
+		ReferenceMonth:   c.ReferenceMonth,
+		Provider:         c.Provider,
+		ProviderChargeID: nullStrPtr(c.ProviderChargeID),
+		CorrelationID:    c.CorrelationID,
+		PayerTaxID:       nullStrPtr(c.payerTaxID),
+		BrCode:           nullStrPtr(c.BRCode),
+		QrCode:           nullStrPtr(c.QRCode),
+	})
+	if err != nil {
+		return err
+	}
+	c.ID = row.ID
+	c.Status = row.Status
+	c.CreatedAt = tsToTime(row.CreatedAt)
+	return nil
+}
+
 // ── Charges ───────────────────────────────────────────────────────────────
 
 func nullStr(s string) any {
@@ -659,6 +870,30 @@ func (s *Store) ListChargesByCustomer(ctx context.Context, customerID int64) ([]
 			CorrelationID: r.CorrelationID,
 			PaidAt:        tsToTimePtr(r.PaidAt),
 			CreatedAt:     tsToTime(r.CreatedAt),
+		}
+	}
+	return out, nil
+}
+
+// ListChargesByRecurrence lista os ciclos (cobranças) de uma recorrência de PIX Automático.
+func (s *Store) ListChargesByRecurrence(ctx context.Context, recurrenceID int64) ([]Charge, error) {
+	rows, err := s.q.ListChargesByRecurrence(ctx, &recurrenceID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Charge, len(rows))
+	for i, r := range rows {
+		out[i] = Charge{
+			ID:             r.ID,
+			Kind:           r.Kind,
+			AmountCents:    r.AmountCents,
+			DueDate:        r.DueDate,
+			ReferenceMonth: r.ReferenceMonth,
+			Status:         r.Status,
+			BRCode:         r.BrCode,
+			CorrelationID:  r.CorrelationID,
+			PaidAt:         tsToTimePtr(r.PaidAt),
+			CreatedAt:      tsToTime(r.CreatedAt),
 		}
 	}
 	return out, nil

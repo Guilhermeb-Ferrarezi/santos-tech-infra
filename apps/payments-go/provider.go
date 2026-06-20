@@ -37,6 +37,45 @@ type WebhookEvent struct {
 	Raw              []byte
 }
 
+// RecurrenceRequest é a entrada para criar um contrato de PIX Automático na Efí
+// (POST /v2/rec). Fase 1: jornada 2 (só autoriza, sem débito imediato), valor fixo.
+type RecurrenceRequest struct {
+	Contract    string // vinculo.contrato — identificador legível do contrato (ex: assinatura #ID)
+	Object      string // vinculo.objeto — descrição do que está sendo cobrado
+	PayerName   string
+	PayerTaxID  string
+	AmountCents int64
+	Periodicity string // MENSAL|SEMANAL|TRIMESTRAL|SEMESTRAL|ANUAL (vocabulário do app)
+	StartDate   string // YYYY-MM-DD
+	EndDate     string // YYYY-MM-DD (opcional)
+}
+
+// RecurrenceResult é o retorno da criação/consulta de uma recorrência na Efí.
+type RecurrenceResult struct {
+	EfiIDRec string // idRec do contrato na Efí
+	BRCode   string // copia-e-cola de autorização (jornada 2)
+	QRCode   string // imagem do QR de autorização (base64/data-uri) ou URL
+	Status   string // status mapeado p/ o app
+}
+
+// RecurringChargeRequest é a entrada para criar a cobrança de um ciclo (PUT /v2/cobr/{txid}),
+// vinculada ao contrato via EfiIDRec.
+type RecurringChargeRequest struct {
+	CorrelationID string // txid da cobr (o nosso stpay...)
+	EfiIDRec      string // idRec do contrato
+	AmountCents   int64
+	PayerName     string
+	PayerTaxID    string
+	DueDate       string // YYYY-MM-DD (calendario.dataDeVencimento)
+}
+
+// RecEvent é um evento de mudança de status de uma recorrência, vindo do webhook rec.
+type RecEvent struct {
+	EfiIDRec string // idRec do contrato afetado
+	Status   string // status mapeado p/ o app
+	Raw      []byte
+}
+
 // PaymentProvider isola o núcleo do gateway. Fase atual: efiProvider.
 type PaymentProvider interface {
 	CreateCharge(ctx context.Context, req ChargeRequest) (ChargeResult, error)

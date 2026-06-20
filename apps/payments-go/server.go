@@ -19,6 +19,7 @@ type Server struct {
 	store     *Store
 	analytics analyticsSource
 	charges   chargeReader
+	recs      recurrenceStore
 	cart      *CartStore
 	provider  PaymentProvider
 	efi       efiOps
@@ -37,6 +38,7 @@ func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client, provider Payment
 		store:     st,
 		analytics: st,
 		charges:   st,
+		recs:      st,
 		cart:      &CartStore{rdb: rdb},
 		provider:  provider,
 		email:     newEmailClient(cfg),
@@ -78,6 +80,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /customers", s.requireAdmin(s.handleListCustomers))
 	mux.HandleFunc("GET /customers/{id}", s.requireAdmin(s.handleGetCustomer))
 
+	mux.HandleFunc("POST /recurrences", s.requireAdmin(s.handleCreateRecurrence))
+	mux.HandleFunc("GET /recurrences", s.requireAdmin(s.handleListRecurrences))
+	mux.HandleFunc("GET /recurrences/{id}", s.requireAdmin(s.handleGetRecurrence))
+	mux.HandleFunc("POST /recurrences/{id}/cancel", s.requireAdmin(s.handleCancelRecurrence))
+
 	mux.HandleFunc("POST /products", s.requireAdmin(s.handleCreateProduct))
 	mux.HandleFunc("GET /products", s.requireAdmin(s.handleListProducts))
 	mux.HandleFunc("PUT /products/{id}", s.requireAdmin(s.handleUpdateProduct))
@@ -102,6 +109,11 @@ func (s *Server) Routes() http.Handler {
 	// log) e sobrevive ao append do /pix. Registramos ambas as rotas no mesmo handler.
 	mux.HandleFunc("POST /webhooks/efi", s.handleWebhook)
 	mux.HandleFunc("POST /webhooks/efi/pix", s.handleWebhook)
+
+	// Webhook de recorrências (mudança de status do contrato PIX Automático), separado
+	// do webhook pix do débito. Mesmo esquema de segredo em ?token= (a Efí pode anexar
+	// um sufixo de rota ao final, tratado no handler).
+	mux.HandleFunc("POST /webhooks/efi/rec", s.handleRecWebhook)
 
 	mux.HandleFunc("GET /efi/balance", s.requireAdmin(s.handleEfiBalance))
 	mux.HandleFunc("GET /efi/med", s.requireAdmin(s.handleEfiMED))

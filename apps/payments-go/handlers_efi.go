@@ -24,6 +24,18 @@ type efiOps interface {
 	// GetReport consulta o status do relatório. Retorna ("done", contentType, csv, nil)
 	// quando pronto (200) ou ("processing", "", nil, nil) quando ainda processando (202).
 	GetReport(ctx context.Context, id string) (status string, contentType string, body []byte, err error)
+	// CreateRecurrence cria um contrato de PIX Automático (jornada 2: só autoriza).
+	CreateRecurrence(ctx context.Context, req RecurrenceRequest) (RecurrenceResult, error)
+	// GetRecurrence consulta o status do contrato de recorrência (status mapeado).
+	GetRecurrence(ctx context.Context, idRec string) (status string, err error)
+	// CancelRecurrence cancela o contrato de recorrência na Efí (best-effort).
+	CancelRecurrence(ctx context.Context, idRec string) error
+	// CreateRecurringCharge cria a cobrança de um ciclo, vinculada ao contrato via idRec.
+	CreateRecurringCharge(ctx context.Context, req RecurringChargeRequest) (ChargeResult, error)
+	// ParseRecWebhook mapeia o payload do webhook de recorrências em eventos de status.
+	ParseRecWebhook(headers map[string][]string, body []byte) ([]RecEvent, error)
+	// RegisterRecWebhook registra a URL do webhook de recorrências na Efí.
+	RegisterRecWebhook(ctx context.Context, url string) error
 }
 
 // chargeReader isola o acesso a cobranças no banco (o *Store em prod, fake nos testes).

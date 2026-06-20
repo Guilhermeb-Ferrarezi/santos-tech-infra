@@ -32,6 +32,7 @@ type Charge struct {
 	ID               int64      `json:"id"`
 	Kind             string     `json:"kind"`
 	SubscriptionID   *int64     `json:"subscriptionId,omitempty"`
+	RecurrenceID     *int64     `json:"recurrenceId,omitempty"`
 	StudentID        *int64     `json:"studentId,omitempty"`
 	CustomerID       *int64     `json:"customerId,omitempty"`
 	AmountCents      int64      `json:"amountCents"`
@@ -49,6 +50,28 @@ type Charge struct {
 	PayerName        string     `json:"payerName,omitempty"`
 
 	payerTaxID string // snapshot p/ insert; não serializa
+}
+
+// Recurrence é um contrato de PIX Automático (recorrência BACEN). Na fase 1 só usa
+// subscription_id (mensalidade, jornada 2); product_id/customer_id ficam prontos p/ a fase 2.
+type Recurrence struct {
+	ID             int64     `json:"id"`
+	SubscriptionID *int64    `json:"subscriptionId,omitempty"`
+	ProductID      *int64    `json:"productId,omitempty"`
+	CustomerID     *int64    `json:"customerId,omitempty"`
+	PayerTaxID     string    `json:"payerTaxId"`
+	PayerName      string    `json:"payerName"`
+	AmountCents    int64     `json:"amountCents"`
+	Periodicity    string    `json:"periodicity"`
+	DueDay         *int      `json:"dueDay,omitempty"`
+	StartDate      string    `json:"startDate"`         // YYYY-MM-DD
+	EndDate        string    `json:"endDate,omitempty"` // YYYY-MM-DD
+	Journey        int       `json:"journey"`
+	EfiIDRec       string    `json:"efiIdRec,omitempty"`
+	BRCode         string    `json:"brCode"`
+	QRCode         string    `json:"qrCode"`
+	Status         string    `json:"status"`
+	CreatedAt      time.Time `json:"createdAt"`
 }
 
 type StatsPeriod struct {

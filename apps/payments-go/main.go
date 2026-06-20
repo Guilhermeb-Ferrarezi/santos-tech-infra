@@ -107,6 +107,26 @@ func main() {
 	defer cancelLoop()
 	go srv.runRecurringLoop(loopCtx)
 	go srv.runExpiryLoop(loopCtx)
+	go srv.runRecurrenceCycleLoop(loopCtx)
+
+	// Registra (best-effort, não bloqueia o boot) o webhook de recorrências na Efí, ao
+	// lado do webhook pix. A URL é a base do webhook pix com sufixo /rec; o segredo vai
+	// em ?token= (mesmo esquema do pix). Sem URL/secret, apenas pula.
+	if srv.efi != nil && cfg.EFIWebhookURL != "" && cfg.EFIWebhookSecret != "" {
+		recURL := cfg.EFIWebhookURL + "/rec?token=" + cfg.EFIWebhookSecret
+		go func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					slog.Error("panic ao registrar webhook rec", "panic", rec)
+				}
+			}()
+			if err := srv.efi.RegisterRecWebhook(loopCtx, recURL); err != nil {
+				slog.Warn("falha ao registrar webhook de recorrências na Efí", "err", err)
+			} else {
+				slog.Info("webhook de recorrências registrado na Efí")
+			}
+		}()
+	}
 
 	httpSrv := &http.Server{
 		Addr:              ":" + cfg.Port,
