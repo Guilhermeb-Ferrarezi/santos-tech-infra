@@ -8,10 +8,12 @@ RETURNING id, status, created_at;
 -- name: InsertRecurrenceCharge :one
 -- Cobrança de um ciclo de PIX Automático (kind='recorrente'), vinculada à recorrência.
 -- O txid da cobr da Efí vai em provider_charge_id; reference_month garante a anti-duplicidade.
+-- public_token só é preenchido na 1ª cobr da Jornada 3 (checkout recorrente, tela
+-- /pay/{token}); nos ciclos seguintes (débito automático) vai NULL.
 INSERT INTO pay_charges
   (kind, recurrence_id, customer_id, amount_cents, due_date, reference_month,
-   provider, provider_charge_id, correlation_id, payer_tax_id, br_code, qr_code)
-VALUES ('recorrente', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+   provider, provider_charge_id, correlation_id, payer_tax_id, br_code, qr_code, public_token)
+VALUES ('recorrente', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, status, created_at;
 
 -- name: GetCharge :one

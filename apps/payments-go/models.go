@@ -95,6 +95,11 @@ type Product struct {
 	Description string `json:"description"`
 	PriceCents  int64  `json:"priceCents"`
 	Active      bool   `json:"active"`
+	// Produto recorrente (assinatura, fase 2). Quando Recurring=true, Periodicity
+	// (MENSAL/etc) e DueDay (1–28) descrevem os ciclos do PIX Automático.
+	Recurring   bool   `json:"recurring"`
+	Periodicity string `json:"periodicity,omitempty"`
+	DueDay      *int   `json:"dueDay,omitempty"`
 }
 
 type Customer struct {

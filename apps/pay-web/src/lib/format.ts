@@ -27,3 +27,18 @@ export function maskPhone(v: string): string {
 export function onlyDigits(v: string): string {
   return v.replace(/\D/g, "");
 }
+
+// Sufixo curto da periodicidade de uma assinatura (ex.: "/mês"). Default mensal.
+const PERIODICITY_SUFFIX: Record<string, string> = {
+  SEMANAL: "/semana",
+  MENSAL: "/mês",
+  TRIMESTRAL: "/trimestre",
+  SEMESTRAL: "/semestre",
+  ANUAL: "/ano",
+};
+
+/** "R$ 49,90/mês" — preço recorrente formatado com o sufixo da periodicidade. */
+export function formatRecurringBRL(cents: number, periodicity?: string): string {
+  const suffix = PERIODICITY_SUFFIX[(periodicity ?? "MENSAL").toUpperCase()] ?? "/mês";
+  return `${formatBRL(cents)}${suffix}`;
+}

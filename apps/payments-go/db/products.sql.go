@@ -10,9 +10,9 @@ import (
 )
 
 const createProduct = `-- name: CreateProduct :one
-INSERT INTO pay_products (slug, name, description, price_cents)
-VALUES ($1, $2, $3, $4)
-RETURNING id, slug, name, description, price_cents, active, created_at
+INSERT INTO pay_products (slug, name, description, price_cents, recurring, periodicity, due_day)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, slug, name, description, price_cents, active, recurring, periodicity, due_day, created_at
 `
 
 type CreateProductParams struct {
@@ -20,6 +20,9 @@ type CreateProductParams struct {
 	Name        string
 	Description string
 	PriceCents  int64
+	Recurring   bool
+	Periodicity *string
+	DueDay      *int32
 }
 
 func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (PayProduct, error) {
@@ -28,6 +31,9 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		arg.Name,
 		arg.Description,
 		arg.PriceCents,
+		arg.Recurring,
+		arg.Periodicity,
+		arg.DueDay,
 	)
 	var i PayProduct
 	err := row.Scan(
@@ -37,6 +43,9 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		&i.Description,
 		&i.PriceCents,
 		&i.Active,
+		&i.Recurring,
+		&i.Periodicity,
+		&i.DueDay,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -55,7 +64,7 @@ func (q *Queries) DeleteProduct(ctx context.Context, id int64) (int64, error) {
 }
 
 const getProductByID = `-- name: GetProductByID :one
-SELECT id, slug, name, description, price_cents, active
+SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day
 FROM pay_products
 WHERE id = $1 AND active = true
 `
@@ -67,6 +76,9 @@ type GetProductByIDRow struct {
 	Description string
 	PriceCents  int64
 	Active      bool
+	Recurring   bool
+	Periodicity *string
+	DueDay      *int32
 }
 
 func (q *Queries) GetProductByID(ctx context.Context, id int64) (GetProductByIDRow, error) {
@@ -79,12 +91,15 @@ func (q *Queries) GetProductByID(ctx context.Context, id int64) (GetProductByIDR
 		&i.Description,
 		&i.PriceCents,
 		&i.Active,
+		&i.Recurring,
+		&i.Periodicity,
+		&i.DueDay,
 	)
 	return i, err
 }
 
 const getProductBySlug = `-- name: GetProductBySlug :one
-SELECT id, slug, name, description, price_cents, active
+SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day
 FROM pay_products
 WHERE slug = $1 AND active = true
 `
@@ -96,6 +111,9 @@ type GetProductBySlugRow struct {
 	Description string
 	PriceCents  int64
 	Active      bool
+	Recurring   bool
+	Periodicity *string
+	DueDay      *int32
 }
 
 func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (GetProductBySlugRow, error) {
@@ -108,12 +126,15 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (GetProduct
 		&i.Description,
 		&i.PriceCents,
 		&i.Active,
+		&i.Recurring,
+		&i.Periodicity,
+		&i.DueDay,
 	)
 	return i, err
 }
 
 const listProducts = `-- name: ListProducts :many
-SELECT id, slug, name, description, price_cents, active
+SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day
 FROM pay_products
 ORDER BY name
 `
@@ -125,6 +146,9 @@ type ListProductsRow struct {
 	Description string
 	PriceCents  int64
 	Active      bool
+	Recurring   bool
+	Periodicity *string
+	DueDay      *int32
 }
 
 func (q *Queries) ListProducts(ctx context.Context) ([]ListProductsRow, error) {
@@ -143,6 +167,9 @@ func (q *Queries) ListProducts(ctx context.Context) ([]ListProductsRow, error) {
 			&i.Description,
 			&i.PriceCents,
 			&i.Active,
+			&i.Recurring,
+			&i.Periodicity,
+			&i.DueDay,
 		); err != nil {
 			return nil, err
 		}
@@ -156,7 +183,7 @@ func (q *Queries) ListProducts(ctx context.Context) ([]ListProductsRow, error) {
 
 const updateProduct = `-- name: UpdateProduct :execrows
 UPDATE pay_products
-SET name = $2, description = $3, price_cents = $4, active = $5
+SET name = $2, description = $3, price_cents = $4, active = $5, recurring = $6, periodicity = $7, due_day = $8
 WHERE id = $1
 `
 
@@ -166,6 +193,9 @@ type UpdateProductParams struct {
 	Description string
 	PriceCents  int64
 	Active      bool
+	Recurring   bool
+	Periodicity *string
+	DueDay      *int32
 }
 
 func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (int64, error) {
@@ -175,6 +205,9 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (i
 		arg.Description,
 		arg.PriceCents,
 		arg.Active,
+		arg.Recurring,
+		arg.Periodicity,
+		arg.DueDay,
 	)
 	if err != nil {
 		return 0, err

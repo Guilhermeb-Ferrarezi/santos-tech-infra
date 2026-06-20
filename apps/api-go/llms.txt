@@ -521,10 +521,13 @@ GET    /customers                                               → [{id,userId,
 GET    /customers/{id}                                          → {id,...,createdAt, charges:[{id,amountCents,status,paidAt,createdAt,items:[{name,priceCents,quantity}]}]}  (compras consolidadas por CPF)
 
 Catálogo de produtos (admin, exceto by-slug):
-POST   /products            body {slug,name,description?,priceCents}  → 201 {id,...,active}
-GET    /products                                                → [{...}]
-PUT    /products/{id}        body {name,description?,priceCents,active} → {...}
-GET    /products/by-slug/{slug}   (PÚBLICO, sem auth; só produtos ativos) → {...}
+Produto pode ser recorrente (assinatura): recurring=true exige periodicity ∈
+{SEMANAL,MENSAL,TRIMESTRAL,SEMESTRAL,ANUAL} e dueDay 1–28. Campos no JSON do Product:
+recurring(bool), periodicity(string, omitido se vazio), dueDay(int|null).
+POST   /products            body {slug,name,description?,priceCents,recurring?,periodicity?,dueDay?}  → 201 {id,...,active,recurring,periodicity,dueDay}
+GET    /products                                                → [{...,recurring,periodicity,dueDay}]
+PUT    /products/{id}        body {name,description?,priceCents,active,recurring?,periodicity?,dueDay?} → {...}
+GET    /products/by-slug/{slug}   (PÚBLICO, sem auth; só produtos ativos) → {...,recurring,periodicity,dueDay}
 
 Cliente logado (authGuard, /me/*) — checkout self-service:
 GET    /me/customer                                             → {id,userId,taxId,phone,...} (vazio se não houver; não cria)
@@ -534,6 +537,15 @@ POST   /me/cart             body {slug}                         → {ok:true} (s
 DELETE /me/cart/{productId}                                     → {ok:true}
 POST   /me/cart/checkout    body {taxId,phone?,save?}           → 201 {token,brCode,qrCode,amountCents}
          (recalcula total pelo catálogo, cria cobrança Efí, grava itens, esvazia o carrinho)
+POST   /me/subscribe        body {productId,taxId,phone?,name,email,save?} → 201 {token,brCode,qrCode,amountCents}
+         Checkout de produto RECORRENTE (assinatura; item único, fora do carrinho). Valida que o
+         produto existe e recurring=true, faz upsert do customer por (conta,CPF) e cria via PIX
+         Automático JORNADA 3 a recorrência (pending_auth, journey=3, periodicity/dueDay do produto)
+         + a 1ª cobrança (kind=recorrente, vencimento HOJE) — devolvendo UM ÚNICO QR/copia-e-cola que
+         AUTORIZA a recorrência e PAGA a 1ª parcela. O token leva a /pay/{token}. Webhook rec move o
+         contrato para active ao autorizar; webhook pix marca a 1ª cobrança paid (correlation_id=txid).
+         Os ciclos seguintes (apenas MENSAL nesta fase) saem pelo runRecurrenceCycleLoop. Erros:
+         400 invalid_body · 404 not_found · 409 not_recurring|invalid_product · 422 provider_error.
 GET    /me/charges                                              → [charges do customer]
 
 Pagamento público (sem auth) — tela de Pix pelo token público da cobrança:

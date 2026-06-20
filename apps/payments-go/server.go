@@ -20,6 +20,7 @@ type Server struct {
 	analytics analyticsSource
 	charges   chargeReader
 	recs      recurrenceStore
+	subs      subscribeStore
 	cart      *CartStore
 	provider  PaymentProvider
 	efi       efiOps
@@ -39,6 +40,7 @@ func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client, provider Payment
 		analytics: st,
 		charges:   st,
 		recs:      st,
+		subs:      st,
 		cart:      &CartStore{rdb: rdb},
 		provider:  provider,
 		email:     newEmailClient(cfg),
@@ -97,6 +99,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /me/cart", s.authGuard(s.handleAddCart))
 	mux.HandleFunc("DELETE /me/cart/{productId}", s.authGuard(s.handleRemoveCart))
 	mux.HandleFunc("POST /me/cart/checkout", s.authGuard(s.handleCheckout))
+	mux.HandleFunc("POST /me/subscribe", s.authGuard(s.handleSubscribe))
 	mux.HandleFunc("GET /me/charges", s.authGuard(s.handleMeCharges))
 
 	mux.HandleFunc("GET /pay/{token}", s.handleGetPay)

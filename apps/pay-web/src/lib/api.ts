@@ -27,7 +27,18 @@ async function req<T>(path: string, init?: RequestInit, retried = false): Promis
   return res.status === 204 ? (undefined as T) : res.json();
 }
 
-export interface Product { id: number; slug: string; name: string; description: string; priceCents: number; }
+export interface Product {
+  id: number;
+  slug: string;
+  name: string;
+  description: string;
+  priceCents: number;
+  // Campos de assinatura (PIX Automático). `recurring` sempre presente; `periodicity`/`dueDay`
+  // só vêm preenchidos em produtos recorrentes (omitempty no backend).
+  recurring?: boolean;
+  periodicity?: string;
+  dueDay?: number | null;
+}
 export interface CartLine { product: Product; quantity: number; }
 export interface PayData { amountCents: number; brCode: string; qrCode: string; status: string; dueDate: string; }
 
@@ -42,6 +53,11 @@ export const api = {
   checkout: (taxId: string, phone: string, name: string, email: string, save: boolean) =>
     req<{ token: string; brCode: string; qrCode: string; amountCents: number }>(`/me/cart/checkout`,
       { method: "POST", body: JSON.stringify({ taxId, phone, name, email, save }) }),
+  // subscribe — checkout de produto recorrente (item único, fora do carrinho). Gera a
+  // recorrência + a 1ª cobrança no mesmo QR de autorização. Mesma forma do checkout.
+  subscribe: (productId: number, taxId: string, phone: string, name: string, email: string, save: boolean) =>
+    req<{ token: string; brCode: string; qrCode: string; amountCents: number }>(`/me/subscribe`,
+      { method: "POST", body: JSON.stringify({ productId, taxId, phone, name, email, save }) }),
   pay: (token: string) => req<PayData>(`/pay/${seg(token)}`),
   payEventsUrl: (token: string) => `${BASE}/pay/${seg(token)}/events`,
   cancelPay: (token: string) => req<{ status: string }>(`/pay/${seg(token)}/cancel`, { method: "POST" }),

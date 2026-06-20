@@ -493,6 +493,95 @@ func (p *efiProvider) CreateRecurrence(ctx context.Context, req RecurrenceReques
 	}, nil
 }
 
+// CreateRecurrenceJornada3 cria a recorrência da Jornada 3: AUTORIZA o contrato e PAGA
+// a 1ª parcela (vencimento hoje) num único QR/copia-e-cola. Dois passos na Efí:
+//  1. cria a cobrança imediata da 1ª parcela (PUT /v2/cob/{txid}), reusando CreateCharge;
+//  2. cria o contrato (POST /v2/rec) referenciando o txid em ativacao.dadosJornada.txid.
+//
+// Devolve o RecurrenceResult (idRec + QR único de autorização+pagamento, vindo de
+// dadosQR.pixCopiaECola do contrato) e o ChargeResult da 1ª cobr (txid = o nosso
+// ChargeCorrelationID; status inicial).
+//
+// TODO: validar payload contra Efí em homolog — a Jornada 3 (ativacao.dadosJornada.txid +
+// loc) não foi exercitada; confirmar o campo de vínculo do txid, se o QR único sai do
+// contrato (rec) ou da cob imediata, e se o `loc` é obrigatório no POST /v2/rec.
+func (p *efiProvider) CreateRecurrenceJornada3(ctx context.Context, req RecurrenceJornada3Request) (RecurrenceResult, ChargeResult, error) {
+	// Passo 1: 1ª cobrança imediata (vence hoje), txid = o nosso correlationID.
+	charge, err := p.CreateCharge(ctx, ChargeRequest{
+		CorrelationID: req.ChargeCorrelationID,
+		AmountCents:   req.AmountCents,
+		PayerName:     req.PayerName,
+		PayerTaxID:    req.PayerTaxID,
+		Description:   req.Description,
+		// Vence hoje: expira no fim do dia (a Efí debita a 1ª parcela já).
+		ExpiresAt: time.Now().Add(23 * time.Hour).Format(time.RFC3339),
+	})
+	if err != nil {
+		return RecurrenceResult{}, ChargeResult{}, err
+	}
+
+	// Passo 2: contrato de recorrência vinculado à 1ª cobr (Jornada 3).
+	valor := strconv.FormatFloat(float64(req.AmountCents)/100, 'f', 2, 64)
+	calendario := map[string]any{
+		"dataInicial":   req.StartDate,
+		"periodicidade": efiPeriodicidade(req.Periodicity),
+	}
+	if req.EndDate != "" {
+		calendario["dataFinal"] = req.EndDate
+	}
+	rec := map[string]any{
+		"vinculo": map[string]any{
+			"contrato": req.Contract,
+			"devedor":  map[string]any{"nome": req.PayerName, "cpf": req.PayerTaxID},
+			"objeto":   req.Object,
+		},
+		"calendario": calendario,
+		"valor":      map[string]any{"valorRec": valor},
+		// TODO: validar payload contra Efí em homolog — política de retentativa default.
+		"politicaRetentativa": "PERMITE_3R_7D",
+		// Jornada 3: vincula a cobrança imediata já criada (autoriza + paga 1ª parcela).
+		"ativacao": map[string]any{
+			"dadosJornada": map[string]any{"txid": req.ChargeCorrelationID},
+		},
+	}
+	data, err := p.do(ctx, http.MethodPost, "/v2/rec", rec)
+	if err != nil {
+		return RecurrenceResult{}, ChargeResult{}, err
+	}
+	var r efiRecResp
+	if err := json.Unmarshal(data, &r); err != nil {
+		return RecurrenceResult{}, ChargeResult{}, err
+	}
+	recRes := RecurrenceResult{
+		EfiIDRec: r.IDRec,
+		BRCode:   r.DadosQR.PixCopiaECola,
+		QRCode:   r.DadosQR.ImagemQrcode,
+		Status:   efiRecStatusToApp(r.Status),
+	}
+	// O POST /v2/rec da Jornada 3 pode não trazer o dadosQR inline; nesse caso consulta
+	// o contrato para obter o QR único de autorização+pagamento.
+	if recRes.BRCode == "" && r.IDRec != "" {
+		if qd, qerr := p.do(ctx, http.MethodGet, "/v2/rec/"+url.PathEscape(r.IDRec), nil); qerr == nil {
+			var rq efiRecResp
+			if json.Unmarshal(qd, &rq) == nil {
+				recRes.BRCode = rq.DadosQR.PixCopiaECola
+				if recRes.QRCode == "" {
+					recRes.QRCode = rq.DadosQR.ImagemQrcode
+				}
+			}
+		}
+	}
+	// O QR único vem do contrato; o copia-e-cola da cob imediata é um fallback se preciso.
+	if recRes.BRCode == "" {
+		recRes.BRCode = charge.BRCode
+		if recRes.QRCode == "" {
+			recRes.QRCode = charge.QRCode
+		}
+	}
+	charge.ProviderChargeID = req.ChargeCorrelationID
+	return recRes, charge, nil
+}
+
 // GetRecurrence consulta o status do contrato de recorrência (GET /v2/rec/{idRec}).
 func (p *efiProvider) GetRecurrence(ctx context.Context, idRec string) (string, error) {
 	data, err := p.do(ctx, http.MethodGet, "/v2/rec/"+url.PathEscape(idRec), nil)

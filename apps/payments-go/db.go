@@ -102,6 +102,11 @@ CREATE TABLE IF NOT EXISTS pay_products (
   active       BOOLEAN NOT NULL DEFAULT true,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Produto recorrente (assinatura, fase 2): quando recurring=true o checkout vira o
+-- fluxo de PIX Automático (Jornada 3). periodicity/due_day descrevem os ciclos.
+ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS recurring   BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS periodicity TEXT;
+ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS due_day     INT;
 CREATE TABLE IF NOT EXISTS pay_customers (
   id         BIGSERIAL PRIMARY KEY,
   user_id    BIGINT NOT NULL,

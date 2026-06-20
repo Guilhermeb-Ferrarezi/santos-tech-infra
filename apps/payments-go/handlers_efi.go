@@ -26,6 +26,9 @@ type efiOps interface {
 	GetReport(ctx context.Context, id string) (status string, contentType string, body []byte, err error)
 	// CreateRecurrence cria um contrato de PIX Automático (jornada 2: só autoriza).
 	CreateRecurrence(ctx context.Context, req RecurrenceRequest) (RecurrenceResult, error)
+	// CreateRecurrenceJornada3 cria a recorrência + 1ª cobr (vencimento hoje) num único
+	// QR de autorização+pagamento. Devolve o contrato e a 1ª cobr.
+	CreateRecurrenceJornada3(ctx context.Context, req RecurrenceJornada3Request) (RecurrenceResult, ChargeResult, error)
 	// GetRecurrence consulta o status do contrato de recorrência (status mapeado).
 	GetRecurrence(ctx context.Context, idRec string) (status string, err error)
 	// CancelRecurrence cancela o contrato de recorrência na Efí (best-effort).

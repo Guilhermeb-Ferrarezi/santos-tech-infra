@@ -69,6 +69,24 @@ type RecurringChargeRequest struct {
 	DueDate       string // YYYY-MM-DD (calendario.dataDeVencimento)
 }
 
+// RecurrenceJornada3Request é a entrada para criar um contrato de PIX Automático na
+// Jornada 3 (POST /v2/rec com a 1ª cobrança vinculada): autoriza a recorrência E paga
+// a 1ª parcela (vencimento hoje) num ÚNICO QR/copia-e-cola. ChargeCorrelationID é o
+// txid (determinístico/seguro) da 1ª cobr imediata, criada antes de vincular ao contrato.
+type RecurrenceJornada3Request struct {
+	Contract            string // vinculo.contrato
+	Object              string // vinculo.objeto
+	PayerName           string
+	PayerTaxID          string
+	AmountCents         int64
+	Periodicity         string // vocabulário do app (MENSAL|…)
+	StartDate           string // YYYY-MM-DD (calendario.dataInicial)
+	EndDate             string // YYYY-MM-DD (opcional)
+	ChargeCorrelationID string // txid da 1ª cobr (cob imediata) — vence hoje
+	FirstDueDate        string // YYYY-MM-DD do vencimento da 1ª parcela (hoje)
+	Description         string // solicitacaoPagador da 1ª cob
+}
+
 // RecEvent é um evento de mudança de status de uma recorrência, vindo do webhook rec.
 type RecEvent struct {
 	EfiIDRec string // idRec do contrato afetado

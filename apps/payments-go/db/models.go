@@ -65,6 +65,9 @@ type PayProduct struct {
 	Description string
 	PriceCents  int64
 	Active      bool
+	Recurring   bool
+	Periodicity *string
+	DueDay      *int32
 	CreatedAt   pgtype.Timestamptz
 }
 

@@ -405,6 +405,7 @@ func (s *Store) InsertRecurrenceCharge(ctx context.Context, c *Charge) error {
 		PayerTaxID:       nullStrPtr(c.payerTaxID),
 		BrCode:           nullStrPtr(c.BRCode),
 		QrCode:           nullStrPtr(c.QRCode),
+		PublicToken:      nullStrPtr(c.PublicToken),
 	})
 	if err != nil {
 		return err
@@ -603,6 +604,9 @@ func (s *Store) CreateProduct(ctx context.Context, p *Product) error {
 		Name:        p.Name,
 		Description: p.Description,
 		PriceCents:  p.PriceCents,
+		Recurring:   p.Recurring,
+		Periodicity: nullStrPtr(p.Periodicity),
+		DueDay:      int32PtrFromInt(p.DueDay),
 	})
 	if err != nil {
 		return err
@@ -610,6 +614,14 @@ func (s *Store) CreateProduct(ctx context.Context, p *Product) error {
 	p.ID = row.ID
 	p.Active = row.Active
 	return nil
+}
+
+// strPtrToStr converte *string (coluna TEXT opcional do sqlc) para string ("" se nil).
+func strPtrToStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 func (s *Store) ListProducts(ctx context.Context) ([]Product, error) {
@@ -626,6 +638,9 @@ func (s *Store) ListProducts(ctx context.Context) ([]Product, error) {
 			Description: r.Description,
 			PriceCents:  r.PriceCents,
 			Active:      r.Active,
+			Recurring:   r.Recurring,
+			Periodicity: strPtrToStr(r.Periodicity),
+			DueDay:      intPtrFromInt32(r.DueDay),
 		}
 	}
 	return out, nil
@@ -643,6 +658,9 @@ func (s *Store) GetProductBySlug(ctx context.Context, slug string) (*Product, er
 		Description: r.Description,
 		PriceCents:  r.PriceCents,
 		Active:      r.Active,
+		Recurring:   r.Recurring,
+		Periodicity: strPtrToStr(r.Periodicity),
+		DueDay:      intPtrFromInt32(r.DueDay),
 	}, nil
 }
 
@@ -658,6 +676,9 @@ func (s *Store) GetProductByID(ctx context.Context, id int64) (*Product, error) 
 		Description: r.Description,
 		PriceCents:  r.PriceCents,
 		Active:      r.Active,
+		Recurring:   r.Recurring,
+		Periodicity: strPtrToStr(r.Periodicity),
+		DueDay:      intPtrFromInt32(r.DueDay),
 	}, nil
 }
 
@@ -679,6 +700,9 @@ func (s *Store) UpdateProduct(ctx context.Context, p *Product) error {
 		Description: p.Description,
 		PriceCents:  p.PriceCents,
 		Active:      p.Active,
+		Recurring:   p.Recurring,
+		Periodicity: nullStrPtr(p.Periodicity),
+		DueDay:      int32PtrFromInt(p.DueDay),
 	})
 	if err != nil {
 		return err

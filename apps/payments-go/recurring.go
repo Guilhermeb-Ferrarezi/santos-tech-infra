@@ -100,6 +100,15 @@ func (s *Server) generateRecurrenceCharges(ctx context.Context) {
 		return
 	}
 	for _, rec := range recs {
+		// O loop roda 1x/dia e gera no máximo 1 cobr/mês por recorrência (anti-duplicidade
+		// por reference_month). Isso corresponde à periodicidade MENSAL. Periodicidades não
+		// mensais (ex.: ANUAL) precisariam de outro intervalo entre ciclos — fora do escopo
+		// desta fase — então o loop só cobra os ciclos seguintes das mensais (a 1ª parcela de
+		// QUALQUER periodicidade já foi cobrada no checkout da Jornada 3).
+		// TODO: suportar ciclos não mensais (intervalo por periodicidade) numa fase futura.
+		if rec.Periodicity != "" && rec.Periodicity != "MENSAL" {
+			continue
+		}
 		ref := refMonth
 		recID := rec.ID
 		dueDate := monthlyDueDate(now.Year(), now.Month(), day)

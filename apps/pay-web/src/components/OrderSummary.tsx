@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { Package } from "lucide-react";
-import { formatBRL } from "../lib/format";
+import { Package, RefreshCw } from "lucide-react";
+import { formatBRL, formatRecurringBRL } from "../lib/format";
 import { SecuritySeal } from "./CheckoutShell";
 
 export interface OrderItem {
@@ -12,17 +12,25 @@ export interface OrderItem {
 
 // OrderSummary — conteúdo fixo da coluna direita: selo de segurança, identificação
 // do produto, bloco "Resumo" (Subtotal + Total) e o slot da ação principal (action).
+// Quando `recurring`, o valor vira "R$ X/mês" (sufixo da `periodicity`) e o resumo
+// destaca que é uma assinatura com débito recorrente.
 export function OrderSummary({
   items,
   totalCents,
   action,
+  recurring = false,
+  periodicity,
 }: {
   items: OrderItem[];
   totalCents: number;
   action?: ReactNode;
+  recurring?: boolean;
+  periodicity?: string;
 }) {
   const main = items[0];
   const extra = items.length - 1;
+  const price = (cents: number) =>
+    recurring ? formatRecurringBRL(cents, periodicity) : formatBRL(cents);
 
   return (
     <div>
@@ -50,9 +58,14 @@ export function OrderSummary({
               + {extra} {extra === 1 ? "outro item" : "outros itens"}
             </div>
           )}
+          {recurring && (
+            <div className="mt-0.5 flex items-center gap-1 text-sm text-[#0db88f]">
+              <RefreshCw className="size-3.5" aria-hidden /> Assinatura
+            </div>
+          )}
         </div>
         <div className="ml-auto whitespace-nowrap text-lg font-semibold text-[#0e2937]">
-          {formatBRL(totalCents)}
+          {price(totalCents)}
         </div>
       </div>
 
@@ -64,13 +77,19 @@ export function OrderSummary({
         <dl className="space-y-2 text-sm">
           <div className="flex justify-between text-[#496b84]">
             <dt>Subtotal</dt>
-            <dd>{formatBRL(totalCents)}</dd>
+            <dd>{price(totalCents)}</dd>
           </div>
           <div className="flex items-baseline justify-between border-t border-[#e3eaf0] pt-3 text-[#0e2937]">
-            <dt className="font-semibold">Total</dt>
+            <dt className="font-semibold">{recurring ? "1ª parcela hoje" : "Total"}</dt>
             <dd className="text-lg font-bold text-[#0db88f]">{formatBRL(totalCents)}</dd>
           </div>
         </dl>
+        {recurring && (
+          <p className="mt-3 text-xs text-[#496b84]">
+            Cobrança {price(totalCents)} renovada automaticamente. Você pode cancelar a qualquer
+            momento no app do seu banco.
+          </p>
+        )}
       </div>
 
       {action && <div className="mt-6">{action}</div>}

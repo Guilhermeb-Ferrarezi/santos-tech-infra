@@ -121,6 +121,14 @@ func (s *Server) handleAddCart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Produto não encontrado")
 		return
 	}
+	// Produto recorrente não entra no carrinho multi-item: a assinatura é item único e
+	// passa pelo fluxo POST /me/subscribe (cria o contrato BACEN via Jornada 3). Sem este
+	// guard, um cliente chamando /me/cart direto cobraria a assinatura 1x como avulso, sem
+	// recorrência. O frontend já redireciona; aqui é a defesa no servidor.
+	if p.Recurring {
+		writeError(w, http.StatusConflict, "use_subscribe", "Produto recorrente: use a assinatura (/me/subscribe), não o carrinho")
+		return
+	}
 	if err := s.cart.Add(r.Context(), s.uid(r), p.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "redis_error", "Falha ao adicionar")
 		return
@@ -195,6 +203,13 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		p, err := s.store.GetProductByID(r.Context(), it.ProductID)
 		if err != nil {
 			continue
+		}
+		// Defesa em profundidade: se o produto virou recorrente DEPOIS de entrar no carrinho
+		// (admin marcou como assinatura entre o add e o checkout), barra aqui também — uma
+		// assinatura nunca pode ser cobrada como avulso. O add já bloqueia novos recorrentes.
+		if p.Recurring {
+			writeError(w, http.StatusConflict, "use_subscribe", "Há um produto de assinatura no carrinho: assine por /me/subscribe e remova-o do carrinho")
+			return
 		}
 		pid := p.ID
 		chargeItems = append(chargeItems, ChargeItem{ProductID: &pid, Name: p.Name, PriceCents: p.PriceCents, Quantity: it.Quantity})

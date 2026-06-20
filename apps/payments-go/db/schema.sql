@@ -45,6 +45,9 @@ CREATE TABLE pay_products (
   description  TEXT NOT NULL DEFAULT '',
   price_cents  BIGINT NOT NULL CHECK (price_cents > 0),
   active       BOOLEAN NOT NULL DEFAULT true,
+  recurring    BOOLEAN NOT NULL DEFAULT false,
+  periodicity  TEXT,
+  due_day      INT,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

@@ -13,9 +13,13 @@ export type PixStatus = "loading" | "pending" | "paid" | "unavailable" | "error"
 export function PixView({
   token,
   onStatusChange,
+  recurring = false,
 }: {
   token: string;
   onStatusChange?: (status: PixStatus) => void;
+  // Quando true, a 1ª cobr é de uma assinatura (PIX Automático): os rótulos mudam para
+  // "autorizar e pagar a 1ª parcela" / "Assinatura ativa".
+  recurring?: boolean;
 }) {
   const [data, setData] = useState<PayData | null>(null);
   const [paid, setPaid] = useState(false);
@@ -108,8 +112,14 @@ export function PixView({
         <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-emerald-100">
           <Check className="size-8 text-emerald-600" />
         </div>
-        <h3 className="text-lg font-bold text-[#0e2937]">Pagamento confirmado!</h3>
-        <p className="text-sm text-slate-600">Obrigado. Tudo certo com a sua compra.</p>
+        <h3 className="text-lg font-bold text-[#0e2937]">
+          {recurring ? "Assinatura ativa!" : "Pagamento confirmado!"}
+        </h3>
+        <p className="text-sm text-slate-600">
+          {recurring
+            ? "Sua assinatura está ativa e a 1ª parcela foi paga."
+            : "Obrigado. Tudo certo com a sua compra."}
+        </p>
         <Button
           variant="outline"
           className="mx-auto h-11 gap-2"
@@ -151,7 +161,9 @@ export function PixView({
         />
       )}
       <p className="text-center text-sm text-slate-500">
-        Escaneie o QR ou copie o código no app do seu banco.
+        {recurring
+          ? "Escaneie para autorizar a assinatura e pagar a 1ª parcela no app do seu banco."
+          : "Escaneie o QR ou copie o código no app do seu banco."}
       </p>
       <Button
         onClick={copy}

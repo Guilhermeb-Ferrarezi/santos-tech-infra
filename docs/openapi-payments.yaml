@@ -104,6 +104,19 @@ components:
         description: { type: string }
         priceCents: { type: integer }
         active: { type: boolean }
+        recurring:
+          type: boolean
+          description: Produto recorrente (assinatura via PIX Automático). Quando true, usar POST /me/subscribe em vez do carrinho.
+        periodicity:
+          type: string
+          enum: [SEMANAL, MENSAL, TRIMESTRAL, SEMESTRAL, ANUAL]
+          description: Periodicidade dos ciclos (presente só quando recurring=true).
+        dueDay:
+          type: integer
+          minimum: 1
+          maximum: 28
+          nullable: true
+          description: Dia de vencimento dos ciclos 1–28 (presente só quando recurring=true).
     Customer:
       type: object
       properties:
@@ -520,6 +533,48 @@ paths:
                   amountCents: { type: integer }
         "400": { description: carrinho vazio ou CPF ausente, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "502": { description: falha no gateway, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /me/subscribe:
+    post:
+      summary: Assina um produto recorrente (checkout de assinatura via PIX Automático)
+      description: >
+        Checkout dedicado a um produto recorrente (item único, fora do carrinho).
+        Valida que o produto existe e tem recurring=true, faz upsert do customer por
+        (conta, CPF) e cria, via PIX Automático Jornada 3, a recorrência (status
+        pending_auth) MAIS a 1ª cobrança com vencimento hoje — devolvendo UM ÚNICO
+        QR/copia-e-cola que autoriza a recorrência e paga a 1ª parcela. O pagador é
+        levado a /pay/{token}; o webhook de recorrência move o contrato para active ao
+        autorizar e o webhook pix marca a 1ª cobrança como paid. Mesma forma de resposta
+        do /me/cart/checkout.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [productId, taxId, name, email]
+              properties:
+                productId: { type: integer, description: "ID do produto recorrente" }
+                taxId: { type: string, description: "CPF do pagador (11 dígitos)" }
+                phone: { type: string, description: "telefone (10–11 dígitos)" }
+                name: { type: string }
+                email: { type: string, format: email }
+                save: { type: boolean, description: "salva dados no frontend (localStorage)" }
+      responses:
+        "201":
+          description: assinatura criada (recorrência + 1ª cobrança)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string, description: "token público da 1ª cobrança (tela /pay/{token})" }
+                  brCode: { type: string, description: "copia-e-cola único de autorização+pagamento" }
+                  qrCode: { type: string, description: "imagem do QR (base64/data-uri)" }
+                  amountCents: { type: integer, description: "valor da 1ª parcela (= preço do produto)" }
+        "400": { description: validação (productId/CPF/email/telefone/nome), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: produto não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "produto não é recorrente (not_recurring) ou mal configurado (invalid_product)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: falha no gateway Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /me/charges:
     get:
       summary: Histórico de cobranças do customer logado

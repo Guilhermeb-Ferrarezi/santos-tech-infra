@@ -38,6 +38,10 @@ func (f fakeEfiOps) GetReport(_ context.Context, _ string) (string, string, []by
 func (f fakeEfiOps) CreateRecurrence(_ context.Context, _ RecurrenceRequest) (RecurrenceResult, error) {
 	return RecurrenceResult{EfiIDRec: "rec-fake-1", BRCode: "00020101br-code", QRCode: "data:image/png;base64,fake", Status: "pending_auth"}, nil
 }
+func (f fakeEfiOps) CreateRecurrenceJornada3(_ context.Context, req RecurrenceJornada3Request) (RecurrenceResult, ChargeResult, error) {
+	return RecurrenceResult{EfiIDRec: "rec-fake-j3", BRCode: "00020101br-code-j3", QRCode: "data:image/png;base64,j3", Status: "pending_auth"},
+		ChargeResult{ProviderChargeID: req.ChargeCorrelationID, BRCode: "00020101br-code-j3", Status: "pending"}, nil
+}
 func (f fakeEfiOps) GetRecurrence(_ context.Context, _ string) (string, error) { return "active", nil }
 func (f fakeEfiOps) CancelRecurrence(_ context.Context, _ string) error        { return nil }
 func (f fakeEfiOps) CreateRecurringCharge(_ context.Context, _ RecurringChargeRequest) (ChargeResult, error) {

@@ -5,6 +5,27 @@ import (
 	"strings"
 )
 
+// validPeriodicities é o conjunto aceito para produtos/recorrências (espelha o CHECK
+// de pay_recurrences.periodicity e o vocabulário repassado à Efí).
+var validPeriodicities = map[string]bool{
+	"SEMANAL": true, "MENSAL": true, "TRIMESTRAL": true, "SEMESTRAL": true, "ANUAL": true,
+}
+
+// recurringFieldsValid valida os campos de assinatura quando recurring=true:
+// periodicity ∈ conjunto válido e due_day 1–28. Sem efeito quando recurring=false.
+func recurringFieldsValid(p Product) error {
+	if !p.Recurring {
+		return nil
+	}
+	if !validPeriodicities[p.Periodicity] {
+		return errors.New("periodicity inválida (SEMANAL|MENSAL|TRIMESTRAL|SEMESTRAL|ANUAL) para produto recorrente")
+	}
+	if p.DueDay == nil || *p.DueDay < 1 || *p.DueDay > 28 {
+		return errors.New("dueDay deve estar entre 1 e 28 para produto recorrente")
+	}
+	return nil
+}
+
 func productValid(p Product) error {
 	if strings.TrimSpace(p.Slug) == "" {
 		return errors.New("slug obrigatório")
@@ -15,7 +36,7 @@ func productValid(p Product) error {
 	if p.PriceCents <= 0 {
 		return errors.New("priceCents deve ser > 0")
 	}
-	return nil
+	return recurringFieldsValid(p)
 }
 
 // productUpdateValid valida um update: o slug é imutável e NÃO é enviado, então não
@@ -27,7 +48,7 @@ func productUpdateValid(p Product) error {
 	if p.PriceCents <= 0 {
 		return errors.New("priceCents deve ser > 0")
 	}
-	return nil
+	return recurringFieldsValid(p)
 }
 
 // onlyDigits remove tudo que não for dígito (normaliza CPF/telefone vindos com máscara).

@@ -200,8 +200,8 @@ func (q *Queries) InsertCharge(ctx context.Context, arg InsertChargeParams) (Ins
 const insertRecurrenceCharge = `-- name: InsertRecurrenceCharge :one
 INSERT INTO pay_charges
   (kind, recurrence_id, customer_id, amount_cents, due_date, reference_month,
-   provider, provider_charge_id, correlation_id, payer_tax_id, br_code, qr_code)
-VALUES ('recorrente', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+   provider, provider_charge_id, correlation_id, payer_tax_id, br_code, qr_code, public_token)
+VALUES ('recorrente', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, status, created_at
 `
 
@@ -217,6 +217,7 @@ type InsertRecurrenceChargeParams struct {
 	PayerTaxID       *string
 	BrCode           *string
 	QrCode           *string
+	PublicToken      *string
 }
 
 type InsertRecurrenceChargeRow struct {
@@ -227,6 +228,8 @@ type InsertRecurrenceChargeRow struct {
 
 // Cobrança de um ciclo de PIX Automático (kind='recorrente'), vinculada à recorrência.
 // O txid da cobr da Efí vai em provider_charge_id; reference_month garante a anti-duplicidade.
+// public_token só é preenchido na 1ª cobr da Jornada 3 (checkout recorrente, tela
+// /pay/{token}); nos ciclos seguintes (débito automático) vai NULL.
 func (q *Queries) InsertRecurrenceCharge(ctx context.Context, arg InsertRecurrenceChargeParams) (InsertRecurrenceChargeRow, error) {
 	row := q.db.QueryRow(ctx, insertRecurrenceCharge,
 		arg.RecurrenceID,
@@ -240,6 +243,7 @@ func (q *Queries) InsertRecurrenceCharge(ctx context.Context, arg InsertRecurren
 		arg.PayerTaxID,
 		arg.BrCode,
 		arg.QrCode,
+		arg.PublicToken,
 	)
 	var i InsertRecurrenceChargeRow
 	err := row.Scan(&i.ID, &i.Status, &i.CreatedAt)
