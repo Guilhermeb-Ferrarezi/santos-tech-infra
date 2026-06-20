@@ -18,7 +18,7 @@ export default function ProductPage() {
     setErr("");
     try {
       await api.addToCart(slug);
-      nav("/cart");
+      nav(`/${slug}`);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Erro ao adicionar ao carrinho");
       setAdding(false);
