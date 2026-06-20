@@ -297,6 +297,77 @@ func (q *Queries) ListRecurrences(ctx context.Context) ([]ListRecurrencesRow, er
 	return items, nil
 }
 
+const listRecurrencesByTaxID = `-- name: ListRecurrencesByTaxID :many
+SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
+       amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
+       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
+       status, created_at
+FROM pay_recurrences
+WHERE payer_tax_id = $1
+ORDER BY created_at DESC
+`
+
+type ListRecurrencesByTaxIDRow struct {
+	ID             int64
+	SubscriptionID *int64
+	ProductID      *int64
+	CustomerID     *int64
+	PayerTaxID     string
+	PayerName      string
+	AmountCents    int64
+	Periodicity    string
+	DueDay         *int32
+	StartDate      string
+	EndDate        string
+	Journey        int16
+	EfiIDRec       string
+	BrCode         string
+	QrCode         string
+	PublicToken    string
+	Status         string
+	CreatedAt      pgtype.Timestamptz
+}
+
+// Recorrências de um cliente, consolidadas pelo CPF (igual ao histórico de compras).
+func (q *Queries) ListRecurrencesByTaxID(ctx context.Context, payerTaxID string) ([]ListRecurrencesByTaxIDRow, error) {
+	rows, err := q.db.Query(ctx, listRecurrencesByTaxID, payerTaxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecurrencesByTaxIDRow
+	for rows.Next() {
+		var i ListRecurrencesByTaxIDRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SubscriptionID,
+			&i.ProductID,
+			&i.CustomerID,
+			&i.PayerTaxID,
+			&i.PayerName,
+			&i.AmountCents,
+			&i.Periodicity,
+			&i.DueDay,
+			&i.StartDate,
+			&i.EndDate,
+			&i.Journey,
+			&i.EfiIDRec,
+			&i.BrCode,
+			&i.QrCode,
+			&i.PublicToken,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recurrencesDueToday = `-- name: RecurrencesDueToday :many
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,

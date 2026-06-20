@@ -37,6 +37,16 @@ SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
 FROM pay_recurrences
 ORDER BY created_at DESC;
 
+-- name: ListRecurrencesByTaxID :many
+-- Recorrências de um cliente, consolidadas pelo CPF (igual ao histórico de compras).
+SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
+       amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
+       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
+       status, created_at
+FROM pay_recurrences
+WHERE payer_tax_id = $1
+ORDER BY created_at DESC;
+
 -- name: SetRecurrenceStatus :exec
 UPDATE pay_recurrences SET status = $2 WHERE id = $1;
 

@@ -369,6 +369,38 @@ func (s *Store) ListRecurrences(ctx context.Context) ([]Recurrence, error) {
 	return out, nil
 }
 
+// ListRecurrencesByTaxID lista as recorrências (PIX Automático) de um cliente pelo CPF.
+func (s *Store) ListRecurrencesByTaxID(ctx context.Context, taxID string) ([]Recurrence, error) {
+	rows, err := s.q.ListRecurrencesByTaxID(ctx, taxID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Recurrence, len(rows))
+	for i, r := range rows {
+		out[i] = Recurrence{
+			ID:             r.ID,
+			SubscriptionID: r.SubscriptionID,
+			ProductID:      r.ProductID,
+			CustomerID:     r.CustomerID,
+			PayerTaxID:     r.PayerTaxID,
+			PayerName:      r.PayerName,
+			AmountCents:    r.AmountCents,
+			Periodicity:    r.Periodicity,
+			DueDay:         intPtrFromInt32(r.DueDay),
+			StartDate:      r.StartDate,
+			EndDate:        r.EndDate,
+			Journey:        int(r.Journey),
+			EfiIDRec:       r.EfiIDRec,
+			BRCode:         r.BrCode,
+			QRCode:         r.QrCode,
+			Status:         r.Status,
+			PublicToken:    r.PublicToken,
+			CreatedAt:      tsToTime(r.CreatedAt),
+		}
+	}
+	return out, nil
+}
+
 func (s *Store) SetRecurrenceStatus(ctx context.Context, id int64, status string) error {
 	return s.q.SetRecurrenceStatus(ctx, paydb.SetRecurrenceStatusParams{
 		ID:     id,
@@ -857,15 +889,21 @@ func (s *Store) GetCustomerDetail(ctx context.Context, id int64) (*CustomerDetai
 			Items:         its,
 		}
 	}
+	// Assinaturas (PIX Automático) do cliente, consolidadas pelo mesmo CPF das compras.
+	recs, err := s.ListRecurrencesByTaxID(ctx, cu.TaxID)
+	if err != nil {
+		return nil, err
+	}
 	return &CustomerDetail{
-		ID:        cu.ID,
-		UserID:    cu.UserID,
-		TaxID:     cu.TaxID,
-		Phone:     cu.Phone,
-		Name:      cu.Name,
-		Email:     cu.Email,
-		CreatedAt: tsToTime(cu.CreatedAt),
-		Charges:   purchases,
+		ID:          cu.ID,
+		UserID:      cu.UserID,
+		TaxID:       cu.TaxID,
+		Phone:       cu.Phone,
+		Name:        cu.Name,
+		Email:       cu.Email,
+		CreatedAt:   tsToTime(cu.CreatedAt),
+		Charges:     purchases,
+		Recurrences: recs,
 	}, nil
 }
 

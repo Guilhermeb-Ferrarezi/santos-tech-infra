@@ -580,6 +580,12 @@ paths:
       summary: Histórico de cobranças do customer logado
       responses:
         "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Charge" } } } } }
+  /me/recurrences:
+    get:
+      summary: Assinaturas (PIX Automático) do customer logado
+      description: Recorrências do cliente logado, consolidadas pelo CPF. Sem customer ainda → lista vazia.
+      responses:
+        "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Recurrence" } } } } }
   /pay/{token}:
     get:
       summary: Dados públicos da cobrança (tela de pagamento)

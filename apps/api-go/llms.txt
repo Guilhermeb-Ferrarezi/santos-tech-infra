@@ -518,7 +518,7 @@ com ciclo vencendo hoje, cria a cobr na Efí (`PUT /v2/cobr/{txid}`) e grava `pa
 
 Clientes (admin) — quem comprou no checkout:
 GET    /customers                                               → [{id,userId,name,email,taxId,phone,createdAt,chargesCount,paidCount,paidTotalCents,lastChargeAt}]  (1 linha por CPF; agregados consolidados de todas as contas com aquele CPF)
-GET    /customers/{id}                                          → {id,...,createdAt, charges:[{id,amountCents,status,paidAt,createdAt,items:[{name,priceCents,quantity}]}]}  (compras consolidadas por CPF)
+GET    /customers/{id}                                          → {id,...,createdAt, charges:[{id,amountCents,status,paidAt,createdAt,items:[{name,priceCents,quantity}]}], recurrences:[assinaturas PIX Automático]}  (compras + assinaturas consolidadas por CPF)
 
 Catálogo de produtos (admin, exceto by-slug):
 Produto pode ser recorrente (assinatura): recurring=true exige periodicity ∈
@@ -547,6 +547,8 @@ POST   /me/subscribe        body {productId,taxId,phone?,name,email,save?} → 2
          Os ciclos seguintes (apenas MENSAL nesta fase) saem pelo runRecurrenceCycleLoop. Erros:
          400 invalid_body · 404 not_found · 409 not_recurring|invalid_product · 422 provider_error.
 GET    /me/charges                                              → [charges do customer]
+GET    /me/recurrences                                          → [assinaturas PIX Automático do customer logado,
+         consolidadas pelo CPF; sem customer → []]. Mesma forma de GET /recurrences.
 
 Pagamento público (sem auth) — tela de Pix pelo token público da cobrança:
 GET    /pay/{token}                                             → {amountCents,brCode,qrCode,status,dueDate}

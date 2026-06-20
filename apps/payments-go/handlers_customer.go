@@ -268,3 +268,23 @@ func (s *Server) handleMeCharges(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, list)
 }
+
+// handleMeRecurrences lista as assinaturas (PIX Automático) do usuário logado,
+// consolidadas pelo CPF do cliente. Sem customer ainda → lista vazia (200).
+func (s *Server) handleMeRecurrences(w http.ResponseWriter, r *http.Request) {
+	cust, err := s.store.GetCustomerByUserID(r.Context(), s.uid(r))
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusOK, []Recurrence{})
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha")
+		return
+	}
+	list, err := s.store.ListRecurrencesByTaxID(r.Context(), cust.TaxID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar")
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}

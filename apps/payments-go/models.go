@@ -143,16 +143,17 @@ type CustomerCharge struct {
 	Items         []ChargeItem `json:"items"`
 }
 
-// CustomerDetail é o cliente + histórico de compras (GET /customers/{id}).
+// CustomerDetail é o cliente + histórico de compras + assinaturas (GET /customers/{id}).
 type CustomerDetail struct {
-	ID        int64            `json:"id"`
-	UserID    int64            `json:"userId"`
-	TaxID     string           `json:"taxId"`
-	Phone     string           `json:"phone"`
-	Name      string           `json:"name"`
-	Email     string           `json:"email"`
-	CreatedAt time.Time        `json:"createdAt"`
-	Charges   []CustomerCharge `json:"charges"`
+	ID          int64            `json:"id"`
+	UserID      int64            `json:"userId"`
+	TaxID       string           `json:"taxId"`
+	Phone       string           `json:"phone"`
+	Name        string           `json:"name"`
+	Email       string           `json:"email"`
+	CreatedAt   time.Time        `json:"createdAt"`
+	Charges     []CustomerCharge `json:"charges"`
+	Recurrences []Recurrence     `json:"recurrences"`
 }
 
 type CartItem struct {

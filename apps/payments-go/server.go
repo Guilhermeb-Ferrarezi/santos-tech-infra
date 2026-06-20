@@ -101,6 +101,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /me/cart/checkout", s.authGuard(s.handleCheckout))
 	mux.HandleFunc("POST /me/subscribe", s.authGuard(s.handleSubscribe))
 	mux.HandleFunc("GET /me/charges", s.authGuard(s.handleMeCharges))
+	mux.HandleFunc("GET /me/recurrences", s.authGuard(s.handleMeRecurrences))
 
 	mux.HandleFunc("GET /pay/{token}", s.handleGetPay)
 	mux.HandleFunc("GET /pay/{token}/events", s.handlePayEvents)
