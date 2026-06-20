@@ -52,5 +52,13 @@ FROM pay_charges
 WHERE customer_id = $1
 ORDER BY created_at DESC;
 
+-- name: ListChargeItemsByCustomer :many
+-- Itens de todas as cobranças de um cliente (para montar o detalhe das compras).
+SELECT ci.charge_id, ci.product_id, ci.name, ci.price_cents, ci.quantity
+FROM pay_charge_items ci
+JOIN pay_charges c ON c.id = ci.charge_id
+WHERE c.customer_id = $1
+ORDER BY ci.charge_id;
+
 -- GetStats usa SQL com fragmento dinâmico (WHERE clause montada em runtime).
 -- Não migrado para sqlc — ver store.go GetStats.

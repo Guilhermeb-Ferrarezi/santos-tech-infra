@@ -13,6 +13,35 @@ import (
 
 func (s *Server) uid(r *http.Request) int64 { return r.Context().Value(userIDKey).(int64) }
 
+// handleListCustomers (admin) lista os clientes com agregados das compras.
+func (s *Server) handleListCustomers(w http.ResponseWriter, r *http.Request) {
+	list, err := s.store.ListCustomersWithStats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar clientes")
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// handleGetCustomer (admin) devolve um cliente + histórico de compras.
+func (s *Server) handleGetCustomer(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_param", "id inválido")
+		return
+	}
+	d, err := s.store.GetCustomerDetail(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not_found", "Cliente não encontrado")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao carregar cliente")
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
 func (s *Server) handleGetMeCustomer(w http.ResponseWriter, r *http.Request) {
 	uid := s.uid(r)
 	c, err := s.store.GetCustomerByUserID(r.Context(), uid)

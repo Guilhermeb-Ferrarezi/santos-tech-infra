@@ -499,6 +499,84 @@ func (s *Store) GetCustomerByUserID(ctx context.Context, userID int64) (*Custome
 	}, nil
 }
 
+// ListCustomersWithStats lista os clientes com agregados das compras (admin).
+func (s *Store) ListCustomersWithStats(ctx context.Context) ([]CustomerWithStats, error) {
+	rows, err := s.q.ListCustomersWithStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CustomerWithStats, len(rows))
+	for i, r := range rows {
+		out[i] = CustomerWithStats{
+			ID:             r.ID,
+			UserID:         r.UserID,
+			TaxID:          r.TaxID,
+			Phone:          r.Phone,
+			Name:           r.Name,
+			Email:          r.Email,
+			CreatedAt:      tsToTime(r.CreatedAt),
+			ChargesCount:   r.ChargesCount,
+			PaidCount:      r.PaidCount,
+			PaidTotalCents: r.PaidTotalCents,
+			LastChargeAt:   tsToTimePtr(r.LastChargeAt),
+		}
+	}
+	return out, nil
+}
+
+// GetCustomerDetail devolve o cliente e o histórico de compras (cobranças + itens).
+func (s *Store) GetCustomerDetail(ctx context.Context, id int64) (*CustomerDetail, error) {
+	cu, err := s.q.GetCustomerByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	charges, err := s.ListChargesByCustomer(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	items, err := s.q.ListChargeItemsByCustomer(ctx, &id)
+	if err != nil {
+		return nil, err
+	}
+	byCharge := make(map[int64][]ChargeItem, len(items))
+	for _, it := range items {
+		byCharge[it.ChargeID] = append(byCharge[it.ChargeID], ChargeItem{
+			ProductID:  it.ProductID,
+			Name:       it.Name,
+			PriceCents: it.PriceCents,
+			Quantity:   int(it.Quantity),
+		})
+	}
+	purchases := make([]CustomerCharge, len(charges))
+	for i, c := range charges {
+		its := byCharge[c.ID]
+		if its == nil {
+			its = []ChargeItem{}
+		}
+		purchases[i] = CustomerCharge{
+			ID:            c.ID,
+			Kind:          c.Kind,
+			AmountCents:   c.AmountCents,
+			Status:        c.Status,
+			DueDate:       c.DueDate,
+			CorrelationID: c.CorrelationID,
+			PaidAt:        c.PaidAt,
+			CreatedAt:     c.CreatedAt,
+			Items:         its,
+		}
+	}
+	return &CustomerDetail{
+		ID:        cu.ID,
+		UserID:    cu.UserID,
+		TaxID:     cu.TaxID,
+		Phone:     cu.Phone,
+		Name:      cu.Name,
+		Email:     cu.Email,
+		CreatedAt: tsToTime(cu.CreatedAt),
+		Charges:   purchases,
+	}, nil
+}
+
 // ── Charge items + charges por token/cliente ──────────────────────────────
 
 func (s *Store) InsertChargeItems(ctx context.Context, chargeID int64, items []ChargeItem) error {

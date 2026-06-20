@@ -7,7 +7,30 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const getCustomerByID = `-- name: GetCustomerByID :one
+SELECT id, user_id, tax_id, phone, name, email, created_at
+FROM pay_customers
+WHERE id = $1
+`
+
+func (q *Queries) GetCustomerByID(ctx context.Context, id int64) (PayCustomer, error) {
+	row := q.db.QueryRow(ctx, getCustomerByID, id)
+	var i PayCustomer
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TaxID,
+		&i.Phone,
+		&i.Name,
+		&i.Email,
+		&i.CreatedAt,
+	)
+	return i, err
+}
 
 const getCustomerByUserID = `-- name: GetCustomerByUserID :one
 SELECT id, user_id, tax_id, phone, name, email
@@ -39,6 +62,66 @@ func (q *Queries) GetCustomerByUserID(ctx context.Context, userID int64) (GetCus
 		&i.Email,
 	)
 	return i, err
+}
+
+const listCustomersWithStats = `-- name: ListCustomersWithStats :many
+SELECT cu.id, cu.user_id, cu.tax_id, cu.phone, cu.name, cu.email, cu.created_at,
+       (COUNT(c.id))::bigint AS charges_count,
+       (COUNT(c.id) FILTER (WHERE c.status = 'paid'))::bigint AS paid_count,
+       (COALESCE(SUM(c.amount_cents) FILTER (WHERE c.status = 'paid'), 0))::bigint AS paid_total_cents,
+       MAX(c.created_at)::timestamptz AS last_charge_at
+FROM pay_customers cu
+LEFT JOIN pay_charges c ON c.customer_id = cu.id
+GROUP BY cu.id
+ORDER BY MAX(c.created_at) DESC NULLS LAST, cu.created_at DESC
+`
+
+type ListCustomersWithStatsRow struct {
+	ID             int64
+	UserID         int64
+	TaxID          string
+	Phone          string
+	Name           string
+	Email          string
+	CreatedAt      pgtype.Timestamptz
+	ChargesCount   int64
+	PaidCount      int64
+	PaidTotalCents int64
+	LastChargeAt   pgtype.Timestamptz
+}
+
+// Lista clientes com agregados das cobranças (admin): nº de compras, nº/total pago,
+// e data da última compra. LEFT JOIN para incluir clientes ainda sem cobrança.
+func (q *Queries) ListCustomersWithStats(ctx context.Context) ([]ListCustomersWithStatsRow, error) {
+	rows, err := q.db.Query(ctx, listCustomersWithStats)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCustomersWithStatsRow
+	for rows.Next() {
+		var i ListCustomersWithStatsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.TaxID,
+			&i.Phone,
+			&i.Name,
+			&i.Email,
+			&i.CreatedAt,
+			&i.ChargesCount,
+			&i.PaidCount,
+			&i.PaidTotalCents,
+			&i.LastChargeAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const upsertCustomer = `-- name: UpsertCustomer :one

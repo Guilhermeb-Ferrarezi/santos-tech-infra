@@ -83,6 +83,46 @@ type Customer struct {
 	Email  string `json:"email"`
 }
 
+// CustomerWithStats é uma linha da lista de clientes (admin) com agregados das compras.
+type CustomerWithStats struct {
+	ID             int64      `json:"id"`
+	UserID         int64      `json:"userId"`
+	TaxID          string     `json:"taxId"`
+	Phone          string     `json:"phone"`
+	Name           string     `json:"name"`
+	Email          string     `json:"email"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	ChargesCount   int64      `json:"chargesCount"`
+	PaidCount      int64      `json:"paidCount"`
+	PaidTotalCents int64      `json:"paidTotalCents"`
+	LastChargeAt   *time.Time `json:"lastChargeAt,omitempty"`
+}
+
+// CustomerCharge é uma compra do cliente (cobrança + itens) no detalhe.
+type CustomerCharge struct {
+	ID            int64        `json:"id"`
+	Kind          string       `json:"kind"`
+	AmountCents   int64        `json:"amountCents"`
+	Status        string       `json:"status"`
+	DueDate       string       `json:"dueDate"`
+	CorrelationID string       `json:"correlationId"`
+	PaidAt        *time.Time   `json:"paidAt,omitempty"`
+	CreatedAt     time.Time    `json:"createdAt"`
+	Items         []ChargeItem `json:"items"`
+}
+
+// CustomerDetail é o cliente + histórico de compras (GET /customers/{id}).
+type CustomerDetail struct {
+	ID        int64            `json:"id"`
+	UserID    int64            `json:"userId"`
+	TaxID     string           `json:"taxId"`
+	Phone     string           `json:"phone"`
+	Name      string           `json:"name"`
+	Email     string           `json:"email"`
+	CreatedAt time.Time        `json:"createdAt"`
+	Charges   []CustomerCharge `json:"charges"`
+}
+
 type CartItem struct {
 	ProductID int64 `json:"productId"`
 	Quantity  int   `json:"quantity"`

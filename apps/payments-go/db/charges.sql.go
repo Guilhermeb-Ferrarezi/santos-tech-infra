@@ -159,6 +159,49 @@ func (q *Queries) InsertCharge(ctx context.Context, arg InsertChargeParams) (Ins
 	return i, err
 }
 
+const listChargeItemsByCustomer = `-- name: ListChargeItemsByCustomer :many
+SELECT ci.charge_id, ci.product_id, ci.name, ci.price_cents, ci.quantity
+FROM pay_charge_items ci
+JOIN pay_charges c ON c.id = ci.charge_id
+WHERE c.customer_id = $1
+ORDER BY ci.charge_id
+`
+
+type ListChargeItemsByCustomerRow struct {
+	ChargeID   int64
+	ProductID  *int64
+	Name       string
+	PriceCents int64
+	Quantity   int32
+}
+
+// Itens de todas as cobranças de um cliente (para montar o detalhe das compras).
+func (q *Queries) ListChargeItemsByCustomer(ctx context.Context, customerID *int64) ([]ListChargeItemsByCustomerRow, error) {
+	rows, err := q.db.Query(ctx, listChargeItemsByCustomer, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChargeItemsByCustomerRow
+	for rows.Next() {
+		var i ListChargeItemsByCustomerRow
+		if err := rows.Scan(
+			&i.ChargeID,
+			&i.ProductID,
+			&i.Name,
+			&i.PriceCents,
+			&i.Quantity,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listChargesByCustomer = `-- name: ListChargesByCustomer :many
 SELECT id, kind, amount_cents, due_date::text, status,
        COALESCE(br_code, ''), correlation_id, paid_at, created_at
