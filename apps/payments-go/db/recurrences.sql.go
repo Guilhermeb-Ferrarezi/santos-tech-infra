@@ -60,7 +60,7 @@ func (q *Queries) CreateRecurrence(ctx context.Context, arg CreateRecurrencePara
 
 const getRecurrence = `-- name: GetRecurrence :one
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
-       amount_cents, periodicity, due_day, start_date::text, end_date::text, journey,
+       amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
        COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
        status, created_at
 FROM pay_recurrences
@@ -114,7 +114,7 @@ func (q *Queries) GetRecurrence(ctx context.Context, id int64) (GetRecurrenceRow
 
 const getRecurrenceByEfiID = `-- name: GetRecurrenceByEfiID :one
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
-       amount_cents, periodicity, due_day, start_date::text, end_date::text, journey,
+       amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
        COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
        status, created_at
 FROM pay_recurrences
@@ -168,7 +168,7 @@ func (q *Queries) GetRecurrenceByEfiID(ctx context.Context, efiIDRec *string) (G
 
 const listRecurrences = `-- name: ListRecurrences :many
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
-       amount_cents, periodicity, due_day, start_date::text, end_date::text, journey,
+       amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
        COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
        status, created_at
 FROM pay_recurrences
@@ -235,7 +235,7 @@ func (q *Queries) ListRecurrences(ctx context.Context) ([]ListRecurrencesRow, er
 
 const recurrencesDueToday = `-- name: RecurrencesDueToday :many
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
-       amount_cents, periodicity, due_day, start_date::text, end_date::text, journey,
+       amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
        COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
        status, created_at
 FROM pay_recurrences r

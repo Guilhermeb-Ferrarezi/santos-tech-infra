@@ -7,7 +7,7 @@ RETURNING id, status, created_at;
 
 -- name: GetRecurrence :one
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
-       amount_cents, periodicity, due_day, start_date::text, end_date::text, journey,
+       amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
        COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
        status, created_at
 FROM pay_recurrences
@@ -15,7 +15,7 @@ WHERE id = $1;
 
 -- name: GetRecurrenceByEfiID :one
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
-       amount_cents, periodicity, due_day, start_date::text, end_date::text, journey,
+       amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
        COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
        status, created_at
 FROM pay_recurrences
@@ -23,7 +23,7 @@ WHERE efi_id_rec = $1;
 
 -- name: ListRecurrences :many
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
-       amount_cents, periodicity, due_day, start_date::text, end_date::text, journey,
+       amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
        COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
        status, created_at
 FROM pay_recurrences
@@ -42,7 +42,7 @@ WHERE id = $1;
 -- Recorrências 'active' cujo ciclo vence hoje (due_day == dia atual) e que ainda não
 -- têm a cobrança do ciclo (anti-duplicidade por reference_month, espelha SubscriptionsDueToday).
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
-       amount_cents, periodicity, due_day, start_date::text, end_date::text, journey,
+       amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
        COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
        status, created_at
 FROM pay_recurrences r
