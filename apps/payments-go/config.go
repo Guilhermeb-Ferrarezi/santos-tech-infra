@@ -23,6 +23,7 @@ type Config struct {
 	EFIPixKey        string
 	EFIWebhookSecret string
 	EFIWebhookURL    string // URL pública a registrar no webhook da Efí (sem ?token)
+	PublicPayURL     string // base pública da tela de pagamento (links de email): {base}/pay/{token}
 	Production       bool
 }
 
@@ -44,6 +45,7 @@ func LoadConfig() Config {
 		EFIPixKey:        mustEnv("EFI_PIX_KEY"),
 		EFIWebhookSecret: getEnv("EFI_WEBHOOK_SECRET", ""),
 		EFIWebhookURL:    strings.TrimRight(getEnv("EFI_WEBHOOK_URL", ""), "/"),
+		PublicPayURL:     strings.TrimRight(getEnv("PUBLIC_PAY_URL", "https://pay.santos-tech.com"), "/"),
 		Production:       getEnv("NODE_ENV", "development") == "production",
 	}
 }

@@ -196,7 +196,8 @@ func (s *Server) handleCreateManualCharge(w http.ResponseWriter, r *http.Request
 
 	// Envia o PIX por email ao cliente (best-effort: não falha a cobrança já criada).
 	if in.SendEmail && payerEmail != "" && s.email != nil {
-		body := chargeEmailHTML(payerName, c.AmountCents, c.DueDate, desc, c.BRCode)
+		payURL := s.cfg.PublicPayURL + "/pay/" + c.PublicToken
+		body := chargeEmailHTML(payerName, c.AmountCents, c.DueDate, desc, payURL)
 		if err := s.email.send(r.Context(), payerEmail, "Cobrança PIX — Santos Tech", body); err != nil {
 			slog.Warn("manual charge: falha ao enviar email de cobrança", "charge", c.ID, "err", err)
 		}

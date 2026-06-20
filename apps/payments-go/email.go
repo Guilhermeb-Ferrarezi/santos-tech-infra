@@ -48,31 +48,49 @@ func (e *emailClient) send(ctx context.Context, to, subject, html string) error 
 }
 
 // chargeEmailHTML — e-mail de cobrança enviado ao cliente quando o admin gera o PIX
-// manualmente no dashboard. Contém valor, vencimento e o copia-e-cola (PIX pra PAGAR).
-// O comprovante de confirmação é outro e-mail (paymentReceiptEmailHTML), disparado no pagamento.
-func chargeEmailHTML(payerName string, amountCents int64, dueDate, description, brCode string) string {
+// manualmente no dashboard. Layout branded com um único CTA para a tela de pagamento
+// (payURL = {PUBLIC_PAY_URL}/pay/{token}), onde estão o QR Code e o copia-e-cola.
+// O comprovante de confirmação é outro e-mail (paymentReceiptEmailHTML), no pagamento.
+func chargeEmailHTML(payerName string, amountCents int64, dueDate, description, payURL string) string {
 	reais := float64(amountCents) / 100
-	greet := "Olá!"
-	if payerName != "" {
-		greet = fmt.Sprintf("Olá, %s!", html.EscapeString(payerName))
+	name := "cliente"
+	if strings.TrimSpace(payerName) != "" {
+		name = html.EscapeString(payerName)
 	}
 	venc := dueDate
 	if d, err := time.Parse("2006-01-02", dueDate); err == nil {
 		venc = d.Format("02/01/2006")
 	}
-	desc := ""
+	descPart := ""
 	if strings.TrimSpace(description) != "" {
-		desc = fmt.Sprintf("<p>Referente a: <b>%s</b></p>", html.EscapeString(description))
+		descPart = " — " + html.EscapeString(description)
 	}
-	return fmt.Sprintf(`<p>%s</p>
-<p>Você tem uma cobrança PIX de <b>R$ %.2f</b>.</p>
-%s<p><b>Vencimento:</b> %s</p>
-<p>Para pagar, copie o código PIX abaixo (copia e cola) e cole na opção "Pix Copia e Cola" do app do seu banco:</p>
-<p style="word-break:break-all;background:#F5F8FA;border:1px solid #cdd9e1;border-radius:8px;padding:12px;font-family:monospace;font-size:13px">%s</p>
-<p style="color:#496B84;font-size:13px">Assim que o pagamento for confirmado, você recebe o comprovante por e-mail.</p>
-<p style="color:#496B84;font-size:12px">Equipe Santos Tech</p>
-<p style="color:#496B84;font-size:12px"><a href="https://santos-tech.com/privacidade" style="color:#496B84">Política de Privacidade</a> · <a href="https://santos-tech.com/termos" style="color:#496B84">Termos de Uso</a></p>`,
-		greet, reais, desc, venc, html.EscapeString(brCode))
+	return fmt.Sprintf(`<div style="background:#F5F8FA;padding:24px 0;font-family:Arial,Helvetica,sans-serif">
+  <table role="presentation" width="100%%" cellpadding="0" cellspacing="0">
+   <tr><td align="center">
+    <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px">
+     <tr><td style="background:#0E2937;border-radius:12px 12px 0 0;padding:20px 28px">
+       <span style="color:#ffffff;font-size:18px;font-weight:bold;letter-spacing:.3px">Santos Tech</span>
+     </td></tr>
+     <tr><td style="background:#ffffff;padding:28px;border:1px solid #e3eaef;border-top:none;border-radius:0 0 12px 12px">
+       <p style="margin:0 0 16px;color:#212121;font-size:15px">Olá, <b>%s</b>!</p>
+       <p style="margin:0 0 2px;color:#496B84;font-size:13px">Cobrança PIX%s</p>
+       <p style="margin:0 0 2px;color:#0E2937;font-size:34px;font-weight:bold;line-height:1.1">R$ %.2f</p>
+       <p style="margin:0 0 24px;color:#496B84;font-size:13px">Vencimento: <b>%s</b></p>
+       <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px">
+        <tr><td style="border-radius:8px;background:#0DB88F">
+          <a href="%s" style="display:inline-block;padding:14px 36px;color:#ffffff;font-size:15px;font-weight:bold;text-decoration:none">Pagar com PIX</a>
+        </td></tr>
+       </table>
+       <p style="margin:0;color:#496B84;font-size:12px;line-height:1.5">No botão acima você vê o <b>QR Code</b> e o <b>copia e cola</b> para pagar pelo app do seu banco. Assim que o pagamento for confirmado, você recebe o comprovante por e-mail.</p>
+     </td></tr>
+     <tr><td style="padding:16px 28px;text-align:center">
+       <p style="margin:0;color:#9bb0bd;font-size:11px">Equipe Santos Tech · <a href="https://santos-tech.com/privacidade" style="color:#9bb0bd">Privacidade</a> · <a href="https://santos-tech.com/termos" style="color:#9bb0bd">Termos</a></p>
+     </td></tr>
+    </table>
+   </td></tr>
+  </table>
+</div>`, name, descPart, reais, venc, html.EscapeString(payURL))
 }
 
 // paymentReceiptEmailHTML — recibo enviado a quem pagou, na confirmação.
