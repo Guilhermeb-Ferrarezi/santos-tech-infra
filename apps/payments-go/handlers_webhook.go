@@ -99,6 +99,11 @@ func (s *Server) handleRecWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_body", "Corpo inválido")
 		return
 	}
+	// POST de validação da Efí no registro do webhook (corpo vazio): responder 200.
+	if strings.TrimSpace(string(body)) == "" {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
 	evs, err := s.efi.ParseRecWebhook(r.Header, body)
 	if err != nil {
 		slog.Warn("webhook rec: payload inválido", "err", err, "body_len", len(body))

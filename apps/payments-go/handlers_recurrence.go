@@ -66,11 +66,20 @@ func (s *Server) handleCreateRecurrence(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	start := strings.TrimSpace(in.StartDate)
+	todayStr := time.Now().Format("2006-01-02")
 	if start == "" {
-		start = time.Now().Format("2006-01-02")
-	} else if _, err := time.Parse("2006-01-02", start); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "startDate deve ser YYYY-MM-DD")
-		return
+		// dataInicial deve ser FUTURA (a Efí recusa data = criação); default = amanhã.
+		start = time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	} else {
+		if _, err := time.Parse("2006-01-02", start); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_body", "startDate deve ser YYYY-MM-DD")
+			return
+		}
+		// Comparação lexicográfica de YYYY-MM-DD = cronológica.
+		if start <= todayStr {
+			writeError(w, http.StatusBadRequest, "invalid_body", "startDate deve ser uma data futura")
+			return
+		}
 	}
 	end := strings.TrimSpace(in.EndDate)
 	if end != "" {

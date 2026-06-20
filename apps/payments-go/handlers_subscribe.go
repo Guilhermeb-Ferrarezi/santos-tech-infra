@@ -93,6 +93,9 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	prodID := p.ID
 	dueDay := *p.DueDay
 	today := time.Now().Format("2006-01-02")
+	// dataInicial do contrato deve ser FUTURA (a Efí recusa = data de criação). Na Jornada 3
+	// a 1ª parcela é a cob imediata (hoje); o contrato começa no próximo ciclo.
+	cycleStart := nextCycleDate(p.Periodicity, time.Now()).Format("2006-01-02")
 	rec := &Recurrence{
 		ProductID:   &prodID,
 		CustomerID:  &custID,
@@ -101,7 +104,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		AmountCents: p.PriceCents,
 		Periodicity: p.Periodicity,
 		DueDay:      &dueDay,
-		StartDate:   today,
+		StartDate:   cycleStart,
 		Journey:     3,
 	}
 	// Persiste primeiro (status 'pending_auth') para ter o ID — também ancora o txid
@@ -120,9 +123,9 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		PayerTaxID:          in.TaxID,
 		AmountCents:         p.PriceCents,
 		Periodicity:         p.Periodicity,
-		StartDate:           today,
+		StartDate:           cycleStart, // contrato começa no próximo ciclo (1ª parcela = cob imediata)
 		ChargeCorrelationID: txid,
-		FirstDueDate:        today,
+		FirstDueDate:        today, // a cob imediata vence hoje
 		Description:         "Assinatura " + p.Name,
 	})
 	if err != nil {

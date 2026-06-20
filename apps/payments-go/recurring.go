@@ -22,6 +22,24 @@ func recurringTxid(recID int64, refMonth string) string {
 	return fmt.Sprintf("stprec%019d%s", recID, strings.ReplaceAll(refMonth, "-", ""))
 }
 
+// nextCycleDate soma uma periodicidade a `from`. A Efí exige que a `dataInicial` do
+// contrato (POST /v2/rec) seja FUTURA — não pode ser igual à data de criação. Na Jornada 3
+// a 1ª parcela já é a cob imediata (hoje), então o contrato começa no próximo ciclo.
+func nextCycleDate(periodicity string, from time.Time) time.Time {
+	switch periodicity {
+	case "SEMANAL":
+		return from.AddDate(0, 0, 7)
+	case "TRIMESTRAL":
+		return from.AddDate(0, 3, 0)
+	case "SEMESTRAL":
+		return from.AddDate(0, 6, 0)
+	case "ANUAL":
+		return from.AddDate(1, 0, 0)
+	default: // MENSAL e vazio
+		return from.AddDate(0, 1, 0)
+	}
+}
+
 // runRecurringLoop roda no boot: dispara já e depois 1x/dia.
 func (s *Server) runRecurringLoop(ctx context.Context) {
 	defer func() {

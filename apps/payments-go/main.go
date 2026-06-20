@@ -29,19 +29,33 @@ func main() {
 			slog.Error("EFI_WEBHOOK_URL ausente — defina a URL pública do webhook")
 			os.Exit(1)
 		}
-		url := cfg.EFIWebhookURL
+		prov := newEfiProvider(cfg)
+		// Webhook pix (débito imediato e ciclos de recorrência).
+		pixURL := cfg.EFIWebhookURL
 		if cfg.EFIWebhookSecret != "" {
 			sep := "?"
-			if strings.Contains(url, "?") {
+			if strings.Contains(pixURL, "?") {
 				sep = "&"
 			}
-			url += sep + "token=" + cfg.EFIWebhookSecret
+			pixURL += sep + "token=" + cfg.EFIWebhookSecret
 		}
-		if err := newEfiProvider(cfg).RegisterWebhook(ctx, url); err != nil {
-			slog.Error("falha ao registrar webhook na Efí", "err", err)
+		if err := prov.RegisterWebhook(ctx, pixURL); err != nil {
+			slog.Error("falha ao registrar webhook pix na Efí", "err", err)
 			os.Exit(1)
 		}
-		slog.Info("webhook registrado na Efí", "url", cfg.EFIWebhookURL)
+		slog.Info("webhook pix registrado na Efí", "url", cfg.EFIWebhookURL)
+		// Webhook de recorrências (PIX Automático): rota /rec, mesmo segredo em ?token=.
+		// Registrado AQUI (comando), não no boot: a Efí faz um POST de validação esperando
+		// 200, e no boot o servidor HTTP ainda não está ouvindo → Traefik 502.
+		recURL := cfg.EFIWebhookURL + "/rec"
+		if cfg.EFIWebhookSecret != "" {
+			recURL += "?token=" + cfg.EFIWebhookSecret
+		}
+		if err := prov.RegisterRecWebhook(ctx, recURL); err != nil {
+			slog.Error("falha ao registrar webhook rec na Efí", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("webhook rec registrado na Efí", "url", cfg.EFIWebhookURL+"/rec")
 		return
 	}
 
@@ -108,25 +122,9 @@ func main() {
 	go srv.runRecurringLoop(loopCtx)
 	go srv.runExpiryLoop(loopCtx)
 	go srv.runRecurrenceCycleLoop(loopCtx)
-
-	// Registra (best-effort, não bloqueia o boot) o webhook de recorrências na Efí, ao
-	// lado do webhook pix. A URL é a base do webhook pix com sufixo /rec; o segredo vai
-	// em ?token= (mesmo esquema do pix). Sem URL/secret, apenas pula.
-	if srv.efi != nil && cfg.EFIWebhookURL != "" && cfg.EFIWebhookSecret != "" {
-		recURL := cfg.EFIWebhookURL + "/rec?token=" + cfg.EFIWebhookSecret
-		go func() {
-			defer func() {
-				if rec := recover(); rec != nil {
-					slog.Error("panic ao registrar webhook rec", "panic", rec)
-				}
-			}()
-			if err := srv.efi.RegisterRecWebhook(loopCtx, recURL); err != nil {
-				slog.Warn("falha ao registrar webhook de recorrências na Efí", "err", err)
-			} else {
-				slog.Info("webhook de recorrências registrado na Efí")
-			}
-		}()
-	}
+	// O webhook de recorrências NÃO é registrado no boot (a validação da Efí pegaria o
+	// servidor antes de ouvir → 502). Registre via `payments -register-webhook` após o deploy,
+	// junto do webhook pix (mesmo padrão).
 
 	httpSrv := &http.Server{
 		Addr:              ":" + cfg.Port,
