@@ -492,8 +492,8 @@ PATCH  /subscriptions/{id}  body {status:active|paused|canceled} → {status}
 Cobranças (admin):
 POST   /charges   body {kind:matricula|avulso,studentId,amountCents,description?,dueDate?}
          → 201 {id,...,brCode,qrCode,correlationId,status} (cria no Dotfy + envia email do Pix)
-POST   /charges/manual   body {customerId? | payerName+payerTaxId, payerEmail?, phone?, amountCents, description?, dueDate?, sendEmail?, saveCustomer?}
-         → 201 {id,...,brCode,qrCode,status} ("Gerar PIX" do dashboard: cliente existente OU avulso; sendEmail manda o link de pagamento por email; saveCustomer salva o avulso como cliente consolidado por CPF, user_id=0. Avulso cujo CPF JÁ é de um cliente é cobrado COMO aquele cliente — usa nome/email canônicos, não sobrescreve)
+POST   /charges/manual   body {customerId? | payerName+payerTaxId, payerEmail?, phone?, productId?, amountCents, description?, dueDate?, sendEmail?, saveCustomer?}
+         → 201 {id,...,brCode,qrCode,status} ("Gerar PIX" do dashboard: cliente existente OU avulso; sendEmail manda o link de pagamento por email; saveCustomer salva o avulso como cliente consolidado por CPF, user_id=0; productId registra o item do catálogo. Avulso cujo CPF JÁ é de um cliente é cobrado COMO aquele cliente — usa nome/email canônicos, não sobrescreve)
 GET    /charges?status=&student_id=                             → [{...}]
 GET    /charges/{id}                                            → {...}
 
@@ -506,6 +506,10 @@ POST   /recurrences   body {subscriptionId,amountCents,payerTaxId,payerName,dueD
          → 201 {id,status,brCode,qrCode}. Persiste `pending_auth`, cria `POST /v2/rec` na Efí
          e devolve o copia-e-cola/QR de AUTORIZAÇÃO. Status vira `active` pelo webhook rec
          após o pagador autorizar. Erros: 400 invalid_body · 422 provider_error (Efí).
+POST   /recurrences/manual   body {customerId? | payerName+payerTaxId, payerEmail?, phone?, productId?, amountCents, periodicity, dueDay(1-28), startDate?, endDate?, description?, sendEmail?, saveCustomer?}
+         → 201 {Recurrence com brCode/qrCode de AUTORIZAÇÃO} ("Gerar assinatura" do dashboard:
+         mesma resolução de pagador do /charges/manual; sendEmail manda o link de autorização;
+         productId vincula a um produto). Erros: 400 · 404 (cliente/produto) · 422 (Efí).
 GET    /recurrences                                            → [{id,subscriptionId,payerTaxId,payerName,
          amountCents,periodicity,dueDay,startDate,endDate,journey,efiIdRec,brCode,qrCode,status,createdAt}]
 GET    /recurrences/{id}                                       → {recurrence:{...}, cycles:[charge kind=recorrente]}

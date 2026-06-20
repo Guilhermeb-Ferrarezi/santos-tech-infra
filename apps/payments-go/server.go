@@ -84,6 +84,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /customers/{id}", s.requireAdmin(s.handleGetCustomer))
 
 	mux.HandleFunc("POST /recurrences", s.requireAdmin(s.handleCreateRecurrence))
+	mux.HandleFunc("POST /recurrences/manual", s.requireAdmin(s.handleCreateManualRecurrence))
 	mux.HandleFunc("GET /recurrences", s.requireAdmin(s.handleListRecurrences))
 	mux.HandleFunc("GET /recurrences/{id}", s.requireAdmin(s.handleGetRecurrence))
 	mux.HandleFunc("POST /recurrences/{id}/cancel", s.requireAdmin(s.handleCancelRecurrence))

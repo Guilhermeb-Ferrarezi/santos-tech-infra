@@ -93,6 +93,62 @@ func chargeEmailHTML(payerName string, amountCents int64, dueDate, description, 
 </div>`, name, descPart, reais, venc, html.EscapeString(payURL))
 }
 
+// periodicityLabelPT — rótulo curto em português da periodicidade da assinatura.
+func periodicityLabelPT(p string) string {
+	switch p {
+	case "SEMANAL":
+		return "por semana"
+	case "MENSAL":
+		return "por mês"
+	case "TRIMESTRAL":
+		return "por trimestre"
+	case "SEMESTRAL":
+		return "por semestre"
+	case "ANUAL":
+		return "por ano"
+	default:
+		return ""
+	}
+}
+
+// subscriptionEmailHTML — e-mail de AUTORIZAÇÃO de assinatura (PIX Automático) enviado quando
+// o admin gera a assinatura no dashboard. O CTA leva à tela onde o cliente autoriza o débito
+// recorrente no app do banco — NÃO é um pagamento. authURL = {PUBLIC_PAY_URL}/subscribe/{token}.
+func subscriptionEmailHTML(payerName string, amountCents int64, periodicity string, dueDay int, authURL string) string {
+	reais := float64(amountCents) / 100
+	name := "cliente"
+	if strings.TrimSpace(payerName) != "" {
+		name = html.EscapeString(payerName)
+	}
+	per := periodicityLabelPT(periodicity)
+	return fmt.Sprintf(`<div style="background:#F5F8FA;padding:24px 0;font-family:Arial,Helvetica,sans-serif">
+  <table role="presentation" width="100%%" cellpadding="0" cellspacing="0">
+   <tr><td align="center">
+    <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px">
+     <tr><td style="background:#0E2937;border-radius:12px 12px 0 0;padding:20px 28px">
+       <span style="color:#ffffff;font-size:18px;font-weight:bold;letter-spacing:.3px">Santos Tech</span>
+     </td></tr>
+     <tr><td style="background:#ffffff;padding:28px;border:1px solid #e3eaef;border-top:none;border-radius:0 0 12px 12px">
+       <p style="margin:0 0 16px;color:#212121;font-size:15px">Olá, <b>%s</b>!</p>
+       <p style="margin:0 0 2px;color:#496B84;font-size:13px">Assinatura via PIX Automático</p>
+       <p style="margin:0 0 2px;color:#0E2937;font-size:34px;font-weight:bold;line-height:1.1">R$ %.2f <span style="font-size:15px;font-weight:normal;color:#496B84">%s</span></p>
+       <p style="margin:0 0 24px;color:#496B84;font-size:13px">Débito automático todo dia <b>%d</b></p>
+       <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px">
+        <tr><td style="border-radius:8px;background:#0DB88F">
+          <a href="%s" style="display:inline-block;padding:14px 36px;color:#ffffff;font-size:15px;font-weight:bold;text-decoration:none">Autorizar assinatura</a>
+        </td></tr>
+       </table>
+       <p style="margin:0;color:#496B84;font-size:12px;line-height:1.5">No botão acima você <b>autoriza</b> o débito recorrente no app do seu banco (não é uma cobrança agora). Após autorizar, os pagamentos acontecem automaticamente a cada ciclo e você recebe o comprovante de cada um por e-mail.</p>
+     </td></tr>
+     <tr><td style="padding:16px 28px;text-align:center">
+       <p style="margin:0;color:#9bb0bd;font-size:11px">Equipe Santos Tech · <a href="https://santos-tech.com/privacidade" style="color:#9bb0bd">Privacidade</a> · <a href="https://santos-tech.com/termos" style="color:#9bb0bd">Termos</a></p>
+     </td></tr>
+    </table>
+   </td></tr>
+  </table>
+</div>`, name, reais, per, dueDay, html.EscapeString(authURL))
+}
+
 // paymentReceiptEmailHTML — recibo enviado a quem pagou, na confirmação.
 func paymentReceiptEmailHTML(payerName string, amountCents int64) string {
 	reais := float64(amountCents) / 100

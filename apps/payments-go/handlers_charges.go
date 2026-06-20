@@ -80,17 +80,88 @@ func (s *Server) handleCreateCharge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, c)
 }
 
+// manualPayerInput é a parte de pagador compartilhada pelo "Gerar PIX" e "Gerar assinatura"
+// do dashboard: cliente existente (customerId) OU avulso (nome+CPF), com opção de salvar.
+type manualPayerInput struct {
+	CustomerID   int64  `json:"customerId"`   // cliente existente
+	PayerName    string `json:"payerName"`    // avulso
+	PayerTaxID   string `json:"payerTaxId"`   // avulso (CPF)
+	PayerEmail   string `json:"payerEmail"`   // avulso (destino do email)
+	Phone        string `json:"phone"`        // avulso (ao salvar como cliente)
+	SendEmail    bool   `json:"sendEmail"`    // envia por email ao cliente
+	SaveCustomer bool   `json:"saveCustomer"` // avulso: cria o cliente (consolida por CPF)
+}
+
 type manualChargeInput struct {
-	CustomerID   int64  `json:"customerId"` // opcional: cliente existente
-	PayerName    string `json:"payerName"`  // avulso
-	PayerTaxID   string `json:"payerTaxId"` // avulso (CPF)
-	PayerEmail   string `json:"payerEmail"` // avulso (destino do email de cobrança)
-	Phone        string `json:"phone"`      // avulso (ao salvar como cliente)
-	AmountCents  int64  `json:"amountCents"`
-	Description  string `json:"description"`
-	DueDate      string `json:"dueDate"`      // YYYY-MM-DD; default hoje+3
-	SendEmail    bool   `json:"sendEmail"`    // envia o PIX por email ao cliente
-	SaveCustomer bool   `json:"saveCustomer"` // avulso: cria/atualiza o cliente (consolida por CPF)
+	manualPayerInput
+	ProductID   int64  `json:"productId"` // opcional: registra o item a partir do catálogo
+	AmountCents int64  `json:"amountCents"`
+	Description string `json:"description"`
+	DueDate     string `json:"dueDate"` // YYYY-MM-DD; default hoje+3
+}
+
+// resolveManualPayer resolve o pagador de uma cobrança/assinatura gerada no dashboard.
+// Cliente existente → usa os dados dele. Avulso → valida nome+CPF; se o CPF já é de um
+// cliente, trata como AQUELE cliente (dados canônicos, sem sobrescrever); senão cria o
+// cliente quando SaveCustomer. Em falha, escreve o erro em w e devolve ok=false.
+func (s *Server) resolveManualPayer(w http.ResponseWriter, r *http.Request, p manualPayerInput) (name, taxID, email string, customerID *int64, ok bool) {
+	if p.CustomerID != 0 {
+		cust, err := s.store.GetCustomerDetail(r.Context(), p.CustomerID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", "Cliente não encontrado")
+			return "", "", "", nil, false
+		}
+		cid := cust.ID
+		return cust.Name, cust.TaxID, cust.Email, &cid, true
+	}
+	name = strings.TrimSpace(p.PayerName)
+	taxID = onlyDigits(p.PayerTaxID)
+	email = strings.TrimSpace(p.PayerEmail)
+	if !validName(name) {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Informe o nome do pagador")
+		return "", "", "", nil, false
+	}
+	if !validCPF(taxID) {
+		writeError(w, http.StatusBadRequest, "invalid_body", "CPF do pagador inválido")
+		return "", "", "", nil, false
+	}
+	if email != "" && !validEmail(email) {
+		writeError(w, http.StatusBadRequest, "invalid_body", "E-mail do pagador inválido")
+		return "", "", "", nil, false
+	}
+	existing, err := s.store.GetCustomerByTaxID(r.Context(), taxID)
+	switch {
+	case err == nil:
+		cid := existing.ID
+		customerID = &cid
+		name = existing.Name
+		if existing.Email != "" {
+			email = existing.Email
+		}
+	case errors.Is(err, pgx.ErrNoRows):
+		if p.SaveCustomer {
+			phone := onlyDigits(p.Phone)
+			if phone != "" && !validPhone(phone) {
+				writeError(w, http.StatusBadRequest, "invalid_body", "Telefone inválido")
+				return "", "", "", nil, false
+			}
+			cust, cerr := s.store.UpsertCustomer(r.Context(), 0, taxID, phone, name, email)
+			if cerr != nil {
+				writeError(w, http.StatusInternalServerError, "db_error", "Falha ao salvar o cliente")
+				return "", "", "", nil, false
+			}
+			cid := cust.ID
+			customerID = &cid
+		}
+	default:
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao consultar o cliente")
+		return "", "", "", nil, false
+	}
+	if p.SendEmail && !validEmail(email) {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Sem e-mail válido para o envio")
+		return "", "", "", nil, false
+	}
+	return name, taxID, email, customerID, true
 }
 
 // handleCreateManualCharge gera um PIX avulso a partir do dashboard, para um cliente
@@ -108,69 +179,9 @@ func (s *Server) handleCreateManualCharge(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Resolve o pagador: cliente existente OU avulso (nome + CPF).
-	var payerName, payerTaxID, payerEmail string
-	var customerID *int64
-	if in.CustomerID != 0 {
-		cust, err := s.store.GetCustomerDetail(r.Context(), in.CustomerID)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "not_found", "Cliente não encontrado")
-			return
-		}
-		cid := cust.ID
-		customerID = &cid
-		payerName, payerTaxID, payerEmail = cust.Name, cust.TaxID, cust.Email
-	} else {
-		payerName = strings.TrimSpace(in.PayerName)
-		payerTaxID = onlyDigits(in.PayerTaxID)
-		payerEmail = strings.TrimSpace(in.PayerEmail)
-		if !validName(payerName) {
-			writeError(w, http.StatusBadRequest, "invalid_body", "Informe o nome do pagador")
-			return
-		}
-		if !validCPF(payerTaxID) {
-			writeError(w, http.StatusBadRequest, "invalid_body", "CPF do pagador inválido")
-			return
-		}
-		if payerEmail != "" && !validEmail(payerEmail) {
-			writeError(w, http.StatusBadRequest, "invalid_body", "E-mail do pagador inválido")
-			return
-		}
-		// Se o CPF já é de um cliente cadastrado, trata como AQUELE cliente: liga a cobrança
-		// a ele e usa os dados canônicos (nome/e-mail) — NÃO sobrescreve com o que foi digitado.
-		existing, err := s.store.GetCustomerByTaxID(r.Context(), payerTaxID)
-		switch {
-		case err == nil:
-			customerID = &existing.ID
-			payerName = existing.Name
-			if existing.Email != "" {
-				payerEmail = existing.Email
-			}
-		case errors.Is(err, pgx.ErrNoRows):
-			// CPF novo: cria o cliente só se o admin pediu (salvar como cliente). user_id=0 =
-			// sem conta de usuário; consolida por CPF e habilita o comprovante no pagamento.
-			if in.SaveCustomer {
-				phone := onlyDigits(in.Phone)
-				if phone != "" && !validPhone(phone) {
-					writeError(w, http.StatusBadRequest, "invalid_body", "Telefone inválido")
-					return
-				}
-				cust, cerr := s.store.UpsertCustomer(r.Context(), 0, payerTaxID, phone, payerName, payerEmail)
-				if cerr != nil {
-					writeError(w, http.StatusInternalServerError, "db_error", "Falha ao salvar o cliente")
-					return
-				}
-				customerID = &cust.ID
-			}
-		default:
-			writeError(w, http.StatusInternalServerError, "db_error", "Falha ao consultar o cliente")
-			return
-		}
-		// Valida o envio de e-mail sobre o e-mail FINAL (resolvido do cliente, quando existir).
-		if in.SendEmail && !validEmail(payerEmail) {
-			writeError(w, http.StatusBadRequest, "invalid_body", "Sem e-mail válido para enviar a cobrança")
-			return
-		}
+	payerName, payerTaxID, payerEmail, customerID, ok := s.resolveManualPayer(w, r, in.manualPayerInput)
+	if !ok {
+		return
 	}
 
 	if in.DueDate == "" {
@@ -205,6 +216,16 @@ func (s *Server) handleCreateManualCharge(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Produto do catálogo (opcional): registra o item para aparecer no histórico do cliente.
+	if in.ProductID != 0 {
+		if p, perr := s.store.GetProductByID(r.Context(), in.ProductID); perr == nil {
+			pid := p.ID
+			if e := s.store.InsertChargeItems(r.Context(), c.ID, []ChargeItem{{ProductID: &pid, Name: p.Name, PriceCents: in.AmountCents, Quantity: 1}}); e != nil {
+				slog.Warn("manual charge: falha ao gravar item do produto", "charge", c.ID, "err", e)
+			}
+		}
+	}
+
 	// Garante o QR mesmo quando a Efí não devolve a imagem (best-effort → sempre presente).
 	if c.QRCode == "" {
 		c.QRCode = qrPNGDataURI(c.BRCode)
@@ -221,6 +242,142 @@ func (s *Server) handleCreateManualCharge(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusCreated, c)
+}
+
+type manualRecurrenceInput struct {
+	manualPayerInput
+	ProductID   int64  `json:"productId"` // opcional: vincula a assinatura ao produto
+	AmountCents int64  `json:"amountCents"`
+	Periodicity string `json:"periodicity"` // SEMANAL|MENSAL|TRIMESTRAL|SEMESTRAL|ANUAL
+	DueDay      int    `json:"dueDay"`      // 1-28
+	StartDate   string `json:"startDate"`   // YYYY-MM-DD; default amanhã (futura)
+	EndDate     string `json:"endDate"`     // YYYY-MM-DD; opcional
+	Description string `json:"description"` // objeto da assinatura
+}
+
+// handleCreateManualRecurrence (admin) cria uma assinatura PIX Automático pelo dashboard,
+// para cliente existente OU avulso, com as configs escolhidas. O QR/copia-e-cola devolvido
+// AUTORIZA a assinatura (não é pagamento); o débito segue os ciclos após a autorização.
+func (s *Server) handleCreateManualRecurrence(w http.ResponseWriter, r *http.Request) {
+	var in manualRecurrenceInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "JSON inválido")
+		return
+	}
+	if in.AmountCents <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_body", "amountCents deve ser > 0")
+		return
+	}
+	if !validPeriodicities[in.Periodicity] {
+		writeError(w, http.StatusBadRequest, "invalid_body", "periodicity inválida")
+		return
+	}
+	// A Efí limita o dia de débito a 1–28 (evita meses sem 29/30/31).
+	if in.DueDay < 1 || in.DueDay > 28 {
+		writeError(w, http.StatusBadRequest, "invalid_body", "dueDay deve estar entre 1 e 28")
+		return
+	}
+	start := strings.TrimSpace(in.StartDate)
+	todayStr := time.Now().Format("2006-01-02")
+	if start == "" {
+		// dataInicial deve ser FUTURA (a Efí recusa data = criação); default = amanhã.
+		start = time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	} else {
+		if _, err := time.Parse("2006-01-02", start); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_body", "startDate deve ser YYYY-MM-DD")
+			return
+		}
+		if start <= todayStr { // comparação lexicográfica de YYYY-MM-DD = cronológica
+			writeError(w, http.StatusBadRequest, "invalid_body", "startDate deve ser uma data futura")
+			return
+		}
+	}
+	end := strings.TrimSpace(in.EndDate)
+	if end != "" {
+		if _, err := time.Parse("2006-01-02", end); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_body", "endDate deve ser YYYY-MM-DD")
+			return
+		}
+	}
+
+	payerName, payerTaxID, payerEmail, customerID, ok := s.resolveManualPayer(w, r, in.manualPayerInput)
+	if !ok {
+		return
+	}
+
+	object := strings.TrimSpace(in.Description)
+	if object == "" {
+		object = "Assinatura Santos Tech"
+	}
+	token := newPublicToken()
+	dueDay := in.DueDay
+	rec := &Recurrence{
+		CustomerID:  customerID,
+		PayerTaxID:  payerTaxID,
+		PayerName:   payerName,
+		AmountCents: in.AmountCents,
+		Periodicity: in.Periodicity,
+		DueDay:      &dueDay,
+		StartDate:   start,
+		EndDate:     end,
+		Journey:     2,
+		PublicToken: token,
+	}
+	// Produto do catálogo (opcional): vincula para habilitar a 1ª cobrança na aprovação.
+	if in.ProductID != 0 {
+		if _, perr := s.store.GetProductByID(r.Context(), in.ProductID); perr != nil {
+			writeError(w, http.StatusNotFound, "not_found", "Produto não encontrado")
+			return
+		}
+		pid := in.ProductID
+		rec.ProductID = &pid
+	}
+	// Persiste primeiro (status 'pending_auth') para ter o ID p/ o contrato.
+	if err := s.recs.CreateRecurrence(r.Context(), rec); err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao criar a assinatura")
+		return
+	}
+
+	res, err := s.efi.CreateRecurrence(r.Context(), RecurrenceRequest{
+		Contract:    "Assinatura #" + strconv.FormatInt(rec.ID, 10),
+		Object:      object,
+		PayerName:   payerName,
+		PayerTaxID:  payerTaxID,
+		AmountCents: in.AmountCents,
+		Periodicity: in.Periodicity,
+		StartDate:   start,
+		EndDate:     end,
+	})
+	if err != nil {
+		_ = s.recs.SetRecurrenceStatus(r.Context(), rec.ID, "rejected")
+		var pe *ProviderError
+		if errors.As(err, &pe) {
+			slog.Warn("manual recurrence: erro do gateway", "status", pe.Status, "message", pe.Message)
+			writeError(w, http.StatusUnprocessableEntity, "provider_error", clientSafeGatewayMsg(pe.Message))
+			return
+		}
+		slog.Warn("manual recurrence: falha no provider", "err", err)
+		writeError(w, http.StatusUnprocessableEntity, "provider_error", "Falha ao criar a assinatura. Tente novamente.")
+		return
+	}
+	if err := s.recs.UpdateRecurrenceAuth(r.Context(), rec.ID, res.EfiIDRec, res.BRCode, res.QRCode, res.Status); err != nil {
+		slog.Warn("manual recurrence: falha ao gravar autorização", "rec", rec.ID, "err", err)
+	}
+	rec.EfiIDRec, rec.BRCode, rec.QRCode, rec.Status = res.EfiIDRec, res.BRCode, res.QRCode, res.Status
+	if rec.QRCode == "" {
+		rec.QRCode = qrPNGDataURI(rec.BRCode)
+	}
+
+	// E-mail de autorização (best-effort): link para a tela onde o cliente autoriza.
+	if in.SendEmail && payerEmail != "" && s.email != nil {
+		authURL := s.cfg.PublicPayURL + "/subscribe/" + token
+		body := subscriptionEmailHTML(payerName, in.AmountCents, in.Periodicity, dueDay, authURL)
+		if e := s.email.send(r.Context(), payerEmail, "Autorize sua assinatura — Santos Tech", body); e != nil {
+			slog.Warn("manual recurrence: falha ao enviar email de autorização", "rec", rec.ID, "err", e)
+		}
+	}
+
+	writeJSON(w, http.StatusCreated, rec)
 }
 
 // createAndPersistCharge cria no provider, grava e dispara email. Reusado pela recorrência.

@@ -387,6 +387,43 @@ paths:
       summary: Lista contratos de recorrência (admin)
       responses:
         "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Recurrence" } } } } }
+  /recurrences/manual:
+    post:
+      tags: [PIX Automático]
+      summary: Gera assinatura PIX Automático pelo dashboard (cliente existente ou avulso)
+      description: >
+        "Gerar assinatura" do dashboard. Resolve o pagador igual ao `/charges/manual`
+        (`customerId` OU `payerName`+`payerTaxId`; CPF já cadastrado é tratado como o
+        cliente existente; `saveCustomer` cria o avulso). Cria a recorrência (`pending_auth`),
+        chama a Efí e devolve `brCode`/`qrCode` de **autorização** (não é cobrança).
+        `sendEmail` envia o link de autorização. `productId` vincula a um produto do catálogo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amountCents, periodicity, dueDay]
+              properties:
+                customerId: { type: integer }
+                payerName: { type: string }
+                payerTaxId: { type: string }
+                payerEmail: { type: string, format: email }
+                phone: { type: string }
+                productId: { type: integer, description: "vincula a assinatura a um produto" }
+                amountCents: { type: integer }
+                periodicity: { type: string, enum: [SEMANAL, MENSAL, TRIMESTRAL, SEMESTRAL, ANUAL] }
+                dueDay: { type: integer, minimum: 1, maximum: 28 }
+                startDate: { type: string, format: date, description: "default: amanhã (futura)" }
+                endDate: { type: string, format: date }
+                description: { type: string }
+                sendEmail: { type: boolean }
+                saveCustomer: { type: boolean }
+      responses:
+        "201": { description: criada (Recurrence com brCode/qrCode de autorização), content: { application/json: { schema: { $ref: "#/components/schemas/Recurrence" } } } }
+        "400": { description: inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: cliente/produto não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: falha no gateway Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /recurrences/{id}:
     get:
       tags: [PIX Automático]
