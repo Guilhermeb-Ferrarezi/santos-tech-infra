@@ -47,7 +47,7 @@ func LoadConfig() Config {
 		EFIPixKey:        mustEnv("EFI_PIX_KEY"),
 		EFIWebhookSecret: getEnv("EFI_WEBHOOK_SECRET", ""),
 		EFIWebhookURL:    strings.TrimRight(getEnv("EFI_WEBHOOK_URL", ""), "/"),
-		PublicPayURL:     strings.TrimRight(getEnv("PUBLIC_PAY_URL", "https://pay.santos-tech.com"), "/"),
+		PublicPayURL:     strings.TrimRight(getEnv("PUBLIC_PAY_URL", "https://pagar.santos-tech.com"), "/"),
 		Production:       getEnv("NODE_ENV", "development") == "production",
 	}
 }
