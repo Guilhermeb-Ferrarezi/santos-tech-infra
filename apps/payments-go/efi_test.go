@@ -195,7 +195,7 @@ func TestEfiRecStatusToApp(t *testing.T) {
 // TestEfiParseRecWebhook: payload com vários itens → um RecEvent por idRec, status mapeado.
 func TestEfiParseRecWebhookMultiplos(t *testing.T) {
 	p := newTestEfi("http://x")
-	body := []byte(`{"rec":[{"idRec":"rec-1","status":"APROVADA"},{"idRec":"rec-2","status":"CANCELADA"}]}`)
+	body := []byte(`{"recs":[{"idRec":"rec-1","status":"APROVADA"},{"idRec":"rec-2","status":"CANCELADA"}]}`)
 	evs, err := p.ParseRecWebhook(nil, body)
 	if err != nil {
 		t.Fatalf("ParseRecWebhook: %v", err)
@@ -214,14 +214,14 @@ func TestEfiParseRecWebhookMultiplos(t *testing.T) {
 // TestEfiParseRecWebhook: itens sem idRec são ignorados; ping/vazio → 0 eventos.
 func TestEfiParseRecWebhookIgnoraSemIDRec(t *testing.T) {
 	p := newTestEfi("http://x")
-	evs, err := p.ParseRecWebhook(nil, []byte(`{"rec":[{"status":"APROVADA"}]}`))
+	evs, err := p.ParseRecWebhook(nil, []byte(`{"recs":[{"status":"APROVADA"}]}`))
 	if err != nil {
 		t.Fatalf("ParseRecWebhook: %v", err)
 	}
 	if len(evs) != 0 {
 		t.Fatalf("item sem idRec deveria ser ignorado, veio %d eventos", len(evs))
 	}
-	evs, err = p.ParseRecWebhook(nil, []byte(`{"rec":[]}`))
+	evs, err = p.ParseRecWebhook(nil, []byte(`{"recs":[]}`))
 	if err != nil {
 		t.Fatalf("payload vazio não deveria dar erro: %v", err)
 	}

@@ -679,17 +679,18 @@ func (p *efiProvider) CreateRecurringCharge(ctx context.Context, req RecurringCh
 // TODO: validar payload contra Efí em homolog — confirmar o envelope ({"rec":[...]}) e os
 // nomes dos campos (idRec/status) do webhook de recorrência.
 func (p *efiProvider) ParseRecWebhook(headers map[string][]string, body []byte) ([]RecEvent, error) {
+	// Envelope real confirmado em produção: {"recs":[{idRec,status,ativacao,atualizacao}]}.
 	var wh struct {
-		Rec []struct {
+		Recs []struct {
 			IDRec  string `json:"idRec"`
 			Status string `json:"status"`
-		} `json:"rec"`
+		} `json:"recs"`
 	}
 	if err := json.Unmarshal(body, &wh); err != nil {
 		return nil, err
 	}
-	out := make([]RecEvent, 0, len(wh.Rec))
-	for _, it := range wh.Rec {
+	out := make([]RecEvent, 0, len(wh.Recs))
+	for _, it := range wh.Recs {
 		if it.IDRec == "" {
 			continue
 		}
