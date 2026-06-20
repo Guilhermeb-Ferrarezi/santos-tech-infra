@@ -6,16 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
-
-// webhookHead devolve os 6 primeiros chars (debug do segredo do webhook, sem vazar o valor inteiro).
-func webhookHead(s string) string {
-	if len(s) > 6 {
-		return s[:6]
-	}
-	return s
-}
 
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Sem o mTLS de volta (skip), autenticamos pelo segredo na URL que só a Efí
@@ -26,16 +19,14 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.cfg.EFIWebhookSecret != "" {
-		// O parâmetro se chama "token" (não "hmac") para que o request logger o
-		// redija automaticamente: o redactor cobre chaves contendo "token"/"secret",
-		// mas não "hmac" — usar "hmac" vazaria o segredo no Loki em texto puro.
-		got := r.URL.Query().Get("token")
+		// O segredo vai como ?token= (o redactor mascara chaves contendo "token";
+		// "hmac" vazaria no Loki). A Efí ANEXA "/pix" ao FINAL da URL registrada —
+		// como o token é o último elemento, o "/pix" gruda no valor ("<secret>/pix").
+		// Por isso removemos esse sufixo antes de comparar (a validação do registro
+		// vem sem "/pix", as notificações vêm com).
+		got := strings.TrimSuffix(r.URL.Query().Get("token"), "/pix")
 		if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.EFIWebhookSecret)) != 1 {
-			// debug temporário: o que a Efí manda vs o que esperamos (só tamanho +
-			// 6 primeiros chars — o redactor mascara o valor cru na query).
-			slog.Warn("webhook efi rejeitado: segredo inválido",
-				"got_len", len(got), "want_len", len(s.cfg.EFIWebhookSecret),
-				"got_head", webhookHead(got), "want_head", webhookHead(s.cfg.EFIWebhookSecret))
+			slog.Warn("webhook efi rejeitado: segredo inválido")
 			writeError(w, http.StatusUnauthorized, "webhook_rejected", "Webhook não autenticado")
 			return
 		}
