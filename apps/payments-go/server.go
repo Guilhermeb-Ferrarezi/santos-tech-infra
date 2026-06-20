@@ -92,6 +92,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /pay/{token}", s.handleGetPay)
 	mux.HandleFunc("GET /pay/{token}/events", s.handlePayEvents)
 
+	// A Efí valida a URL base no registro (POST esperando 200) e anexa "/pix" só
+	// nas notificações reais. O segredo vai como ?token= (param único, redigido no
+	// log) e sobrevive ao append do /pix. Registramos ambas as rotas no mesmo handler.
+	mux.HandleFunc("POST /webhooks/efi", s.handleWebhook)
 	mux.HandleFunc("POST /webhooks/efi/pix", s.handleWebhook)
 
 	mux.HandleFunc("GET /efi/balance", s.requireAdmin(s.handleEfiBalance))

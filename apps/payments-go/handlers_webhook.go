@@ -9,6 +9,14 @@ import (
 	"time"
 )
 
+// webhookHead devolve os 6 primeiros chars (debug do segredo do webhook, sem vazar o valor inteiro).
+func webhookHead(s string) string {
+	if len(s) > 6 {
+		return s[:6]
+	}
+	return s
+}
+
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Sem o mTLS de volta (skip), autenticamos pelo segredo na URL que só a Efí
 	// conhece (nós o registramos). Fail-closed em produção: sem secret, recusa.
@@ -21,8 +29,13 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		// O parâmetro se chama "token" (não "hmac") para que o request logger o
 		// redija automaticamente: o redactor cobre chaves contendo "token"/"secret",
 		// mas não "hmac" — usar "hmac" vazaria o segredo no Loki em texto puro.
-		if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(s.cfg.EFIWebhookSecret)) != 1 {
-			slog.Warn("webhook efi rejeitado: segredo inválido")
+		got := r.URL.Query().Get("token")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.EFIWebhookSecret)) != 1 {
+			// debug temporário: o que a Efí manda vs o que esperamos (só tamanho +
+			// 6 primeiros chars — o redactor mascara o valor cru na query).
+			slog.Warn("webhook efi rejeitado: segredo inválido",
+				"got_len", len(got), "want_len", len(s.cfg.EFIWebhookSecret),
+				"got_head", webhookHead(got), "want_head", webhookHead(s.cfg.EFIWebhookSecret))
 			writeError(w, http.StatusUnauthorized, "webhook_rejected", "Webhook não autenticado")
 			return
 		}
