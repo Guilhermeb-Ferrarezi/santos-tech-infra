@@ -59,16 +59,17 @@ type PayPlan struct {
 }
 
 type PayProduct struct {
-	ID          int64
-	Slug        string
-	Name        string
-	Description string
-	PriceCents  int64
-	Active      bool
-	Recurring   bool
-	Periodicity *string
-	DueDay      *int32
-	CreatedAt   pgtype.Timestamptz
+	ID                int64
+	Slug              string
+	Name              string
+	Description       string
+	PriceCents        int64
+	Active            bool
+	Recurring         bool
+	Periodicity       *string
+	DueDay            *int32
+	ChargeOnSubscribe bool
+	CreatedAt         pgtype.Timestamptz
 }
 
 type PayRecurrence struct {
@@ -88,6 +89,7 @@ type PayRecurrence struct {
 	BrCode         *string
 	QrCode         *string
 	Status         string
+	PublicToken    *string
 	CreatedAt      pgtype.Timestamptz
 }
 

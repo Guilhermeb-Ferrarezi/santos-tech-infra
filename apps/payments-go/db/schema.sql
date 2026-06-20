@@ -48,6 +48,7 @@ CREATE TABLE pay_products (
   recurring    BOOLEAN NOT NULL DEFAULT false,
   periodicity  TEXT,
   due_day      INT,
+  charge_on_subscribe BOOLEAN NOT NULL DEFAULT false,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -81,8 +82,10 @@ CREATE TABLE pay_recurrences (
   qr_code         TEXT,
   status          TEXT NOT NULL DEFAULT 'pending_auth'
                     CHECK (status IN ('pending_auth','active','rejected','expired','canceled')),
+  public_token    TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX uq_pay_recurrences_public_token ON pay_recurrences(public_token) WHERE public_token IS NOT NULL;
 
 CREATE INDEX idx_pay_recurrences_status ON pay_recurrences(status);
 

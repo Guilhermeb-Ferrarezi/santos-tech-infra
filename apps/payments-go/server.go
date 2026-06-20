@@ -106,6 +106,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /pay/{token}/events", s.handlePayEvents)
 	mux.HandleFunc("POST /pay/{token}/cancel", s.handleCancelPay)
 	mux.HandleFunc("GET /pay/{token}/receipt", s.handlePayReceipt)
+	// Status da assinatura (público, token): a tela de checkout acompanha a autorização.
+	mux.HandleFunc("GET /subscribe/{token}", s.handleGetSubscribe)
+	mux.HandleFunc("GET /subscribe/{token}/events", s.handleSubscribeEvents)
 
 	// A Efí valida a URL base no registro (POST esperando 200) e anexa "/pix" só
 	// nas notificações reais. O segredo vai como ?token= (param único, redigido no

@@ -127,8 +127,8 @@ func TestHandleSubscribeProductMisconfigured(t *testing.T) {
 	}
 }
 
-// Caminho feliz: produto recorrente → cria recorrência (journey=3) + 1ª cobr e devolve
-// token/brCode/qrCode/amountCents.
+// Caminho feliz: produto recorrente → cria recorrência (Jornada 2, só autoriza) e devolve
+// token/brCode/qrCode/amountCents. NÃO cria cobrança imediata (o débito vem depois).
 func TestHandleSubscribeHappy(t *testing.T) {
 	rs := &fakeRecStore{}
 	ss := &fakeSubStore{
@@ -150,34 +150,30 @@ func TestHandleSubscribeHappy(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if out.Token == "" || out.BRCode != "00020101br-code-j3" || out.QRCode == "" || out.AmountCents != 9900 {
+	if out.Token == "" || out.BRCode != "00020101br-code" || out.QRCode == "" || out.AmountCents != 9900 {
 		t.Fatalf("resposta inesperada: %+v", out)
 	}
-	// Recorrência persistida com journey=3, periodicity e due_day do produto.
-	if rs.created == nil || rs.created.Journey != 3 || rs.created.Periodicity != "MENSAL" ||
+	// Recorrência persistida com journey=2, public_token, periodicity e due_day do produto.
+	if rs.created == nil || rs.created.Journey != 2 || rs.created.Periodicity != "MENSAL" || rs.created.PublicToken == "" ||
 		rs.created.DueDay == nil || *rs.created.DueDay != 10 || rs.created.ProductID == nil || *rs.created.ProductID != 3 {
 		t.Fatalf("recorrência persistida inesperada: %+v", rs.created)
 	}
 	if !rs.authCalled {
 		t.Fatal("esperava UpdateRecurrenceAuth após a Efí")
 	}
-	// 1ª cobr: kind recorrente (via InsertRecurrenceCharge), com public_token e correlation_id = txid.
-	if ss.insertedCharge == nil || ss.insertedCharge.PublicToken == "" ||
-		ss.insertedCharge.RecurrenceID == nil || ss.insertedCharge.CorrelationID == "" {
-		t.Fatalf("1ª cobrança inesperada: %+v", ss.insertedCharge)
-	}
-	if ss.insertedCharge.CustomerID == nil || *ss.insertedCharge.CustomerID != 55 {
-		t.Fatalf("cobrança deveria ligar ao customer 55: %+v", ss.insertedCharge)
+	// Jornada 2 não cobra na hora: nenhuma cobrança imediata é inserida.
+	if ss.insertedCharge != nil {
+		t.Fatalf("não deveria inserir cobrança imediata na Jornada 2: %+v", ss.insertedCharge)
 	}
 }
 
-// Efí falha ao criar a Jornada 3 → status local vira 'rejected' e responde 422.
+// Efí falha ao criar a recorrência → status local vira 'rejected' e responde 422.
 func TestHandleSubscribeProviderError(t *testing.T) {
 	rs := &fakeRecStore{}
 	ss := &fakeSubStore{
 		product: &Product{ID: 3, Name: "Plano Pro", PriceCents: 9900, Recurring: true, Periodicity: "MENSAL", DueDay: intp(10)},
 	}
-	s := &Server{efi: failingJ3EfiOps{}, recs: rs, subs: ss}
+	s := &Server{efi: failingRecEfiOps{}, recs: rs, subs: ss}
 	body := `{"productId":3,"taxId":"39053344705","phone":"11999998888","name":"Fulano de Tal","email":"a@b.com"}`
 	w := subscribeReq(s, body)
 	if w.Code != http.StatusUnprocessableEntity {
@@ -188,9 +184,39 @@ func TestHandleSubscribeProviderError(t *testing.T) {
 	}
 }
 
-// failingJ3EfiOps falha só na Jornada 3 (reusa o resto do fakeEfiOps).
-type failingJ3EfiOps struct{ fakeEfiOps }
+// GET /subscribe/{token}: snapshot do status da assinatura pelo token público.
+func TestHandleGetSubscribe(t *testing.T) {
+	rs := &fakeRecStore{byToken: &Recurrence{Status: "active", BRCode: "br", QRCode: "qr", AmountCents: 4990}}
+	s := &Server{recs: rs}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/subscribe/abc", nil)
+	req.SetPathValue("token", "abc")
+	s.handleGetSubscribe(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Status      string `json:"status"`
+		AmountCents int64  `json:"amountCents"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	if out.Status != "active" || out.AmountCents != 4990 {
+		t.Fatalf("resposta inesperada: %+v", out)
+	}
+	// Token inexistente → 404.
+	rs.byTokenErr = errors.New("no rows")
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/subscribe/x", nil)
+	req.SetPathValue("token", "x")
+	s.handleGetSubscribe(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("esperado 404, veio %d", w.Code)
+	}
+}
 
-func (failingJ3EfiOps) CreateRecurrenceJornada3(_ context.Context, _ RecurrenceJornada3Request) (RecurrenceResult, ChargeResult, error) {
-	return RecurrenceResult{}, ChargeResult{}, errors.New("efi indisponível")
+// failingRecEfiOps falha ao criar a recorrência (reusa o resto do fakeEfiOps).
+type failingRecEfiOps struct{ fakeEfiOps }
+
+func (failingRecEfiOps) CreateRecurrence(_ context.Context, _ RecurrenceRequest) (RecurrenceResult, error) {
+	return RecurrenceResult{}, errors.New("efi indisponível")
 }

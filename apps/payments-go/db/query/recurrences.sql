@@ -1,14 +1,22 @@
 -- name: CreateRecurrence :one
 INSERT INTO pay_recurrences
   (subscription_id, product_id, customer_id, payer_tax_id, payer_name, amount_cents,
-   periodicity, due_day, start_date, end_date, journey)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+   periodicity, due_day, start_date, end_date, journey, public_token)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, status, created_at;
+
+-- name: GetRecurrenceByPublicToken :one
+SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
+       amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
+       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
+       status, created_at
+FROM pay_recurrences
+WHERE public_token = $1;
 
 -- name: GetRecurrence :one
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
-       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
+       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
        status, created_at
 FROM pay_recurrences
 WHERE id = $1;
@@ -16,7 +24,7 @@ WHERE id = $1;
 -- name: GetRecurrenceByEfiID :one
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
-       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
+       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
        status, created_at
 FROM pay_recurrences
 WHERE efi_id_rec = $1;
@@ -24,7 +32,7 @@ WHERE efi_id_rec = $1;
 -- name: ListRecurrences :many
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
-       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
+       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
        status, created_at
 FROM pay_recurrences
 ORDER BY created_at DESC;
@@ -43,7 +51,7 @@ WHERE id = $1;
 -- têm a cobrança do ciclo (anti-duplicidade por reference_month, espelha SubscriptionsDueToday).
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
-       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
+       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
        status, created_at
 FROM pay_recurrences r
 WHERE r.status = 'active'

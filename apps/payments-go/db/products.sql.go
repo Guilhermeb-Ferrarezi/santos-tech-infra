@@ -10,19 +10,20 @@ import (
 )
 
 const createProduct = `-- name: CreateProduct :one
-INSERT INTO pay_products (slug, name, description, price_cents, recurring, periodicity, due_day)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, slug, name, description, price_cents, active, recurring, periodicity, due_day, created_at
+INSERT INTO pay_products (slug, name, description, price_cents, recurring, periodicity, due_day, charge_on_subscribe)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe, created_at
 `
 
 type CreateProductParams struct {
-	Slug        string
-	Name        string
-	Description string
-	PriceCents  int64
-	Recurring   bool
-	Periodicity *string
-	DueDay      *int32
+	Slug              string
+	Name              string
+	Description       string
+	PriceCents        int64
+	Recurring         bool
+	Periodicity       *string
+	DueDay            *int32
+	ChargeOnSubscribe bool
 }
 
 func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (PayProduct, error) {
@@ -34,6 +35,7 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		arg.Recurring,
 		arg.Periodicity,
 		arg.DueDay,
+		arg.ChargeOnSubscribe,
 	)
 	var i PayProduct
 	err := row.Scan(
@@ -46,6 +48,7 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		&i.Recurring,
 		&i.Periodicity,
 		&i.DueDay,
+		&i.ChargeOnSubscribe,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -64,21 +67,22 @@ func (q *Queries) DeleteProduct(ctx context.Context, id int64) (int64, error) {
 }
 
 const getProductByID = `-- name: GetProductByID :one
-SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day
+SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe
 FROM pay_products
 WHERE id = $1 AND active = true
 `
 
 type GetProductByIDRow struct {
-	ID          int64
-	Slug        string
-	Name        string
-	Description string
-	PriceCents  int64
-	Active      bool
-	Recurring   bool
-	Periodicity *string
-	DueDay      *int32
+	ID                int64
+	Slug              string
+	Name              string
+	Description       string
+	PriceCents        int64
+	Active            bool
+	Recurring         bool
+	Periodicity       *string
+	DueDay            *int32
+	ChargeOnSubscribe bool
 }
 
 func (q *Queries) GetProductByID(ctx context.Context, id int64) (GetProductByIDRow, error) {
@@ -94,26 +98,28 @@ func (q *Queries) GetProductByID(ctx context.Context, id int64) (GetProductByIDR
 		&i.Recurring,
 		&i.Periodicity,
 		&i.DueDay,
+		&i.ChargeOnSubscribe,
 	)
 	return i, err
 }
 
 const getProductBySlug = `-- name: GetProductBySlug :one
-SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day
+SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe
 FROM pay_products
 WHERE slug = $1 AND active = true
 `
 
 type GetProductBySlugRow struct {
-	ID          int64
-	Slug        string
-	Name        string
-	Description string
-	PriceCents  int64
-	Active      bool
-	Recurring   bool
-	Periodicity *string
-	DueDay      *int32
+	ID                int64
+	Slug              string
+	Name              string
+	Description       string
+	PriceCents        int64
+	Active            bool
+	Recurring         bool
+	Periodicity       *string
+	DueDay            *int32
+	ChargeOnSubscribe bool
 }
 
 func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (GetProductBySlugRow, error) {
@@ -129,26 +135,28 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (GetProduct
 		&i.Recurring,
 		&i.Periodicity,
 		&i.DueDay,
+		&i.ChargeOnSubscribe,
 	)
 	return i, err
 }
 
 const listProducts = `-- name: ListProducts :many
-SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day
+SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe
 FROM pay_products
 ORDER BY name
 `
 
 type ListProductsRow struct {
-	ID          int64
-	Slug        string
-	Name        string
-	Description string
-	PriceCents  int64
-	Active      bool
-	Recurring   bool
-	Periodicity *string
-	DueDay      *int32
+	ID                int64
+	Slug              string
+	Name              string
+	Description       string
+	PriceCents        int64
+	Active            bool
+	Recurring         bool
+	Periodicity       *string
+	DueDay            *int32
+	ChargeOnSubscribe bool
 }
 
 func (q *Queries) ListProducts(ctx context.Context) ([]ListProductsRow, error) {
@@ -170,6 +178,7 @@ func (q *Queries) ListProducts(ctx context.Context) ([]ListProductsRow, error) {
 			&i.Recurring,
 			&i.Periodicity,
 			&i.DueDay,
+			&i.ChargeOnSubscribe,
 		); err != nil {
 			return nil, err
 		}
@@ -183,19 +192,20 @@ func (q *Queries) ListProducts(ctx context.Context) ([]ListProductsRow, error) {
 
 const updateProduct = `-- name: UpdateProduct :execrows
 UPDATE pay_products
-SET name = $2, description = $3, price_cents = $4, active = $5, recurring = $6, periodicity = $7, due_day = $8
+SET name = $2, description = $3, price_cents = $4, active = $5, recurring = $6, periodicity = $7, due_day = $8, charge_on_subscribe = $9
 WHERE id = $1
 `
 
 type UpdateProductParams struct {
-	ID          int64
-	Name        string
-	Description string
-	PriceCents  int64
-	Active      bool
-	Recurring   bool
-	Periodicity *string
-	DueDay      *int32
+	ID                int64
+	Name              string
+	Description       string
+	PriceCents        int64
+	Active            bool
+	Recurring         bool
+	Periodicity       *string
+	DueDay            *int32
+	ChargeOnSubscribe bool
 }
 
 func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (int64, error) {
@@ -208,6 +218,7 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (i
 		arg.Recurring,
 		arg.Periodicity,
 		arg.DueDay,
+		arg.ChargeOnSubscribe,
 	)
 	if err != nil {
 		return 0, err

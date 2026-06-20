@@ -107,6 +107,9 @@ CREATE TABLE IF NOT EXISTS pay_products (
 ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS recurring   BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS periodicity TEXT;
 ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS due_day     INT;
+-- charge_on_subscribe: true = cobra a 1ª parcela logo após a autorização (auto-débito);
+-- false = a 1ª parcela cai no due_day (ciclo normal).
+ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS charge_on_subscribe BOOLEAN NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS pay_customers (
   id         BIGSERIAL PRIMARY KEY,
   user_id    BIGINT NOT NULL,
@@ -162,6 +165,10 @@ CREATE TABLE IF NOT EXISTS pay_recurrences (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_pay_recurrences_status ON pay_recurrences(status);
+-- public_token: identificador opaco da assinatura p/ a tela de checkout acompanhar o
+-- status (autorização) por SSE, sem expor o id interno.
+ALTER TABLE pay_recurrences ADD COLUMN IF NOT EXISTS public_token TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pay_recurrences_public_token ON pay_recurrences(public_token) WHERE public_token IS NOT NULL;
 ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS recurrence_id BIGINT REFERENCES pay_recurrences(id) ON DELETE SET NULL;
 -- kind ganha 'recorrente' (ciclos de PIX Automático): recria o CHECK incluindo-o.
 ALTER TABLE pay_charges DROP CONSTRAINT IF EXISTS pay_charges_kind_check;

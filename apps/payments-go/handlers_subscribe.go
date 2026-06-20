@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -92,10 +93,16 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	custID := cust.ID
 	prodID := p.ID
 	dueDay := *p.DueDay
-	today := time.Now().Format("2006-01-02")
-	// dataInicial do contrato deve ser FUTURA (a Efí recusa = data de criação). Na Jornada 3
-	// a 1ª parcela é a cob imediata (hoje); o contrato começa no próximo ciclo.
-	cycleStart := nextCycleDate(p.Periodicity, time.Now()).Format("2006-01-02")
+	// dataInicial do contrato deve ser FUTURA (a Efí recusa = data de criação). "Cobrar no
+	// dia": começa no próximo due_day. "Cobrar na assinatura": amanhã (o quanto antes); o
+	// débito da 1ª parcela é disparado pelo webhook ao aprovar (ver handleRecWebhook).
+	var startDate string
+	if p.ChargeOnSubscribe {
+		startDate = time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	} else {
+		startDate = nextDueDate(dueDay, time.Now()).Format("2006-01-02")
+	}
+	token := newPublicToken()
 	rec := &Recurrence{
 		ProductID:   &prodID,
 		CustomerID:  &custID,
@@ -104,29 +111,24 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		AmountCents: p.PriceCents,
 		Periodicity: p.Periodicity,
 		DueDay:      &dueDay,
-		StartDate:   cycleStart,
-		Journey:     3,
+		StartDate:   startDate,
+		Journey:     2, // só autoriza; a Efí decide a jornada na hora do pagador autorizar
+		PublicToken: token,
 	}
-	// Persiste primeiro (status 'pending_auth') para ter o ID — também ancora o txid
-	// determinístico da 1ª cobr (recurringTxid), tornando o PUT /v2/cob idempotente.
+	// Persiste primeiro (status 'pending_auth') para ter o ID p/ o contrato.
 	if err := s.recs.CreateRecurrence(r.Context(), rec); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao criar assinatura")
 		return
 	}
 
-	refMonth := time.Now().Format("2006-01")
-	txid := recurringTxid(rec.ID, refMonth)
-	recRes, charge, err := s.efi.CreateRecurrenceJornada3(r.Context(), RecurrenceJornada3Request{
-		Contract:            "Assinatura #" + strconv.FormatInt(rec.ID, 10),
-		Object:              p.Name,
-		PayerName:           in.Name,
-		PayerTaxID:          in.TaxID,
-		AmountCents:         p.PriceCents,
-		Periodicity:         p.Periodicity,
-		StartDate:           cycleStart, // contrato começa no próximo ciclo (1ª parcela = cob imediata)
-		ChargeCorrelationID: txid,
-		FirstDueDate:        today, // a cob imediata vence hoje
-		Description:         "Assinatura " + p.Name,
+	recRes, err := s.efi.CreateRecurrence(r.Context(), RecurrenceRequest{
+		Contract:    "Assinatura #" + strconv.FormatInt(rec.ID, 10),
+		Object:      p.Name,
+		PayerName:   in.Name,
+		PayerTaxID:  in.TaxID,
+		AmountCents: p.PriceCents,
+		Periodicity: p.Periodicity,
+		StartDate:   startDate,
 	})
 	if err != nil {
 		// 422 (não 502): Cloudflare/Traefik troca 5xx do origin por HTML sem CORS.
@@ -145,31 +147,112 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("assinatura: falha ao gravar autorização", "rec", rec.ID, "err", err)
 	}
 
-	// 1ª cobrança do ciclo (kind='recorrente'): public_token p/ a tela /pay/{token},
-	// correlation_id = txid (casa com o webhook pix do débito).
-	ref := refMonth
-	c := &Charge{
-		RecurrenceID:     &rec.ID,
-		CustomerID:       &custID,
-		AmountCents:      p.PriceCents,
-		DueDate:          today,
-		ReferenceMonth:   &ref,
-		Provider:         "efi",
-		ProviderChargeID: charge.ProviderChargeID,
-		CorrelationID:    txid,
-		PublicToken:      newPublicToken(),
-		BRCode:           recRes.BRCode,
-		QRCode:           recRes.QRCode,
+	// A tela acompanha a aprovação por SSE em /subscribe/{token}/events (sem cobrança
+	// imediata: PIX Automático autoriza agora e debita conforme o modo do produto).
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"token": token, "brCode": recRes.BRCode, "qrCode": recRes.QRCode, "amountCents": p.PriceCents,
+	})
+}
+
+// maybeChargeFirstInstallment dispara a 1ª cobrança recorrente logo após a aprovação, se o
+// produto está marcado como "cobrar na assinatura" (charge_on_subscribe). Best-effort,
+// idempotente por (recurrence_id, reference_month). A cobr (/v2/cobr) só foi exercitada em
+// produção — se a Efí recusar cobrar antes da dataInicial, ajustar a data aqui após o teste real.
+func (s *Server) maybeChargeFirstInstallment(ctx context.Context, rec *Recurrence) {
+	if rec.ProductID == nil {
+		return
 	}
-	c.payerTaxID = in.TaxID
-	if err := s.subs.InsertRecurrenceCharge(r.Context(), c); err != nil {
-		// A recorrência+cobr já existem na Efí; registra para reconciliação e segue.
-		slog.Warn("assinatura: falha ao gravar 1ª cobrança", "rec", rec.ID, "err", err)
-		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar a cobrança")
+	p, err := s.store.GetProductByID(ctx, *rec.ProductID)
+	if err != nil || !p.ChargeOnSubscribe {
+		return
+	}
+	refMonth := time.Now().Format("2006-01")
+	due := time.Now().Format("2006-01-02")
+	txid := recurringTxid(rec.ID, refMonth)
+	res, err := s.efi.CreateRecurringCharge(ctx, RecurringChargeRequest{
+		CorrelationID: txid,
+		EfiIDRec:      rec.EfiIDRec,
+		AmountCents:   rec.AmountCents,
+		PayerName:     rec.PayerName,
+		PayerTaxID:    rec.PayerTaxID,
+		DueDate:       due,
+	})
+	if err != nil {
+		slog.Warn("assinatura: falha ao cobrar 1ª parcela na aprovação", "rec", rec.ID, "err", err)
+		return
+	}
+	c := &Charge{
+		RecurrenceID: &rec.ID, CustomerID: rec.CustomerID,
+		AmountCents: rec.AmountCents, DueDate: due, ReferenceMonth: &refMonth,
+		Provider: "efi", ProviderChargeID: res.ProviderChargeID,
+		CorrelationID: txid, BRCode: res.BRCode, QRCode: res.QRCode,
+		PublicToken: newPublicToken(),
+	}
+	c.payerTaxID = rec.PayerTaxID
+	if err := s.store.InsertRecurrenceCharge(ctx, c); err != nil {
+		slog.Warn("assinatura: falha ao gravar 1ª cobrança da aprovação", "rec", rec.ID, "err", err)
+	}
+}
+
+// handleGetSubscribe devolve o snapshot do status da assinatura pelo token público (a tela
+// usa pra renderizar o QR e o estado: pending_auth/active/rejected/canceled/expired).
+func (s *Server) handleGetSubscribe(w http.ResponseWriter, r *http.Request) {
+	rec, err := s.recs.GetRecurrenceByPublicToken(r.Context(), r.PathValue("token"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Assinatura não encontrada")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": rec.Status, "brCode": rec.BRCode, "qrCode": rec.QRCode, "amountCents": rec.AmountCents,
+	})
+}
+
+// handleSubscribeEvents transmite por SSE a mudança de status da assinatura: manda o estado
+// atual e, quando o webhookrec publicar a transição (active/rejected/canceled), empurra e
+// encerra. Espelha handlePayEvents (cobrança), mas para a recorrência.
+func (s *Server) handleSubscribeEvents(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	rec, err := s.recs.GetRecurrenceByPublicToken(r.Context(), token)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Assinatura não encontrada")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "sse_unsupported", "Streaming indisponível")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	fmt.Fprintf(w, "event: status\ndata: %s\n\n", rec.Status)
+	flusher.Flush()
+	if rec.Status != "pending_auth" {
+		return // já resolvido
+	}
+
+	pubsub := s.subscribeRecurrence(r.Context(), token)
+	defer pubsub.Close()
+	ch := pubsub.Channel()
+
+	// Re-checa após assinar: fecha a corrida em que a aprovação cai ENTRE o GET e o Subscribe.
+	if r2, err := s.recs.GetRecurrenceByPublicToken(r.Context(), token); err == nil && r2.Status != "pending_auth" {
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", r2.Status, r2.Status)
+		flusher.Flush()
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"token": c.PublicToken, "brCode": recRes.BRCode, "qrCode": recRes.QRCode, "amountCents": p.PriceCents,
-	})
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case msg := <-ch:
+			if msg != nil && msg.Payload != "" {
+				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", msg.Payload, msg.Payload)
+				flusher.Flush()
+				return
+			}
+		}
+	}
 }

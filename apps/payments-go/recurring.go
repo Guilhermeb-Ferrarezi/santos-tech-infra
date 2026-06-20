@@ -22,6 +22,18 @@ func recurringTxid(recID int64, refMonth string) string {
 	return fmt.Sprintf("stprec%019d%s", recID, strings.ReplaceAll(refMonth, "-", ""))
 }
 
+// nextDueDate devolve a próxima data FUTURA (após `from`) cujo dia do mês é dueDay.
+// Usada como dataInicial do contrato quando a 1ª cobrança é "no dia do vencimento".
+// dueDay é 1–28 (validado no produto), então não há overflow de dia em nenhum mês.
+func nextDueDate(dueDay int, from time.Time) time.Time {
+	y, m, _ := from.Date()
+	cand := time.Date(y, m, dueDay, 0, 0, 0, 0, from.Location())
+	if !cand.After(from) {
+		cand = time.Date(y, m+1, dueDay, 0, 0, 0, 0, from.Location())
+	}
+	return cand
+}
+
 // nextCycleDate soma uma periodicidade a `from`. A Efí exige que a `dataInicial` do
 // contrato (POST /v2/rec) seja FUTURA — não pode ser igual à data de criação. Na Jornada 3
 // a 1ª parcela já é a cob imediata (hoje), então o contrato começa no próximo ciclo.

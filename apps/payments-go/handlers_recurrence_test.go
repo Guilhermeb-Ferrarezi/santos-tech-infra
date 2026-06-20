@@ -23,6 +23,8 @@ type fakeRecStore struct {
 	statusSet  []string // status passados a SetRecurrenceStatus, em ordem
 	authCalled bool
 	cycles     []Charge
+	byToken    *Recurrence
+	byTokenErr error
 }
 
 func (f *fakeRecStore) CreateRecurrence(_ context.Context, r *Recurrence) error {
@@ -50,6 +52,9 @@ func (f *fakeRecStore) UpdateRecurrenceAuth(_ context.Context, _ int64, _, _, _,
 }
 func (f *fakeRecStore) ListChargesByRecurrence(_ context.Context, _ int64) ([]Charge, error) {
 	return f.cycles, nil
+}
+func (f *fakeRecStore) GetRecurrenceByPublicToken(_ context.Context, _ string) (*Recurrence, error) {
+	return f.byToken, f.byTokenErr
 }
 
 // As validações de POST /recurrences rodam ANTES de tocar o store/Efí, então cobrimos

@@ -245,6 +245,7 @@ func (s *Store) CreateRecurrence(ctx context.Context, r *Recurrence) error {
 		StartDate:      optDateToPgtype(r.StartDate),
 		EndDate:        optDateToPgtype(r.EndDate),
 		Journey:        int16(r.Journey),
+		PublicToken:    nullStrPtr(r.PublicToken),
 	})
 	if err != nil {
 		return err
@@ -253,6 +254,34 @@ func (s *Store) CreateRecurrence(ctx context.Context, r *Recurrence) error {
 	r.Status = row.Status
 	r.CreatedAt = tsToTime(row.CreatedAt)
 	return nil
+}
+
+// GetRecurrenceByPublicToken resolve a assinatura pelo token público (tela de checkout).
+func (s *Store) GetRecurrenceByPublicToken(ctx context.Context, token string) (*Recurrence, error) {
+	r, err := s.q.GetRecurrenceByPublicToken(ctx, &token)
+	if err != nil {
+		return nil, err
+	}
+	return &Recurrence{
+		ID:             r.ID,
+		SubscriptionID: r.SubscriptionID,
+		ProductID:      r.ProductID,
+		CustomerID:     r.CustomerID,
+		PayerTaxID:     r.PayerTaxID,
+		PayerName:      r.PayerName,
+		AmountCents:    r.AmountCents,
+		Periodicity:    r.Periodicity,
+		DueDay:         intPtrFromInt32(r.DueDay),
+		StartDate:      r.StartDate,
+		EndDate:        r.EndDate,
+		Journey:        int(r.Journey),
+		EfiIDRec:       r.EfiIDRec,
+		BRCode:         r.BrCode,
+		QRCode:         r.QrCode,
+		Status:         r.Status,
+		PublicToken:    r.PublicToken,
+		CreatedAt:      tsToTime(r.CreatedAt),
+	}, nil
 }
 
 func (s *Store) GetRecurrence(ctx context.Context, id int64) (*Recurrence, error) {
@@ -277,6 +306,7 @@ func (s *Store) GetRecurrence(ctx context.Context, id int64) (*Recurrence, error
 		BRCode:         r.BrCode,
 		QRCode:         r.QrCode,
 		Status:         r.Status,
+		PublicToken:    r.PublicToken,
 		CreatedAt:      tsToTime(r.CreatedAt),
 	}, nil
 }
@@ -303,6 +333,7 @@ func (s *Store) GetRecurrenceByEfiID(ctx context.Context, efiIDRec string) (*Rec
 		BRCode:         r.BrCode,
 		QRCode:         r.QrCode,
 		Status:         r.Status,
+		PublicToken:    r.PublicToken,
 		CreatedAt:      tsToTime(r.CreatedAt),
 	}, nil
 }
@@ -331,6 +362,7 @@ func (s *Store) ListRecurrences(ctx context.Context) ([]Recurrence, error) {
 			BRCode:         r.BrCode,
 			QRCode:         r.QrCode,
 			Status:         r.Status,
+			PublicToken:    r.PublicToken,
 			CreatedAt:      tsToTime(r.CreatedAt),
 		}
 	}
@@ -384,6 +416,7 @@ func (s *Store) RecurrencesDueToday(ctx context.Context, day int, refMonth strin
 			BRCode:         r.BrCode,
 			QRCode:         r.QrCode,
 			Status:         r.Status,
+			PublicToken:    r.PublicToken,
 			CreatedAt:      tsToTime(r.CreatedAt),
 		}
 	}
@@ -600,13 +633,14 @@ func (s *Store) PublicTokenByCorrelation(ctx context.Context, correlationID stri
 
 func (s *Store) CreateProduct(ctx context.Context, p *Product) error {
 	row, err := s.q.CreateProduct(ctx, paydb.CreateProductParams{
-		Slug:        p.Slug,
-		Name:        p.Name,
-		Description: p.Description,
-		PriceCents:  p.PriceCents,
-		Recurring:   p.Recurring,
-		Periodicity: nullStrPtr(p.Periodicity),
-		DueDay:      int32PtrFromInt(p.DueDay),
+		Slug:              p.Slug,
+		Name:              p.Name,
+		Description:       p.Description,
+		PriceCents:        p.PriceCents,
+		Recurring:         p.Recurring,
+		Periodicity:       nullStrPtr(p.Periodicity),
+		DueDay:            int32PtrFromInt(p.DueDay),
+		ChargeOnSubscribe: p.ChargeOnSubscribe,
 	})
 	if err != nil {
 		return err
@@ -632,15 +666,16 @@ func (s *Store) ListProducts(ctx context.Context) ([]Product, error) {
 	out := make([]Product, len(rows))
 	for i, r := range rows {
 		out[i] = Product{
-			ID:          r.ID,
-			Slug:        r.Slug,
-			Name:        r.Name,
-			Description: r.Description,
-			PriceCents:  r.PriceCents,
-			Active:      r.Active,
-			Recurring:   r.Recurring,
-			Periodicity: strPtrToStr(r.Periodicity),
-			DueDay:      intPtrFromInt32(r.DueDay),
+			ID:                r.ID,
+			Slug:              r.Slug,
+			Name:              r.Name,
+			Description:       r.Description,
+			PriceCents:        r.PriceCents,
+			Active:            r.Active,
+			Recurring:         r.Recurring,
+			Periodicity:       strPtrToStr(r.Periodicity),
+			DueDay:            intPtrFromInt32(r.DueDay),
+			ChargeOnSubscribe: r.ChargeOnSubscribe,
 		}
 	}
 	return out, nil
@@ -652,15 +687,16 @@ func (s *Store) GetProductBySlug(ctx context.Context, slug string) (*Product, er
 		return nil, err
 	}
 	return &Product{
-		ID:          r.ID,
-		Slug:        r.Slug,
-		Name:        r.Name,
-		Description: r.Description,
-		PriceCents:  r.PriceCents,
-		Active:      r.Active,
-		Recurring:   r.Recurring,
-		Periodicity: strPtrToStr(r.Periodicity),
-		DueDay:      intPtrFromInt32(r.DueDay),
+		ID:                r.ID,
+		Slug:              r.Slug,
+		Name:              r.Name,
+		Description:       r.Description,
+		PriceCents:        r.PriceCents,
+		Active:            r.Active,
+		Recurring:         r.Recurring,
+		Periodicity:       strPtrToStr(r.Periodicity),
+		DueDay:            intPtrFromInt32(r.DueDay),
+		ChargeOnSubscribe: r.ChargeOnSubscribe,
 	}, nil
 }
 
@@ -670,15 +706,16 @@ func (s *Store) GetProductByID(ctx context.Context, id int64) (*Product, error) 
 		return nil, err
 	}
 	return &Product{
-		ID:          r.ID,
-		Slug:        r.Slug,
-		Name:        r.Name,
-		Description: r.Description,
-		PriceCents:  r.PriceCents,
-		Active:      r.Active,
-		Recurring:   r.Recurring,
-		Periodicity: strPtrToStr(r.Periodicity),
-		DueDay:      intPtrFromInt32(r.DueDay),
+		ID:                r.ID,
+		Slug:              r.Slug,
+		Name:              r.Name,
+		Description:       r.Description,
+		PriceCents:        r.PriceCents,
+		Active:            r.Active,
+		Recurring:         r.Recurring,
+		Periodicity:       strPtrToStr(r.Periodicity),
+		DueDay:            intPtrFromInt32(r.DueDay),
+		ChargeOnSubscribe: r.ChargeOnSubscribe,
 	}, nil
 }
 
@@ -695,14 +732,15 @@ func (s *Store) DeleteProduct(ctx context.Context, id int64) error {
 
 func (s *Store) UpdateProduct(ctx context.Context, p *Product) error {
 	n, err := s.q.UpdateProduct(ctx, paydb.UpdateProductParams{
-		ID:          p.ID,
-		Name:        p.Name,
-		Description: p.Description,
-		PriceCents:  p.PriceCents,
-		Active:      p.Active,
-		Recurring:   p.Recurring,
-		Periodicity: nullStrPtr(p.Periodicity),
-		DueDay:      int32PtrFromInt(p.DueDay),
+		ID:                p.ID,
+		Name:              p.Name,
+		Description:       p.Description,
+		PriceCents:        p.PriceCents,
+		Active:            p.Active,
+		Recurring:         p.Recurring,
+		Periodicity:       nullStrPtr(p.Periodicity),
+		DueDay:            int32PtrFromInt(p.DueDay),
+		ChargeOnSubscribe: p.ChargeOnSubscribe,
 	})
 	if err != nil {
 		return err

@@ -71,6 +71,7 @@ type Recurrence struct {
 	BRCode         string    `json:"brCode"`
 	QRCode         string    `json:"qrCode"`
 	Status         string    `json:"status"`
+	PublicToken    string    `json:"publicToken,omitempty"`
 	CreatedAt      time.Time `json:"createdAt"`
 }
 
@@ -100,6 +101,9 @@ type Product struct {
 	Recurring   bool   `json:"recurring"`
 	Periodicity string `json:"periodicity,omitempty"`
 	DueDay      *int   `json:"dueDay,omitempty"`
+	// ChargeOnSubscribe: true = cobra a 1ª parcela logo após autorizar (auto-débito);
+	// false = a 1ª parcela cai no due_day.
+	ChargeOnSubscribe bool `json:"chargeOnSubscribe"`
 }
 
 type Customer struct {

@@ -80,7 +80,7 @@ export function OrderSummary({
             <dd>{price(totalCents)}</dd>
           </div>
           <div className="flex items-baseline justify-between border-t border-[#e3eaf0] pt-3 text-[#0e2937]">
-            <dt className="font-semibold">{recurring ? "1ª parcela hoje" : "Total"}</dt>
+            <dt className="font-semibold">{recurring ? "Valor da assinatura" : "Total"}</dt>
             <dd className="text-lg font-bold text-[#0db88f]">{formatBRL(totalCents)}</dd>
           </div>
         </dl>

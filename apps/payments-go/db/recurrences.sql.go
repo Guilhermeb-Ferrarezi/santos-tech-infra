@@ -14,8 +14,8 @@ import (
 const createRecurrence = `-- name: CreateRecurrence :one
 INSERT INTO pay_recurrences
   (subscription_id, product_id, customer_id, payer_tax_id, payer_name, amount_cents,
-   periodicity, due_day, start_date, end_date, journey)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+   periodicity, due_day, start_date, end_date, journey, public_token)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, status, created_at
 `
 
@@ -31,6 +31,7 @@ type CreateRecurrenceParams struct {
 	StartDate      pgtype.Date
 	EndDate        pgtype.Date
 	Journey        int16
+	PublicToken    *string
 }
 
 type CreateRecurrenceRow struct {
@@ -52,6 +53,7 @@ func (q *Queries) CreateRecurrence(ctx context.Context, arg CreateRecurrencePara
 		arg.StartDate,
 		arg.EndDate,
 		arg.Journey,
+		arg.PublicToken,
 	)
 	var i CreateRecurrenceRow
 	err := row.Scan(&i.ID, &i.Status, &i.CreatedAt)
@@ -61,7 +63,7 @@ func (q *Queries) CreateRecurrence(ctx context.Context, arg CreateRecurrencePara
 const getRecurrence = `-- name: GetRecurrence :one
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
-       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
+       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
        status, created_at
 FROM pay_recurrences
 WHERE id = $1
@@ -83,6 +85,7 @@ type GetRecurrenceRow struct {
 	EfiIDRec       string
 	BrCode         string
 	QrCode         string
+	PublicToken    string
 	Status         string
 	CreatedAt      pgtype.Timestamptz
 }
@@ -106,6 +109,7 @@ func (q *Queries) GetRecurrence(ctx context.Context, id int64) (GetRecurrenceRow
 		&i.EfiIDRec,
 		&i.BrCode,
 		&i.QrCode,
+		&i.PublicToken,
 		&i.Status,
 		&i.CreatedAt,
 	)
@@ -115,7 +119,7 @@ func (q *Queries) GetRecurrence(ctx context.Context, id int64) (GetRecurrenceRow
 const getRecurrenceByEfiID = `-- name: GetRecurrenceByEfiID :one
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
-       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
+       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
        status, created_at
 FROM pay_recurrences
 WHERE efi_id_rec = $1
@@ -137,6 +141,7 @@ type GetRecurrenceByEfiIDRow struct {
 	EfiIDRec       string
 	BrCode         string
 	QrCode         string
+	PublicToken    string
 	Status         string
 	CreatedAt      pgtype.Timestamptz
 }
@@ -160,6 +165,63 @@ func (q *Queries) GetRecurrenceByEfiID(ctx context.Context, efiIDRec *string) (G
 		&i.EfiIDRec,
 		&i.BrCode,
 		&i.QrCode,
+		&i.PublicToken,
+		&i.Status,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getRecurrenceByPublicToken = `-- name: GetRecurrenceByPublicToken :one
+SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
+       amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
+       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
+       status, created_at
+FROM pay_recurrences
+WHERE public_token = $1
+`
+
+type GetRecurrenceByPublicTokenRow struct {
+	ID             int64
+	SubscriptionID *int64
+	ProductID      *int64
+	CustomerID     *int64
+	PayerTaxID     string
+	PayerName      string
+	AmountCents    int64
+	Periodicity    string
+	DueDay         *int32
+	StartDate      string
+	EndDate        string
+	Journey        int16
+	EfiIDRec       string
+	BrCode         string
+	QrCode         string
+	PublicToken    string
+	Status         string
+	CreatedAt      pgtype.Timestamptz
+}
+
+func (q *Queries) GetRecurrenceByPublicToken(ctx context.Context, publicToken *string) (GetRecurrenceByPublicTokenRow, error) {
+	row := q.db.QueryRow(ctx, getRecurrenceByPublicToken, publicToken)
+	var i GetRecurrenceByPublicTokenRow
+	err := row.Scan(
+		&i.ID,
+		&i.SubscriptionID,
+		&i.ProductID,
+		&i.CustomerID,
+		&i.PayerTaxID,
+		&i.PayerName,
+		&i.AmountCents,
+		&i.Periodicity,
+		&i.DueDay,
+		&i.StartDate,
+		&i.EndDate,
+		&i.Journey,
+		&i.EfiIDRec,
+		&i.BrCode,
+		&i.QrCode,
+		&i.PublicToken,
 		&i.Status,
 		&i.CreatedAt,
 	)
@@ -169,7 +231,7 @@ func (q *Queries) GetRecurrenceByEfiID(ctx context.Context, efiIDRec *string) (G
 const listRecurrences = `-- name: ListRecurrences :many
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
-       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
+       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
        status, created_at
 FROM pay_recurrences
 ORDER BY created_at DESC
@@ -191,6 +253,7 @@ type ListRecurrencesRow struct {
 	EfiIDRec       string
 	BrCode         string
 	QrCode         string
+	PublicToken    string
 	Status         string
 	CreatedAt      pgtype.Timestamptz
 }
@@ -220,6 +283,7 @@ func (q *Queries) ListRecurrences(ctx context.Context) ([]ListRecurrencesRow, er
 			&i.EfiIDRec,
 			&i.BrCode,
 			&i.QrCode,
+			&i.PublicToken,
 			&i.Status,
 			&i.CreatedAt,
 		); err != nil {
@@ -236,7 +300,7 @@ func (q *Queries) ListRecurrences(ctx context.Context) ([]ListRecurrencesRow, er
 const recurrencesDueToday = `-- name: RecurrencesDueToday :many
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,
-       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''),
+       COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
        status, created_at
 FROM pay_recurrences r
 WHERE r.status = 'active'
@@ -270,6 +334,7 @@ type RecurrencesDueTodayRow struct {
 	EfiIDRec       string
 	BrCode         string
 	QrCode         string
+	PublicToken    string
 	Status         string
 	CreatedAt      pgtype.Timestamptz
 }
@@ -301,6 +366,7 @@ func (q *Queries) RecurrencesDueToday(ctx context.Context, arg RecurrencesDueTod
 			&i.EfiIDRec,
 			&i.BrCode,
 			&i.QrCode,
+			&i.PublicToken,
 			&i.Status,
 			&i.CreatedAt,
 		); err != nil {

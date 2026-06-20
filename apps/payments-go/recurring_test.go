@@ -14,6 +14,24 @@ func TestMonthlyDueDate(t *testing.T) {
 	}
 }
 
+func TestNextDueDate(t *testing.T) {
+	// due_day ainda à frente neste mês → mesmo mês.
+	if got := nextDueDate(10, time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)).Format("2006-01-02"); got != "2026-06-10" {
+		t.Fatalf("esperava 2026-06-10, veio %s", got)
+	}
+	// due_day já passou (ou é hoje) → próximo mês (futuro estrito).
+	if got := nextDueDate(10, time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)).Format("2006-01-02"); got != "2026-07-10" {
+		t.Fatalf("esperava 2026-07-10, veio %s", got)
+	}
+	if got := nextDueDate(10, time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)).Format("2006-01-02"); got != "2026-07-10" {
+		t.Fatalf("esperava 2026-07-10, veio %s", got)
+	}
+	// virada de ano (dezembro → janeiro).
+	if got := nextDueDate(5, time.Date(2026, 12, 20, 0, 0, 0, 0, time.UTC)).Format("2006-01-02"); got != "2027-01-05" {
+		t.Fatalf("esperava 2027-01-05, veio %s", got)
+	}
+}
+
 func TestRecurringTxid(t *testing.T) {
 	got := recurringTxid(123, "2026-08")
 	if want := "stprec0000000000000000123202608"; got != want {

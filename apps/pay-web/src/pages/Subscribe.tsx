@@ -7,16 +7,16 @@ import { CheckoutShell } from "../components/CheckoutShell";
 import { OrderSummary, type OrderItem } from "../components/OrderSummary";
 import { PersonalDataForm } from "../components/PersonalDataForm";
 import { validatePayer, emptyPayer, type PayerData } from "../lib/payer";
-import { PixView, type PixStatus } from "../components/PixView";
+import { RecView, type RecStatus } from "../components/RecView";
 import { onlyDigits } from "../lib/format";
 
 type Step = "data" | "pix";
 
 const FORM_ID = "subscribe-payer-form";
 
-// Checkout de ASSINATURA (PIX Automático, Jornada 3) — produto recorrente, item único,
-// fora do carrinho. Mesmas 2 etapas do checkout avulso (Dados → Pix), mas chama
-// api.subscribe (que cria a recorrência + a 1ª cobr no mesmo QR de autorização).
+// Checkout de ASSINATURA (PIX Automático) — produto recorrente, item único, fora do
+// carrinho. Duas etapas (Dados → Autorização). api.subscribe cria a recorrência e devolve
+// o QR de AUTORIZAÇÃO; a tela acompanha a aprovação ao vivo (SSE) → "Assinatura ativa".
 export default function SubscribePage() {
   const { slug = "" } = useParams();
   const [product, setProduct] = useState<Product | null>(null);
@@ -43,8 +43,8 @@ export default function SubscribePage() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
-  const [pixToken, setPixToken] = useState<string | null>(null);
-  const [pixStatus, setPixStatus] = useState<PixStatus>("loading");
+  const [sub, setSub] = useState<{ token: string; brCode: string; qrCode: string } | null>(null);
+  const [recStatus, setRecStatus] = useState<RecStatus>("pending");
 
   useEffect(() => {
     api.product(slug).then(setProduct).catch(() => setLoadErr("Produto não encontrado"));
@@ -73,7 +73,7 @@ export default function SubscribePage() {
         payer.email.trim(),
         payer.save,
       );
-      setPixToken(r.token);
+      setSub({ token: r.token, brCode: r.brCode, qrCode: r.qrCode });
       setStep("pix");
       // Salva (ou limpa) os dados para as próximas compras conforme o checkbox.
       try {
@@ -119,9 +119,17 @@ export default function SubscribePage() {
       <div>
         <h1 className="text-2xl font-bold text-[#0e2937]">Autorize sua assinatura</h1>
         <p className="mt-1 mb-8 text-sm text-[#496b84]">
-          Escaneie para autorizar e pagar a 1ª parcela no app do seu banco.
+          Escaneie no app do seu banco para autorizar a cobrança automática.
         </p>
-        {pixToken && <PixView key={pixToken} token={pixToken} recurring onStatusChange={setPixStatus} />}
+        {sub && (
+          <RecView
+            key={sub.token}
+            token={sub.token}
+            brCode={sub.brCode}
+            qrCode={sub.qrCode}
+            onStatusChange={setRecStatus}
+          />
+        )}
         {err && <p className="mt-4 text-sm text-rose-600">{err}</p>}
       </div>
     );
@@ -146,7 +154,7 @@ export default function SubscribePage() {
         )}
       </Button>
     ) : (
-      <PixAction status={pixStatus} submitting={submitting} onRetry={generatePix} />
+      <RecAction status={recStatus} submitting={submitting} onRetry={generatePix} />
     );
 
   return (
@@ -165,36 +173,35 @@ export default function SubscribePage() {
   );
 }
 
-// PixAction — botão/estado da coluna direita durante a etapa Pix da assinatura.
-function PixAction({
+// RecAction — botão/estado da coluna direita durante a etapa de autorização da assinatura.
+function RecAction({
   status,
   submitting,
   onRetry,
 }: {
-  status: PixStatus;
+  status: RecStatus;
   submitting: boolean;
   onRetry: () => void;
 }) {
-  if (status === "paid") {
+  if (status === "active") {
     return (
       <div className="rounded-xl bg-emerald-50 px-4 py-3 text-center text-sm font-medium text-emerald-700">
         Assinatura ativa ✓
       </div>
     );
   }
-  // submitting cobre o retry (gerando uma assinatura nova) e a 1ª geração.
-  if (status === "loading" || submitting) {
+  if (submitting) {
     return (
       <Button disabled className="h-12 w-full gap-2 bg-[#0db88f] text-base">
-        <Loader2 className="size-5 animate-spin" /> {submitting ? "Trabalhando nisso…" : "Gerando seu Pix…"}
+        <Loader2 className="size-5 animate-spin" /> Trabalhando nisso…
       </Button>
     );
   }
-  if (status === "unavailable" || status === "error") {
-    // A cobrança morta não pode ser paga — retentar gera uma assinatura nova (novo QR).
+  if (status === "unavailable") {
+    // A autorização não foi concluída (recusada/cancelada/expirada) — retentar gera nova.
     return (
       <div className="space-y-2">
-        <p className="text-center text-sm text-[#496b84]">Cobrança indisponível</p>
+        <p className="text-center text-sm text-[#496b84]">Assinatura indisponível</p>
         <Button
           onClick={onRetry}
           className="h-12 w-full gap-2 bg-[#0db88f] text-base hover:bg-[#0aa17d]"

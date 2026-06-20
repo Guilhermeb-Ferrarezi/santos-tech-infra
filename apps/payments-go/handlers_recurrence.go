@@ -21,6 +21,7 @@ type recurrenceStore interface {
 	SetRecurrenceStatus(ctx context.Context, id int64, status string) error
 	UpdateRecurrenceAuth(ctx context.Context, id int64, efiIDRec, brCode, qrCode, status string) error
 	ListChargesByRecurrence(ctx context.Context, recurrenceID int64) ([]Charge, error)
+	GetRecurrenceByPublicToken(ctx context.Context, token string) (*Recurrence, error)
 }
 
 type createRecurrenceInput struct {

@@ -132,6 +132,13 @@ func (s *Server) handleRecWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.store.SetRecurrenceStatus(r.Context(), rec.ID, ev.Status); err != nil {
 			slog.Warn("webhook rec: falha ao atualizar status", "rec", rec.ID, "status", ev.Status, "err", err)
+			continue
+		}
+		// Avisa a tela de checkout (SSE) da nova situação (active/rejected/canceled/expired).
+		s.publishRecurrenceStatus(r.Context(), rec.PublicToken, ev.Status)
+		// "Cobrar na assinatura": ao aprovar, dispara a 1ª cobrança automática.
+		if ev.Status == "active" {
+			s.maybeChargeFirstInstallment(r.Context(), rec)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

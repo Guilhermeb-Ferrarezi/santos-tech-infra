@@ -53,11 +53,16 @@ export const api = {
   checkout: (taxId: string, phone: string, name: string, email: string, save: boolean) =>
     req<{ token: string; brCode: string; qrCode: string; amountCents: number }>(`/me/cart/checkout`,
       { method: "POST", body: JSON.stringify({ taxId, phone, name, email, save }) }),
-  // subscribe — checkout de produto recorrente (item único, fora do carrinho). Gera a
-  // recorrência + a 1ª cobrança no mesmo QR de autorização. Mesma forma do checkout.
+  // subscribe — checkout de produto recorrente (item único, fora do carrinho). Cria a
+  // recorrência (PIX Automático, Jornada 2) e devolve o QR de AUTORIZAÇÃO. A 1ª cobrança
+  // vem depois (no dia do vencimento ou logo após aprovar, conforme o produto).
   subscribe: (productId: number, taxId: string, phone: string, name: string, email: string, save: boolean) =>
     req<{ token: string; brCode: string; qrCode: string; amountCents: number }>(`/me/subscribe`,
       { method: "POST", body: JSON.stringify({ productId, taxId, phone, name, email, save }) }),
+  // subscribeStatus / subscribeEventsUrl — acompanham a autorização da assinatura pelo token.
+  subscribeStatus: (token: string) =>
+    req<{ status: string; brCode: string; qrCode: string; amountCents: number }>(`/subscribe/${seg(token)}`),
+  subscribeEventsUrl: (token: string) => `${BASE}/subscribe/${seg(token)}/events`,
   pay: (token: string) => req<PayData>(`/pay/${seg(token)}`),
   payEventsUrl: (token: string) => `${BASE}/pay/${seg(token)}/events`,
   cancelPay: (token: string) => req<{ status: string }>(`/pay/${seg(token)}/cancel`, { method: "POST" }),
