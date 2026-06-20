@@ -463,8 +463,14 @@ func (s *Store) UpdateProduct(ctx context.Context, p *Product) error {
 
 // ── Customers ─────────────────────────────────────────────────────────────
 
-func (s *Store) UpsertCustomer(ctx context.Context, userID int64) (*Customer, error) {
-	r, err := s.q.UpsertCustomer(ctx, userID)
+func (s *Store) UpsertCustomer(ctx context.Context, userID int64, taxID, phone, name, email string) (*Customer, error) {
+	r, err := s.q.UpsertCustomer(ctx, paydb.UpsertCustomerParams{
+		UserID: userID,
+		TaxID:  taxID,
+		Phone:  phone,
+		Name:   name,
+		Email:  email,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -491,16 +497,6 @@ func (s *Store) GetCustomerByUserID(ctx context.Context, userID int64) (*Custome
 		Name:   r.Name,
 		Email:  r.Email,
 	}, nil
-}
-
-func (s *Store) UpdateCustomerData(ctx context.Context, userID int64, taxID, phone, name, email string) error {
-	return s.q.UpdateCustomerData(ctx, paydb.UpdateCustomerDataParams{
-		UserID: userID,
-		TaxID:  taxID,
-		Phone:  phone,
-		Name:   name,
-		Email:  email,
-	})
 }
 
 // ── Charge items + charges por token/cliente ──────────────────────────────

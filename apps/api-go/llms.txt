@@ -491,8 +491,8 @@ PUT    /products/{id}        body {name,description?,priceCents,active} → {...
 GET    /products/by-slug/{slug}   (PÚBLICO, sem auth; só produtos ativos) → {...}
 
 Cliente logado (authGuard, /me/*) — checkout self-service:
-GET    /me/customer                                             → {id,userId,taxId,phone,...} (cria se não existir)
-PUT    /me/customer         body {taxId?,phone?}                → {ok:true}
+GET    /me/customer                                             → {id,userId,taxId,phone,...} (vazio se não houver; não cria)
+PUT    /me/customer         body {taxId,phone}                  → {ok:true} (CPF obrigatório — cliente é por CPF)
 GET    /me/cart                                                 → [{product,quantity}] (enriquecido)
 POST   /me/cart             body {slug}                         → {ok:true} (soma quantidade)
 DELETE /me/cart/{productId}                                     → {ok:true}
@@ -508,6 +508,8 @@ Carrinho fica no REDIS (hash `cart:{userID}` productID→quantity, TTL 7 dias). 
 usa Redis pub/sub: o webhook CHARGE_PAID publica no canal `pay:charge:{token}` e o
 stream empurra `event: paid` e encerra. Cobranças de cliente usam `customer_id` +
 `public_token` (student_id é nullable). Preço SEMPRE recalculado no servidor.
+`pay_customers` é único por `(user_id, tax_id)` — a mesma conta pode pagar com CPFs
+distintos (um cliente por CPF); o cliente nasce no checkout, sempre com CPF.
 
 Dashboard financeiro (admin):
 GET    /analytics?range=7d|30d|90d|12m|all  (default 30d)

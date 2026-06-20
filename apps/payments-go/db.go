@@ -104,13 +104,17 @@ CREATE TABLE IF NOT EXISTS pay_products (
 );
 CREATE TABLE IF NOT EXISTS pay_customers (
   id         BIGSERIAL PRIMARY KEY,
-  user_id    BIGINT NOT NULL UNIQUE,
+  user_id    BIGINT NOT NULL,
   tax_id     TEXT NOT NULL DEFAULT '',
   phone      TEXT NOT NULL DEFAULT '',
   name       TEXT NOT NULL DEFAULT '',
   email      TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Cliente passa a ser único por (conta, CPF), não mais só por conta: a mesma conta
+-- pode pagar com CPFs distintos (cada um vira um cliente) e o CPF identifica a pessoa.
+ALTER TABLE pay_customers DROP CONSTRAINT IF EXISTS pay_customers_user_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pay_customers_user_tax ON pay_customers(user_id, tax_id);
 ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS customer_id BIGINT REFERENCES pay_customers(id);
 ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS public_token TEXT;
 ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS payer_tax_id TEXT;

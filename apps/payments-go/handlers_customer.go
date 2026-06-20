@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -14,13 +13,15 @@ import (
 
 func (s *Server) uid(r *http.Request) int64 { return r.Context().Value(userIDKey).(int64) }
 
-// customer garante (idempotente, sem sobrescrever dados) o registro do cliente logado.
-func (s *Server) customer(ctx context.Context, userID int64) (*Customer, error) {
-	return s.store.UpsertCustomer(ctx, userID)
-}
-
 func (s *Server) handleGetMeCustomer(w http.ResponseWriter, r *http.Request) {
-	c, err := s.customer(r.Context(), s.uid(r))
+	uid := s.uid(r)
+	c, err := s.store.GetCustomerByUserID(r.Context(), uid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Sem cliente ainda (nenhuma compra). Devolve um vazio NÃO persistido para o
+		// frontend pré-preencher — o cliente nasce no checkout, já com CPF.
+		writeJSON(w, http.StatusOK, &Customer{UserID: uid})
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao carregar cliente")
 		return
@@ -41,7 +42,8 @@ func (s *Server) handlePutMeCustomer(w http.ResponseWriter, r *http.Request) {
 	}
 	taxID := onlyDigits(in.TaxID)
 	phone := onlyDigits(in.Phone)
-	if taxID != "" && !validCPF(taxID) {
+	// O cliente é identificado pelo CPF — sem CPF não há cliente a salvar.
+	if !validCPF(taxID) {
 		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido (11 dígitos)")
 		return
 	}
@@ -49,11 +51,7 @@ func (s *Server) handlePutMeCustomer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_body", "Telefone inválido (10 ou 11 dígitos)")
 		return
 	}
-	if _, err := s.customer(r.Context(), s.uid(r)); err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", "Falha")
-		return
-	}
-	if err := s.store.UpdateCustomerData(r.Context(), s.uid(r), taxID, phone, strings.TrimSpace(in.Name), strings.TrimSpace(in.Email)); err != nil {
+	if _, err := s.store.UpsertCustomer(r.Context(), s.uid(r), taxID, phone, strings.TrimSpace(in.Name), strings.TrimSpace(in.Email)); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao salvar")
 		return
 	}
@@ -120,7 +118,9 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		Phone string `json:"phone"`
 		Name  string `json:"name"`
 		Email string `json:"email"`
-		Save  bool   `json:"save"`
+		// Save controla apenas o pré-preenchimento no frontend (localStorage). O
+		// cliente é sempre registrado pelo CPF nesta cobrança, independentemente disso.
+		Save bool `json:"save"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", "JSON inválido")
@@ -147,7 +147,9 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uid := s.uid(r)
-	cust, err := s.customer(r.Context(), uid)
+	// Cliente único por (conta, CPF): cria/atualiza com os dados do pagador e liga a
+	// cobrança a ele. É aqui que o cliente é materializado (sempre com CPF válido).
+	cust, err := s.store.UpsertCustomer(r.Context(), uid, in.TaxID, in.Phone, in.Name, in.Email)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha no cliente")
 		return
@@ -199,9 +201,6 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("falha ao gravar itens da cobrança", "charge_id", c.ID, "err", err)
 	}
 	_ = s.cart.Clear(r.Context(), uid)
-	if in.Save {
-		_ = s.store.UpdateCustomerData(r.Context(), uid, in.TaxID, in.Phone, in.Name, in.Email)
-	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token": c.PublicToken, "brCode": c.BRCode, "qrCode": c.QRCode, "amountCents": total,
 	})

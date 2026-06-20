@@ -50,12 +50,13 @@ CREATE TABLE pay_products (
 
 CREATE TABLE pay_customers (
   id         BIGSERIAL PRIMARY KEY,
-  user_id    BIGINT NOT NULL UNIQUE,
+  user_id    BIGINT NOT NULL,
   tax_id     TEXT NOT NULL DEFAULT '',
   phone      TEXT NOT NULL DEFAULT '',
   name       TEXT NOT NULL DEFAULT '',
   email      TEXT NOT NULL DEFAULT '',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_pay_customers_user_tax UNIQUE (user_id, tax_id)
 );
 
 CREATE TABLE pay_charges (
