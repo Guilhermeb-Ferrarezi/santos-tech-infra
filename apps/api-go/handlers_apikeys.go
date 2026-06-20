@@ -10,6 +10,7 @@ import (
 // handleCreateAPIKey cria um Personal Access Token para o usuário logado. O segredo
 // completo só é devolvido aqui (não dá pra recuperar depois — guardamos só o hash).
 func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		Name          string `json:"name"`
@@ -26,6 +27,14 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(name) > 100 {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome é muito longo (máx. 100 caracteres)"))
+		return
+	}
+	// 0 = sem expiração; negativo ou > 3650 (10 anos) é inválido. Sem o teto
+	// superior, valores gigantes (> ~106 751 dias) causariam overflow de
+	// time.Duration e gerariam uma expiração no passado — chave inútil criada
+	// silenciosamente em vez de erro claro.
+	if body.ExpiresInDays < 0 || body.ExpiresInDays > 3650 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "expiresInDays deve ser 0 (sem expiração) ou entre 1 e 3650 dias"))
 		return
 	}
 

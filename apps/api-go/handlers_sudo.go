@@ -134,6 +134,14 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else if body.Password != "" && u.PasswordHash != nil {
+		// Senha > 128 chars: argon2id sobre senha arbitrária é vetor de CPU-DoS
+		// (~300 ms + memória por tentativa). Nenhuma senha legítima supera este
+		// limite (handleRegister já rejeita 8–128). Retornamos INVALID_CODE — mesmo
+		// erro de qualquer falha — para não vazar o motivo da rejeição.
+		if len(body.Password) > 128 {
+			writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Confirmação inválida"))
+			return
+		}
 		valid = verifyPassword(body.Password, *u.PasswordHash)
 	}
 	if !valid {

@@ -109,6 +109,11 @@ func (s *Server) handleMFAEmailEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
+	code := strings.TrimSpace(body.Code)
+	if len(code) != 6 {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
+		return
+	}
 	// Teto de tentativas por usuário (≤5 numa janela de 15min): sem isso, o OTP de
 	// e-mail (6 dígitos, 10⁶ combinações) seria brute-forçável limitado só pelo
 	// rate-limit por IP — bypassável com múltiplos IPs/VPNs. Conta a tentativa ANTES
@@ -137,7 +142,7 @@ func (s *Server) handleMFAEmailEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusConflict, "EMAIL_NOT_VERIFIED", "Verifique seu email antes de usá-lo como 2º fator"))
 		return
 	}
-	if !s.consumeAcctEmailCode(r.Context(), uid, body.Code) {
+	if !s.consumeAcctEmailCode(r.Context(), uid, code) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido ou expirado"))
 		return
 	}

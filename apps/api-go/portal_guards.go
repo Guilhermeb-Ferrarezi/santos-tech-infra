@@ -17,20 +17,30 @@ const customRolePermCacheTTL = 2 * time.Minute
 // cachedCustomRole carrega as permissões do cargo pelo Redis (cache) e, em caso de
 // miss ou erro, cai no banco. Fail-open: se o Redis falhar, a DB é usada diretamente.
 func (s *Server) cachedCustomRole(ctx context.Context, roleID string) (*CustomRole, error) {
-	cacheKey := "custom_role_perms:" + roleID
-	if raw, err := s.rdb.Get(ctx, cacheKey).Bytes(); err == nil {
-		var perms map[string][]string
-		if json.Unmarshal(raw, &perms) == nil {
-			return &CustomRole{ID: roleID, Permissions: perms}, nil
+	const keyPrefix = "api-go:auth:custom_role:"
+	key := keyPrefix + roleID
+	if s.rdb != nil {
+		rctx, cancel := context.WithTimeout(ctx, cacheOpTimeout)
+		raw, err := s.rdb.Get(rctx, key).Bytes()
+		cancel()
+		if err == nil {
+			var perms map[string][]string
+			if json.Unmarshal(raw, &perms) == nil {
+				return &CustomRole{ID: roleID, Permissions: perms}, nil
+			}
 		}
 	}
 	cr, err := s.getCustomRole(ctx, roleID)
 	if err != nil || cr == nil {
 		return cr, err
 	}
-	if b, merr := json.Marshal(cr.Permissions); merr == nil {
-		if serr := s.rdb.Set(ctx, cacheKey, b, customRolePermCacheTTL).Err(); serr != nil {
-			slog.Warn("custom_role_perms: falha ao gravar cache", "role", roleID, "err", serr)
+	if s.rdb != nil {
+		if b, merr := json.Marshal(cr.Permissions); merr == nil {
+			wctx, wcancel := context.WithTimeout(ctx, cacheOpTimeout)
+			if serr := s.rdb.Set(wctx, key, b, customRolePermCacheTTL).Err(); serr != nil {
+				slog.Warn("custom_role_perms: falha ao gravar cache", "role", roleID, "err", serr)
+			}
+			wcancel()
 		}
 	}
 	return cr, nil
@@ -39,7 +49,10 @@ func (s *Server) cachedCustomRole(ctx context.Context, roleID string) (*CustomRo
 // invalidateCustomRoleCache remove a entrada de permissões do cargo do Redis.
 // Chamado em update/delete para encurtar a janela de dados desatualizados.
 func (s *Server) invalidateCustomRoleCache(ctx context.Context, roleID string) {
-	if err := s.rdb.Del(ctx, "custom_role_perms:"+roleID).Err(); err != nil {
+	if s.rdb == nil {
+		return
+	}
+	if err := s.rdb.Del(ctx, "api-go:auth:custom_role:"+roleID).Err(); err != nil {
 		slog.Warn("custom_role_perms: falha ao invalidar cache", "role", roleID, "err", err)
 	}
 }
