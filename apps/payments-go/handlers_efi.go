@@ -11,6 +11,8 @@ import (
 // efiOps isola as operações Efí expostas via dashboard (o *efiProvider em prod, fake nos testes).
 type efiOps interface {
 	GetBalance(ctx context.Context) (int64, error)
+	// CancelCharge remove uma cobrança ativa no gateway (invalida o QR na hora).
+	CancelCharge(ctx context.Context, providerChargeID string) error
 	// GetReceipt baixa o comprovante de um Pix pelo txid (= correlationID da cobrança).
 	// Retorna o content-type e os bytes do comprovante.
 	GetReceipt(ctx context.Context, txid string) (contentType string, body []byte, err error)

@@ -506,7 +506,9 @@ GET    /me/charges                                              → [charges do 
 
 Pagamento público (sem auth) — tela de Pix pelo token público da cobrança:
 GET    /pay/{token}                                             → {amountCents,brCode,qrCode,status,dueDate}
-GET    /pay/{token}/events   (SSE, text/event-stream)           → event:status (atual) e event:paid ao confirmar
+GET    /pay/{token}/events   (SSE, text/event-stream)           → event:status (atual), event:paid / event:canceled (terminal)
+POST   /pay/{token}/cancel                                      → {status:"canceled"} (cancela cobrança pendente; remove a cob na Efí)
+GET    /pay/{token}/receipt                                     → PDF do comprovante (só se paga; pagador baixa sem login)
 
 Carrinho fica no REDIS (hash `cart:{userID}` productID→quantity, TTL 7 dias). O SSE
 usa Redis pub/sub: o webhook CHARGE_PAID publica no canal `pay:charge:{token}` e o

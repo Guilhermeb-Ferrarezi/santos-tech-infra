@@ -31,6 +31,39 @@ func (s *Server) runRecurringLoop(ctx context.Context) {
 	}
 }
 
+// runExpiryLoop marca cobranças pendentes vencidas como expiradas (QR já passou da
+// validade na Efí). Roda no boot e depois 1x/hora — assim o dashboard não mantém
+// cobranças "penduradas" em pending após o PIX expirar.
+func (s *Server) runExpiryLoop(ctx context.Context) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic em runExpiryLoop", "panic", rec)
+		}
+	}()
+	s.expireOverdueCharges(ctx) // roda no start
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.expireOverdueCharges(ctx)
+		}
+	}
+}
+
+func (s *Server) expireOverdueCharges(ctx context.Context) {
+	n, err := s.store.ExpireOverdueCharges(ctx)
+	if err != nil {
+		slog.Error("falha ao expirar cobranças vencidas", "err", err)
+		return
+	}
+	if n > 0 {
+		slog.Info("cobranças expiradas (QR vencido)", "count", n)
+	}
+}
+
 func (s *Server) generateMonthlyCharges(ctx context.Context) {
 	now := time.Now()
 	day := now.Day()

@@ -344,6 +344,23 @@ func (s *Store) MarkChargeExpired(ctx context.Context, correlationID string) err
 	return s.q.MarkChargeExpired(ctx, correlationID)
 }
 
+// ExpireOverdueCharges marca como expiradas as cobranças pendentes vencidas (job
+// periódico). Devolve quantas foram expiradas.
+func (s *Store) ExpireOverdueCharges(ctx context.Context) (int64, error) {
+	return s.q.ExpireOverdueCharges(ctx)
+}
+
+// CancelChargeByToken cancela uma cobrança pendente pelo token público (tela de
+// pagamento). Devolve correlationID e providerChargeID para cancelar no gateway.
+// pgx.ErrNoRows se não havia cobrança pendente com esse token.
+func (s *Store) CancelChargeByToken(ctx context.Context, token string) (correlationID, providerChargeID string, err error) {
+	r, err := s.q.CancelChargeByToken(ctx, &token)
+	if err != nil {
+		return "", "", err
+	}
+	return r.CorrelationID, r.ProviderChargeID, nil
+}
+
 // ── Webhook idempotência ──────────────────────────────────────────────────
 
 // MarkWebhookSeen retorna true se é a 1ª vez que vemos este evento (deve processar).

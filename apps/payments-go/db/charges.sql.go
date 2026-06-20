@@ -11,6 +11,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const cancelChargeByToken = `-- name: CancelChargeByToken :one
+UPDATE pay_charges
+SET status = 'canceled'
+WHERE public_token = $1 AND status = 'pending'
+RETURNING correlation_id, COALESCE(provider_charge_id, '') AS provider_charge_id
+`
+
+type CancelChargeByTokenRow struct {
+	CorrelationID    string
+	ProviderChargeID string
+}
+
+// Cancela uma cobrança pendente pelo token público (botão na tela de pagamento).
+// Só afeta pendentes; já paga/cancelada/inexistente → sem linha (ErrNoRows).
+func (q *Queries) CancelChargeByToken(ctx context.Context, publicToken *string) (CancelChargeByTokenRow, error) {
+	row := q.db.QueryRow(ctx, cancelChargeByToken, publicToken)
+	var i CancelChargeByTokenRow
+	err := row.Scan(&i.CorrelationID, &i.ProviderChargeID)
+	return i, err
+}
+
+const expireOverdueCharges = `-- name: ExpireOverdueCharges :execrows
+UPDATE pay_charges
+SET status = 'expired'
+WHERE status = 'pending'
+  AND (due_date + interval '23 hours') < now()
+`
+
+// Marca como expiradas as cobranças pendentes cujo QR já passou da validade
+// (vencimento + 23h, igual à expiração enviada à Efí em createAndPersistCharge).
+func (q *Queries) ExpireOverdueCharges(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, expireOverdueCharges)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getCharge = `-- name: GetCharge :one
 SELECT id, kind, subscription_id, student_id, amount_cents, due_date::text, reference_month,
        status, provider, COALESCE(provider_charge_id, ''), correlation_id,

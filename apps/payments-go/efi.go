@@ -365,6 +365,16 @@ func (p *efiProvider) GetCharge(ctx context.Context, providerChargeID string) (C
 	}, nil
 }
 
+// CancelCharge remove (cancela) uma cobrança imediata na Efí, invalidando o QR na
+// hora: PATCH /v2/cob/{txid} com status REMOVIDA_PELO_USUARIO_RECEBEDOR. Só vale para
+// cobranças ATIVAS — uma já paga/removida devolve erro do gateway (o caller trata
+// como best-effort).
+func (p *efiProvider) CancelCharge(ctx context.Context, providerChargeID string) error {
+	body := map[string]any{"status": "REMOVIDA_PELO_USUARIO_RECEBEDOR"}
+	_, err := p.do(ctx, http.MethodPatch, "/v2/cob/"+providerChargeID, body)
+	return err
+}
+
 type efiPixItem struct {
 	EndToEndID string `json:"endToEndId"`
 	Txid       string `json:"txid"`

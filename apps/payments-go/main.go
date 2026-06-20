@@ -106,6 +106,7 @@ func main() {
 	loopCtx, cancelLoop := context.WithCancel(ctx)
 	defer cancelLoop()
 	go srv.runRecurringLoop(loopCtx)
+	go srv.runExpiryLoop(loopCtx)
 
 	httpSrv := &http.Server{
 		Addr:              ":" + cfg.Port,

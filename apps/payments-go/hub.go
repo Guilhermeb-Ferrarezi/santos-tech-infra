@@ -17,6 +17,14 @@ func (s *Server) publishChargePaid(ctx context.Context, token string) {
 	_ = s.rdb.Publish(ctx, chargeChannel(token), "paid").Err()
 }
 
+// publishChargeCanceled avisa os streams SSE inscritos que a cobrança foi cancelada.
+func (s *Server) publishChargeCanceled(ctx context.Context, token string) {
+	if token == "" {
+		return
+	}
+	_ = s.rdb.Publish(ctx, chargeChannel(token), "canceled").Err()
+}
+
 // subscribeCharge devolve um pubsub do Redis para o token (lembre de Close no fim).
 func (s *Server) subscribeCharge(ctx context.Context, token string) *redis.PubSub {
 	return s.rdb.Subscribe(ctx, chargeChannel(token))

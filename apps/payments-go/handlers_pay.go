@@ -1,8 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type payDTO struct {
@@ -58,7 +62,7 @@ func (s *Server) handlePayEvents(w http.ResponseWriter, r *http.Request) {
 	// para não confiar num valor "pending" potencialmente defasado nesta corrida.
 	if c2, err := s.store.GetChargeByPublicToken(r.Context(), token); err == nil && c2.Status != "pending" {
 		s.cacheChargeStatus(r.Context(), token, c2.Status)
-		fmt.Fprintf(w, "event: paid\ndata: paid\n\n")
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", c2.Status, c2.Status)
 		flusher.Flush()
 		return
 	}
@@ -68,11 +72,69 @@ func (s *Server) handlePayEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case msg := <-ch:
-			if msg != nil && msg.Payload == "paid" {
-				fmt.Fprintf(w, "event: paid\ndata: paid\n\n")
+			// Qualquer evento terminal publicado (paid/canceled) encerra o stream.
+			if msg != nil && msg.Payload != "" {
+				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", msg.Payload, msg.Payload)
 				flusher.Flush()
 				return
 			}
 		}
 	}
+}
+
+// handleCancelPay cancela uma cobrança pendente pelo token público (botão na tela de
+// pagamento). Marca como cancelada no banco, tenta remover a cob na Efí (best-effort,
+// pois o gateway expira sozinho) e avisa os streams SSE inscritos.
+func (s *Server) handleCancelPay(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	correlationID, providerChargeID, err := s.store.CancelChargeByToken(r.Context(), token)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Já paga, já cancelada/expirada, ou token inexistente: nada a cancelar.
+		writeError(w, http.StatusConflict, "not_cancelable", "Cobrança não pode ser cancelada")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao cancelar")
+		return
+	}
+	// Remove a cob na Efí na hora (best-effort): se falhar, o QR ainda expira sozinho.
+	if s.efi != nil {
+		id := providerChargeID
+		if id == "" {
+			id = correlationID
+		}
+		if e := s.efi.CancelCharge(r.Context(), id); e != nil {
+			slog.Warn("falha ao cancelar cob na Efí (segue cancelada localmente)", "corr", correlationID, "err", e)
+		}
+	}
+	s.invalidateChargeStatus(r.Context(), token)
+	s.publishChargeCanceled(r.Context(), token)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "canceled"})
+}
+
+// handlePayReceipt entrega o comprovante PDF do Pix ao próprio pagador, pelo token
+// público da cobrança (sem login). Só para cobranças já pagas.
+func (s *Server) handlePayReceipt(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	c, err := s.store.GetChargeByPublicToken(r.Context(), token)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Cobrança não encontrada")
+		return
+	}
+	if c.Status != "paid" {
+		writeError(w, http.StatusConflict, "not_paid", "Cobrança ainda não foi paga")
+		return
+	}
+	if s.efi == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "Comprovante indisponível")
+		return
+	}
+	ct, body, err := s.efi.GetReceipt(r.Context(), c.CorrelationID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "efi_error", "Falha ao obter comprovante na Efí")
+		return
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Disposition", `attachment; filename="comprovante.pdf"`)
+	w.Write(body) //nolint:errcheck
 }

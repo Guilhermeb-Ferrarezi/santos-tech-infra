@@ -60,5 +60,21 @@ JOIN pay_charges c ON c.id = ci.charge_id
 WHERE c.customer_id = $1
 ORDER BY ci.charge_id;
 
+-- name: ExpireOverdueCharges :execrows
+-- Marca como expiradas as cobranças pendentes cujo QR já passou da validade
+-- (vencimento + 23h, igual à expiração enviada à Efí em createAndPersistCharge).
+UPDATE pay_charges
+SET status = 'expired'
+WHERE status = 'pending'
+  AND (due_date + interval '23 hours') < now();
+
+-- name: CancelChargeByToken :one
+-- Cancela uma cobrança pendente pelo token público (botão na tela de pagamento).
+-- Só afeta pendentes; já paga/cancelada/inexistente → sem linha (ErrNoRows).
+UPDATE pay_charges
+SET status = 'canceled'
+WHERE public_token = $1 AND status = 'pending'
+RETURNING correlation_id, COALESCE(provider_charge_id, '') AS provider_charge_id;
+
 -- GetStats usa SQL com fragmento dinâmico (WHERE clause montada em runtime).
 -- Não migrado para sqlc — ver store.go GetStats.
