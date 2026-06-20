@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { api, type CartLine } from "../lib/api";
 import { Button } from "../components/ui/button";
@@ -18,6 +19,7 @@ const FORM_ID = "checkout-payer-form";
 //   2. "Pagamento com PIX" — gera a cobrança (api.checkout) e exibe o QR + SSE.
 // Sem tela de conta/login no caminho: vai direto de Dados → Pix.
 export default function CheckoutPage() {
+  const { slug } = useParams();
   const [lines, setLines] = useState<CartLine[] | null>(null);
   const [step, setStep] = useState<Step>("data");
   const [payer, setPayer] = useState<PayerData>(() => {
@@ -45,12 +47,26 @@ export default function CheckoutPage() {
   const [pixToken, setPixToken] = useState<string | null>(null);
   const [pixStatus, setPixStatus] = useState<PixStatus>("loading");
 
+  // A rota é o produto (/<slug>): garante esse produto no carrinho ao abrir a página,
+  // venha do botão "Comprar" (já adicionado) ou de acesso direto à URL (carrinho vazio).
   useEffect(() => {
-    api
-      .cart()
-      .then(setLines)
-      .catch(() => setLines([]));
-  }, []);
+    let cancelled = false;
+    (async () => {
+      try {
+        let cart = await api.cart();
+        if (slug && !cart.some((l) => l.product.slug === slug)) {
+          await api.addToCart(slug);
+          cart = await api.cart();
+        }
+        if (!cancelled) setLines(cart);
+      } catch {
+        if (!cancelled) setLines([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [slug]);
 
   const items: OrderItem[] = (lines ?? []).map((l) => ({
     name: l.product.name,
