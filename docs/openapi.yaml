@@ -1040,10 +1040,18 @@ paths:
           $ref: "#/components/responses/Unauthorized"
     post:
       tags: [Admin]
-      summary: Criar usuário (sem senha + convite)
+      summary: Criar usuário (sem senha + convite, ou com senha já ativa)
       description: |
-        Cria uma conta sem senha e envia um email de convite com link para o
-        usuário definir sua própria senha (TTL 72h).
+        Cria uma conta de usuário. Dois modos:
+
+        **Modo convite (padrão):** sem `password`, cria a conta sem senha e envia
+        um email de convite com link para o usuário definir sua própria senha
+        (TTL 72h). Comportamento atual preservado.
+
+        **Modo senha direta:** com `password` preenchido (mín. 8 chars, máx. 128),
+        cria a conta **já ativa** com essa senha — sem enviar convite. O campo
+        `pending` da resposta fica `false`. Indicado para contas de login não-
+        institucionais onde o admin já conhece a senha inicial.
 
         Aceita `email` completo (qualquer domínio) **ou** `localPart` (que vira
         `@santos-tech.com`). Quando os dois são enviados, `email` tem precedência.
@@ -1052,7 +1060,8 @@ paths:
         `@santos-tech.com` sem login — exige `localPart`; `name` vira opcional
         (default = `localPart`); nenhum convite é enviado; a conta não autentica
         por senha, OAuth, convite nem "esqueci a senha". A resposta inclui
-        `loginDisabled: true` para essas contas.
+        `loginDisabled: true` para essas contas. O campo `password` é ignorado
+        para contas `shared`.
 
         Rate limit: **10 req/min por IP**.
       requestBody:
@@ -1085,10 +1094,19 @@ paths:
                     Cria uma caixa institucional compartilhada `@santos-tech.com` sem login.
                     Exige `localPart`. `name` vira opcional. Nenhum convite é enviado.
                     A conta não autentica por nenhum caminho (senha, OAuth, "esqueci a senha").
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+                  maxLength: 128
+                  description: |
+                    Senha inicial (opcional). Se presente, a conta é criada **já ativa**
+                    com essa senha e nenhum convite é enviado (`pending: false`).
+                    Se ausente, o comportamento padrão de convite é mantido (`pending: true`).
               required: []
       responses:
         "201":
-          description: Usuário criado e convite enviado
+          description: Usuário criado (com convite ou já ativo, dependendo do campo `password`)
           content:
             application/json:
               schema:
@@ -1116,6 +1134,10 @@ paths:
       description: |
         Atualiza campos do usuário (todos opcionais — só os enviados são alterados).
         Um admin não pode suspender a própria conta (`SELF_ACTION`).
+
+        Com o campo `password` preenchido (mín. 8 chars, máx. 128), redefine a
+        senha do usuário imediatamente (hash argon2id) e marca a conta como ativa
+        (`pending: false`). Pode ser combinado com outros campos no mesmo PATCH.
 
         Rate limit: **20 req/min por IP**.
       parameters:
@@ -1146,6 +1168,14 @@ paths:
                   format: int64
                   minimum: 0
                   description: Cota de armazenamento em bytes (0 = sem limite).
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+                  maxLength: 128
+                  description: |
+                    Nova senha do usuário (opcional). Se presente, redefine a senha
+                    diretamente (sem link de reset) e ativa a conta (`pending: false`).
       responses:
         "200":
           description: Usuário atualizado
@@ -1221,6 +1251,70 @@ paths:
       responses:
         "204":
           description: Convite reenviado
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Usuário não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "usuário não encontrado" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/admin/users/{id}/send-reset:
+    post:
+      tags: [Admin]
+      summary: Enviar link de redefinição de senha (admin)
+      description: |
+        Gera e envia um link de redefinição de senha para o usuário identificado
+        por `{id}`. Reutiliza o mesmo mecanismo do `POST /auth/forgot-password`:
+        token efêmero no Redis com TTL de **1 hora**, mesmo template de email
+        "Recuperação de senha".
+
+        O destino do email pode ser sobrescrito com o campo `email` no body (útil
+        para enviar para um endereço alternativo). Se o body não vier ou não tiver
+        `email`, usa o email cadastrado do próprio usuário.
+
+        Contas institucionais (`loginDisabled: true`) não possuem login, portanto
+        retornam `400`.
+
+        Rate limit: **5 req/min por IP**.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+          description: ID interno do usuário.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: |
+                    Endereço de destino alternativo. Se omitido, usa o email
+                    cadastrado do usuário.
+      responses:
+        "200":
+          description: Link enviado com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+                required: [ok]
+        "400":
+          description: Conta institucional (sem login) ou email inválido no body
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: VALIDATION_ERROR, message: "conta institucional não tem login — sem link de reset" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":

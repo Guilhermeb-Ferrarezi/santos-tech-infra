@@ -238,6 +238,15 @@ func (s *Server) insertUserWithRole(ctx context.Context, email, name string, rol
 		email, name, role))
 }
 
+// insertUserWithRoleAndPassword cria um usuário já ATIVO (com senha) e o role dado.
+// Diferente de insertUserWithRole, não requer convite: o usuário pode logar
+// imediatamente com o email e a senha fornecidos.
+func (s *Server) insertUserWithRoleAndPassword(ctx context.Context, email, name, passwordHash string, role int16) (*User, error) {
+	return scanUser(s.db.QueryRow(ctx,
+		`INSERT INTO users (email, name, password_hash, role) VALUES ($1,$2,$3,$4) RETURNING `+userCols,
+		email, name, passwordHash, role))
+}
+
 // insertSharedMailbox cria uma caixa institucional @santos-tech.com SEM senha e com
 // login_disabled=true: recebe/envia email, mas não autentica por nenhum caminho.
 func (s *Server) insertSharedMailbox(ctx context.Context, email, name string) (*User, error) {

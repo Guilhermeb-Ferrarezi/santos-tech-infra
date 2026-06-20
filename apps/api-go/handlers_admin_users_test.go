@@ -155,3 +155,51 @@ func TestCreateAdminUserBadEmail(t *testing.T) {
 		}
 	}
 }
+
+// password curta (< 8 chars) no create → 400 antes do banco.
+func TestCreateAdminUserPasswordTooShort(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	s.handleCreateAdminUser(w, httptest.NewRequest("POST", "/auth/admin/users",
+		strings.NewReader(`{"email":"joao@exemplo.com","name":"João","password":"1234567"}`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}
+
+// password curta (< 8 chars) no update → 400 antes do banco.
+func TestUpdateAdminUserPasswordTooShort(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("PATCH", "/auth/admin/users/1",
+		strings.NewReader(`{"password":"curta"}`))
+	r.SetPathValue("id", "1")
+	s.handleUpdateAdminUser(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}
+
+// send-reset: id não-numérico → 400.
+func TestSendResetAdminUserBadID(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/auth/admin/users/abc/send-reset", nil)
+	r.SetPathValue("id", "abc")
+	s.handleSendResetAdminUser(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}
+
+// send-reset: id não-numérico → 400 (validação pura, sem banco).
+func TestSendResetAdminUserBadIDFormat(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/auth/admin/users/xyz/send-reset", nil)
+	r.SetPathValue("id", "xyz")
+	s.handleSendResetAdminUser(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, esperado 400", w.Code)
+	}
+}

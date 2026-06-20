@@ -115,17 +115,26 @@ tokens retornam no **corpo** (sem cookies).
 - `POST /auth/avatar` (multipart) — avatar → R2; `POST /auth/upload` — imagem → R2
 - `GET /auth/admin/users[?scope=all]` — lista contas @santos-tech.com; com
   `scope=all`, todos os usuários (qualquer domínio)
-- `POST /auth/admin/users {email|localPart,name,role,shared?}` — cria sem senha +
-  convite por email; `email` completo (qualquer domínio) tem precedência sobre
+- `POST /auth/admin/users {email|localPart,name,role,shared?,password?}` — cria
+  conta; dois modos: (a) sem `password`: cria sem senha + convite por email (TTL 72h,
+  `pending: true`); (b) com `password` (mín. 8 chars): cria já ativa, sem convite
+  (`pending: false`). `email` completo (qualquer domínio) tem precedência sobre
   `localPart` (que vira @santos-tech.com) · 400 | 409 `EMAIL_ALREADY_EXISTS`
-  (rate 10/min). Campo opcional `shared` (bool): cria uma **caixa institucional
-  compartilhada** `@santos-tech.com` sem login — exige `localPart`; `name` vira
-  opcional (default = `localPart`); nenhum convite é enviado; a conta não autentica
-  por senha, OAuth, convite nem "esqueci a senha". A resposta inclui
+  (rate 10/min). Campo `shared` (bool): cria uma **caixa institucional compartilhada**
+  `@santos-tech.com` sem login — exige `localPart`; `name` vira opcional; nenhum
+  convite é enviado; a conta não autentica por nenhum caminho. Resposta inclui
   `loginDisabled: true` para essas contas.
-- `PATCH /auth/admin/users/{id} {name?,role?,suspended?,quotaBytes?}` ·
-  `POST /auth/admin/users/{id}/invite` (reenvia convite; 400 se `loginDisabled`) ·
-  `DELETE /auth/admin/users/{id}` (**exige sudo**) — gestão admin (role 3)
+- `PATCH /auth/admin/users/{id} {name?,role?,suspended?,quotaBytes?,password?}` —
+  atualiza campos (todos opcionais). Com `password` (mín. 8 chars): redefine a senha
+  diretamente (sem link de reset) e ativa a conta (`pending: false`). Pode ser
+  combinado com os demais campos no mesmo PATCH. (rate 20/min)
+- `POST /auth/admin/users/{id}/invite` — reenvia convite; 400 se `loginDisabled`
+  (rate 5/min)
+- `POST /auth/admin/users/{id}/send-reset {email?}` — gera e envia link de
+  redefinição de senha (mesmo mecanismo do forgot-password: TTL 1h, mesmo template).
+  Body opcional: `email` sobrescreve o destino; se ausente usa o email do usuário.
+  400 se conta institucional (`loginDisabled`). Resposta: `{"ok": true}` (rate 5/min)
+- `DELETE /auth/admin/users/{id}` (**exige sudo**) — exclui permanentemente
 - `GET /auth/admin/oauth-clients` → `{clients:[{id,clientId,name,redirectUris,isActive,createdAt}]}`
 - `POST /auth/admin/oauth-clients {clientId,name,redirectUris}` → 201 |
   400 | 409 `CLIENT_ALREADY_EXISTS` (rate 10/min)

@@ -18,7 +18,8 @@ var emailRe = regexp.MustCompile(`^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$`)
 // handleCreateAdminUser cria um usuário sem senha e dispara o convite. Aceita
 // `email` completo (qualquer domínio) ou `localPart` (vira @santos-tech.com);
 // `email` tem precedência se os dois vierem. Com `shared=true`, cria uma caixa
-// institucional @santos-tech.com sem login e sem convite.
+// institucional @santos-tech.com sem login e sem convite. Com `password` (não-
+// institucional), cria a conta já ATIVA com essa senha sem enviar convite.
 func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
@@ -27,6 +28,7 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 		Name      string `json:"name"`
 		Role      int16  `json:"role"`
 		Shared    bool   `json:"shared"`
+		Password  string `json:"password"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
@@ -99,6 +101,11 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "role inválido"))
 		return
 	}
+	// Valida tamanho da senha antes de tocar no banco.
+	if body.Password != "" && (len(body.Password) < 8 || len(body.Password) > 128) {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "senha deve ter entre 8 e 128 caracteres"))
+		return
+	}
 
 	existing, err := s.userByEmail(r.Context(), email)
 	if err != nil {
@@ -109,6 +116,23 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusConflict, "EMAIL_ALREADY_EXISTS", "Este email já está cadastrado"))
 		return
 	}
+
+	// Se uma senha foi fornecida, cria a conta já ativa (sem convite).
+	if body.Password != "" {
+		pwdHash, err := hashPassword(body.Password)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		u, err := s.insertUserWithRoleAndPassword(r.Context(), email, body.Name, pwdHash, body.Role)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"user": adminUserJSON(u)})
+		return
+	}
+
 	u, err := s.insertUserWithRole(r.Context(), email, body.Name, body.Role)
 	if err != nil {
 		writeErr(w, err)
@@ -141,7 +165,8 @@ func (s *Server) handleListAdminUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"users": out})
 }
 
-// handleUpdateAdminUser atualiza nome/role e/ou suspende/reativa.
+// handleUpdateAdminUser atualiza nome/role e/ou suspende/reativa. Aceita também
+// `password` (opcional) para redefinir a senha diretamente sem link de reset.
 func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -155,6 +180,7 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 		Suspended    *bool   `json:"suspended"`
 		QuotaBytes   *int64  `json:"quotaBytes"`
 		CustomRoleID *string `json:"customRoleId"`
+		Password     string  `json:"password"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
@@ -172,6 +198,10 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "quotaBytes inválido"))
 		return
 	}
+	if body.Password != "" && (len(body.Password) < 8 || len(body.Password) > 128) {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "senha deve ter entre 8 e 128 caracteres"))
+		return
+	}
 	// Self-proteção: admin não pode se auto-suspender (evita lockout).
 	if body.Suspended != nil && *body.Suspended && id == userIDFrom(r) {
 		writeErr(w, appErr(http.StatusBadRequest, "SELF_ACTION", "você não pode suspender a própria conta"))
@@ -179,6 +209,18 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Suspended != nil {
 		if err := s.setUserSuspended(r.Context(), id, *body.Suspended); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	// Redefinição de senha direta pelo admin: hash + grava (marca conta como ativa).
+	if body.Password != "" {
+		pwdHash, err := hashPassword(body.Password)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if err := s.updatePassword(r.Context(), id, pwdHash); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -235,6 +277,60 @@ func (s *Server) handleDeleteAdminUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSendResetAdminUser gera e envia um link de redefinição de senha para um
+// usuário existente. Reutiliza exatamente o mesmo mecanismo do forgot-password
+// (TTL 1h, mesmo template). Body opcional: {"email"?: string} — se ausente, usa
+// o email cadastrado do usuário.
+func (s *Server) handleSendResetAdminUser(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "id inválido"))
+		return
+	}
+	var body struct {
+		Email string `json:"email"`
+	}
+	// body é opcional; ignora erro de EOF (body vazio)
+	_ = decodeJSON(r, &body)
+	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
+
+	u, err := s.userByID(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if u == nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "usuário não encontrado"))
+		return
+	}
+	if u.LoginDisabled {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "conta institucional não tem login — sem link de reset"))
+		return
+	}
+
+	// Destino do email: usa o fornecido no body ou o do próprio usuário.
+	to := body.Email
+	if to == "" {
+		to = u.Email
+	} else if !emailRe.MatchString(to) {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "email inválido"))
+		return
+	}
+
+	// Mesmo mecanismo do forgot-password: token efêmero no Redis (TTL 1h).
+	token := randomToken(32)
+	hash := sha256Hex(token)
+	if err := s.rdb.Set(r.Context(), "pwd_reset:"+hash, u.ID, time.Hour).Err(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.cfg.AuthWebOrigin, token)
+	s.sendResetEmail(to, resetURL)
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // sendInvite gera um token de convite (mesmo mecanismo do reset de senha, TTL 72h)
