@@ -492,6 +492,8 @@ PATCH  /subscriptions/{id}  body {status:active|paused|canceled} → {status}
 Cobranças (admin):
 POST   /charges   body {kind:matricula|avulso,studentId,amountCents,description?,dueDate?}
          → 201 {id,...,brCode,qrCode,correlationId,status} (cria no Dotfy + envia email do Pix)
+POST   /charges/manual   body {customerId? | payerName+payerTaxId, payerEmail?, phone?, amountCents, description?, dueDate?, sendEmail?, saveCustomer?}
+         → 201 {id,...,brCode,qrCode,status} ("Gerar PIX" do dashboard: cliente existente OU avulso; sendEmail manda o copia-e-cola por email; saveCustomer salva o avulso como cliente consolidado por CPF, user_id=0)
 GET    /charges?status=&student_id=                             → [{...}]
 GET    /charges/{id}                                            → {...}
 

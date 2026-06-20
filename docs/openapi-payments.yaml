@@ -305,6 +305,37 @@ paths:
         - { name: student_id, in: query, schema: { type: integer } }
       responses:
         "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Charge" } } } } }
+  /charges/manual:
+    post:
+      summary: Gera PIX avulso pelo dashboard (cliente existente ou pagador avulso)
+      description: >
+        Cria uma cobrança PIX avulsa (kind=avulso). Informe `customerId` para um cliente
+        já cadastrado OU `payerName`+`payerTaxId` para um pagador avulso. Com `sendEmail=true`
+        envia o copia-e-cola por e-mail (no modo avulso exige `payerEmail`). A resposta inclui
+        `brCode`/`qrCode` para exibir o QR no dashboard.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amountCents]
+              properties:
+                customerId: { type: integer, description: cliente existente (exclusivo com payerName/payerTaxId) }
+                payerName: { type: string, description: pagador avulso }
+                payerTaxId: { type: string, description: CPF do pagador avulso }
+                payerEmail: { type: string, format: email, description: destino do e-mail (modo avulso) }
+                phone: { type: string, description: telefone do pagador (avulso, ao salvar como cliente) }
+                amountCents: { type: integer }
+                description: { type: string }
+                dueDate: { type: string, format: date, description: "default: hoje+3" }
+                sendEmail: { type: boolean, description: envia o PIX por e-mail ao cliente }
+                saveCustomer: { type: boolean, description: "avulso: salva o pagador como cliente (consolida por CPF, habilita comprovante no pagamento)" }
+      responses:
+        "201": { description: criada (inclui brCode/qrCode), content: { application/json: { schema: { $ref: "#/components/schemas/Charge" } } } }
+        "400": { description: inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: cliente não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: falha no gateway, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /charges/{id}:
     get:
       summary: Detalhe da cobrança
