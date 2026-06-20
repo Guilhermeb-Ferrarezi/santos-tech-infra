@@ -66,7 +66,8 @@ type lokiQueryFilters struct {
 	Path        string
 	RequestID   string
 	Search      string
-	MinDurMs    int // filtra requisições com dur_ms >= este valor; 0 = sem filtro
+	MinDurMs    int  // filtra requisições com dur_ms >= este valor; 0 = sem filtro
+	HTTPOnly    bool // só linhas de requisição HTTP (têm o campo method) — "Só REST"
 }
 
 var lokiRangePresets = map[string]time.Duration{
@@ -233,7 +234,7 @@ func buildLokiQL(q lokiQueryFilters, appLabel string) string {
 		sb.WriteString(` |= ` + lokiQuote(s))
 	}
 	needJSON := q.Level != "" || q.StatusClass != "" || q.StatusCode != 0 ||
-		q.Method != "" || strings.TrimSpace(q.Path) != "" || q.RequestID != "" || q.MinDurMs > 0
+		q.Method != "" || strings.TrimSpace(q.Path) != "" || q.RequestID != "" || q.MinDurMs > 0 || q.HTTPOnly
 	if needJSON {
 		sb.WriteString(` | json`)
 		if lv := strings.TrimSpace(q.Level); lv != "" {
@@ -244,6 +245,10 @@ func buildLokiQL(q lokiQueryFilters, appLabel string) string {
 		}
 		if q.Method != "" {
 			sb.WriteString(` | method=` + lokiQuote(strings.ToUpper(strings.TrimSpace(q.Method))))
+		} else if q.HTTPOnly {
+			// "Só REST": só linhas que têm o campo method (requisições HTTP), de
+			// qualquer serviço — descarta logs de boot/nginx/aplicação sem method.
+			sb.WriteString(` | method=~".+"`)
 		}
 		if p := strings.TrimSpace(q.Path); p != "" {
 			sb.WriteString(` | path=~` + lokiQuote(".*"+regexp.QuoteMeta(p)+".*"))
