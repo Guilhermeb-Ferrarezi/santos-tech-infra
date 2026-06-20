@@ -32,6 +32,39 @@ func (q *Queries) GetCustomerByID(ctx context.Context, id int64) (PayCustomer, e
 	return i, err
 }
 
+const getCustomerByTaxID = `-- name: GetCustomerByTaxID :one
+SELECT id, user_id, tax_id, phone, name, email
+FROM pay_customers
+WHERE tax_id = $1
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetCustomerByTaxIDRow struct {
+	ID     int64
+	UserID int64
+	TaxID  string
+	Phone  string
+	Name   string
+	Email  string
+}
+
+// Cliente por CPF (qualquer conta): devolve o registro mais recente daquele CPF.
+// Usado pelo "Gerar PIX" avulso para tratar um CPF já cadastrado como o cliente existente.
+func (q *Queries) GetCustomerByTaxID(ctx context.Context, taxID string) (GetCustomerByTaxIDRow, error) {
+	row := q.db.QueryRow(ctx, getCustomerByTaxID, taxID)
+	var i GetCustomerByTaxIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TaxID,
+		&i.Phone,
+		&i.Name,
+		&i.Email,
+	)
+	return i, err
+}
+
 const getCustomerByUserID = `-- name: GetCustomerByUserID :one
 SELECT id, user_id, tax_id, phone, name, email
 FROM pay_customers

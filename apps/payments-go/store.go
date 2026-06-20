@@ -821,6 +821,23 @@ func (s *Store) GetCustomerByUserID(ctx context.Context, userID int64) (*Custome
 	}, nil
 }
 
+// GetCustomerByTaxID devolve o cliente mais recente com aquele CPF (qualquer conta),
+// ou pgx.ErrNoRows se nenhum existir. Usado pelo "Gerar PIX" avulso.
+func (s *Store) GetCustomerByTaxID(ctx context.Context, taxID string) (*Customer, error) {
+	r, err := s.q.GetCustomerByTaxID(ctx, taxID)
+	if err != nil {
+		return nil, err
+	}
+	return &Customer{
+		ID:     r.ID,
+		UserID: r.UserID,
+		TaxID:  r.TaxID,
+		Phone:  r.Phone,
+		Name:   r.Name,
+		Email:  r.Email,
+	}, nil
+}
+
 // ListCustomersWithStats lista os clientes com agregados das compras (admin).
 func (s *Store) ListCustomersWithStats(ctx context.Context) ([]CustomerWithStats, error) {
 	rows, err := s.q.ListCustomersWithStats(ctx)

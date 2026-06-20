@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func newCorrelationID() string {
@@ -130,29 +132,44 @@ func (s *Server) handleCreateManualCharge(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusBadRequest, "invalid_body", "CPF do pagador inválido")
 			return
 		}
-		if in.SendEmail && !validEmail(payerEmail) {
+		if payerEmail != "" && !validEmail(payerEmail) {
 			writeError(w, http.StatusBadRequest, "invalid_body", "E-mail do pagador inválido")
 			return
 		}
-		// Salvar como cliente: cria/atualiza o registro (consolidado por CPF) e liga a
-		// cobrança a ele — assim aparece na lista de Clientes e o comprovante automático
-		// no pagamento é resolvido via PayerEmailByCharge. user_id=0 = sem conta de usuário.
-		if in.SaveCustomer {
-			phone := onlyDigits(in.Phone)
-			if phone != "" && !validPhone(phone) {
-				writeError(w, http.StatusBadRequest, "invalid_body", "Telefone inválido")
-				return
+		// Se o CPF já é de um cliente cadastrado, trata como AQUELE cliente: liga a cobrança
+		// a ele e usa os dados canônicos (nome/e-mail) — NÃO sobrescreve com o que foi digitado.
+		existing, err := s.store.GetCustomerByTaxID(r.Context(), payerTaxID)
+		switch {
+		case err == nil:
+			customerID = &existing.ID
+			payerName = existing.Name
+			if existing.Email != "" {
+				payerEmail = existing.Email
 			}
-			if payerEmail != "" && !validEmail(payerEmail) {
-				writeError(w, http.StatusBadRequest, "invalid_body", "E-mail do pagador inválido")
-				return
+		case errors.Is(err, pgx.ErrNoRows):
+			// CPF novo: cria o cliente só se o admin pediu (salvar como cliente). user_id=0 =
+			// sem conta de usuário; consolida por CPF e habilita o comprovante no pagamento.
+			if in.SaveCustomer {
+				phone := onlyDigits(in.Phone)
+				if phone != "" && !validPhone(phone) {
+					writeError(w, http.StatusBadRequest, "invalid_body", "Telefone inválido")
+					return
+				}
+				cust, cerr := s.store.UpsertCustomer(r.Context(), 0, payerTaxID, phone, payerName, payerEmail)
+				if cerr != nil {
+					writeError(w, http.StatusInternalServerError, "db_error", "Falha ao salvar o cliente")
+					return
+				}
+				customerID = &cust.ID
 			}
-			cust, err := s.store.UpsertCustomer(r.Context(), 0, payerTaxID, phone, payerName, payerEmail)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "db_error", "Falha ao salvar o cliente")
-				return
-			}
-			customerID = &cust.ID
+		default:
+			writeError(w, http.StatusInternalServerError, "db_error", "Falha ao consultar o cliente")
+			return
+		}
+		// Valida o envio de e-mail sobre o e-mail FINAL (resolvido do cliente, quando existir).
+		if in.SendEmail && !validEmail(payerEmail) {
+			writeError(w, http.StatusBadRequest, "invalid_body", "Sem e-mail válido para enviar a cobrança")
+			return
 		}
 	}
 

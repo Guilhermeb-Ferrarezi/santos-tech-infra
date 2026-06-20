@@ -19,6 +19,15 @@ SELECT id, user_id, tax_id, phone, name, email, created_at
 FROM pay_customers
 WHERE id = $1;
 
+-- name: GetCustomerByTaxID :one
+-- Cliente por CPF (qualquer conta): devolve o registro mais recente daquele CPF.
+-- Usado pelo "Gerar PIX" avulso para tratar um CPF já cadastrado como o cliente existente.
+SELECT id, user_id, tax_id, phone, name, email
+FROM pay_customers
+WHERE tax_id = $1
+ORDER BY created_at DESC
+LIMIT 1;
+
 -- name: ListCustomersWithStats :many
 -- Lista clientes AGRUPADOS por CPF (uma linha por pessoa, mesmo que tenha logado com
 -- contas diferentes): dados do registro mais recente + agregados de TODAS as compras
