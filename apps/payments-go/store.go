@@ -547,11 +547,13 @@ func (s *Store) GetCustomerDetail(ctx context.Context, id int64) (*CustomerDetai
 	if err != nil {
 		return nil, err
 	}
-	charges, err := s.ListChargesByCustomer(ctx, id)
+	// Consolida por CPF: todas as compras de QUALQUER conta com o mesmo tax_id —
+	// assim o detalhe bate com a lista (que agrupa clientes por CPF).
+	charges, err := s.q.ListChargesByTaxID(ctx, cu.TaxID)
 	if err != nil {
 		return nil, err
 	}
-	items, err := s.q.ListChargeItemsByCustomer(ctx, &id)
+	items, err := s.q.ListChargeItemsByTaxID(ctx, cu.TaxID)
 	if err != nil {
 		return nil, err
 	}
@@ -575,10 +577,10 @@ func (s *Store) GetCustomerDetail(ctx context.Context, id int64) (*CustomerDetai
 			Kind:          c.Kind,
 			AmountCents:   c.AmountCents,
 			Status:        c.Status,
-			DueDate:       c.DueDate,
+			DueDate:       c.CDueDate,
 			CorrelationID: c.CorrelationID,
-			PaidAt:        c.PaidAt,
-			CreatedAt:     c.CreatedAt,
+			PaidAt:        tsToTimePtr(c.PaidAt),
+			CreatedAt:     tsToTime(c.CreatedAt),
 			Items:         its,
 		}
 	}

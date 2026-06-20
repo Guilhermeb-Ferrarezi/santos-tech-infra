@@ -485,8 +485,8 @@ GET    /charges?status=&student_id=                             → [{...}]
 GET    /charges/{id}                                            → {...}
 
 Clientes (admin) — quem comprou no checkout:
-GET    /customers                                               → [{id,userId,name,email,taxId,phone,createdAt,chargesCount,paidCount,paidTotalCents,lastChargeAt}]
-GET    /customers/{id}                                          → {id,...,createdAt, charges:[{id,amountCents,status,paidAt,createdAt,items:[{name,priceCents,quantity}]}]}
+GET    /customers                                               → [{id,userId,name,email,taxId,phone,createdAt,chargesCount,paidCount,paidTotalCents,lastChargeAt}]  (1 linha por CPF; agregados consolidados de todas as contas com aquele CPF)
+GET    /customers/{id}                                          → {id,...,createdAt, charges:[{id,amountCents,status,paidAt,createdAt,items:[{name,priceCents,quantity}]}]}  (compras consolidadas por CPF)
 
 Catálogo de produtos (admin, exceto by-slug):
 POST   /products            body {slug,name,description?,priceCents}  → 201 {id,...,active}

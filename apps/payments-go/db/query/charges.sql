@@ -60,6 +60,24 @@ JOIN pay_charges c ON c.id = ci.charge_id
 WHERE c.customer_id = $1
 ORDER BY ci.charge_id;
 
+-- name: ListChargesByTaxID :many
+-- Cobranças de TODAS as contas com um mesmo CPF (detalhe consolidado por pessoa).
+SELECT c.id, c.kind, c.amount_cents, c.due_date::text, c.status,
+       COALESCE(c.br_code, ''), c.correlation_id, c.paid_at, c.created_at
+FROM pay_charges c
+JOIN pay_customers cu ON cu.id = c.customer_id
+WHERE cu.tax_id = $1
+ORDER BY c.created_at DESC;
+
+-- name: ListChargeItemsByTaxID :many
+-- Itens das cobranças de todas as contas com um mesmo CPF.
+SELECT ci.charge_id, ci.product_id, ci.name, ci.price_cents, ci.quantity
+FROM pay_charge_items ci
+JOIN pay_charges c ON c.id = ci.charge_id
+JOIN pay_customers cu ON cu.id = c.customer_id
+WHERE cu.tax_id = $1
+ORDER BY ci.charge_id;
+
 -- name: ExpireOverdueCharges :execrows
 -- Marca como expiradas as cobranças pendentes cujo QR já passou da validade
 -- (vencimento + 23h, igual à expiração enviada à Efí em createAndPersistCharge).

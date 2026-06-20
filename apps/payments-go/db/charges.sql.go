@@ -240,6 +240,50 @@ func (q *Queries) ListChargeItemsByCustomer(ctx context.Context, customerID *int
 	return items, nil
 }
 
+const listChargeItemsByTaxID = `-- name: ListChargeItemsByTaxID :many
+SELECT ci.charge_id, ci.product_id, ci.name, ci.price_cents, ci.quantity
+FROM pay_charge_items ci
+JOIN pay_charges c ON c.id = ci.charge_id
+JOIN pay_customers cu ON cu.id = c.customer_id
+WHERE cu.tax_id = $1
+ORDER BY ci.charge_id
+`
+
+type ListChargeItemsByTaxIDRow struct {
+	ChargeID   int64
+	ProductID  *int64
+	Name       string
+	PriceCents int64
+	Quantity   int32
+}
+
+// Itens das cobranças de todas as contas com um mesmo CPF.
+func (q *Queries) ListChargeItemsByTaxID(ctx context.Context, taxID string) ([]ListChargeItemsByTaxIDRow, error) {
+	rows, err := q.db.Query(ctx, listChargeItemsByTaxID, taxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChargeItemsByTaxIDRow
+	for rows.Next() {
+		var i ListChargeItemsByTaxIDRow
+		if err := rows.Scan(
+			&i.ChargeID,
+			&i.ProductID,
+			&i.Name,
+			&i.PriceCents,
+			&i.Quantity,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listChargesByCustomer = `-- name: ListChargesByCustomer :many
 SELECT id, kind, amount_cents, due_date::text, status,
        COALESCE(br_code, ''), correlation_id, paid_at, created_at
@@ -274,6 +318,58 @@ func (q *Queries) ListChargesByCustomer(ctx context.Context, customerID *int64) 
 			&i.Kind,
 			&i.AmountCents,
 			&i.DueDate,
+			&i.Status,
+			&i.BrCode,
+			&i.CorrelationID,
+			&i.PaidAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChargesByTaxID = `-- name: ListChargesByTaxID :many
+SELECT c.id, c.kind, c.amount_cents, c.due_date::text, c.status,
+       COALESCE(c.br_code, ''), c.correlation_id, c.paid_at, c.created_at
+FROM pay_charges c
+JOIN pay_customers cu ON cu.id = c.customer_id
+WHERE cu.tax_id = $1
+ORDER BY c.created_at DESC
+`
+
+type ListChargesByTaxIDRow struct {
+	ID            int64
+	Kind          string
+	AmountCents   int64
+	CDueDate      string
+	Status        string
+	BrCode        string
+	CorrelationID string
+	PaidAt        pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+}
+
+// Cobranças de TODAS as contas com um mesmo CPF (detalhe consolidado por pessoa).
+func (q *Queries) ListChargesByTaxID(ctx context.Context, taxID string) ([]ListChargesByTaxIDRow, error) {
+	rows, err := q.db.Query(ctx, listChargesByTaxID, taxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChargesByTaxIDRow
+	for rows.Next() {
+		var i ListChargesByTaxIDRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.AmountCents,
+			&i.CDueDate,
 			&i.Status,
 			&i.BrCode,
 			&i.CorrelationID,
