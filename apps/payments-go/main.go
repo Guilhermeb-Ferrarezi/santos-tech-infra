@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,7 +31,11 @@ func main() {
 		}
 		url := cfg.EFIWebhookURL
 		if cfg.EFIWebhookSecret != "" {
-			url += "?token=" + cfg.EFIWebhookSecret
+			sep := "?"
+			if strings.Contains(url, "?") {
+				sep = "&"
+			}
+			url += sep + "token=" + cfg.EFIWebhookSecret
 		}
 		if err := newEfiProvider(cfg).RegisterWebhook(ctx, url); err != nil {
 			slog.Error("falha ao registrar webhook na Efí", "err", err)
