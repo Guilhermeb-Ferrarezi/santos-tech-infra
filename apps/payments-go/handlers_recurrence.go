@@ -100,7 +100,9 @@ func (s *Server) handleCreateRecurrence(w http.ResponseWriter, r *http.Request) 
 	}
 
 	res, err := s.efi.CreateRecurrence(r.Context(), RecurrenceRequest{
-		Contract:    "Assinatura #" + strconv.FormatInt(subID, 10),
+		// Contrato único por recorrência (a Efí rejeita contrato já com recorrência ativa);
+		// usa o id da recorrência, não o da assinatura, p/ permitir recriar após cancelar.
+		Contract:    "Assinatura #" + strconv.FormatInt(rec.ID, 10),
 		Object:      "Mensalidade Santos Tech",
 		PayerName:   rec.PayerName,
 		PayerTaxID:  rec.PayerTaxID,

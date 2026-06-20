@@ -16,8 +16,23 @@ import (
 	"sync"
 	"time"
 
+	qrcode "github.com/skip2/go-qrcode"
 	pkcs12 "software.sslmate.com/src/go-pkcs12"
 )
+
+// qrPNGDataURI gera uma imagem PNG (data-uri base64) do QR de um copia-e-cola Pix. PIX
+// Automático (recorrência) só devolve o copia-e-cola, sem imagem — então geramos a imagem
+// aqui para a tela exibir o QR como em qualquer outra cobrança. Best-effort: "" se falhar.
+func qrPNGDataURI(payload string) string {
+	if payload == "" {
+		return ""
+	}
+	png, err := qrcode.Encode(payload, qrcode.Medium, 256)
+	if err != nil {
+		return ""
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+}
 
 // loadClientCert decodifica o .p12 (base64) e monta um tls.Certificate pronto para
 // o mTLS da Efí. O .p12 da Efí costuma vir com senha vazia.
@@ -414,11 +429,10 @@ func (p *efiProvider) ParseWebhook(headers map[string][]string, body []byte) ([]
 // PIX Automático (recorrência BACEN): /v2/rec (contrato) e /v2/cobr/{txid} (ciclo).
 // ---------------------------------------------------------------------------
 
-// efiPeriodicidade mapeia o vocabulário do app para o da Efí. A Efí documenta
-// MENSAL|ANUAL para PIX Automático; as demais periodicidades são repassadas como
-// estão (a Efí valida no schema).
-// TODO: validar payload contra Efí em homolog — confirmar quais periodicidades além
-// de MENSAL/ANUAL o /v2/rec aceita (SEMANAL/TRIMESTRAL/SEMESTRAL).
+// efiPeriodicidade mapeia o vocabulário do app para o da Efí. MENSAL confirmado em homolog
+// (recorrência criada com sucesso); as demais (SEMANAL/TRIMESTRAL/SEMESTRAL/ANUAL) são
+// repassadas como estão e a Efí valida no schema — só MENSAL é exercitada hoje (o loop de
+// ciclo só re-cobra MENSAL; ver recurring.go).
 func efiPeriodicidade(p string) string {
 	if p == "" {
 		return "MENSAL"
@@ -443,21 +457,55 @@ func efiRecStatusToApp(s string) string {
 	}
 }
 
-// efiRecResp — resposta de /v2/rec e /v2/rec/{idRec}.
-// TODO: validar payload contra Efí em homolog — confirmar nome dos campos de QR
-// (dadosQR.pixCopiaECola) e onde vem a imagem do QR na jornada 2.
+// efiRecResp — resposta de /v2/rec e /v2/rec/{idRec}. Confirmado em homolog: o POST /v2/rec
+// devolve idRec/status mas NÃO traz dadosQR (vem "ativacao":"AGUARDANDO_DEFINICAO"); o
+// copia-e-cola de autorização só aparece no GET /v2/rec/{idRec} em dadosQR.pixCopiaECola.
+// A Efí NÃO devolve imagem de QR para recorrência — a tela renderiza o QR a partir do copia-e-cola.
 type efiRecResp struct {
 	IDRec   string `json:"idRec"`
 	Status  string `json:"status"`
 	DadosQR struct {
 		PixCopiaECola string `json:"pixCopiaECola"`
-		ImagemQrcode  string `json:"imagemQrcode"`
 	} `json:"dadosQR"`
 }
 
-// CreateRecurrence cria o contrato de recorrência na Efí (POST /v2/rec). Jornada 2:
-// só autoriza, sem débito imediato — devolve o copia-e-cola/QR de autorização.
-func (p *efiProvider) CreateRecurrence(ctx context.Context, req RecurrenceRequest) (RecurrenceResult, error) {
+// createLocrec cria uma location de recorrência (POST /v2/locrec, corpo vazio) e devolve o
+// id da loc. Esse id vai no campo "loc" do POST /v2/rec; sem ele a Efí cria o contrato mas
+// não gera o copia-e-cola de autorização. Sequência confirmada em homolog.
+func (p *efiProvider) createLocrec(ctx context.Context) (int64, error) {
+	data, err := p.do(ctx, http.MethodPost, "/v2/locrec", map[string]any{})
+	if err != nil {
+		return 0, err
+	}
+	var r struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return 0, err
+	}
+	if r.ID == 0 {
+		return 0, fmt.Errorf("efi locrec: id vazio na resposta: %s", data)
+	}
+	return r.ID, nil
+}
+
+// recAuthQR consulta o contrato (GET /v2/rec/{idRec}) e devolve o copia-e-cola de
+// autorização (dadosQR.pixCopiaECola), que não vem na resposta do POST. Best-effort.
+func (p *efiProvider) recAuthQR(ctx context.Context, idRec string) string {
+	data, err := p.do(ctx, http.MethodGet, "/v2/rec/"+url.PathEscape(idRec), nil)
+	if err != nil {
+		return ""
+	}
+	var r efiRecResp
+	if json.Unmarshal(data, &r) != nil {
+		return ""
+	}
+	return r.DadosQR.PixCopiaECola
+}
+
+// recBaseBody monta o corpo do POST /v2/rec comum às jornadas (vinculo/calendario/valor/
+// politicaRetentativa/loc). A Jornada 3 acrescenta "ativacao.dadosJornada.txid" depois.
+func recBaseBody(req RecurrenceRequest, loc int64) map[string]any {
 	valor := strconv.FormatFloat(float64(req.AmountCents)/100, 'f', 2, 64)
 	calendario := map[string]any{
 		"dataInicial":   req.StartDate,
@@ -466,18 +514,30 @@ func (p *efiProvider) CreateRecurrence(ctx context.Context, req RecurrenceReques
 	if req.EndDate != "" {
 		calendario["dataFinal"] = req.EndDate
 	}
-	rec := map[string]any{
+	return map[string]any{
 		"vinculo": map[string]any{
 			"contrato": req.Contract,
 			"devedor":  map[string]any{"nome": req.PayerName, "cpf": req.PayerTaxID},
 			"objeto":   req.Object,
 		},
-		"calendario": calendario,
-		"valor":      map[string]any{"valorRec": valor},
-		// TODO: validar payload contra Efí em homolog — política de retentativa default.
+		"calendario":          calendario,
+		"valor":               map[string]any{"valorRec": valor},
 		"politicaRetentativa": "PERMITE_3R_7D",
+		"loc":                 loc,
 	}
-	data, err := p.do(ctx, http.MethodPost, "/v2/rec", rec)
+}
+
+// CreateRecurrence cria o contrato de recorrência na Efí (Jornada 2: só autoriza, sem débito
+// imediato) e devolve o copia-e-cola de autorização. Sequência confirmada em homolog:
+//  1. POST /v2/locrec → id da location;
+//  2. POST /v2/rec com "loc" = esse id → contrato (status CRIADA);
+//  3. GET /v2/rec/{idRec} → o copia-e-cola (dadosQR.pixCopiaECola) só aparece aqui.
+func (p *efiProvider) CreateRecurrence(ctx context.Context, req RecurrenceRequest) (RecurrenceResult, error) {
+	loc, err := p.createLocrec(ctx)
+	if err != nil {
+		return RecurrenceResult{}, err
+	}
+	data, err := p.do(ctx, http.MethodPost, "/v2/rec", recBaseBody(req, loc))
 	if err != nil {
 		return RecurrenceResult{}, err
 	}
@@ -485,28 +545,33 @@ func (p *efiProvider) CreateRecurrence(ctx context.Context, req RecurrenceReques
 	if err := json.Unmarshal(data, &r); err != nil {
 		return RecurrenceResult{}, err
 	}
-	return RecurrenceResult{
+	res := RecurrenceResult{
 		EfiIDRec: r.IDRec,
 		BRCode:   r.DadosQR.PixCopiaECola,
-		QRCode:   r.DadosQR.ImagemQrcode,
 		Status:   efiRecStatusToApp(r.Status),
-	}, nil
+	}
+	if res.BRCode == "" && r.IDRec != "" {
+		res.BRCode = p.recAuthQR(ctx, r.IDRec)
+	}
+	res.QRCode = qrPNGDataURI(res.BRCode)
+	return res, nil
 }
 
-// CreateRecurrenceJornada3 cria a recorrência da Jornada 3: AUTORIZA o contrato e PAGA
-// a 1ª parcela (vencimento hoje) num único QR/copia-e-cola. Dois passos na Efí:
-//  1. cria a cobrança imediata da 1ª parcela (PUT /v2/cob/{txid}), reusando CreateCharge;
-//  2. cria o contrato (POST /v2/rec) referenciando o txid em ativacao.dadosJornada.txid.
+// CreateRecurrenceJornada3 cria a recorrência da Jornada 3: AUTORIZA o contrato e PAGA a 1ª
+// parcela (vencimento hoje) num único copia-e-cola. Sequência confirmada em homolog:
+//  1. POST /v2/locrec → location do contrato;
+//  2. PUT /v2/cob/{txid} → 1ª cobrança imediata (reusa CreateCharge);
+//  3. POST /v2/rec com "loc" e "ativacao.dadosJornada.txid" apontando para a cob;
+//  4. GET /v2/rec/{idRec} → o copia-e-cola único de autorização+pagamento sai daqui.
 //
-// Devolve o RecurrenceResult (idRec + QR único de autorização+pagamento, vindo de
-// dadosQR.pixCopiaECola do contrato) e o ChargeResult da 1ª cobr (txid = o nosso
-// ChargeCorrelationID; status inicial).
-//
-// TODO: validar payload contra Efí em homolog — a Jornada 3 (ativacao.dadosJornada.txid +
-// loc) não foi exercitada; confirmar o campo de vínculo do txid, se o QR único sai do
-// contrato (rec) ou da cob imediata, e se o `loc` é obrigatório no POST /v2/rec.
+// Devolve o RecurrenceResult (idRec + copia-e-cola único) e o ChargeResult da 1ª cobr
+// (txid = o nosso ChargeCorrelationID).
 func (p *efiProvider) CreateRecurrenceJornada3(ctx context.Context, req RecurrenceJornada3Request) (RecurrenceResult, ChargeResult, error) {
-	// Passo 1: 1ª cobrança imediata (vence hoje), txid = o nosso correlationID.
+	loc, err := p.createLocrec(ctx)
+	if err != nil {
+		return RecurrenceResult{}, ChargeResult{}, err
+	}
+	// 1ª cobrança imediata (vence hoje), txid = o nosso correlationID.
 	charge, err := p.CreateCharge(ctx, ChargeRequest{
 		CorrelationID: req.ChargeCorrelationID,
 		AmountCents:   req.AmountCents,
@@ -520,30 +585,15 @@ func (p *efiProvider) CreateRecurrenceJornada3(ctx context.Context, req Recurren
 		return RecurrenceResult{}, ChargeResult{}, err
 	}
 
-	// Passo 2: contrato de recorrência vinculado à 1ª cobr (Jornada 3).
-	valor := strconv.FormatFloat(float64(req.AmountCents)/100, 'f', 2, 64)
-	calendario := map[string]any{
-		"dataInicial":   req.StartDate,
-		"periodicidade": efiPeriodicidade(req.Periodicity),
-	}
-	if req.EndDate != "" {
-		calendario["dataFinal"] = req.EndDate
-	}
-	rec := map[string]any{
-		"vinculo": map[string]any{
-			"contrato": req.Contract,
-			"devedor":  map[string]any{"nome": req.PayerName, "cpf": req.PayerTaxID},
-			"objeto":   req.Object,
-		},
-		"calendario": calendario,
-		"valor":      map[string]any{"valorRec": valor},
-		// TODO: validar payload contra Efí em homolog — política de retentativa default.
-		"politicaRetentativa": "PERMITE_3R_7D",
-		// Jornada 3: vincula a cobrança imediata já criada (autoriza + paga 1ª parcela).
-		"ativacao": map[string]any{
-			"dadosJornada": map[string]any{"txid": req.ChargeCorrelationID},
-		},
-	}
+	// Contrato vinculado à 1ª cobr (Jornada 3): mesmo corpo base + ativacao.dadosJornada.txid.
+	rec := recBaseBody(RecurrenceRequest{
+		Contract: req.Contract, Object: req.Object,
+		PayerName: req.PayerName, PayerTaxID: req.PayerTaxID,
+		AmountCents: req.AmountCents, Periodicity: req.Periodicity,
+		StartDate: req.StartDate, EndDate: req.EndDate,
+	}, loc)
+	rec["ativacao"] = map[string]any{"dadosJornada": map[string]any{"txid": req.ChargeCorrelationID}}
+
 	data, err := p.do(ctx, http.MethodPost, "/v2/rec", rec)
 	if err != nil {
 		return RecurrenceResult{}, ChargeResult{}, err
@@ -555,28 +605,20 @@ func (p *efiProvider) CreateRecurrenceJornada3(ctx context.Context, req Recurren
 	recRes := RecurrenceResult{
 		EfiIDRec: r.IDRec,
 		BRCode:   r.DadosQR.PixCopiaECola,
-		QRCode:   r.DadosQR.ImagemQrcode,
 		Status:   efiRecStatusToApp(r.Status),
 	}
-	// O POST /v2/rec da Jornada 3 pode não trazer o dadosQR inline; nesse caso consulta
-	// o contrato para obter o QR único de autorização+pagamento.
+	// O copia-e-cola único vem do GET do contrato (não do POST).
 	if recRes.BRCode == "" && r.IDRec != "" {
-		if qd, qerr := p.do(ctx, http.MethodGet, "/v2/rec/"+url.PathEscape(r.IDRec), nil); qerr == nil {
-			var rq efiRecResp
-			if json.Unmarshal(qd, &rq) == nil {
-				recRes.BRCode = rq.DadosQR.PixCopiaECola
-				if recRes.QRCode == "" {
-					recRes.QRCode = rq.DadosQR.ImagemQrcode
-				}
-			}
-		}
+		recRes.BRCode = p.recAuthQR(ctx, r.IDRec)
 	}
-	// O QR único vem do contrato; o copia-e-cola da cob imediata é um fallback se preciso.
+	// Fallback extremo: se ainda assim vier vazio, usa o copia-e-cola da cob imediata.
 	if recRes.BRCode == "" {
 		recRes.BRCode = charge.BRCode
-		if recRes.QRCode == "" {
-			recRes.QRCode = charge.QRCode
-		}
+		recRes.QRCode = charge.QRCode
+	}
+	// Gera a imagem do QR a partir do copia-e-cola único (a Efí não devolve imagem p/ rec).
+	if recRes.QRCode == "" {
+		recRes.QRCode = qrPNGDataURI(recRes.BRCode)
 	}
 	charge.ProviderChargeID = req.ChargeCorrelationID
 	return recRes, charge, nil
@@ -595,9 +637,9 @@ func (p *efiProvider) GetRecurrence(ctx context.Context, idRec string) (string, 
 	return efiRecStatusToApp(r.Status), nil
 }
 
-// CancelRecurrence cancela o contrato de recorrência (PATCH /v2/rec/{idRec}).
+// CancelRecurrence cancela o contrato de recorrência (PATCH /v2/rec/{idRec} com
+// {"status":"CANCELADA"}). Confirmado em homolog: o status vai para CANCELADA (→ canceled).
 // Best-effort no caller (uma recorrência já cancelada/expirada devolve erro do gateway).
-// TODO: validar payload contra Efí em homolog — confirmar o campo/valor de cancelamento.
 func (p *efiProvider) CancelRecurrence(ctx context.Context, idRec string) error {
 	body := map[string]any{"status": "CANCELADA"}
 	_, err := p.do(ctx, http.MethodPatch, "/v2/rec/"+url.PathEscape(idRec), body)
