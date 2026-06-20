@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, Copy, FileText, Loader2, XCircle } from "lucide-react";
 import { api, type PayData } from "../lib/api";
 import { Button } from "./ui/button";
+import { BoletoBarcode } from "./BoletoBarcode";
 import type { PixStatus } from "./PixView";
 
 // BoletoView — etapa "Pagamento por boleto" (coluna esquerda do checkout). Mostra a
@@ -129,6 +130,11 @@ export function BoletoView({
             <FileText className="size-5" /> Baixar boleto (PDF)
           </a>
         </Button>
+      )}
+      {data.brCode && (
+        <div className="flex justify-center rounded-xl border border-slate-100 bg-white p-3">
+          <BoletoBarcode linha={data.brCode} className="h-16 w-full" />
+        </div>
       )}
       {data.brCode && (
         <div className="space-y-1.5">
