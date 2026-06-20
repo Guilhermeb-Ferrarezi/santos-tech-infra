@@ -204,12 +204,13 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		// Defesa em profundidade: se o produto virou recorrente DEPOIS de entrar no carrinho
-		// (admin marcou como assinatura entre o add e o checkout), barra aqui também — uma
-		// assinatura nunca pode ser cobrada como avulso. O add já bloqueia novos recorrentes.
+		// Se o produto virou recorrente DEPOIS de entrar no carrinho (admin marcou como
+		// assinatura entre o add e o checkout), ele não pode ser cobrado como avulso. Em vez
+		// de travar o checkout inteiro (cliente ficava preso), removemos o item do carrinho e
+		// seguimos com o resto. Assinatura é por /me/subscribe.
 		if p.Recurring {
-			writeError(w, http.StatusConflict, "use_subscribe", "Há um produto de assinatura no carrinho: assine por /me/subscribe e remova-o do carrinho")
-			return
+			_ = s.cart.Remove(r.Context(), uid, it.ProductID)
+			continue
 		}
 		pid := p.ID
 		chargeItems = append(chargeItems, ChargeItem{ProductID: &pid, Name: p.Name, PriceCents: p.PriceCents, Quantity: it.Quantity})
