@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight, Loader2, RotateCcw } from "lucide-react";
 import { api, type Product } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { CheckoutShell } from "../components/CheckoutShell";
@@ -121,7 +121,7 @@ export default function SubscribePage() {
         <p className="mt-1 mb-8 text-sm text-[#496b84]">
           Escaneie para autorizar e pagar a 1ª parcela no app do seu banco.
         </p>
-        {pixToken && <PixView token={pixToken} recurring onStatusChange={setPixStatus} />}
+        {pixToken && <PixView key={pixToken} token={pixToken} recurring onStatusChange={setPixStatus} />}
         {err && <p className="mt-4 text-sm text-rose-600">{err}</p>}
       </div>
     );
@@ -146,7 +146,7 @@ export default function SubscribePage() {
         )}
       </Button>
     ) : (
-      <PixAction status={pixStatus} />
+      <PixAction status={pixStatus} submitting={submitting} onRetry={generatePix} />
     );
 
   return (
@@ -166,7 +166,15 @@ export default function SubscribePage() {
 }
 
 // PixAction — botão/estado da coluna direita durante a etapa Pix da assinatura.
-function PixAction({ status }: { status: PixStatus }) {
+function PixAction({
+  status,
+  submitting,
+  onRetry,
+}: {
+  status: PixStatus;
+  submitting: boolean;
+  onRetry: () => void;
+}) {
   if (status === "paid") {
     return (
       <div className="rounded-xl bg-emerald-50 px-4 py-3 text-center text-sm font-medium text-emerald-700">
@@ -174,17 +182,25 @@ function PixAction({ status }: { status: PixStatus }) {
       </div>
     );
   }
-  if (status === "loading") {
+  // submitting cobre o retry (gerando uma assinatura nova) e a 1ª geração.
+  if (status === "loading" || submitting) {
     return (
       <Button disabled className="h-12 w-full gap-2 bg-[#0db88f] text-base">
-        <Loader2 className="size-5 animate-spin" /> Gerando seu Pix…
+        <Loader2 className="size-5 animate-spin" /> {submitting ? "Trabalhando nisso…" : "Gerando seu Pix…"}
       </Button>
     );
   }
   if (status === "unavailable" || status === "error") {
+    // A cobrança morta não pode ser paga — retentar gera uma assinatura nova (novo QR).
     return (
-      <div className="rounded-xl bg-slate-100 px-4 py-3 text-center text-sm text-[#496b84]">
-        Cobrança indisponível
+      <div className="space-y-2">
+        <p className="text-center text-sm text-[#496b84]">Cobrança indisponível</p>
+        <Button
+          onClick={onRetry}
+          className="h-12 w-full gap-2 bg-[#0db88f] text-base hover:bg-[#0aa17d]"
+        >
+          <RotateCcw className="size-5" /> Tentar novamente
+        </Button>
       </div>
     );
   }
