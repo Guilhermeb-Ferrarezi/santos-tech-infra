@@ -17,7 +17,7 @@ function barcodeFromLinhaDigitavel(linha: string): string | null {
 
 /** Renderiza o código de barras (ITF) do boleto a partir da linha digitável. */
 export function BoletoBarcode({ linha, className }: { linha: string; className?: string }) {
-  const ref = useRef<SVGSVGElement>(null);
+  const ref = useRef<HTMLCanvasElement>(null);
   const code = barcodeFromLinhaDigitavel(linha);
 
   useEffect(() => {
@@ -25,18 +25,25 @@ export function BoletoBarcode({ linha, className }: { linha: string; className?:
     try {
       JsBarcode(ref.current, code, {
         format: "ITF",
-        width: 1.4,
-        height: 64,
+        width: 1.8,
+        height: 72,
         displayValue: false,
         margin: 0,
         background: "#ffffff",
         lineColor: "#000000",
       });
-    } catch {
-      /* código inválido: não renderiza nada */
+    } catch (e) {
+      console.error("boleto barcode:", e);
     }
   }, [code]);
 
   if (!code) return null;
-  return <svg ref={ref} className={className} aria-label="Código de barras do boleto" />;
+  return (
+    <canvas
+      ref={ref}
+      className={className}
+      style={{ maxWidth: "100%", height: "auto" }}
+      aria-label="Código de barras do boleto"
+    />
+  );
 }

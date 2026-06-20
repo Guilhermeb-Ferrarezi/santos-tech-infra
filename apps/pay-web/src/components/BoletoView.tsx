@@ -133,7 +133,7 @@ export function BoletoView({
       )}
       {data.brCode && (
         <div className="flex justify-center rounded-xl border border-slate-100 bg-white p-3">
-          <BoletoBarcode linha={data.brCode} className="h-16 w-full" />
+          <BoletoBarcode linha={data.brCode} />
         </div>
       )}
       {data.brCode && (
