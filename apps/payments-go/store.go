@@ -507,6 +507,14 @@ func dateToPgtype(dateStr string) pgtype.Date {
 	return pgtype.Date{Time: t, Valid: true}
 }
 
+// methodOrPix normaliza o método: vazio (cobranças antigas/PIX) → "pix".
+func methodOrPix(m string) string {
+	if m == "" {
+		return "pix"
+	}
+	return m
+}
+
 func (s *Store) InsertCharge(ctx context.Context, c *Charge) error {
 	row, err := s.q.InsertCharge(ctx, paydb.InsertChargeParams{
 		Kind:             c.Kind,
@@ -521,8 +529,11 @@ func (s *Store) InsertCharge(ctx context.Context, c *Charge) error {
 		CorrelationID:    c.CorrelationID,
 		PublicToken:      nullStrPtr(c.PublicToken),
 		PayerTaxID:       nullStrPtr(c.payerTaxID),
+		Method:           methodOrPix(c.Method),
 		BrCode:           nullStrPtr(c.BRCode),
 		QrCode:           nullStrPtr(c.QRCode),
+		PdfUrl:           nullStrPtr(c.PDFURL),
+		Barcode:          nullStrPtr(c.Barcode),
 	})
 	if err != nil {
 		return err
@@ -539,9 +550,10 @@ func (s *Store) InsertCharge(ctx context.Context, c *Charge) error {
 func (s *Store) ListCharges(ctx context.Context, status string, studentID int64) ([]Charge, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT c.id, c.kind, c.subscription_id, c.student_id, c.amount_cents, c.due_date::text, c.reference_month,
-		       c.status, c.provider, COALESCE(c.provider_charge_id,''), c.correlation_id,
+		       c.status, c.provider, COALESCE(c.provider_charge_id,''), c.correlation_id, c.method,
 		       COALESCE(c.br_code,''), COALESCE(c.qr_code,''), c.paid_at, c.created_at,
-		       COALESCE(NULLIF(st.name,''), NULLIF(cu.name,''), '') AS payer_name
+		       COALESCE(NULLIF(st.name,''), NULLIF(cu.name,''), '') AS payer_name,
+		       COALESCE(NULLIF(st.email,''), NULLIF(cu.email,''), '') AS payer_email
 		FROM pay_charges c
 		LEFT JOIN pay_students st ON st.id = c.student_id
 		LEFT JOIN pay_customers cu ON cu.id = c.customer_id
@@ -555,8 +567,8 @@ func (s *Store) ListCharges(ctx context.Context, status string, studentID int64)
 	for rows.Next() {
 		var c Charge
 		if err := rows.Scan(&c.ID, &c.Kind, &c.SubscriptionID, &c.StudentID, &c.AmountCents, &c.DueDate,
-			&c.ReferenceMonth, &c.Status, &c.Provider, &c.ProviderChargeID, &c.CorrelationID,
-			&c.BRCode, &c.QRCode, &c.PaidAt, &c.CreatedAt, &c.PayerName); err != nil {
+			&c.ReferenceMonth, &c.Status, &c.Provider, &c.ProviderChargeID, &c.CorrelationID, &c.Method,
+			&c.BRCode, &c.QRCode, &c.PaidAt, &c.CreatedAt, &c.PayerName, &c.PayerEmail); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -606,8 +618,11 @@ func (s *Store) GetCharge(ctx context.Context, id int64) (*Charge, error) {
 		Provider:         r.Provider,
 		ProviderChargeID: r.ProviderChargeID,
 		CorrelationID:    r.CorrelationID,
+		Method:           r.Method,
 		BRCode:           r.BrCode,
 		QRCode:           r.QrCode,
+		PDFURL:           r.PdfUrl,
+		Barcode:          r.Barcode,
 		PaidAt:           tsToTimePtr(r.PaidAt),
 		CreatedAt:        tsToTime(r.CreatedAt),
 	}, nil
@@ -630,12 +645,30 @@ func (s *Store) ExpireOverdueCharges(ctx context.Context) (int64, error) {
 // CancelChargeByToken cancela uma cobrança pendente pelo token público (tela de
 // pagamento). Devolve correlationID e providerChargeID para cancelar no gateway.
 // pgx.ErrNoRows se não havia cobrança pendente com esse token.
-func (s *Store) CancelChargeByToken(ctx context.Context, token string) (correlationID, providerChargeID string, err error) {
+func (s *Store) CancelChargeByToken(ctx context.Context, token string) (correlationID, providerChargeID, method string, err error) {
 	r, err := s.q.CancelChargeByToken(ctx, &token)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return r.CorrelationID, r.ProviderChargeID, nil
+	return r.CorrelationID, r.ProviderChargeID, r.Method, nil
+}
+
+// MarkChargePaidByProviderID marca paga a cobrança casada pelo charge_id do Efí
+// (boleto/API Cobranças). Devolve true se realmente passou de pending→paid agora.
+func (s *Store) MarkChargePaidByProviderID(ctx context.Context, providerChargeID string) (bool, error) {
+	n, err := s.q.MarkChargePaidByProviderID(ctx, &providerChargeID)
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+func (s *Store) PublicTokenByProviderID(ctx context.Context, providerChargeID string) (string, error) {
+	tok, err := s.q.PublicTokenByProviderID(ctx, &providerChargeID)
+	if err != nil || tok == nil {
+		return "", err
+	}
+	return *tok, nil
 }
 
 // ── Webhook idempotência ──────────────────────────────────────────────────
@@ -947,18 +980,22 @@ func (s *Store) GetChargeByPublicToken(ctx context.Context, token string) (*Char
 		return nil, err
 	}
 	return &Charge{
-		ID:            r.ID,
-		Kind:          r.Kind,
-		StudentID:     r.StudentID,
-		CustomerID:    r.CustomerID,
-		AmountCents:   r.AmountCents,
-		DueDate:       r.DueDate,
-		Status:        r.Status,
-		BRCode:        r.BrCode,
-		QRCode:        r.QrCode,
-		CorrelationID: r.CorrelationID,
-		PaidAt:        tsToTimePtr(r.PaidAt),
-		CreatedAt:     tsToTime(r.CreatedAt),
+		ID:               r.ID,
+		Kind:             r.Kind,
+		StudentID:        r.StudentID,
+		CustomerID:       r.CustomerID,
+		AmountCents:      r.AmountCents,
+		DueDate:          r.DueDate,
+		Status:           r.Status,
+		Method:           r.Method,
+		BRCode:           r.BrCode,
+		QRCode:           r.QrCode,
+		PDFURL:           r.PdfUrl,
+		Barcode:          r.Barcode,
+		ProviderChargeID: r.ProviderChargeID,
+		CorrelationID:    r.CorrelationID,
+		PaidAt:           tsToTimePtr(r.PaidAt),
+		CreatedAt:        tsToTime(r.CreatedAt),
 	}, nil
 }
 

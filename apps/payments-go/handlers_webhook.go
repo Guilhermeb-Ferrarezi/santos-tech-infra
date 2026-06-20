@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -139,6 +140,72 @@ func (s *Server) handleRecWebhook(w http.ResponseWriter, r *http.Request) {
 		// "Cobrar na assinatura": ao aprovar, dispara a 1ª cobrança automática.
 		if ev.Status == "active" {
 			s.maybeChargeFirstInstallment(r.Context(), rec)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleCobrWebhook recebe as notificações da API Cobranças (boleto). A Efí POSTa
+// {"notification":"<token>"} a cada mudança de status; buscamos o detalhe em
+// GET /v1/notification/{token} e marcamos paga a cobrança casada pelo charge_id do Efí
+// (provider_charge_id). Mesmo esquema de segredo em ?token= dos demais webhooks.
+func (s *Server) handleCobrWebhook(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Production && s.cfg.EFIWebhookSecret == "" {
+		slog.Error("webhook cobr recusado: EFI_WEBHOOK_SECRET ausente em produção")
+		writeError(w, http.StatusServiceUnavailable, "webhook_unverifiable", "Webhook não verificável")
+		return
+	}
+	if s.cfg.EFIWebhookSecret != "" {
+		got := strings.TrimSuffix(r.URL.Query().Get("token"), "/cobr")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.EFIWebhookSecret)) != 1 {
+			slog.Warn("webhook cobr rejeitado: segredo inválido")
+			writeError(w, http.StatusUnauthorized, "webhook_rejected", "Webhook não autenticado")
+			return
+		}
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Corpo inválido")
+		return
+	}
+	// POST de validação/registro (corpo vazio): responder 200.
+	if strings.TrimSpace(string(body)) == "" {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+	var payload struct {
+		Notification string `json:"notification"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil || payload.Notification == "" {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Payload inválido")
+		return
+	}
+	if s.efiCobr == nil || s.store == nil { // guarda defensiva (testes / boleto desabilitado)
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+	evs, err := s.efiCobr.GetNotification(r.Context(), payload.Notification)
+	if err != nil {
+		slog.Warn("webhook cobr: falha ao buscar notificação", "err", err)
+		writeError(w, http.StatusBadGateway, "efi_error", "Falha ao consultar a notificação")
+		return
+	}
+	for _, ev := range evs {
+		if ev.Status != "paid" && ev.Status != "settled" {
+			continue
+		}
+		marked, err := s.store.MarkChargePaidByProviderID(r.Context(), ev.ChargeID)
+		if err != nil {
+			slog.Warn("webhook cobr: falha ao marcar paga", "charge_id", ev.ChargeID, "err", err)
+			continue
+		}
+		if !marked {
+			continue // já estava paga/cancelada, ou charge_id desconhecido
+		}
+		if tok, e := s.store.PublicTokenByProviderID(r.Context(), ev.ChargeID); e == nil && tok != "" {
+			s.invalidateChargeStatus(r.Context(), tok)
+			s.publishChargePaid(r.Context(), tok)
+			s.enqueueNotifyPaid(r.Context(), tok)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

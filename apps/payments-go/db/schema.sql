@@ -105,8 +105,11 @@ CREATE TABLE pay_charges (
   correlation_id     TEXT NOT NULL UNIQUE,
   public_token       TEXT,
   payer_tax_id       TEXT,
+  method             TEXT NOT NULL DEFAULT 'pix' CHECK (method IN ('pix','boleto')),
   br_code            TEXT,
   qr_code            TEXT,
+  pdf_url            TEXT,
+  barcode            TEXT,
   paid_at            TIMESTAMPTZ,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );

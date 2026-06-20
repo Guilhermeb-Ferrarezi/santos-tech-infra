@@ -98,6 +98,7 @@ type manualChargeInput struct {
 	AmountCents int64  `json:"amountCents"`
 	Description string `json:"description"`
 	DueDate     string `json:"dueDate"` // YYYY-MM-DD; default hoje+3
+	Method      string `json:"method"`  // pix (default) | boleto
 }
 
 // resolveManualPayer resolve o pagador de uma cobrança/assinatura gerada no dashboard.
@@ -178,6 +179,18 @@ func (s *Server) handleCreateManualCharge(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid_body", "amountCents deve ser > 0")
 		return
 	}
+	method := in.Method
+	if method == "" {
+		method = "pix"
+	}
+	if method != "pix" && method != "boleto" {
+		writeError(w, http.StatusBadRequest, "invalid_body", "method deve ser 'pix' ou 'boleto'")
+		return
+	}
+	if method == "boleto" && s.efiCobr == nil {
+		writeError(w, http.StatusServiceUnavailable, "boleto_unavailable", "Boleto indisponível no momento")
+		return
+	}
 
 	payerName, payerTaxID, payerEmail, customerID, ok := s.resolveManualPayer(w, r, in.manualPayerInput)
 	if !ok {
@@ -200,10 +213,10 @@ func (s *Server) handleCreateManualCharge(w http.ResponseWriter, r *http.Request
 
 	c := &Charge{
 		Kind: "avulso", CustomerID: customerID, AmountCents: in.AmountCents,
-		DueDate: in.DueDate, Provider: "efi", CorrelationID: newCorrelationID(),
+		DueDate: in.DueDate, Provider: "efi", Method: method, CorrelationID: newCorrelationID(),
 		PublicToken: newPublicToken(), payerTaxID: payerTaxID,
 	}
-	st := &Student{Name: payerName, TaxID: payerTaxID, Email: payerEmail} // nome/CPF p/ o gateway
+	st := &Student{Name: payerName, TaxID: payerTaxID, Email: payerEmail, Phone: onlyDigits(in.Phone)} // nome/CPF p/ o gateway (boleto: phone_number só dígitos)
 	if err := s.createAndPersistCharge(r.Context(), c, st, desc); err != nil {
 		var pe *ProviderError
 		if errors.As(err, &pe) {
@@ -226,17 +239,24 @@ func (s *Server) handleCreateManualCharge(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// Garante o QR mesmo quando a Efí não devolve a imagem (best-effort → sempre presente).
-	if c.QRCode == "" {
+	// PIX: garante o QR mesmo quando a Efí não devolve a imagem (boleto não tem QR).
+	if method == "pix" && c.QRCode == "" {
 		c.QRCode = qrPNGDataURI(c.BRCode)
 	}
 	c.PayerName = payerName // p/ o modal; createAndPersistCharge não seta
 
-	// Envia o PIX por email ao cliente (best-effort: não falha a cobrança já criada).
+	// Envia a cobrança por email ao cliente (best-effort: não falha a cobrança já criada).
 	if in.SendEmail && payerEmail != "" && s.email != nil {
 		payURL := s.cfg.PublicPayURL + "/pay/" + c.PublicToken
-		body := chargeEmailHTML(payerName, c.AmountCents, c.DueDate, desc, payURL)
-		if err := s.email.send(r.Context(), payerEmail, "Cobrança PIX — Santos Tech", body); err != nil {
+		var subject, body string
+		if method == "boleto" {
+			subject = "Boleto — Santos Tech"
+			body = boletoEmailHTML(payerName, c.AmountCents, c.DueDate, desc, payURL, c.PDFURL)
+		} else {
+			subject = "Cobrança PIX — Santos Tech"
+			body = chargeEmailHTML(payerName, c.AmountCents, c.DueDate, desc, payURL)
+		}
+		if err := s.email.send(r.Context(), payerEmail, subject, body); err != nil {
 			slog.Warn("manual charge: falha ao enviar email de cobrança", "charge", c.ID, "err", err)
 		}
 	}
@@ -381,7 +401,11 @@ func (s *Server) handleCreateManualRecurrence(w http.ResponseWriter, r *http.Req
 }
 
 // createAndPersistCharge cria no provider, grava e dispara email. Reusado pela recorrência.
+// Boleto (c.Method=="boleto") vai pela API Cobranças; o resto segue o fluxo PIX.
 func (s *Server) createAndPersistCharge(ctx context.Context, c *Charge, st *Student, desc string) error {
+	if c.Method == "boleto" {
+		return s.createAndPersistBoleto(ctx, c, st, desc)
+	}
 	expires := time.Now().AddDate(0, 0, 3).Format(time.RFC3339)
 	if d, err := time.Parse("2006-01-02", c.DueDate); err == nil {
 		expires = d.Add(23 * time.Hour).Format(time.RFC3339)
@@ -399,6 +423,34 @@ func (s *Server) createAndPersistCharge(ctx context.Context, c *Charge, st *Stud
 	if res.CorrelationID != "" {
 		c.CorrelationID = res.CorrelationID
 	}
+	if err := s.store.InsertCharge(ctx, c); err != nil {
+		return err
+	}
+	return nil
+}
+
+// createAndPersistBoleto emite o boleto na API Cobranças e grava a cobrança. A confirmação
+// de pagamento chega pela notificação (POST /webhooks/efi/cobr), casada por provider_charge_id.
+func (s *Server) createAndPersistBoleto(ctx context.Context, c *Charge, st *Student, desc string) error {
+	notifyURL := ""
+	if s.cfg.EFIWebhookURL != "" {
+		notifyURL = s.cfg.EFIWebhookURL + "/cobr"
+		if s.cfg.EFIWebhookSecret != "" {
+			notifyURL += "?token=" + s.cfg.EFIWebhookSecret
+		}
+	}
+	res, err := s.efiCobr.CreateBoleto(ctx, BoletoRequest{
+		AmountCents: c.AmountCents, PayerName: st.Name, PayerTaxID: st.TaxID,
+		PayerEmail: st.Email, PayerPhone: st.Phone, Description: desc,
+		DueDate: c.DueDate, CustomID: c.CorrelationID, NotificationURL: notifyURL,
+	})
+	if err != nil {
+		return err
+	}
+	c.ProviderChargeID = res.ChargeID // charge_id do Efí → casa a notificação
+	c.BRCode = res.Line               // linha digitável (copia-e-cola do boleto)
+	c.PDFURL = res.PDFURL
+	c.Barcode = res.Line
 	if err := s.store.InsertCharge(ctx, c); err != nil {
 		return err
 	}

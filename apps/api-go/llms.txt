@@ -492,8 +492,8 @@ PATCH  /subscriptions/{id}  body {status:active|paused|canceled} → {status}
 Cobranças (admin):
 POST   /charges   body {kind:matricula|avulso,studentId,amountCents,description?,dueDate?}
          → 201 {id,...,brCode,qrCode,correlationId,status} (cria no Dotfy + envia email do Pix)
-POST   /charges/manual   body {customerId? | payerName+payerTaxId, payerEmail?, phone?, productId?, amountCents, description?, dueDate?, sendEmail?, saveCustomer?}
-         → 201 {id,...,brCode,qrCode,status} ("Gerar PIX" do dashboard: cliente existente OU avulso; sendEmail manda o link de pagamento por email; saveCustomer salva o avulso como cliente consolidado por CPF, user_id=0; productId registra o item do catálogo. Avulso cujo CPF JÁ é de um cliente é cobrado COMO aquele cliente — usa nome/email canônicos, não sobrescreve)
+POST   /charges/manual   body {customerId? | payerName+payerTaxId, payerEmail?, phone?, productId?, amountCents, description?, dueDate?, method?, sendEmail?, saveCustomer?}
+         → 201 {id,...,method,brCode,qrCode,pdfUrl?,barcode?,status} ("Gerar cobrança" do dashboard: cliente existente OU avulso; method=pix(default)|boleto — boleto via API Cobranças do Efí devolve brCode=linha digitável + pdfUrl + barcode (sem qrCode); sendEmail manda o link de pagamento por email; saveCustomer salva o avulso como cliente consolidado por CPF, user_id=0; productId registra o item do catálogo. Avulso cujo CPF JÁ é de um cliente é cobrado COMO aquele cliente — usa nome/email canônicos, não sobrescreve)
 GET    /charges?status=&student_id=                             → [{...}]
 GET    /charges/{id}                                            → {...}
 
@@ -557,7 +557,7 @@ GET    /me/recurrences                                          → [assinaturas
          consolidadas pelo CPF; sem customer → []]. Mesma forma de GET /recurrences.
 
 Pagamento público (sem auth) — tela de Pix pelo token público da cobrança:
-GET    /pay/{token}                                             → {amountCents,brCode,qrCode,status,dueDate}
+GET    /pay/{token}                                             → {amountCents,method,brCode,qrCode,pdfUrl?,barcode?,status,dueDate} (boleto: brCode=linha digitável, pdfUrl=PDF, sem qrCode)
 GET    /pay/{token}/events   (SSE, text/event-stream)           → event:status (atual), event:paid / event:canceled (terminal)
 POST   /pay/{token}/cancel                                      → {status:"canceled"} (cancela cobrança pendente; remove a cob na Efí)
 GET    /pay/{token}/receipt                                     → PDF do comprovante (só se paga; pagador baixa sem login)
@@ -609,6 +609,11 @@ POST   /webhooks/efi/rec   mudanças de status dos contratos de PIX Automático 
          do webhook de débito). Mesma auth `?token=<EFI_WEBHOOK_SECRET>`. Resolve o
          contrato por `idRec` e atualiza o status local (pending_auth/active/rejected/
          expired/canceled). 401 se o segredo não bater.
+POST   /webhooks/efi/cobr   notificações da API Cobranças (boleto). A Efí POSTa
+         `{"notification":"<token>"}`; o handler busca GET /v1/notification/{token} e
+         marca paga a cobrança pelo `charge_id` do Efí (=provider_charge_id), publicando
+         no Redis p/ SSE. Mesma auth `?token=<EFI_WEBHOOK_SECRET>`; notification_url
+         registrada por cobrança na emissão do boleto.
 
 Tabelas próprias (mesmo Postgres `santos_tech`, prefixo pay_): pay_students,
 pay_plans, pay_subscriptions, pay_charges, pay_webhook_events, pay_products,

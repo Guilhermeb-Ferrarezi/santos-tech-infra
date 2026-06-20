@@ -15,12 +15,13 @@ const cancelChargeByToken = `-- name: CancelChargeByToken :one
 UPDATE pay_charges
 SET status = 'canceled'
 WHERE public_token = $1 AND status = 'pending'
-RETURNING correlation_id, COALESCE(provider_charge_id, '') AS provider_charge_id
+RETURNING correlation_id, COALESCE(provider_charge_id, '') AS provider_charge_id, method
 `
 
 type CancelChargeByTokenRow struct {
 	CorrelationID    string
 	ProviderChargeID string
+	Method           string
 }
 
 // Cancela uma cobrança pendente pelo token público (botão na tela de pagamento).
@@ -28,7 +29,7 @@ type CancelChargeByTokenRow struct {
 func (q *Queries) CancelChargeByToken(ctx context.Context, publicToken *string) (CancelChargeByTokenRow, error) {
 	row := q.db.QueryRow(ctx, cancelChargeByToken, publicToken)
 	var i CancelChargeByTokenRow
-	err := row.Scan(&i.CorrelationID, &i.ProviderChargeID)
+	err := row.Scan(&i.CorrelationID, &i.ProviderChargeID, &i.Method)
 	return i, err
 }
 
@@ -52,7 +53,8 @@ func (q *Queries) ExpireOverdueCharges(ctx context.Context) (int64, error) {
 const getCharge = `-- name: GetCharge :one
 SELECT id, kind, subscription_id, student_id, amount_cents, due_date::text, reference_month,
        status, provider, COALESCE(provider_charge_id, ''), correlation_id,
-       COALESCE(br_code, ''), COALESCE(qr_code, ''), paid_at, created_at
+       method, COALESCE(br_code, ''), COALESCE(qr_code, ''),
+       COALESCE(pdf_url, ''), COALESCE(barcode, ''), paid_at, created_at
 FROM pay_charges
 WHERE id = $1
 `
@@ -69,8 +71,11 @@ type GetChargeRow struct {
 	Provider         string
 	ProviderChargeID string
 	CorrelationID    string
+	Method           string
 	BrCode           string
 	QrCode           string
+	PdfUrl           string
+	Barcode          string
 	PaidAt           pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 }
@@ -90,8 +95,11 @@ func (q *Queries) GetCharge(ctx context.Context, id int64) (GetChargeRow, error)
 		&i.Provider,
 		&i.ProviderChargeID,
 		&i.CorrelationID,
+		&i.Method,
 		&i.BrCode,
 		&i.QrCode,
+		&i.PdfUrl,
+		&i.Barcode,
 		&i.PaidAt,
 		&i.CreatedAt,
 	)
@@ -101,24 +109,30 @@ func (q *Queries) GetCharge(ctx context.Context, id int64) (GetChargeRow, error)
 const getChargeByPublicToken = `-- name: GetChargeByPublicToken :one
 
 SELECT id, kind, student_id, customer_id, amount_cents, due_date::text, status,
-       COALESCE(br_code, ''), COALESCE(qr_code, ''), correlation_id, paid_at, created_at
+       method, COALESCE(br_code, ''), COALESCE(qr_code, ''),
+       COALESCE(pdf_url, ''), COALESCE(barcode, ''),
+       COALESCE(provider_charge_id, ''), correlation_id, paid_at, created_at
 FROM pay_charges
 WHERE public_token = $1
 `
 
 type GetChargeByPublicTokenRow struct {
-	ID            int64
-	Kind          string
-	StudentID     *int64
-	CustomerID    *int64
-	AmountCents   int64
-	DueDate       string
-	Status        string
-	BrCode        string
-	QrCode        string
-	CorrelationID string
-	PaidAt        pgtype.Timestamptz
-	CreatedAt     pgtype.Timestamptz
+	ID               int64
+	Kind             string
+	StudentID        *int64
+	CustomerID       *int64
+	AmountCents      int64
+	DueDate          string
+	Status           string
+	Method           string
+	BrCode           string
+	QrCode           string
+	PdfUrl           string
+	Barcode          string
+	ProviderChargeID string
+	CorrelationID    string
+	PaidAt           pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
 }
 
 // ListCharges filtra opcionalmente por status e student_id.
@@ -135,8 +149,12 @@ func (q *Queries) GetChargeByPublicToken(ctx context.Context, publicToken *strin
 		&i.AmountCents,
 		&i.DueDate,
 		&i.Status,
+		&i.Method,
 		&i.BrCode,
 		&i.QrCode,
+		&i.PdfUrl,
+		&i.Barcode,
+		&i.ProviderChargeID,
 		&i.CorrelationID,
 		&i.PaidAt,
 		&i.CreatedAt,
@@ -147,8 +165,9 @@ func (q *Queries) GetChargeByPublicToken(ctx context.Context, publicToken *strin
 const insertCharge = `-- name: InsertCharge :one
 INSERT INTO pay_charges
   (kind, subscription_id, student_id, customer_id, amount_cents, due_date, reference_month,
-   provider, provider_charge_id, correlation_id, public_token, payer_tax_id, br_code, qr_code)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+   provider, provider_charge_id, correlation_id, public_token, payer_tax_id, method,
+   br_code, qr_code, pdf_url, barcode)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 RETURNING id, status, created_at
 `
 
@@ -165,8 +184,11 @@ type InsertChargeParams struct {
 	CorrelationID    string
 	PublicToken      *string
 	PayerTaxID       *string
+	Method           string
 	BrCode           *string
 	QrCode           *string
+	PdfUrl           *string
+	Barcode          *string
 }
 
 type InsertChargeRow struct {
@@ -189,8 +211,11 @@ func (q *Queries) InsertCharge(ctx context.Context, arg InsertChargeParams) (Ins
 		arg.CorrelationID,
 		arg.PublicToken,
 		arg.PayerTaxID,
+		arg.Method,
 		arg.BrCode,
 		arg.QrCode,
+		arg.PdfUrl,
+		arg.Barcode,
 	)
 	var i InsertChargeRow
 	err := row.Scan(&i.ID, &i.Status, &i.CreatedAt)
@@ -514,6 +539,22 @@ func (q *Queries) MarkChargePaid(ctx context.Context, correlationID string) erro
 	return err
 }
 
+const markChargePaidByProviderID = `-- name: MarkChargePaidByProviderID :execrows
+UPDATE pay_charges
+SET status = 'paid', paid_at = now()
+WHERE provider_charge_id = $1 AND status = 'pending'
+`
+
+// Boleto (API Cobranças): a notificação casa pelo charge_id do Efí (provider_charge_id),
+// não pelo correlation_id. Devolve nº de linhas afetadas (>0 = realmente marcou paga agora).
+func (q *Queries) MarkChargePaidByProviderID(ctx context.Context, providerChargeID *string) (int64, error) {
+	result, err := q.db.Exec(ctx, markChargePaidByProviderID, providerChargeID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const payerEmailByCharge = `-- name: PayerEmailByCharge :one
 SELECT COALESCE(NULLIF(st.name, ''),  cu.name, '') AS name,
        COALESCE(NULLIF(st.email, ''), cu.email, '') AS email
@@ -543,6 +584,19 @@ WHERE correlation_id = $1
 
 func (q *Queries) PublicTokenByCorrelation(ctx context.Context, correlationID string) (*string, error) {
 	row := q.db.QueryRow(ctx, publicTokenByCorrelation, correlationID)
+	var public_token *string
+	err := row.Scan(&public_token)
+	return public_token, err
+}
+
+const publicTokenByProviderID = `-- name: PublicTokenByProviderID :one
+SELECT public_token
+FROM pay_charges
+WHERE provider_charge_id = $1
+`
+
+func (q *Queries) PublicTokenByProviderID(ctx context.Context, providerChargeID *string) (*string, error) {
+	row := q.db.QueryRow(ctx, publicTokenByProviderID, providerChargeID)
 	var public_token *string
 	err := row.Scan(&public_token)
 	return public_token, err

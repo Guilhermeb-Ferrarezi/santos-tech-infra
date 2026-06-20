@@ -174,6 +174,13 @@ ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS recurrence_id BIGINT REFERENCES
 ALTER TABLE pay_charges DROP CONSTRAINT IF EXISTS pay_charges_kind_check;
 ALTER TABLE pay_charges ADD CONSTRAINT pay_charges_kind_check
   CHECK (kind IN ('mensalidade','matricula','avulso','recorrente'));
+-- Método de pagamento da cobrança (default 'pix' p/ as existentes). Boleto reusa
+-- br_code (linha digitável) e provider_charge_id (charge_id do Efí); pdf_url/barcode
+-- são específicos do boleto.
+ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS method  TEXT NOT NULL DEFAULT 'pix'
+  CHECK (method IN ('pix','boleto'));
+ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS pdf_url TEXT;
+ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS barcode TEXT;
 `
 
 func migrate(ctx context.Context, db *pgxpool.Pool) error {

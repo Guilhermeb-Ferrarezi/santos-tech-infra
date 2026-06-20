@@ -67,8 +67,11 @@ components:
         providerChargeId: { type: string }
         correlationId: { type: string }
         publicToken: { type: string, description: "token público p/ tela de pagamento (cobranças de cliente)" }
-        brCode: { type: string, description: "Pix copia-e-cola" }
-        qrCode: { type: string, description: "imagem do QR (base64/data-uri) ou URL" }
+        method: { type: string, enum: [pix, boleto], description: "método de pagamento" }
+        brCode: { type: string, description: "PIX: copia-e-cola · boleto: linha digitável" }
+        qrCode: { type: string, description: "imagem do QR (base64/data-uri) ou URL — só PIX" }
+        pdfUrl: { type: string, description: "boleto: link do PDF" }
+        barcode: { type: string, description: "boleto: código de barras / linha digitável" }
         paidAt: { type: string, format: date-time, nullable: true }
         createdAt: { type: string, format: date-time }
     Recurrence:
@@ -307,12 +310,13 @@ paths:
         "200": { description: lista, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Charge" } } } } }
   /charges/manual:
     post:
-      summary: Gera PIX avulso pelo dashboard (cliente existente ou pagador avulso)
+      summary: Gera cobrança avulsa (PIX ou boleto) pelo dashboard (cliente existente ou pagador avulso)
       description: >
-        Cria uma cobrança PIX avulsa (kind=avulso). Informe `customerId` para um cliente
-        já cadastrado OU `payerName`+`payerTaxId` para um pagador avulso. Com `sendEmail=true`
-        envia o copia-e-cola por e-mail (no modo avulso exige `payerEmail`). A resposta inclui
-        `brCode`/`qrCode` para exibir o QR no dashboard.
+        Cria uma cobrança avulsa (kind=avulso). `method` escolhe **pix** (default) ou
+        **boleto** (API Cobranças do Efí). Informe `customerId` para um cliente já
+        cadastrado OU `payerName`+`payerTaxId` para um pagador avulso. Com `sendEmail=true`
+        envia ao cliente por e-mail (no modo avulso exige `payerEmail`). PIX devolve
+        `brCode`/`qrCode`; boleto devolve `brCode` (linha digitável), `pdfUrl` e `barcode`.
       requestBody:
         required: true
         content:
@@ -328,8 +332,9 @@ paths:
                 phone: { type: string, description: telefone do pagador (avulso, ao salvar como cliente) }
                 amountCents: { type: integer }
                 description: { type: string }
-                dueDate: { type: string, format: date, description: "default: hoje+3" }
-                sendEmail: { type: boolean, description: envia o PIX por e-mail ao cliente }
+                dueDate: { type: string, format: date, description: "default: hoje+3 (boleto: vencimento)" }
+                method: { type: string, enum: [pix, boleto], description: "método de pagamento (default pix)" }
+                sendEmail: { type: boolean, description: envia a cobrança por e-mail ao cliente }
                 saveCustomer: { type: boolean, description: "avulso: salva o pagador como cliente (consolida por CPF, habilita comprovante no pagamento)" }
       responses:
         "201": { description: criada (inclui brCode/qrCode), content: { application/json: { schema: { $ref: "#/components/schemas/Charge" } } } }
@@ -668,8 +673,11 @@ paths:
                 type: object
                 properties:
                   amountCents: { type: integer }
-                  brCode: { type: string }
-                  qrCode: { type: string }
+                  method: { type: string, enum: [pix, boleto] }
+                  brCode: { type: string, description: "PIX: copia-e-cola · boleto: linha digitável" }
+                  qrCode: { type: string, description: "imagem do QR — só PIX" }
+                  pdfUrl: { type: string, description: "boleto: link do PDF" }
+                  barcode: { type: string, description: "boleto: código de barras" }
                   status: { type: string, enum: [pending, paid, expired, canceled] }
                   dueDate: { type: string, format: date }
         "404": { description: não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -933,3 +941,25 @@ paths:
         "200": { description: processado }
         "400": { description: webhook inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { description: segredo inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /webhooks/efi/cobr:
+    post:
+      summary: Webhook da Efí — notificações da API Cobranças / boleto (público)
+      security: []
+      description: >
+        Recebe as notificações da API Cobranças (boleto). A Efí POSTa
+        `{"notification":"<token>"}` a cada mudança de status; o handler busca o detalhe
+        em `GET /v1/notification/{token}` e marca paga a cobrança casada pelo `charge_id`
+        do Efí (= `providerChargeId`), publicando no Redis para o SSE. Autenticação via
+        `?token=<EFI_WEBHOOK_SECRET>`, mesmo esquema dos demais webhooks. A
+        `notification_url` é registrada por cobrança na emissão do boleto.
+      parameters:
+        - name: token
+          in: query
+          required: false
+          schema: { type: string }
+          description: Secret compartilhado (EFI_WEBHOOK_SECRET); validado pelo handler.
+      responses:
+        "200": { description: processado }
+        "400": { description: webhook inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: segredo inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: falha ao consultar a notificação na Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }

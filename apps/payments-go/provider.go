@@ -94,6 +94,34 @@ type RecEvent struct {
 	Raw      []byte
 }
 
+// BoletoRequest é a entrada para emitir um boleto na API Cobranças do Efí
+// (POST /v1/charge/one-step). NotificationURL recebe os avisos de mudança de status.
+type BoletoRequest struct {
+	AmountCents     int64
+	PayerName       string
+	PayerTaxID      string // CPF (só dígitos)
+	PayerEmail      string // opcional
+	PayerPhone      string // opcional
+	Description     string // vira o nome do item
+	DueDate         string // YYYY-MM-DD (banking_billet.expire_at)
+	CustomID        string // metadata.custom_id (nosso correlation_id)
+	NotificationURL string // metadata.notification_url
+}
+
+// BoletoResult é o retorno da emissão do boleto.
+type BoletoResult struct {
+	ChargeID string // data.charge_id (numérico, guardado como string em provider_charge_id)
+	Line     string // data.barcode — linha digitável (copia-e-cola do boleto)
+	PDFURL   string // data.pdf.charge — link do PDF
+	Status   string // data.status (waiting|paid|...)
+}
+
+// BoletoEvent é um item de GET /v1/notification/{token} (mudança de status de cobrança).
+type BoletoEvent struct {
+	ChargeID string // identifiers.charge_id
+	Status   string // status.current (paid|waiting|unpaid|canceled|...)
+}
+
 // PaymentProvider isola o núcleo do gateway. Fase atual: efiProvider.
 type PaymentProvider interface {
 	CreateCharge(ctx context.Context, req ChargeRequest) (ChargeResult, error)

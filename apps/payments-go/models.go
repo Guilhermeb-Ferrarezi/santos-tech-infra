@@ -43,11 +43,15 @@ type Charge struct {
 	ProviderChargeID string     `json:"providerChargeId"`
 	CorrelationID    string     `json:"correlationId"`
 	PublicToken      string     `json:"publicToken,omitempty"`
-	BRCode           string     `json:"brCode"`
+	Method           string     `json:"method"` // pix | boleto
+	BRCode           string     `json:"brCode"` // pix: copia-e-cola · boleto: linha digitável
 	QRCode           string     `json:"qrCode"`
+	PDFURL           string     `json:"pdfUrl,omitempty"`  // boleto: link do PDF
+	Barcode          string     `json:"barcode,omitempty"` // boleto: código de barras
 	PaidAt           *time.Time `json:"paidAt,omitempty"`
 	CreatedAt        time.Time  `json:"createdAt"`
 	PayerName        string     `json:"payerName,omitempty"`
+	PayerEmail       string     `json:"payerEmail,omitempty"` // só preenchido na listagem (busca)
 
 	payerTaxID string // snapshot p/ insert; não serializa
 }

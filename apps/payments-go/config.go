@@ -16,6 +16,7 @@ type Config struct {
 	EmailAPIKey      string
 	NotifyEmail      string // destino do aviso de pagamento confirmado (opcional)
 	EFIBaseURL       string
+	EFICobrBaseURL   string // base da API Cobranças (boleto) — distinta da API Pix
 	EFIClientID      string
 	EFIClientSecret  string
 	EFICertP12Base64 string
@@ -38,6 +39,7 @@ func LoadConfig() Config {
 		EmailAPIKey:      getEnv("EMAIL_API_KEY", ""),
 		NotifyEmail:      strings.TrimSpace(getEnv("PAYMENT_NOTIFY_EMAIL", "")),
 		EFIBaseURL:       strings.TrimRight(getEnv("EFI_BASE_URL", "https://pix-h.api.efipay.com.br"), "/"),
+		EFICobrBaseURL:   strings.TrimRight(getEnv("EFI_COBR_BASE_URL", "https://cobrancas-h.api.efipay.com.br"), "/"),
 		EFIClientID:      mustEnv("EFI_CLIENT_ID"),
 		EFIClientSecret:  mustEnv("EFI_CLIENT_SECRET"),
 		EFICertP12Base64: mustEnv("EFI_CERT_P12_BASE64"),

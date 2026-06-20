@@ -40,7 +40,16 @@ export interface Product {
   dueDay?: number | null;
 }
 export interface CartLine { product: Product; quantity: number; }
-export interface PayData { amountCents: number; brCode: string; qrCode: string; status: string; dueDate: string; }
+export interface PayData {
+  amountCents: number;
+  method?: string; // "pix" | "boleto" (ausente em cobranças antigas = pix)
+  brCode: string; // pix: copia-e-cola · boleto: linha digitável
+  qrCode: string;
+  pdfUrl?: string; // boleto: link do PDF
+  barcode?: string; // boleto: código de barras
+  status: string;
+  dueDate: string;
+}
 
 // seg codifica um segmento de path controlado pelo usuário (evita path/URL injection).
 const seg = (v: string | number) => encodeURIComponent(String(v));

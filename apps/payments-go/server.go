@@ -24,6 +24,7 @@ type Server struct {
 	cart      *CartStore
 	provider  PaymentProvider
 	efi       efiOps
+	efiCobr   *efiCobrancas // API Cobranças (boleto); nil se EFI_COBR_BASE_URL ausente
 	email     *emailClient
 	// queue enfileira tasks asynq (notificação de pagamento). Pode ser nil em
 	// testes que não montam a fila — os callers tratam o nil com fallback.
@@ -48,6 +49,10 @@ func NewServer(cfg Config, db *pgxpool.Pool, rdb *redis.Client, provider Payment
 	// O *efiProvider satisfaz tanto PaymentProvider quanto efiOps.
 	if ep, ok := provider.(*efiProvider); ok {
 		s.efi = ep
+	}
+	// API Cobranças (boleto) só sobe se a base estiver configurada.
+	if cfg.EFICobrBaseURL != "" {
+		s.efiCobr = newEfiCobrancas(cfg)
 	}
 	return s
 }
@@ -123,6 +128,10 @@ func (s *Server) Routes() http.Handler {
 	// do webhook pix do débito. Mesmo esquema de segredo em ?token= (a Efí pode anexar
 	// um sufixo de rota ao final, tratado no handler).
 	mux.HandleFunc("POST /webhooks/efi/rec", s.handleRecWebhook)
+
+	// Webhook da API Cobranças (boleto): a Efí POSTa {"notification":"<token>"} a cada
+	// mudança de status; o handler busca o detalhe e marca a cobrança paga pelo charge_id.
+	mux.HandleFunc("POST /webhooks/efi/cobr", s.handleCobrWebhook)
 
 	mux.HandleFunc("GET /efi/balance", s.requireAdmin(s.handleEfiBalance))
 	mux.HandleFunc("GET /efi/med", s.requireAdmin(s.handleEfiMED))

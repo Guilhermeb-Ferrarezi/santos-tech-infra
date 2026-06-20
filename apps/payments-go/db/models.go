@@ -24,8 +24,11 @@ type PayCharge struct {
 	CorrelationID    string
 	PublicToken      *string
 	PayerTaxID       *string
+	Method           string
 	BrCode           *string
 	QrCode           *string
+	PdfUrl           *string
+	Barcode          *string
 	PaidAt           pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 }

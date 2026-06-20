@@ -11,8 +11,11 @@ import (
 
 type payDTO struct {
 	AmountCents int64  `json:"amountCents"`
-	BRCode      string `json:"brCode"`
+	Method      string `json:"method"` // pix | boleto
+	BRCode      string `json:"brCode"` // pix: copia-e-cola · boleto: linha digitável
 	QRCode      string `json:"qrCode"`
+	PDFURL      string `json:"pdfUrl,omitempty"`  // boleto: link do PDF
+	Barcode     string `json:"barcode,omitempty"` // boleto: código de barras
 	Status      string `json:"status"`
 	DueDate     string `json:"dueDate"`
 }
@@ -24,7 +27,8 @@ func (s *Server) handleGetPay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, payDTO{
-		AmountCents: c.AmountCents, BRCode: c.BRCode, QRCode: c.QRCode, Status: c.Status, DueDate: c.DueDate,
+		AmountCents: c.AmountCents, Method: methodOrPix(c.Method), BRCode: c.BRCode, QRCode: c.QRCode,
+		PDFURL: c.PDFURL, Barcode: c.Barcode, Status: c.Status, DueDate: c.DueDate,
 	})
 }
 
@@ -87,7 +91,7 @@ func (s *Server) handlePayEvents(w http.ResponseWriter, r *http.Request) {
 // pois o gateway expira sozinho) e avisa os streams SSE inscritos.
 func (s *Server) handleCancelPay(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
-	correlationID, providerChargeID, err := s.store.CancelChargeByToken(r.Context(), token)
+	correlationID, providerChargeID, method, err := s.store.CancelChargeByToken(r.Context(), token)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Já paga, já cancelada/expirada, ou token inexistente: nada a cancelar.
 		writeError(w, http.StatusConflict, "not_cancelable", "Cobrança não pode ser cancelada")
@@ -97,8 +101,14 @@ func (s *Server) handleCancelPay(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao cancelar")
 		return
 	}
-	// Remove a cob na Efí na hora (best-effort): se falhar, o QR ainda expira sozinho.
-	if s.efi != nil {
+	// Remove a cobrança na Efí na hora (best-effort): se falhar, ela ainda expira sozinha.
+	if method == "boleto" {
+		if s.efiCobr != nil && providerChargeID != "" {
+			if e := s.efiCobr.CancelBoleto(r.Context(), providerChargeID); e != nil {
+				slog.Warn("falha ao cancelar boleto na Efí (segue cancelado localmente)", "corr", correlationID, "err", e)
+			}
+		}
+	} else if s.efi != nil {
 		id := providerChargeID
 		if id == "" {
 			id = correlationID
@@ -123,6 +133,12 @@ func (s *Server) handlePayReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 	if c.Status != "paid" {
 		writeError(w, http.StatusConflict, "not_paid", "Cobrança ainda não foi paga")
+		return
+	}
+	if methodOrPix(c.Method) == "boleto" {
+		// Boleto não tem o comprovante Pix (/gn/pix/comprovantes); o próprio PDF do boleto
+		// serve de referência na tela de pagamento.
+		writeError(w, http.StatusConflict, "receipt_unavailable", "Comprovante em PDF disponível apenas para PIX")
 		return
 	}
 	if s.efi == nil {

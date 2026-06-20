@@ -1,8 +1,9 @@
 -- name: InsertCharge :one
 INSERT INTO pay_charges
   (kind, subscription_id, student_id, customer_id, amount_cents, due_date, reference_month,
-   provider, provider_charge_id, correlation_id, public_token, payer_tax_id, br_code, qr_code)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+   provider, provider_charge_id, correlation_id, public_token, payer_tax_id, method,
+   br_code, qr_code, pdf_url, barcode)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 RETURNING id, status, created_at;
 
 -- name: InsertRecurrenceCharge :one
@@ -19,7 +20,8 @@ RETURNING id, status, created_at;
 -- name: GetCharge :one
 SELECT id, kind, subscription_id, student_id, amount_cents, due_date::text, reference_month,
        status, provider, COALESCE(provider_charge_id, ''), correlation_id,
-       COALESCE(br_code, ''), COALESCE(qr_code, ''), paid_at, created_at
+       method, COALESCE(br_code, ''), COALESCE(qr_code, ''),
+       COALESCE(pdf_url, ''), COALESCE(barcode, ''), paid_at, created_at
 FROM pay_charges
 WHERE id = $1;
 
@@ -29,7 +31,9 @@ WHERE id = $1;
 
 -- name: GetChargeByPublicToken :one
 SELECT id, kind, student_id, customer_id, amount_cents, due_date::text, status,
-       COALESCE(br_code, ''), COALESCE(qr_code, ''), correlation_id, paid_at, created_at
+       method, COALESCE(br_code, ''), COALESCE(qr_code, ''),
+       COALESCE(pdf_url, ''), COALESCE(barcode, ''),
+       COALESCE(provider_charge_id, ''), correlation_id, paid_at, created_at
 FROM pay_charges
 WHERE public_token = $1;
 
@@ -37,6 +41,18 @@ WHERE public_token = $1;
 UPDATE pay_charges
 SET status = 'paid', paid_at = now()
 WHERE correlation_id = $1 AND status = 'pending';
+
+-- name: MarkChargePaidByProviderID :execrows
+-- Boleto (API Cobranças): a notificação casa pelo charge_id do Efí (provider_charge_id),
+-- não pelo correlation_id. Devolve nº de linhas afetadas (>0 = realmente marcou paga agora).
+UPDATE pay_charges
+SET status = 'paid', paid_at = now()
+WHERE provider_charge_id = $1 AND status = 'pending';
+
+-- name: PublicTokenByProviderID :one
+SELECT public_token
+FROM pay_charges
+WHERE provider_charge_id = $1;
 
 -- name: MarkChargeExpired :exec
 UPDATE pay_charges
@@ -111,7 +127,7 @@ WHERE status = 'pending'
 UPDATE pay_charges
 SET status = 'canceled'
 WHERE public_token = $1 AND status = 'pending'
-RETURNING correlation_id, COALESCE(provider_charge_id, '') AS provider_charge_id;
+RETURNING correlation_id, COALESCE(provider_charge_id, '') AS provider_charge_id, method;
 
 -- GetStats usa SQL com fragmento dinâmico (WHERE clause montada em runtime).
 -- Não migrado para sqlc — ver store.go GetStats.
