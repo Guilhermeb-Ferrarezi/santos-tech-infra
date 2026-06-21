@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ShieldCheck } from "lucide-react";
+import { Lock, ShieldCheck } from "lucide-react";
 
 // CheckoutShell — split layout de duas colunas inspirado no checkout do AbacatePay.
 // Esquerda (~60%, fundo branco): o conteúdo da etapa atual.
@@ -14,9 +14,16 @@ export function CheckoutShell({ left, right }: { left: ReactNode; right: ReactNo
             Conteúdo alinhado à direita (perto da divisa) no desktop. */}
         <main className="order-1 flex-1 px-6 py-8 sm:px-10 sm:py-12 lg:basis-[55%] lg:px-14 lg:py-14">
           <div className="mx-auto w-full max-w-2xl lg:ml-auto lg:mr-0">
-            <header className="mb-10 flex items-center gap-3">
-              <img src="/logo-santostech.svg" alt="Santos Tech" className="h-9 w-9" />
-              <span className="text-lg font-bold tracking-tight text-[#0e2937]">Santos Tech</span>
+            {/* Header: logo à esquerda + selo de segurança à direita */}
+            <header className="mb-10 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <img src="/logo-santostech.svg" alt="Santos Tech" className="h-9 w-9" />
+                <span className="text-lg font-bold tracking-tight text-[#0e2937]">Santos Tech</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs font-medium text-[#496b84]">
+                <Lock className="size-3.5 text-[#0db88f]" aria-hidden />
+                <span>Compra 100% segura</span>
+              </div>
             </header>
             {left}
           </div>
@@ -35,7 +42,7 @@ export function CheckoutShell({ left, right }: { left: ReactNode; right: ReactNo
 // SecuritySeal — selo "Compra 100% segura" exibido no topo da coluna direita.
 export function SecuritySeal() {
   return (
-    <div className="mb-6 flex items-center gap-2 text-sm font-medium text-[#0db88f]">
+    <div className="mb-5 flex items-center gap-2 text-sm font-medium text-[#0db88f]">
       <ShieldCheck className="size-4" aria-hidden />
       <span>Compra 100% segura</span>
     </div>

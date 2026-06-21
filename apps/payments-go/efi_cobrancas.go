@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -196,6 +197,147 @@ func (p *efiCobrancas) CreateBoleto(ctx context.Context, req BoletoRequest) (Bol
 func (p *efiCobrancas) CancelBoleto(ctx context.Context, chargeID string) error {
 	_, err := p.do(ctx, http.MethodPut, "/v1/charge/"+chargeID+"/cancel", nil)
 	return err
+}
+
+// Installments consulta as opções de parcelamento para um cartão
+// (GET /v1/installments?brand=<brand>&total=<totalCents>).
+func (p *efiCobrancas) Installments(ctx context.Context, brand string, totalCents int) ([]Installment, error) {
+	path := fmt.Sprintf("/v1/installments?brand=%s&total=%d", url.QueryEscape(brand), totalCents)
+	data, err := p.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Data struct {
+			Installments []struct {
+				Installment  int     `json:"installment"`
+				Value        int64   `json:"value"`
+				InterestRate float64 `json:"interest_rate"`
+			} `json:"installments"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]Installment, 0, len(resp.Data.Installments))
+	for _, i := range resp.Data.Installments {
+		out = append(out, Installment{
+			Number:          i.Installment,
+			ValueCents:      i.Value,
+			InterestPercent: i.InterestRate,
+		})
+	}
+	return out, nil
+}
+
+// ChargeCardOneStep cria uma cobrança de cartão de crédito em um passo
+// (POST /v1/charge/one-step com payment.credit_card). Reusa o token Basic Auth do boleto.
+// NUNCA recebe PAN/CVV — só o payment_token gerado pelo SDK Efí no frontend.
+func (p *efiCobrancas) ChargeCardOneStep(ctx context.Context, in CardChargeInput) (CardChargeResult, error) {
+	name := in.Description
+	if name == "" {
+		name = "Cobrança"
+	}
+	installments := in.Installments
+	if installments < 1 {
+		installments = 1
+	}
+	customer := map[string]any{
+		"name":  in.Customer.Name,
+		"cpf":   in.Customer.TaxID,
+		"email": in.Customer.Email,
+	}
+	if in.Customer.Phone != "" {
+		customer["phone_number"] = in.Customer.Phone
+	}
+	if in.Customer.BirthDate != "" {
+		customer["birth"] = in.Customer.BirthDate
+	}
+	billing := map[string]any{
+		"street":       in.BillingAddress.Street,
+		"number":       in.BillingAddress.Number,
+		"neighborhood": in.BillingAddress.Neighborhood,
+		"zipcode":      in.BillingAddress.ZipCode,
+		"city":         in.BillingAddress.City,
+		"state":        in.BillingAddress.State,
+	}
+	payload := map[string]any{
+		"items": []map[string]any{
+			{"name": name, "value": in.AmountCents, "amount": 1},
+		},
+		"payment": map[string]any{
+			"credit_card": map[string]any{
+				"customer":        customer,
+				"installments":    installments,
+				"payment_token":   in.PaymentToken,
+				"billing_address": billing,
+			},
+		},
+	}
+	data, err := p.do(ctx, http.MethodPost, "/v1/charge/one-step", payload)
+	if err != nil {
+		// Não inclui o body bruto no erro propagado — pode conter dados sensíveis de cartão.
+		var pe *ProviderError
+		if errors.As(err, &pe) {
+			return CardChargeResult{}, pe
+		}
+		return CardChargeResult{}, fmt.Errorf("efi cobr card: status inesperado")
+	}
+	var resp struct {
+		Data struct {
+			ChargeID int64  `json:"charge_id"`
+			Status   string `json:"status"`
+			Message  string `json:"message"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return CardChargeResult{}, fmt.Errorf("efi cobr card: resposta inválida")
+	}
+	if resp.Data.ChargeID == 0 {
+		return CardChargeResult{}, fmt.Errorf("efi cobr card: resposta sem charge_id")
+	}
+	return CardChargeResult{
+		ChargeID: strconv.FormatInt(resp.Data.ChargeID, 10),
+		Status:   mapCardStatus(resp.Data.Status),
+		Message:  resp.Data.Message,
+	}, nil
+}
+
+// RefundCard solicita o estorno de uma cobrança de cartão
+// (POST /v1/charge/card/{id}/refund). Se amountCents for nil, estorna o valor total.
+func (p *efiCobrancas) RefundCard(ctx context.Context, chargeID string, amountCents *int64) error {
+	var body any
+	if amountCents != nil {
+		body = map[string]any{"value": *amountCents}
+	}
+	_, err := p.do(ctx, http.MethodPost, "/v1/charge/card/"+chargeID+"/refund", body)
+	return err
+}
+
+// GetCobrancaNotification é um alias tipado para GetNotification, que serve tanto
+// para boleto quanto para cartão (a Efí usa o mesmo endpoint de notificação).
+func (p *efiCobrancas) GetCobrancaNotification(ctx context.Context, token string) ([]BoletoEvent, error) {
+	return p.GetNotification(ctx, token)
+}
+
+// mapCardStatus traduz o status da Efí (API Cobranças) para o vocabulário interno.
+// new/waiting/approved/paid → "waiting" (aguardando confirmação) ou "paid";
+// unpaid → mantém pendente (recusado); canceled → "canceled".
+func mapCardStatus(efiStatus string) string {
+	switch efiStatus {
+	case "paid", "approved":
+		return "paid"
+	case "new", "waiting":
+		return "waiting"
+	case "unpaid":
+		return "unpaid"
+	case "canceled":
+		return "canceled"
+	case "refunded":
+		return "refunded"
+	default:
+		return efiStatus
+	}
 }
 
 // GetNotification busca o detalhe de uma notificação (GET /v1/notification/{token}) e

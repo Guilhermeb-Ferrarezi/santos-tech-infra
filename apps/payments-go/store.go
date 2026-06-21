@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -636,6 +637,17 @@ func (s *Store) MarkChargeExpired(ctx context.Context, correlationID string) err
 	return s.q.MarkChargeExpired(ctx, correlationID)
 }
 
+// MarkChargeRefunded marca a cobrança como estornada (status='refunded') pelo
+// correlationID. Fecha a janela de double-refund: uma 2ª chamada de RefundCard
+// é bloqueada antes de chegar ao gateway (o handler verifica c.Status == "refunded").
+// O status 'refunded' não está no CHECK atual de pay_charges — adicionamos via migration.
+func (s *Store) MarkChargeRefunded(ctx context.Context, correlationID string) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE pay_charges SET status='refunded' WHERE correlation_id=$1 AND status='paid'`,
+		correlationID)
+	return err
+}
+
 // ExpireOverdueCharges marca como expiradas as cobranças pendentes vencidas (job
 // periódico). Devolve quantas foram expiradas.
 func (s *Store) ExpireOverdueCharges(ctx context.Context) (int64, error) {
@@ -1190,4 +1202,316 @@ func (s *Store) bucketSeries(ctx context.Context, sql string, args ...any) (map[
 		out[b.Key] = b
 	}
 	return out, rows.Err()
+}
+
+// ── Payment Links ─────────────────────────────────────────────────────────────
+
+// CreatePaymentLink insere um novo link de pagamento e preenche ID, CreatedAt e Status.
+func (s *Store) CreatePaymentLink(ctx context.Context, l *PaymentLink) error {
+	// Converter []int para []int64 para o driver pgx
+	pids := make([]int64, len(l.ProductIDs))
+	for i, v := range l.ProductIDs {
+		pids[i] = int64(v)
+	}
+	methods := l.Methods
+	if len(methods) == 0 {
+		methods = []string{"pix"}
+	}
+	coupons := l.Coupons
+	if coupons == nil {
+		coupons = []string{}
+	}
+	return s.db.QueryRow(ctx, `
+		INSERT INTO pay_payment_links
+		  (public_token, amount_cents, product_ids, methods, coupons, finish_url, return_url)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, status, created_at`,
+		l.PublicToken, l.AmountCents, pids, methods, coupons, l.FinishURL, l.ReturnURL,
+	).Scan(&l.ID, &l.Status, &l.CreatedAt)
+}
+
+// GetPaymentLinkByToken resolve um link pelo token público.
+func (s *Store) GetPaymentLinkByToken(ctx context.Context, token string) (*PaymentLink, error) {
+	var l PaymentLink
+	var pids []int64
+	err := s.db.QueryRow(ctx, `
+		SELECT id, public_token, amount_cents, product_ids, methods, coupons,
+		       finish_url, return_url, status, created_at
+		FROM pay_payment_links WHERE public_token = $1`, token).
+		Scan(&l.ID, &l.PublicToken, &l.AmountCents, &pids, &l.Methods, &l.Coupons,
+			&l.FinishURL, &l.ReturnURL, &l.Status, &l.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	l.ProductIDs = make([]int, len(pids))
+	for i, v := range pids {
+		l.ProductIDs[i] = int(v)
+	}
+	if l.Methods == nil {
+		l.Methods = []string{}
+	}
+	if l.Coupons == nil {
+		l.Coupons = []string{}
+	}
+	return &l, nil
+}
+
+// GetPaymentLink resolve um link pelo ID interno (admin).
+func (s *Store) GetPaymentLink(ctx context.Context, id int64) (*PaymentLink, error) {
+	var l PaymentLink
+	var pids []int64
+	err := s.db.QueryRow(ctx, `
+		SELECT id, public_token, amount_cents, product_ids, methods, coupons,
+		       finish_url, return_url, status, created_at
+		FROM pay_payment_links WHERE id = $1`, id).
+		Scan(&l.ID, &l.PublicToken, &l.AmountCents, &pids, &l.Methods, &l.Coupons,
+			&l.FinishURL, &l.ReturnURL, &l.Status, &l.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	l.ProductIDs = make([]int, len(pids))
+	for i, v := range pids {
+		l.ProductIDs[i] = int(v)
+	}
+	if l.Methods == nil {
+		l.Methods = []string{}
+	}
+	if l.Coupons == nil {
+		l.Coupons = []string{}
+	}
+	return &l, nil
+}
+
+// ListPaymentLinks lista todos os links de pagamento, mais recentes primeiro.
+func (s *Store) ListPaymentLinks(ctx context.Context) ([]PaymentLink, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, public_token, amount_cents, product_ids, methods, coupons,
+		       finish_url, return_url, status, created_at
+		FROM pay_payment_links
+		ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PaymentLink
+	for rows.Next() {
+		var l PaymentLink
+		var pids []int64
+		if err := rows.Scan(&l.ID, &l.PublicToken, &l.AmountCents, &pids, &l.Methods, &l.Coupons,
+			&l.FinishURL, &l.ReturnURL, &l.Status, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		l.ProductIDs = make([]int, len(pids))
+		for i, v := range pids {
+			l.ProductIDs[i] = int(v)
+		}
+		if l.Methods == nil {
+			l.Methods = []string{}
+		}
+		if l.Coupons == nil {
+			l.Coupons = []string{}
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// SetPaymentLinkStatus altera o status de um link (active | inactive).
+func (s *Store) SetPaymentLinkStatus(ctx context.Context, id int64, status string) error {
+	tag, err := s.db.Exec(ctx,
+		`UPDATE pay_payment_links SET status=$1 WHERE id=$2`, status, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// ── Withdrawals (Saques) ──────────────────────────────────────────────────
+
+// CreateWithdrawal insere um novo registro de saque e preenche ID e CreatedAt.
+// O campo Destination NÃO é gravado no banco — nunca persistir dados de conta bancária
+// no log nem na tabela (só o saque já executado fica registrado, sem o destino).
+func (s *Store) CreateWithdrawal(ctx context.Context, w *Withdrawal) error {
+	key := nullStrPtr(w.IdempotencyKey)
+	return s.db.QueryRow(ctx, `
+		INSERT INTO pay_withdrawals (amount_cents, status, public_token, idempotency_key)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, created_at`,
+		w.AmountCents, w.Status, w.PublicToken, key,
+	).Scan(&w.ID, &w.CreatedAt)
+}
+
+// GetWithdrawalByIdempotencyKey devolve o withdrawal existente com aquela chave,
+// ou nil (sem erro) se não existir.
+func (s *Store) GetWithdrawalByIdempotencyKey(ctx context.Context, key string) (*Withdrawal, error) {
+	var w Withdrawal
+	var ikey *string
+	err := s.db.QueryRow(ctx, `
+		SELECT id, amount_cents, status, public_token, idempotency_key, created_at
+		FROM pay_withdrawals WHERE idempotency_key = $1`, key).
+		Scan(&w.ID, &w.AmountCents, &w.Status, &w.PublicToken, &ikey, &w.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if ikey != nil {
+		w.IdempotencyKey = *ikey
+	}
+	return &w, nil
+}
+
+// ListWithdrawals lista todos os saques, mais recentes primeiro.
+func (s *Store) ListWithdrawals(ctx context.Context) ([]Withdrawal, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, amount_cents, status, public_token, created_at
+		FROM pay_withdrawals
+		ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Withdrawal
+	for rows.Next() {
+		var w Withdrawal
+		if err := rows.Scan(&w.ID, &w.AmountCents, &w.Status, &w.PublicToken, &w.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// ── Statement (extrato de movimentos) ────────────────────────────────────────
+
+// ListMovements devolve os movimentos financeiros do período [from, to], ordenados
+// por data decrescente. Inclui:
+//   - Cobranças pagas (direction="in", type="${method}_in"): usando paid_at como data.
+//   - Saques registrados (direction="out", type="payout"): usando created_at como data.
+//
+// Não persiste SQL em handlers: toda a agregação fica aqui no store.
+func (s *Store) ListMovements(ctx context.Context, from, to time.Time) ([]Movement, error) {
+	// 1. Cobranças pagas no intervalo.
+	chargeRows, err := s.db.Query(ctx, `
+		SELECT
+			c.id,
+			COALESCE(c.method, 'pix') AS method,
+			c.amount_cents,
+			COALESCE(NULLIF(st.name,''),  NULLIF(cu.name,''),  '') AS customer_name,
+			COALESCE(NULLIF(st.email,''), NULLIF(cu.email,''), '') AS customer_email,
+			c.paid_at
+		FROM pay_charges c
+		LEFT JOIN pay_students  st ON st.id = c.student_id
+		LEFT JOIN pay_customers cu ON cu.id = c.customer_id
+		WHERE c.status = 'paid'
+		  AND c.paid_at >= $1
+		  AND c.paid_at < $2
+		ORDER BY c.paid_at DESC`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer chargeRows.Close()
+
+	var out []Movement
+	for chargeRows.Next() {
+		var (
+			id            int64
+			method        string
+			valueCents    int64
+			customerName  string
+			customerEmail string
+			paidAt        time.Time
+		)
+		if err := chargeRows.Scan(&id, &method, &valueCents, &customerName, &customerEmail, &paidAt); err != nil {
+			return nil, err
+		}
+		movType := method + "_in"
+		if method == "" {
+			movType = "pix_in"
+		}
+		out = append(out, Movement{
+			ID:            id,
+			Type:          movType,
+			Direction:     "in",
+			Method:        method,
+			ValueCents:    valueCents,
+			CustomerName:  customerName,
+			CustomerEmail: customerEmail,
+			Date:          paidAt,
+		})
+	}
+	if err := chargeRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 2. Saques registrados no intervalo.
+	payoutRows, err := s.db.Query(ctx, `
+		SELECT id, amount_cents, created_at
+		FROM pay_withdrawals
+		WHERE created_at >= $1
+		  AND created_at < $2
+		ORDER BY created_at DESC`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer payoutRows.Close()
+
+	for payoutRows.Next() {
+		var (
+			id         int64
+			valueCents int64
+			createdAt  time.Time
+		)
+		if err := payoutRows.Scan(&id, &valueCents, &createdAt); err != nil {
+			return nil, err
+		}
+		out = append(out, Movement{
+			ID:         id,
+			Type:       "payout",
+			Direction:  "out",
+			Method:     "",
+			ValueCents: valueCents,
+			Date:       createdAt,
+		})
+	}
+	if err := payoutRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Ordena todos os movimentos por data decrescente (combina cobranças + saques).
+	sortMovements(out)
+	return out, nil
+}
+
+// sortMovements ordena os movimentos por data decrescente sem dependência externa.
+func sortMovements(mvs []Movement) {
+	// Insertion sort simples — o número de movimentos por janela é pequeno.
+	for i := 1; i < len(mvs); i++ {
+		for j := i; j > 0 && mvs[j].Date.After(mvs[j-1].Date); j-- {
+			mvs[j], mvs[j-1] = mvs[j-1], mvs[j]
+		}
+	}
+}
+
+// InsertChargeWithLink insere uma cobrança vinculada a um link de pagamento.
+// Reutiliza o mesmo INSERT de InsertCharge mas adiciona link_id.
+func (s *Store) InsertChargeWithLink(ctx context.Context, c *Charge, linkID int64) error {
+	return s.db.QueryRow(ctx, `
+		INSERT INTO pay_charges
+		  (kind, subscription_id, student_id, customer_id, amount_cents, due_date, reference_month,
+		   provider, provider_charge_id, correlation_id, public_token, payer_tax_id, method,
+		   br_code, qr_code, pdf_url, barcode, link_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		RETURNING id, status, created_at`,
+		c.Kind, c.SubscriptionID, c.StudentID, c.CustomerID,
+		c.AmountCents, dateToPgtype(c.DueDate), c.ReferenceMonth,
+		c.Provider, nullStrPtr(c.ProviderChargeID), c.CorrelationID,
+		nullStrPtr(c.PublicToken), nullStrPtr(c.payerTaxID), methodOrPix(c.Method),
+		nullStrPtr(c.BRCode), nullStrPtr(c.QRCode),
+		nullStrPtr(c.PDFURL), nullStrPtr(c.Barcode), linkID,
+	).Scan(&c.ID, &c.Status, &c.CreatedAt)
 }

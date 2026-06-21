@@ -128,3 +128,59 @@ type PaymentProvider interface {
 	GetCharge(ctx context.Context, providerChargeID string) (ChargeResult, error)
 	ParseWebhook(headers map[string][]string, body []byte) ([]WebhookEvent, error)
 }
+
+// ── Cartão (API Cobranças) ────────────────────────────────────────────────
+
+// Installment descreve uma opção de parcelamento devolvida pelo Efí.
+type Installment struct {
+	Number          int     `json:"number"`
+	ValueCents      int64   `json:"valueCents"`
+	InterestPercent float64 `json:"interestPercent"`
+}
+
+// CardBillingAddress é o endereço de cobrança do portador.
+type CardBillingAddress struct {
+	Street       string `json:"street"`
+	Number       string `json:"number"`
+	Neighborhood string `json:"neighborhood"`
+	ZipCode      string `json:"zipCode"`
+	City         string `json:"city"`
+	State        string `json:"state"`
+}
+
+// CardCustomer são os dados do portador do cartão (não-sensíveis — nunca PAN/CVV).
+type CardCustomer struct {
+	Name      string `json:"name"`
+	TaxID     string `json:"taxId"` // CPF (só dígitos)
+	Email     string `json:"email"`
+	Phone     string `json:"phone,omitempty"`
+	BirthDate string `json:"birthDate,omitempty"` // YYYY-MM-DD
+}
+
+// CardChargeInput é o payload de criação de cobrança com cartão recebido do frontend.
+// ATENÇÃO: nunca deve conter campos de PAN/CVV — o tokenizador Efí no frontend envia
+// apenas o payment_token. O handler rejeita explicitamente qualquer corpo com esses campos.
+type CardChargeInput struct {
+	PaymentToken   string             `json:"paymentToken"`
+	Installments   int                `json:"installments"`
+	Customer       CardCustomer       `json:"customer"`
+	BillingAddress CardBillingAddress `json:"billingAddress"`
+	// Campos de negócio opcionais
+	AmountCents int64  `json:"amountCents"`
+	Description string `json:"description"`
+	// Campos de contexto: a cobrança pode vir de um cliente existente
+	CustomerID *int64 `json:"customerId,omitempty"`
+}
+
+// CardChargeResult é o retorno da criação de cobrança com cartão.
+type CardChargeResult struct {
+	ChargeID string `json:"chargeId"`
+	Status   string `json:"status"` // status mapeado (waiting|paid|unpaid|canceled)
+	Message  string `json:"message,omitempty"`
+}
+
+// CardRefusalInfo carrega detalhes de recusa do cartão (status unpaid).
+type CardRefusalInfo struct {
+	Reason string `json:"reason"`
+	Retry  bool   `json:"retry"`
+}

@@ -181,6 +181,48 @@ ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS method  TEXT NOT NULL DEFAULT '
   CHECK (method IN ('pix','boleto'));
 ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS pdf_url TEXT;
 ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS barcode TEXT;
+-- Cartão: alarga o CHECK de method para incluir 'card'.
+DO $$
+BEGIN
+  ALTER TABLE pay_charges DROP CONSTRAINT IF EXISTS pay_charges_method_check;
+  ALTER TABLE pay_charges ADD CONSTRAINT pay_charges_method_check
+    CHECK (method IN ('pix','boleto','card'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END$$;
+-- Estorno: alarga o CHECK de status para incluir 'refunded'.
+DO $$
+BEGIN
+  ALTER TABLE pay_charges DROP CONSTRAINT IF EXISTS pay_charges_status_check;
+  ALTER TABLE pay_charges ADD CONSTRAINT pay_charges_status_check
+    CHECK (status IN ('pending','paid','expired','canceled','refunded'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END$$;
+-- Links de pagamento reutilizáveis.
+CREATE TABLE IF NOT EXISTS pay_payment_links (
+  id           BIGSERIAL PRIMARY KEY,
+  public_token TEXT NOT NULL UNIQUE,
+  amount_cents BIGINT,                     -- NULL = valor livre (a definir pelo pagador)
+  product_ids  BIGINT[] NOT NULL DEFAULT '{}',
+  methods      TEXT[]   NOT NULL DEFAULT '{"pix"}',
+  coupons      TEXT[]   NOT NULL DEFAULT '{}',
+  finish_url   TEXT NOT NULL DEFAULT '',
+  return_url   TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive')),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS link_id BIGINT REFERENCES pay_payment_links(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_pay_charges_link ON pay_charges(link_id) WHERE link_id IS NOT NULL;
+-- Saques (payouts): registra cada solicitação de saque do saldo Efí.
+-- destination NÃO é armazenado aqui por segurança (dados bancários são sensíveis).
+CREATE TABLE IF NOT EXISTS pay_withdrawals (
+  id               BIGSERIAL PRIMARY KEY,
+  amount_cents     BIGINT NOT NULL CHECK (amount_cents > 0),
+  status           TEXT NOT NULL DEFAULT 'processing'
+                     CHECK (status IN ('processing','completed','failed','disabled')),
+  public_token     TEXT NOT NULL UNIQUE,
+  idempotency_key  TEXT UNIQUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 func migrate(ctx context.Context, db *pgxpool.Pool) error {

@@ -16,24 +16,22 @@ import (
 
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Sem o mTLS de volta (skip), autenticamos pelo segredo na URL que só a Efí
-	// conhece (nós o registramos). Fail-closed em produção: sem secret, recusa.
-	if s.cfg.Production && s.cfg.EFIWebhookSecret == "" {
-		slog.Error("webhook recusado: EFI_WEBHOOK_SECRET ausente em produção")
+	// conhece (nós o registramos). Fail-closed sempre: sem secret, recusa.
+	if s.cfg.EFIWebhookSecret == "" {
+		slog.Error("webhook recusado: EFI_WEBHOOK_SECRET ausente")
 		writeError(w, http.StatusServiceUnavailable, "webhook_unverifiable", "Webhook não verificável")
 		return
 	}
-	if s.cfg.EFIWebhookSecret != "" {
-		// O segredo vai como ?token= (o redactor mascara chaves contendo "token";
-		// "hmac" vazaria no Loki). A Efí ANEXA "/pix" ao FINAL da URL registrada —
-		// como o token é o último elemento, o "/pix" gruda no valor ("<secret>/pix").
-		// Por isso removemos esse sufixo antes de comparar (a validação do registro
-		// vem sem "/pix", as notificações vêm com).
-		got := strings.TrimSuffix(r.URL.Query().Get("token"), "/pix")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.EFIWebhookSecret)) != 1 {
-			slog.Warn("webhook efi rejeitado: segredo inválido")
-			writeError(w, http.StatusUnauthorized, "webhook_rejected", "Webhook não autenticado")
-			return
-		}
+	// O segredo vai como ?token= (o redactor mascara chaves contendo "token";
+	// "hmac" vazaria no Loki). A Efí ANEXA "/pix" ao FINAL da URL registrada —
+	// como o token é o último elemento, o "/pix" gruda no valor ("<secret>/pix").
+	// Por isso removemos esse sufixo antes de comparar (a validação do registro
+	// vem sem "/pix", as notificações vêm com).
+	got := strings.TrimSuffix(r.URL.Query().Get("token"), "/pix")
+	if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.EFIWebhookSecret)) != 1 {
+		slog.Warn("webhook efi rejeitado: segredo inválido")
+		writeError(w, http.StatusUnauthorized, "webhook_rejected", "Webhook não autenticado")
+		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -46,12 +44,17 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_body", "Payload inválido")
 		return
 	}
-	if s.store == nil { // guarda defensiva (testes)
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-		return
+	// Resolve o store: campo pixWH injetável nos testes; caso contrário usa s.store.
+	wh := s.pixWH
+	if wh == nil {
+		if s.store == nil { // guarda defensiva (testes sem DB)
+			writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+		}
+		wh = s.store
 	}
 	for _, ev := range evs {
-		fresh, err := s.store.MarkWebhookSeen(r.Context(), ev.ID, ev.Type, ev.Raw)
+		fresh, err := wh.MarkWebhookSeen(r.Context(), ev.ID, ev.Type, ev.Raw)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar evento")
 			return
@@ -61,9 +64,24 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		switch ev.Type {
 		case "CHARGE_PAID":
-			if err := s.store.MarkChargePaid(r.Context(), ev.CorrelationID); err != nil {
+			// Não confiamos no corpo do webhook — confirmamos o status real na Efí
+			// antes de marcar paga (evita forja de pagamento via corpo manipulado).
+			if s.provider == nil {
+				slog.Warn("webhook pix: provider não configurado, ignorando evento", "corr", ev.CorrelationID)
+				continue
+			}
+			cr, qerr := s.provider.GetCharge(r.Context(), ev.CorrelationID)
+			if qerr != nil {
+				slog.Warn("webhook pix: falha ao confirmar status na Efí", "corr", ev.CorrelationID, "err", qerr)
+				continue
+			}
+			if cr.Status != "paid" {
+				slog.Warn("webhook pix: status não confirmado como pago", "corr", ev.CorrelationID, "status", cr.Status)
+				continue
+			}
+			if err := wh.MarkChargePaid(r.Context(), ev.CorrelationID); err != nil {
 				slog.Warn("falha ao marcar paga", "corr", ev.CorrelationID, "err", err)
-			} else if tok, e := s.store.PublicTokenByCorrelation(r.Context(), ev.CorrelationID); e == nil {
+			} else if tok, e := wh.PublicTokenByCorrelation(r.Context(), ev.CorrelationID); e == nil {
 				s.invalidateChargeStatus(r.Context(), tok)
 				s.publishChargePaid(r.Context(), tok)
 				s.enqueueNotifyPaid(r.Context(), tok)
@@ -80,20 +98,18 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 // segredo na URL do webhook pix. O débito de cada ciclo NÃO chega aqui — ele cai no
 // webhook pix existente (txid = cobr, resolvido por correlation_id em MarkChargePaid).
 func (s *Server) handleRecWebhook(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Production && s.cfg.EFIWebhookSecret == "" {
-		slog.Error("webhook rec recusado: EFI_WEBHOOK_SECRET ausente em produção")
+	if s.cfg.EFIWebhookSecret == "" {
+		slog.Error("webhook rec recusado: EFI_WEBHOOK_SECRET ausente")
 		writeError(w, http.StatusServiceUnavailable, "webhook_unverifiable", "Webhook não verificável")
 		return
 	}
-	if s.cfg.EFIWebhookSecret != "" {
-		// Mesmo esquema do webhook pix: segredo em ?token=; a Efí pode anexar um sufixo
-		// de rota ao final da URL registrada, então removemos antes de comparar.
-		got := strings.TrimSuffix(r.URL.Query().Get("token"), "/rec")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.EFIWebhookSecret)) != 1 {
-			slog.Warn("webhook rec rejeitado: segredo inválido")
-			writeError(w, http.StatusUnauthorized, "webhook_rejected", "Webhook não autenticado")
-			return
-		}
+	// Mesmo esquema do webhook pix: segredo em ?token=; a Efí pode anexar um sufixo
+	// de rota ao final da URL registrada, então removemos antes de comparar.
+	got := strings.TrimSuffix(r.URL.Query().Get("token"), "/rec")
+	if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.EFIWebhookSecret)) != 1 {
+		slog.Warn("webhook rec rejeitado: segredo inválido")
+		writeError(w, http.StatusUnauthorized, "webhook_rejected", "Webhook não autenticado")
+		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -150,18 +166,16 @@ func (s *Server) handleRecWebhook(w http.ResponseWriter, r *http.Request) {
 // GET /v1/notification/{token} e marcamos paga a cobrança casada pelo charge_id do Efí
 // (provider_charge_id). Mesmo esquema de segredo em ?token= dos demais webhooks.
 func (s *Server) handleCobrWebhook(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Production && s.cfg.EFIWebhookSecret == "" {
-		slog.Error("webhook cobr recusado: EFI_WEBHOOK_SECRET ausente em produção")
+	if s.cfg.EFIWebhookSecret == "" {
+		slog.Error("webhook cobr recusado: EFI_WEBHOOK_SECRET ausente")
 		writeError(w, http.StatusServiceUnavailable, "webhook_unverifiable", "Webhook não verificável")
 		return
 	}
-	if s.cfg.EFIWebhookSecret != "" {
-		got := strings.TrimSuffix(r.URL.Query().Get("token"), "/cobr")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.EFIWebhookSecret)) != 1 {
-			slog.Warn("webhook cobr rejeitado: segredo inválido")
-			writeError(w, http.StatusUnauthorized, "webhook_rejected", "Webhook não autenticado")
-			return
-		}
+	got := strings.TrimSuffix(r.URL.Query().Get("token"), "/cobr")
+	if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.EFIWebhookSecret)) != 1 {
+		slog.Warn("webhook cobr rejeitado: segredo inválido")
+		writeError(w, http.StatusUnauthorized, "webhook_rejected", "Webhook não autenticado")
+		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -184,28 +198,54 @@ func (s *Server) handleCobrWebhook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
-	evs, err := s.efiCobr.GetNotification(r.Context(), payload.Notification)
+	// Idempotência: usa o token de notificação como ID de evento. Se já foi processado,
+	// responde 200 sem re-disparar efeitos (igual ao webhook PIX — MarkWebhookSeen).
+	fresh, err := s.store.MarkWebhookSeen(r.Context(), payload.Notification, "cobr_notification", body)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar evento")
+		return
+	}
+	if !fresh {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+	// NÃO confiamos no corpo do webhook — buscamos o status real na Efí pelo token.
+	evs, err := s.efiCobr.GetCobrancaNotification(r.Context(), payload.Notification)
 	if err != nil {
 		slog.Warn("webhook cobr: falha ao buscar notificação", "err", err)
 		writeError(w, http.StatusBadGateway, "efi_error", "Falha ao consultar a notificação")
 		return
 	}
 	for _, ev := range evs {
-		if ev.Status != "paid" && ev.Status != "settled" {
-			continue
-		}
-		marked, err := s.store.MarkChargePaidByProviderID(r.Context(), ev.ChargeID)
-		if err != nil {
-			slog.Warn("webhook cobr: falha ao marcar paga", "charge_id", ev.ChargeID, "err", err)
-			continue
-		}
-		if !marked {
-			continue // já estava paga/cancelada, ou charge_id desconhecido
-		}
-		if tok, e := s.store.PublicTokenByProviderID(r.Context(), ev.ChargeID); e == nil && tok != "" {
-			s.invalidateChargeStatus(r.Context(), tok)
-			s.publishChargePaid(r.Context(), tok)
-			s.enqueueNotifyPaid(r.Context(), tok)
+		switch ev.Status {
+		case "paid", "settled", "approved":
+			// Validamos o charge_id contra o banco (MarkChargePaidByProviderID retorna false
+			// se o provider_charge_id não existir localmente — evita transições espúrias).
+			marked, err := s.store.MarkChargePaidByProviderID(r.Context(), ev.ChargeID)
+			if err != nil {
+				slog.Warn("webhook cobr: falha ao marcar paga", "charge_id", ev.ChargeID, "err", err)
+				continue
+			}
+			if !marked {
+				continue // já estava paga/cancelada, ou charge_id desconhecido
+			}
+			if tok, e := s.store.PublicTokenByProviderID(r.Context(), ev.ChargeID); e == nil && tok != "" {
+				s.invalidateChargeStatus(r.Context(), tok)
+				s.publishChargePaid(r.Context(), tok)
+				s.enqueueNotifyPaid(r.Context(), tok)
+			}
+
+		case "unpaid":
+			// Cartão recusado: mantém pendente (não marca pago). Logamos para acompanhamento;
+			// a UI já sabe que o status permanece waiting/unpaid via polling/SSE.
+			slog.Info("webhook cobr: cobrança recusada (unpaid)", "charge_id", ev.ChargeID)
+
+		case "contested", "refunded":
+			// Disputa ou estorno: sem ação automática no DB por ora — log para acompanhamento.
+			slog.Info("webhook cobr: status avançado recebido", "charge_id", ev.ChargeID, "status", ev.Status)
+
+		default:
+			slog.Info("webhook cobr: status ignorado", "charge_id", ev.ChargeID, "status", ev.Status)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

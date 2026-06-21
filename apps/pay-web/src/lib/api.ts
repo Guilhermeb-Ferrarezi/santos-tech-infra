@@ -1,5 +1,11 @@
 const BASE = import.meta.env.VITE_API_URL ?? "https://api.santos-tech.com/payments";
 const AUTH = import.meta.env.VITE_AUTH_URL ?? "https://auth.santos-tech.com";
+
+// Hardening: em produção a API DEVE ser HTTPS — senão o payment_token e o CPF do
+// titular trafegariam em texto claro. Falha explícita no boot se mal configurado.
+if (import.meta.env.PROD && !BASE.startsWith("https://")) {
+  throw new Error("VITE_API_URL deve usar HTTPS em produção");
+}
 // raiz da API do ecossistema (onde vive /auth/refresh), derivada do BASE.
 const API_ROOT = BASE.replace(/\/payments\/?$/, "");
 
@@ -42,13 +48,35 @@ export interface Product {
 export interface CartLine { product: Product; quantity: number; }
 export interface PayData {
   amountCents: number;
-  method?: string; // "pix" | "boleto" (ausente em cobranças antigas = pix)
+  method?: string; // "pix" | "boleto" | "card" (ausente em cobranças antigas = pix)
   brCode: string; // pix: copia-e-cola · boleto: linha digitável
   qrCode: string;
   pdfUrl?: string; // boleto: link do PDF
   barcode?: string; // boleto: código de barras
   status: string;
   dueDate: string;
+}
+
+// Parcela de cartão de crédito retornada pelo endpoint GET /installments
+export interface InstallmentOption {
+  installments: number;
+  value: number;  // centavos por parcela
+  total: number;  // centavos total com juros
+  label: string;  // ex.: "3× de R$ 10,00 (sem juros)"
+}
+
+// Payload para pagamento com cartão.
+// NUNCA inclui PAN, CVV ou validade — esses dados ficam no browser e vão à Efí via efi.ts.
+export interface CardPayPayload {
+  paymentToken: string;       // token opaco gerado pela Efí no browser
+  installments: number;
+  holder: string;             // nome do titular
+  holderDocument: string;     // CPF (só dígitos)
+  billingAddress?: {
+    zipCode: string;          // CEP (só dígitos)
+    number: string;
+    complement?: string;
+  };
 }
 
 // seg codifica um segmento de path controlado pelo usuário (evita path/URL injection).
@@ -76,6 +104,21 @@ export const api = {
   payEventsUrl: (token: string) => `${BASE}/pay/${seg(token)}/events`,
   cancelPay: (token: string) => req<{ status: string }>(`/pay/${seg(token)}/cancel`, { method: "POST" }),
   history: () => req<unknown[]>(`/me/charges`),
+
+  // --- Cartão de crédito ---
+
+  // GET /installments?brand=&total= — opções de parcelamento para a bandeira e valor.
+  // Retorna array de InstallmentOption. Seguro para trafegar (não há dado sensível).
+  getInstallments: (brand: string, totalCents: number) =>
+    req<InstallmentOption[]>(`/installments?brand=${encodeURIComponent(brand)}&total=${encodeURIComponent(totalCents)}`),
+
+  // POST /link/{token}/pay — efetua o pagamento com cartão.
+  // NUNCA inclua PAN/CVV/validade no payload — apenas o payment_token (opaco) e metadados.
+  payCard: (token: string, payload: CardPayPayload) =>
+    req<{ status: string }>(`/link/${seg(token)}/pay`, {
+      method: "POST",
+      body: JSON.stringify({ method: "card", ...payload }),
+    }),
 };
 
 /** Baixa o comprovante PDF da cobrança paga pelo token público (pagador, sem login). */

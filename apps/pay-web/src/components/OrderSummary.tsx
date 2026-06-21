@@ -38,39 +38,41 @@ export function OrderSummary({
 
       {/* Foto do produto — só quando o produto tem imagem */}
       {main?.imageUrl && (
-        <div className="mb-5 aspect-[16/10] w-full overflow-hidden rounded-2xl border border-[#e3eaf0] bg-white">
+        <div className="mb-4 aspect-[16/10] w-full overflow-hidden rounded-2xl border border-[#e3eaf0] bg-white">
           <img src={main.imageUrl} alt={main.name} className="h-full w-full object-cover" />
         </div>
       )}
 
       {/* Identificação do produto */}
-      <div className="flex items-center gap-4 rounded-2xl border border-[#e3eaf0] bg-white p-5">
-        <div className="grid size-16 shrink-0 place-items-center rounded-2xl bg-[#0db88f]/10 text-[#0db88f]">
-          <Package className="size-8" aria-hidden />
-        </div>
-        <div className="min-w-0">
-          <div className="truncate text-lg font-semibold text-[#0e2937]">
+      <div className="flex items-center gap-3 rounded-2xl border border-[#e3eaf0] bg-white p-4">
+        {!main?.imageUrl && (
+          <div className="grid size-12 shrink-0 place-items-center rounded-xl bg-[#0db88f]/10 text-[#0db88f]">
+            <Package className="size-6" aria-hidden />
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-base font-semibold text-[#0e2937]">
             {main ? main.name : "Compra Santos Tech"}
             {main && main.quantity > 1 ? ` ×${main.quantity}` : ""}
           </div>
           {extra > 0 && (
-            <div className="mt-0.5 text-sm text-[#496b84]">
+            <div className="mt-0.5 text-xs text-[#496b84]">
               + {extra} {extra === 1 ? "outro item" : "outros itens"}
             </div>
           )}
           {recurring && (
-            <div className="mt-0.5 flex items-center gap-1 text-sm text-[#0db88f]">
-              <RefreshCw className="size-3.5" aria-hidden /> Assinatura
+            <div className="mt-0.5 flex items-center gap-1 text-xs text-[#0db88f]">
+              <RefreshCw className="size-3" aria-hidden /> Assinatura
             </div>
           )}
         </div>
-        <div className="ml-auto whitespace-nowrap text-lg font-semibold text-[#0e2937]">
+        <div className="ml-auto shrink-0 whitespace-nowrap text-base font-semibold text-[#0e2937]">
           {price(totalCents)}
         </div>
       </div>
 
       {/* Resumo */}
-      <div className="mt-6 rounded-xl border border-[#e3eaf0] bg-white p-4">
+      <div className="mt-4 rounded-xl border border-[#e3eaf0] bg-white px-4 py-4">
         <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.15em] text-[#496b84]">
           Resumo
         </div>
@@ -79,20 +81,22 @@ export function OrderSummary({
             <dt>Subtotal</dt>
             <dd>{price(totalCents)}</dd>
           </div>
-          <div className="flex items-baseline justify-between border-t border-[#e3eaf0] pt-3 text-[#0e2937]">
-            <dt className="font-semibold">{recurring ? "Valor da assinatura" : "Total"}</dt>
+          <div className="flex items-baseline justify-between border-t border-[#e3eaf0] pt-3">
+            <dt className="font-semibold text-[#0e2937]">
+              {recurring ? "Valor da assinatura" : "Total"}
+            </dt>
             <dd className="text-lg font-bold text-[#0db88f]">{formatBRL(totalCents)}</dd>
           </div>
         </dl>
         {recurring && (
-          <p className="mt-3 text-xs text-[#496b84]">
-            Cobrança {price(totalCents)} renovada automaticamente. Você pode cancelar a qualquer
-            momento no app do seu banco.
+          <p className="mt-3 rounded-lg bg-[#0db88f]/8 px-3 py-2 text-xs leading-relaxed text-[#496b84]">
+            Renovação automática de {price(totalCents)}. Cancele quando quiser no app do seu
+            banco.
           </p>
         )}
       </div>
 
-      {action && <div className="mt-6">{action}</div>}
+      {action && <div className="mt-5">{action}</div>}
     </div>
   );
 }

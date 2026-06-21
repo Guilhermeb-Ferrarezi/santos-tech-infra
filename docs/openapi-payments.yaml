@@ -24,6 +24,38 @@ components:
       properties:
         code: { type: string }
         message: { type: string }
+    Withdrawal:
+      type: object
+      description: >
+        Registro de saque (payout) do saldo Efí. O campo destination nunca é
+        serializado nem persistido no banco por razões de segurança.
+      properties:
+        id: { type: integer, format: int64 }
+        amountCents: { type: integer, format: int64, description: Valor do saque em centavos }
+        status:
+          type: string
+          enum: [processing, completed, failed, disabled]
+          description: >
+            processing = aguardando confirmação da Efí;
+            completed = transferência confirmada;
+            failed = transferência recusada;
+            disabled = flag PAYOUT_ENABLED=false (não executado).
+        publicToken: { type: string }
+        createdAt: { type: string, format: date-time }
+    PaymentLink:
+      type: object
+      description: Link de pagamento reutilizável
+      properties:
+        id: { type: integer }
+        publicToken: { type: string }
+        amountCents: { type: integer, nullable: true, description: "null = valor livre" }
+        productIds: { type: array, items: { type: integer } }
+        methods: { type: array, items: { type: string, enum: [pix, card, boleto] } }
+        coupons: { type: array, items: { type: string } }
+        finishUrl: { type: string }
+        returnUrl: { type: string }
+        status: { type: string, enum: [active, inactive] }
+        createdAt: { type: string, format: date-time }
     Student:
       type: object
       properties:
@@ -67,13 +99,21 @@ components:
         providerChargeId: { type: string }
         correlationId: { type: string }
         publicToken: { type: string, description: "token público p/ tela de pagamento (cobranças de cliente)" }
-        method: { type: string, enum: [pix, boleto], description: "método de pagamento" }
+        method: { type: string, enum: [pix, boleto, card], description: "método de pagamento" }
         brCode: { type: string, description: "PIX: copia-e-cola · boleto: linha digitável" }
         qrCode: { type: string, description: "imagem do QR (base64/data-uri) ou URL — só PIX" }
         pdfUrl: { type: string, description: "boleto: link do PDF" }
         barcode: { type: string, description: "boleto: código de barras / linha digitável" }
         paidAt: { type: string, format: date-time, nullable: true }
         createdAt: { type: string, format: date-time }
+        linkId: { type: integer, nullable: true, description: "ID do link de pagamento de origem (quando veio de /link/{token}/pay)" }
+        refusal:
+          type: object
+          nullable: true
+          description: "cartão: motivo de recusa (status unpaid)"
+          properties:
+            reason: { type: string }
+            retry: { type: boolean }
     Recurrence:
       type: object
       description: >
@@ -341,6 +381,115 @@ paths:
         "400": { description: inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: cliente não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "422": { description: falha no gateway, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /charges/card:
+    post:
+      summary: Cria cobrança com cartão de crédito (API Cobranças Efí — one-step)
+      tags: [Cartão]
+      description: >
+        Cria uma cobrança de cartão de crédito em um passo.
+
+        **SEGURANÇA:** o frontend tokeniza o cartão via SDK Efí e envia **apenas** o
+        `paymentToken` — PAN/CVV **nunca** devem ser enviados ao backend.
+        O handler rejeita com 400 qualquer corpo que contenha campos `number`, `cvv`,
+        `card_number`, `pan` ou `cvc`. O status inicial é `waiting` (processamento
+        assíncrono confirmado via webhook `/webhooks/efi/cobr`). Status `unpaid` indica
+        recusa síncrona — o campo `refusal.reason` traz o motivo e `refusal.retry=true`
+        indica que uma nova tentativa é possível.
+
+        TODO (llms.txt central): documentar esta rota em api.santos-tech.com/llms.txt.
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paymentToken, amountCents, customer, billingAddress]
+              properties:
+                paymentToken: { type: string, description: "Token gerado pelo SDK Efí no frontend (nunca PAN/CVV)" }
+                installments: { type: integer, minimum: 1, default: 1 }
+                amountCents: { type: integer, minimum: 1 }
+                description: { type: string }
+                customerId: { type: integer, description: "cliente existente (opcional)" }
+                customer:
+                  type: object
+                  required: [name, taxId, email]
+                  properties:
+                    name: { type: string }
+                    taxId: { type: string, description: CPF (só dígitos) }
+                    email: { type: string, format: email }
+                    phone: { type: string }
+                    birthDate: { type: string, format: date }
+                billingAddress:
+                  type: object
+                  properties:
+                    street: { type: string }
+                    number: { type: string }
+                    neighborhood: { type: string }
+                    zipCode: { type: string }
+                    city: { type: string }
+                    state: { type: string }
+      responses:
+        "201":
+          description: cobrança criada (method=card; status=waiting|paid|unpaid)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Charge"
+                  - type: object
+                    properties:
+                      refusal:
+                        type: object
+                        nullable: true
+                        properties:
+                          reason: { type: string }
+                          retry: { type: boolean }
+        "400": { description: "inválido ou corpo com PAN/CVV", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: erro do gateway, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: cartão indisponível (EFI_COBR_BASE_URL não configurada), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /charges/card/{id}/refund:
+    post:
+      summary: Solicita estorno de cobrança com cartão (admin)
+      tags: [Cartão]
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer }, description: "ID interno da cobrança (pay_charges.id)" }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amountCents: { type: integer, description: "valor parcial do estorno (omitir para estorno total)" }
+      responses:
+        "200": { description: estorno solicitado, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean } } } } } }
+        "404": { description: cobrança não encontrada }
+        "409": { description: cobrança não é cartão ou não está paga }
+        "422": { description: erro do gateway }
+  /installments:
+    get:
+      summary: Consulta parcelas por bandeira e valor (admin)
+      tags: [Cartão]
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      parameters:
+        - { name: brand, in: query, required: true, schema: { type: string }, description: "Bandeira (visa, mastercard, elo, etc.)" }
+        - { name: total, in: query, required: true, schema: { type: integer }, description: "Valor total em centavos" }
+      responses:
+        "200":
+          description: lista de parcelas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    number: { type: integer }
+                    valueCents: { type: integer }
+                    interestPercent: { type: number }
+        "400": { description: brand ou total ausente/inválido }
+        "502": { description: falha na Efí }
   /charges/{id}:
     get:
       summary: Detalhe da cobrança
@@ -747,11 +896,14 @@ paths:
         "502": { description: falha ao obter comprovante na Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /efi/balance:
     get:
-      summary: Saldo disponível na conta Efí
+      summary: Saldo detalhado na conta Efí
       tags: [Efí]
       description: >
         Retorna o saldo disponível na conta Efí/Pix em centavos, consultado
-        diretamente em `GET /v2/gn/saldo` da API Efí. Requer role=3 (Admin).
+        diretamente em `GET /v2/gn/saldo` da API Efí. Os campos processingCents,
+        blockedCents, dailyLimitCents e nightLimitCents são retornados como 0 pois
+        a API Pix Efí não expõe esses dados via endpoint equivalente (TODO: consultar
+        endpoint de limites quando disponível). Requer role=3 (Admin).
       responses:
         "200":
           description: Saldo retornado com sucesso
@@ -759,16 +911,122 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [availableCents]
+                required: [availableCents, processingCents, blockedCents, dailyLimitCents, nightLimitCents]
                 properties:
                   availableCents:
                     type: integer
                     format: int64
-                    description: Saldo em centavos (ex. 10000 = R$ 100,00)
+                    description: Saldo disponível para saque em centavos
                     example: 10000
+                  processingCents:
+                    type: integer
+                    format: int64
+                    description: Valor em processamento (sem endpoint Efí — sempre 0 por ora)
+                    example: 0
+                  blockedCents:
+                    type: integer
+                    format: int64
+                    description: Valor bloqueado em disputas (sem endpoint Efí — sempre 0 por ora)
+                    example: 0
+                  dailyLimitCents:
+                    type: integer
+                    format: int64
+                    description: Limite diário de saque (sem endpoint Efí — sempre 0 por ora)
+                    example: 0
+                  nightLimitCents:
+                    type: integer
+                    format: int64
+                    description: Limite noturno de saque (sem endpoint Efí — sempre 0 por ora)
+                    example: 0
         "401": { description: não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "403": { description: acesso proibido (não é admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "502": { description: falha ao consultar a Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /efi/payout:
+    post:
+      summary: Solicitar saque do saldo Efí (SENSÍVEL — sudo + rate-limit)
+      tags: [Efí]
+      description: >
+        Transfere saldo Efí para a conta bancária configurada. Requer:
+        - role=3 (Admin)
+        - JWT com claim `sudo_exp` no futuro (confirmação de identidade recente)
+        - Rate-limit: 1 req/10s, burst=2
+        - amountCents ≤ saldo disponível
+        - Flag `PAYOUT_ENABLED=true` no servidor (default false — ativar só após
+          validar a operação de saque na conta Efí em produção).
+
+        Com `PAYOUT_ENABLED=false`: todos os guards são verificados mas a
+        transferência NÃO é executada e retorna 503 `payout_disabled`.
+
+        **NUNCA** enviar ou logar dados de conta bancária sensíveis além do campo
+        `destination` (que não é persistido no banco).
+
+        TODO(llms.txt): documentar no llms.txt central após validar em produção.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amountCents, destination]
+              properties:
+                amountCents:
+                  type: integer
+                  format: int64
+                  description: Valor do saque em centavos (deve ser > 0 e ≤ saldo disponível)
+                  example: 10000
+                destination:
+                  type: string
+                  description: >
+                    Chave Pix ou dados da conta de destino (nunca persistido no banco).
+                    Valor opaco — o backend repassa diretamente à Efí.
+                  example: "chave-pix@exemplo.com"
+      responses:
+        "202":
+          description: Saque aceito (processando)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Withdrawal"
+        "400":
+          description: Parâmetros inválidos (valor ≤ 0, destino vazio ou acima do saldo)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { description: não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403":
+          description: >
+            Proibido. code=forbidden (não é admin) ou code=sudo_required
+            (sem elevação sudo — frontend deve redirecionar ao /confirm do auth).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { description: Rate limit atingido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: Falha ao consultar saldo na Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503":
+          description: >
+            Saques desabilitados (PAYOUT_ENABLED=false — code=payout_disabled) ou
+            serviço Efí indisponível (code=efi_unavailable).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /withdrawals:
+    get:
+      summary: Listar saques realizados
+      tags: [Efí]
+      description: >
+        Lista todos os registros de saque (Withdrawal), do mais recente ao mais
+        antigo. Não inclui o campo destination (nunca persistido). Requer role=3 (Admin).
+      responses:
+        "200":
+          description: Lista de saques
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Withdrawal"
+        "401": { description: não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: acesso proibido (não é admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /efi/med:
     get:
       summary: Infrações MED (disputas Pix) da conta Efí
@@ -943,15 +1201,16 @@ paths:
         "401": { description: segredo inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /webhooks/efi/cobr:
     post:
-      summary: Webhook da Efí — notificações da API Cobranças / boleto (público)
+      summary: Webhook da Efí — notificações da API Cobranças / boleto e cartão (público)
       security: []
       description: >
-        Recebe as notificações da API Cobranças (boleto). A Efí POSTa
-        `{"notification":"<token>"}` a cada mudança de status; o handler busca o detalhe
-        em `GET /v1/notification/{token}` e marca paga a cobrança casada pelo `charge_id`
-        do Efí (= `providerChargeId`), publicando no Redis para o SSE. Autenticação via
-        `?token=<EFI_WEBHOOK_SECRET>`, mesmo esquema dos demais webhooks. A
-        `notification_url` é registrada por cobrança na emissão do boleto.
+        Recebe as notificações da API Cobranças (boleto **e cartão**). A Efí POSTa
+        `{"notification":"<token>"}` a cada mudança de status; o handler **não confia
+        no corpo** — busca o status real em `GET /v1/notification/{token}` e trata:
+        `paid`/`settled`/`approved` → marca cobrança paga e publica no Redis (SSE);
+        `unpaid` → log (recusa de cartão, charge permanece pendente);
+        `contested`/`refunded` → log. Idempotência via tabela `webhooks`. Autenticação
+        via `?token=<EFI_WEBHOOK_SECRET>`, mesmo esquema dos demais webhooks.
       parameters:
         - name: token
           in: query
@@ -963,3 +1222,124 @@ paths:
         "400": { description: webhook inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { description: segredo inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "502": { description: falha ao consultar a notificação na Efí, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ── Links de Pagamento (C2) ────────────────────────────────────────────────
+  # TODO: documentar também no llms.txt central (santos-tech-infra/apps/api-go/llms.txt).
+  /payment-links:
+    post:
+      summary: Cria um link de pagamento reutilizável (admin)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amountCents: { type: integer, nullable: true, description: "Valor em centavos; null = valor livre (pagador define)" }
+                productIds: { type: array, items: { type: integer } }
+                methods: { type: array, items: { type: string, enum: [pix, card, boleto] }, description: "Padrão: [pix]" }
+                coupons: { type: array, items: { type: string } }
+                finishUrl: { type: string, format: uri }
+                returnUrl: { type: string, format: uri }
+      responses:
+        "201": { description: Link criado, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentLink" } } } }
+        "400": { description: Dados inválidos, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Acesso negado (admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    get:
+      summary: Lista os links de pagamento (admin)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Lista de links
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/PaymentLink" } }
+        "401": { description: Não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Acesso negado (admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /payment-links/{id}:
+    get:
+      summary: Retorna um link por ID (admin)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Link encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentLink" } } } }
+        "401": { description: Não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Acesso negado (admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    patch:
+      summary: Altera o status de um link (admin)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [active, inactive] }
+      responses:
+        "200": { description: Status atualizado }
+        "400": { description: Dados inválidos, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Não autenticado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Acesso negado (admin), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /link/{token}:
+    get:
+      summary: Resolve um link de pagamento para checkout (público — sem autenticação)
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Dados do link, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentLink" } } } }
+        "404": { description: Não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "410": { description: Link inativo (status=inactive), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /link/{token}/pay:
+    post:
+      summary: Pagar via link — cria uma charge vinculada (público — sem autenticação)
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [method, customer]
+              properties:
+                method: { type: string, enum: [pix, card, boleto] }
+                amountCents: { type: integer, description: "Obrigatório para links com valor livre" }
+                paymentToken: { type: string, description: "Token do SDK Efí — somente para method=card; NUNCA enviar PAN/CVV" }
+                installments: { type: integer, minimum: 1, default: 1, description: "Para method=card" }
+                customer:
+                  type: object
+                  required: [name, taxId]
+                  properties:
+                    name: { type: string }
+                    taxId: { type: string, description: "CPF sem formatação" }
+                    email: { type: string, format: email }
+                    phone: { type: string }
+                billingAddress:
+                  type: object
+                  description: "Obrigatório para method=card"
+                  properties:
+                    street: { type: string }
+                    number: { type: string }
+                    neighborhood: { type: string }
+                    zipCode: { type: string }
+                    city: { type: string }
+                    state: { type: string }
+                dueDate: { type: string, format: date, description: "YYYY-MM-DD; padrão hoje+3 para boleto" }
+      responses:
+        "201": { description: Cobrança criada, content: { application/json: { schema: { $ref: "#/components/schemas/Charge" } } } }
+        "400": { description: Dados inválidos, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Link não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "410": { description: Link inativo, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: Erro no gateway, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: Método de pagamento indisponível, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
