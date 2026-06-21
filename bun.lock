@@ -40,6 +40,7 @@
         "clsx": "^2.1.1",
         "jsbarcode": "^3.12.3",
         "lucide-react": "^1.20.0",
+        "payment-token-efi": "^3.3.0",
         "react": "^19.2.7",
         "react-dom": "^19.2.7",
         "react-router-dom": "^7.18.0",
@@ -709,6 +710,8 @@
     "path-exists": ["path-exists@4.0.0", "", {}, "sha512-ak9Qy5Q7jYb2Wwcey5Fpvg2KoAc/ZIhLSLOSBmRmygPsGwkVVt0fZa0qrtMz+m6tJTAHfZQ8FnmB4MG4LWy7/w=="],
 
     "path-key": ["path-key@3.1.1", "", {}, "sha512-ojmeN0qd+y0jszEtoY48r0Peq5dwMEkIlCOu6Q5f41lfkswXuKtYrhgoTpLnyIcHm24Uhqx+5Tqm2InSwLhE6Q=="],
+
+    "payment-token-efi": ["payment-token-efi@3.3.0", "", {}, "sha512-KzE8nowYtElcq1RRgjDd6HZMnYpzwnrVkNS2N5JawLiw65bK/6yNn9LZw2AHHMxd3x+imZw1GeA10inOFAQgfg=="],
 
     "pg": ["pg@8.21.0", "", { "dependencies": { "pg-connection-string": "^2.13.0", "pg-pool": "^3.14.0", "pg-protocol": "^1.14.0", "pg-types": "2.2.0", "pgpass": "1.0.5" }, "optionalDependencies": { "pg-cloudflare": "^1.4.0" }, "peerDependencies": { "pg-native": ">=3.0.1" }, "optionalPeers": ["pg-native"] }, "sha512-AUP1EYJuHraQGsVoCQVIcM7TEJVGtDzxWtGFZd8rds9d+CCXlU5Js1rYgfLNvxy9iJrpHjGrRjoi/3BT9fRyiA=="],
 

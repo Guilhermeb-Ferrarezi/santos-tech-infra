@@ -5,6 +5,34 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>pay-web</title>
+    <!--
+      Content-Security-Policy — ponto de partida PCI.
+      Origens confirmadas via análise do bundle payment-token-efi:
+        - Efí tokenizador:  tokenizer.sejaefi.com.br
+        - Efí API:          cobrancas.api.efipay.com.br  (prod)
+                            cobrancas-h.api.efipay.com.br (sandbox)
+        - ClearSale fp:     device.clearsale.com.br
+        - FP monitor:       web.fpcs-monitor.com.br
+      TODO (deploy): mova esta política para o header HTTP
+      "Content-Security-Policy" no proxy/CDN — headers são mais difíceis de
+      contornar que meta tags e impedem framing mesmo antes de o HTML ser parseado.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src  'self'
+                  https://device.clearsale.com.br
+                  https://web.fpcs-monitor.com.br;
+      connect-src 'self'
+                  https://api.santos-tech.com
+                  https://tokenizer.sejaefi.com.br
+                  https://cobrancas.api.efipay.com.br
+                  https://cobrancas-h.api.efipay.com.br
+                  https://device.clearsale.com.br;
+      img-src     'self' data:
+                  https://device.clearsale.com.br
+                  https://web.fpcs-monitor.com.br;
+      frame-ancestors 'none';
+    " />
   </head>
   <body>
     <div id="root"></div>

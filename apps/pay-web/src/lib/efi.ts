@@ -26,6 +26,14 @@ if (!PAYEE_CODE) {
   );
 }
 
+// Hardening: em produção o ambiente DEVE ser "production" — senão dados de cartão
+// reais serão enviados ao sandbox da Efí (sem processamento real e possível exposição).
+if (import.meta.env.PROD && EFI_ENV !== "production") {
+  throw new Error(
+    "VITE_EFI_ENV deve ser \"production\" em produção. Configure a variável de ambiente corretamente.",
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Tipos públicos
 // ---------------------------------------------------------------------------

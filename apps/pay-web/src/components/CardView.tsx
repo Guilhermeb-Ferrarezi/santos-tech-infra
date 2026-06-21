@@ -257,36 +257,63 @@ export function CardView({
           ? { billingAddress: { zipCode: cep.replace(/\D/g, ""), number: addressNum, complement } }
           : {}),
       });
-    } catch {
-      // Backend retornou erro — pode ser recusa ou erro técnico
-      // Aguardamos o SSE para decidir o status real (cartão pode ter sido enviado e está processando)
+    } catch (err: unknown) {
+      // 400 = erro de validação / dados rejeitados → volta ao formulário com mensagem.
+      // Outros status (5xx, rede) podem ter chegado ao processador; aguardamos o SSE.
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("400") || msg.startsWith("Erro 400")) {
+        setPhase("form");
+        setErrorMsg(msg || "Dados inválidos. Verifique as informações e tente novamente.");
+        return;
+      }
+      // Para demais erros (5xx, rede), o SSE abaixo determina o estado real.
+      // Se o SSE também falhar, o fallback via api.pay(token) é acionado.
     }
 
-    // --- SSE: aguarda evento de status final ---
+    // --- SSE: aguarda evento de status final (timeout de 60 s) ---
     const es = new EventSource(api.payEventsUrl(token), { withCredentials: true });
     esRef.current = es;
 
-    es.addEventListener("paid", () => {
-      setPhase("paid");
-      es.close();
-    });
-    es.addEventListener("unpaid", () => {
-      // Recusa da operadora
-      setPhase("declined");
-      es.close();
-    });
-    es.addEventListener("canceled", () => {
-      setPhase("declined");
-      es.close();
-    });
-    es.onerror = () => {
-      // Se o SSE cair sem evento de conclusão, tenta uma consulta direta
+    // Timeout de segurança: se nenhum evento chegar em 60 s, fecha o SSE e
+    // consulta o status via REST para não deixar o usuário preso em "processando".
+    const sseTimeoutId = window.setTimeout(() => {
       es.close();
       api
         .pay(token)
         .then((d) => {
           if (d.status === "paid") setPhase("paid");
-          else if (d.status === "unpaid") setPhase("declined");
+          else if (d.status === "unpaid" || d.status === "canceled") setPhase("declined");
+          else setPhase("error");
+        })
+        .catch(() => setPhase("error"));
+    }, 60_000);
+
+    function closeSse() {
+      window.clearTimeout(sseTimeoutId);
+      es.close();
+    }
+
+    es.addEventListener("paid", () => {
+      setPhase("paid");
+      closeSse();
+    });
+    es.addEventListener("unpaid", () => {
+      // Recusa da operadora
+      setPhase("declined");
+      closeSse();
+    });
+    es.addEventListener("canceled", () => {
+      setPhase("declined");
+      closeSse();
+    });
+    es.onerror = () => {
+      // Se o SSE cair sem evento de conclusão, tenta uma consulta direta
+      closeSse();
+      api
+        .pay(token)
+        .then((d) => {
+          if (d.status === "paid") setPhase("paid");
+          else if (d.status === "unpaid" || d.status === "canceled") setPhase("declined");
           else setPhase("error");
         })
         .catch(() => setPhase("error"));
@@ -423,8 +450,9 @@ export function CardView({
           <Label htmlFor="cvv">CVV</Label>
           <Input
             id="cvv"
+            type="password"
             inputMode="numeric"
-            autoComplete="off"
+            autoComplete="cc-csc"
             placeholder="123"
             value={cvv}
             onChange={(e) => setCvv(onlyDigits(e.target.value, 4))}
