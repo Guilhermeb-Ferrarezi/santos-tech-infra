@@ -124,7 +124,11 @@ func (s *Server) handleOAuthConfirm(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	s.rdb.Del(r.Context(), authReqKey(body.RequestID)) // consome só após sucesso
+	// Consome o requestId só após sucesso. Logar falha do Del: se ficar no Redis,
+	// abre janela de replay do requestId até expirar sozinho.
+	if err := s.rdb.Del(r.Context(), authReqKey(body.RequestID)).Err(); err != nil {
+		slog.Warn("oauth: falha ao consumir requestId do Redis (janela de replay)", "err", err)
+	}
 
 	dest, _ := url.Parse(req.RedirectURI)
 	qq := dest.Query()
