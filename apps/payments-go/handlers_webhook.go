@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -172,8 +173,8 @@ func (s *Server) handleRecWebhook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// handleCobrWebhook recebe as notificações da API Cobranças (boleto). A Efí POSTa
-// {"notification":"<token>"} a cada mudança de status; buscamos o detalhe em
+// handleCobrWebhook recebe as notificações da API Cobranças (boleto/cartão). A Efí
+// POSTa form-urlencoded "notification=<token>" a cada mudança de status; buscamos o detalhe em
 // GET /v1/notification/{token} e marcamos paga a cobrança casada pelo charge_id do Efí
 // (provider_charge_id). Mesmo esquema de segredo em ?token= dos demais webhooks.
 func (s *Server) handleCobrWebhook(w http.ResponseWriter, r *http.Request) {
@@ -198,10 +199,22 @@ func (s *Server) handleCobrWebhook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
-	var payload struct {
-		Notification string `json:"notification"`
+	// A API de Cobranças da Efí POSTa form-urlencoded: "notification=<token>"
+	// (às vezes com "&token=..." adicional). Parseamos isso primeiro; alguns
+	// ambientes/testes mandam JSON {"notification":"..."} — fallback para esse caso.
+	notification := ""
+	if vals, perr := url.ParseQuery(strings.TrimSpace(string(body))); perr == nil {
+		notification = vals.Get("notification")
 	}
-	if err := json.Unmarshal(body, &payload); err != nil || payload.Notification == "" {
+	if notification == "" {
+		var payload struct {
+			Notification string `json:"notification"`
+		}
+		if json.Unmarshal(body, &payload) == nil {
+			notification = payload.Notification
+		}
+	}
+	if notification == "" {
 		writeError(w, http.StatusBadRequest, "invalid_body", "Payload inválido")
 		return
 	}
@@ -211,7 +224,7 @@ func (s *Server) handleCobrWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	// Idempotência: usa o token de notificação como ID de evento. Se já foi processado,
 	// responde 200 sem re-disparar efeitos (igual ao webhook PIX — MarkWebhookSeen).
-	fresh, err := s.store.MarkWebhookSeen(r.Context(), payload.Notification, "cobr_notification", body)
+	fresh, err := s.store.MarkWebhookSeen(r.Context(), notification, "cobr_notification", body)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar evento")
 		return
@@ -221,7 +234,7 @@ func (s *Server) handleCobrWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// NÃO confiamos no corpo do webhook — buscamos o status real na Efí pelo token.
-	evs, err := s.efiCobr.GetCobrancaNotification(r.Context(), payload.Notification)
+	evs, err := s.efiCobr.GetCobrancaNotification(r.Context(), notification)
 	if err != nil {
 		slog.Warn("webhook cobr: falha ao buscar notificação", "err", err)
 		writeError(w, http.StatusBadGateway, "efi_error", "Falha ao consultar a notificação")

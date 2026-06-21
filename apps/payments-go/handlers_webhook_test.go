@@ -126,6 +126,26 @@ func TestHandleCobrWebhook_Paid(t *testing.T) {
 	}
 }
 
+// TestHandleCobrWebhook_FormEncoded cobre o formato REAL da Efí: a API de Cobranças
+// POSTa "notification=<token>" como application/x-www-form-urlencoded (não JSON).
+// Regressão do 400 "Payload inválido" que rejeitava a notificação verdadeira.
+func TestHandleCobrWebhook_FormEncoded(t *testing.T) {
+	const secret = "secret-cobr-form"
+	const tok = "notif-tok-form"
+	srv, cobr := cobrWebhookServer(t, tok, "98765", "paid")
+	defer srv.Close()
+
+	s := &Server{cfg: Config{EFIWebhookSecret: secret}, efiCobr: cobr, store: nil, provider: efiStub{}}
+	body := "notification=" + tok
+	req := httptest.NewRequest("POST", "/webhooks/efi/cobr?token="+secret, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleCobrWebhook(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("form-urlencoded deveria retornar 200, veio %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestHandleCobrWebhook_Unpaid verifica que status "unpaid" não causa erro (200 OK)
 // — a charge permanece pendente; o log registra o evento.
 func TestHandleCobrWebhook_Unpaid(t *testing.T) {
