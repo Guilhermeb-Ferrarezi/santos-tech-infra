@@ -82,6 +82,56 @@ export interface CardPayPayload {
 // seg codifica um segmento de path controlado pelo usuário (evita path/URL injection).
 const seg = (v: string | number) => encodeURIComponent(String(v));
 
+// ─── Link de Pagamento (reutilizável) ─────────────────────────────────────────
+
+/** Objeto retornado por GET /link/{token}. */
+export interface LinkData {
+  id: number;
+  publicToken: string;
+  /** null = valor livre (pagador informa o valor). */
+  amountCents: number | null;
+  productIds: number[];
+  /** Subconjunto de "pix" | "card" | "boleto". */
+  methods: string[];
+  coupons: string[];
+  finishUrl?: string;
+  returnUrl?: string;
+  status: "active" | "inactive";
+  createdAt: string;
+}
+
+/** Dados do cliente enviados em POST /link/{token}/pay. */
+export interface LinkCustomer {
+  name: string;
+  taxId: string;
+  email: string;
+  phone: string;
+}
+
+/** Payload para POST /link/{token}/pay. */
+export interface LinkPayPayload {
+  method: "pix" | "card" | "boleto";
+  /** Obrigatório quando link.amountCents é null (valor livre). */
+  amountCents?: number;
+  customer: LinkCustomer;
+  /** Apenas para method="card" — token opaco da Efí, nunca PAN/CVV. */
+  paymentToken?: string;
+  installments?: number;
+}
+
+/** Cobrança criada pelo POST /link/{token}/pay. */
+export interface LinkChargeData {
+  publicToken: string;
+  method: string;
+  status: string;
+  amountCents: number;
+  dueDate: string;
+  brCode: string;
+  qrCode: string;
+  pdfUrl?: string;
+  barcode?: string;
+}
+
 export const api = {
   product: (slug: string) => req<Product>(`/products/by-slug/${seg(slug)}`),
   cart: () => req<CartLine[]>(`/me/cart`),
@@ -118,6 +168,19 @@ export const api = {
     req<{ status: string }>(`/link/${seg(token)}/pay`, {
       method: "POST",
       body: JSON.stringify({ method: "card", ...payload }),
+    }),
+
+  // --- Link de Pagamento reutilizável ---
+
+  /** GET /link/{token} — busca os metadados do link. Lança erro HTTP 410 se inativo. */
+  getLink: (token: string) => req<LinkData>(`/link/${seg(token)}`),
+
+  /** POST /link/{token}/pay — cria uma cobrança a partir do link reutilizável.
+   *  NUNCA inclua PAN/CVV/validade — apenas paymentToken (opaco, da Efí) para cartão. */
+  payLink: (token: string, payload: LinkPayPayload) =>
+    req<LinkChargeData>(`/link/${seg(token)}/pay`, {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
 };
 
