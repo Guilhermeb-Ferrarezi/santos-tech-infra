@@ -1,7 +1,10 @@
-import type { ReactNode } from "react";
-import { Package, RefreshCw } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Package, RefreshCw, Tag, X } from "lucide-react";
 import { formatBRL, formatRecurringBRL } from "../lib/format";
 import { SecuritySeal } from "./CheckoutShell";
+import { api, type ApplyCouponResult } from "../lib/api";
+import { Input } from "./ui/input";
+import { Button } from "./ui/button";
 
 export interface OrderItem {
   name: string;
@@ -11,26 +14,75 @@ export interface OrderItem {
 }
 
 // OrderSummary — conteúdo fixo da coluna direita: selo de segurança, identificação
-// do produto, bloco "Resumo" (Subtotal + Total) e o slot da ação principal (action).
+// do produto, bloco "Resumo" (Subtotal + desconto opcional + Total) e o slot da ação
+// principal (action).
 // Quando `recurring`, o valor vira "R$ X/mês" (sufixo da `periodicity`) e o resumo
 // destaca que é uma assinatura com débito recorrente.
+// Quando `allowCoupon`, exibe o campo de cupom abaixo do Subtotal. Quando um cupom
+// válido é aplicado, a linha de desconto aparece e o Total reflete o `finalCents`.
+// O pai recebe as atualizações via `onCouponApplied(code|null, finalCents|null)`.
 export function OrderSummary({
   items,
   totalCents,
   action,
   recurring = false,
   periodicity,
+  allowCoupon = false,
+  onCouponApplied,
 }: {
   items: OrderItem[];
   totalCents: number;
   action?: ReactNode;
   recurring?: boolean;
   periodicity?: string;
+  allowCoupon?: boolean;
+  onCouponApplied?: (code: string | null, finalCents: number | null) => void;
 }) {
   const main = items[0];
   const extra = items.length - 1;
   const price = (cents: number) =>
     recurring ? formatRecurringBRL(cents, periodicity) : formatBRL(cents);
+
+  // ── Estado do cupom ────────────────────────────────────────────────────────
+  const [couponCode, setCouponCode] = useState("");
+  const [applying, setApplying] = useState(false);
+  const [couponResult, setCouponResult] = useState<ApplyCouponResult | null>(null);
+  const [couponError, setCouponError] = useState("");
+
+  const appliedDiscount = couponResult?.valid ? couponResult.discountCents ?? 0 : 0;
+  const displayTotal = couponResult?.valid && couponResult.finalCents != null
+    ? couponResult.finalCents
+    : totalCents;
+
+  async function handleApplyCoupon() {
+    const code = couponCode.trim().toUpperCase();
+    if (!code) return;
+    setApplying(true);
+    setCouponError("");
+    try {
+      const res = await api.applyCoupon(code, totalCents);
+      setCouponResult(res);
+      if (res.valid) {
+        setCouponError("");
+        onCouponApplied?.(res.code ?? code, res.finalCents ?? totalCents);
+      } else {
+        setCouponError(res.reason ?? "Cupom inválido");
+        onCouponApplied?.(null, null);
+      }
+    } catch {
+      setCouponError("Erro ao validar cupom. Tente novamente.");
+      onCouponApplied?.(null, null);
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  function handleRemoveCoupon() {
+    setCouponCode("");
+    setCouponResult(null);
+    setCouponError("");
+    onCouponApplied?.(null, null);
+  }
 
   return (
     <div>
@@ -81,11 +133,77 @@ export function OrderSummary({
             <dt>Subtotal</dt>
             <dd>{price(totalCents)}</dd>
           </div>
+
+          {/* Campo de cupom — só quando allowCoupon=true */}
+          {allowCoupon && (
+            <div className="pt-1">
+              {couponResult?.valid ? (
+                // Cupom aplicado: mostra linha de desconto com botão remover
+                <div className="flex items-center justify-between rounded-lg bg-[#0db88f]/8 px-3 py-2">
+                  <span className="flex items-center gap-1.5 text-xs text-[#0db88f]">
+                    <Tag className="size-3" aria-hidden />
+                    {couponResult.code}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleRemoveCoupon}
+                    className="ml-2 text-[#496b84] transition-colors hover:text-rose-500"
+                    aria-label="Remover cupom"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </div>
+              ) : (
+                // Input + botão de aplicar
+                <div className="flex gap-2">
+                  <Input
+                    value={couponCode}
+                    onChange={(e) => {
+                      setCouponCode(e.target.value.toUpperCase());
+                      setCouponError("");
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleApplyCoupon();
+                      }
+                    }}
+                    placeholder="Código do cupom"
+                    className="h-9 flex-1 text-sm"
+                    disabled={applying}
+                    aria-label="Código do cupom"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleApplyCoupon}
+                    disabled={applying || !couponCode.trim()}
+                    className="h-9 shrink-0 text-xs"
+                  >
+                    {applying ? "…" : "Aplicar"}
+                  </Button>
+                </div>
+              )}
+              {couponError && (
+                <p className="mt-1.5 text-xs text-rose-600">{couponError}</p>
+              )}
+            </div>
+          )}
+
+          {/* Linha de desconto — aparece quando cupom válido aplicado */}
+          {couponResult?.valid && appliedDiscount > 0 && (
+            <div className="flex justify-between text-sm text-[#0db88f]">
+              <dt>Desconto ({couponResult.code})</dt>
+              <dd>− {formatBRL(appliedDiscount)}</dd>
+            </div>
+          )}
+
           <div className="flex items-baseline justify-between border-t border-[#e3eaf0] pt-3">
             <dt className="font-semibold text-[#0e2937]">
               {recurring ? "Valor da assinatura" : "Total"}
             </dt>
-            <dd className="text-lg font-bold text-[#0db88f]">{formatBRL(totalCents)}</dd>
+            <dd className="text-lg font-bold text-[#0db88f]">{formatBRL(displayTotal)}</dd>
           </div>
         </dl>
         {recurring && (

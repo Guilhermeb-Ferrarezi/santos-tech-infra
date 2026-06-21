@@ -31,6 +31,8 @@ export default function PayLinkPage() {
   const [activeMethod, setActiveMethod] = useState<PayMethod>("pix");
   const [loadError, setLoadError] = useState(false);
   const [payStatus, setPayStatus] = useState<PixStatus>("loading");
+  const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null);
+  const [couponFinalCents, setCouponFinalCents] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -126,8 +128,9 @@ export default function PayLinkPage() {
       {activeMethod === "card" && (
         <CardView
           token={token}
-          totalCents={amountCents}
+          totalCents={couponFinalCents ?? amountCents}
           onStatusChange={setPayStatus}
+          coupon={appliedCoupon ?? undefined}
         />
       )}
     </div>
@@ -141,6 +144,11 @@ export default function PayLinkPage() {
           items={items}
           totalCents={amountCents}
           action={<PayAction status={payStatus} method={activeMethod} />}
+          allowCoupon={activeMethod === "card" && payStatus !== "paid"}
+          onCouponApplied={(code, finalCents) => {
+            setAppliedCoupon(code);
+            setCouponFinalCents(finalCents);
+          }}
         />
       }
     />

@@ -30,6 +30,16 @@ type couponStore interface {
 	IncrementCouponUse(ctx context.Context, id int64) error
 }
 
+// checkoutStore isola o acesso ao banco usado pelo checkout do carrinho (POST
+// /me/cart/checkout): produto e cliente. O *Store satisfaz em prod; um fake nos
+// testes (sem Postgres). A criação da cobrança usa createAndPersistCharge que
+// por sua vez precisa de store + provider.
+type checkoutStore interface {
+	GetProductByID(ctx context.Context, id int64) (*Product, error)
+	UpsertCustomer(ctx context.Context, userID int64, taxID, phone, name, email string) (*Customer, error)
+	InsertChargeItems(ctx context.Context, chargeID int64, items []ChargeItem) error
+}
+
 // paymentLinkStore define as operações de persistência de links de pagamento.
 // Extraída como interface para facilitar testes sem DB.
 type paymentLinkStore interface {
@@ -50,23 +60,24 @@ type rateLimiterIface interface {
 }
 
 type Server struct {
-	cfg       Config
-	db        *pgxpool.Pool
-	rdb       *redis.Client
-	store     *Store
-	pixWH     pixWebhookStore  // store do webhook PIX; nil usa s.store
-	links     paymentLinkStore // store de links; nil usa s.store
-	coupons   couponStore      // store de cupons; nil usa s.store
-	payout    withdrawalStore  // store de saques; nil usa s.store
-	analytics analyticsSource
-	charges   chargeReader
-	recs      recurrenceStore
-	subs      subscribeStore
-	cart      *CartStore
-	provider  PaymentProvider
-	efi       efiOps
-	efiCobr   *efiCobrancas // API Cobranças (boleto); nil se EFI_COBR_BASE_URL ausente
-	email     *emailClient
+	cfg        Config
+	db         *pgxpool.Pool
+	rdb        *redis.Client
+	store      *Store
+	pixWH      pixWebhookStore  // store do webhook PIX; nil usa s.store
+	links      paymentLinkStore // store de links; nil usa s.store
+	coupons    couponStore      // store de cupons; nil usa s.store
+	checkoutSt checkoutStore    // store do checkout do carrinho; nil usa s.store
+	payout     withdrawalStore  // store de saques; nil usa s.store
+	analytics  analyticsSource
+	charges    chargeReader
+	recs       recurrenceStore
+	subs       subscribeStore
+	cart       *CartStore
+	provider   PaymentProvider
+	efi        efiOps
+	efiCobr    *efiCobrancas // API Cobranças (boleto); nil se EFI_COBR_BASE_URL ausente
+	email      *emailClient
 	// refund store de estorno de cartão; nil usa s.store.
 	refund chargeRefundStore
 	// payoutRateLimiter pode ser substituído em testes; nil usa o global payoutDefaultLimiter.
