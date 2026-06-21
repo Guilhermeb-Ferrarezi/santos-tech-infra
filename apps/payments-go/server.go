@@ -12,6 +12,14 @@ import (
 	"github.com/santos-tech/golog"
 )
 
+// pixWebhookStore define as operações de persistência usadas pelo handleWebhook (PIX).
+// Extraída como interface para facilitar testes sem DB.
+type pixWebhookStore interface {
+	MarkWebhookSeen(ctx context.Context, id, typ string, payload []byte) (bool, error)
+	MarkChargePaid(ctx context.Context, correlationID string) error
+	PublicTokenByCorrelation(ctx context.Context, correlationID string) (string, error)
+}
+
 // paymentLinkStore define as operações de persistência de links de pagamento.
 // Extraída como interface para facilitar testes sem DB.
 type paymentLinkStore interface {
@@ -36,6 +44,7 @@ type Server struct {
 	db        *pgxpool.Pool
 	rdb       *redis.Client
 	store     *Store
+	pixWH     pixWebhookStore  // store do webhook PIX; nil usa s.store
 	links     paymentLinkStore // store de links; nil usa s.store
 	payout    withdrawalStore  // store de saques; nil usa s.store
 	analytics analyticsSource

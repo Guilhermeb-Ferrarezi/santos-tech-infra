@@ -105,19 +105,20 @@ func (f *fakeCobrStore) PublicTokenByProviderID(_ context.Context, _ string) (st
 // notification=<token>, busca o status na Efí e responde 200. Com store=nil
 // (guarda defensiva), o handler retorna 200 sem tocar no DB.
 func TestHandleCobrWebhook_Paid(t *testing.T) {
+	const secret = "secret-cobr-paid"
 	const tok = "notif-tok-paid"
 	const chargeID = "12345"
 	srv, cobr := cobrWebhookServer(t, tok, chargeID, "paid")
 	defer srv.Close()
 
 	s := &Server{
-		cfg:      Config{EFIWebhookSecret: ""},
+		cfg:      Config{EFIWebhookSecret: secret},
 		efiCobr:  cobr,
 		store:    nil, // guarda defensiva: 200 sem DB
 		provider: efiStub{},
 	}
 	body := `{"notification":"` + tok + `"}`
-	req := httptest.NewRequest("POST", "/webhooks/efi/cobr", strings.NewReader(body))
+	req := httptest.NewRequest("POST", "/webhooks/efi/cobr?token="+secret, strings.NewReader(body))
 	w := httptest.NewRecorder()
 	s.handleCobrWebhook(w, req)
 	if w.Code != http.StatusOK {
@@ -128,13 +129,14 @@ func TestHandleCobrWebhook_Paid(t *testing.T) {
 // TestHandleCobrWebhook_Unpaid verifica que status "unpaid" não causa erro (200 OK)
 // — a charge permanece pendente; o log registra o evento.
 func TestHandleCobrWebhook_Unpaid(t *testing.T) {
+	const secret = "secret-cobr-unpaid"
 	const tok = "notif-tok-unpaid"
 	srv, cobr := cobrWebhookServer(t, tok, "55001", "unpaid")
 	defer srv.Close()
 
-	s := &Server{efiCobr: cobr, store: nil, provider: efiStub{}}
+	s := &Server{cfg: Config{EFIWebhookSecret: secret}, efiCobr: cobr, store: nil, provider: efiStub{}}
 	body := `{"notification":"` + tok + `"}`
-	req := httptest.NewRequest("POST", "/webhooks/efi/cobr", strings.NewReader(body))
+	req := httptest.NewRequest("POST", "/webhooks/efi/cobr?token="+secret, strings.NewReader(body))
 	w := httptest.NewRecorder()
 	s.handleCobrWebhook(w, req)
 	if w.Code != http.StatusOK {
@@ -147,9 +149,10 @@ func TestHandleCobrWebhook_Unpaid(t *testing.T) {
 // 200 sem chamar a Efí — o importante é que o campo "notification" seja extraído do corpo
 // e outros campos arbitrários do webhook (que a Efí pode mandar) sejam ignorados sem erro.
 func TestHandleCobrWebhook_TokenBusca(t *testing.T) {
-	s := &Server{efiCobr: nil, store: nil, provider: efiStub{}}
+	const secret = "secret-cobr-busca"
+	s := &Server{cfg: Config{EFIWebhookSecret: secret}, efiCobr: nil, store: nil, provider: efiStub{}}
 	body := `{"notification":"meu-token-unico"}`
-	req := httptest.NewRequest("POST", "/webhooks/efi/cobr", strings.NewReader(body))
+	req := httptest.NewRequest("POST", "/webhooks/efi/cobr?token="+secret, strings.NewReader(body))
 	w := httptest.NewRecorder()
 	s.handleCobrWebhook(w, req)
 	if w.Code != http.StatusOK {
@@ -170,8 +173,9 @@ func TestHandleCobrWebhook_SegredoInvalido(t *testing.T) {
 
 // TestHandleCobrWebhook_CorpoVazio verifica que corpo vazio (registro do webhook) retorna 200.
 func TestHandleCobrWebhook_CorpoVazio(t *testing.T) {
-	s := &Server{provider: efiStub{}}
-	req := httptest.NewRequest("POST", "/webhooks/efi/cobr", strings.NewReader(""))
+	const secret = "secret-cobr-vazio"
+	s := &Server{cfg: Config{EFIWebhookSecret: secret}, provider: efiStub{}}
+	req := httptest.NewRequest("POST", "/webhooks/efi/cobr?token="+secret, strings.NewReader(""))
 	w := httptest.NewRecorder()
 	s.handleCobrWebhook(w, req)
 	if w.Code != http.StatusOK {
@@ -225,12 +229,13 @@ func TestCobrWebhookIdempotencia_GuardaDefensiva(t *testing.T) {
 	defer srv.Close()
 	cobr := newTestCobr(srv.URL)
 
+	const secret = "secret-cobr-idem"
 	// store=nil → guarda defensiva retorna 200 sem chamar efiCobr.GetCobrancaNotification.
-	s := &Server{efiCobr: cobr, store: nil, provider: efiStub{}}
+	s := &Server{cfg: Config{EFIWebhookSecret: secret}, efiCobr: cobr, store: nil, provider: efiStub{}}
 	body := `{"notification":"tok-idem"}`
 
 	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest("POST", "/webhooks/efi/cobr", strings.NewReader(body))
+		req := httptest.NewRequest("POST", "/webhooks/efi/cobr?token="+secret, strings.NewReader(body))
 		w := httptest.NewRecorder()
 		s.handleCobrWebhook(w, req)
 		if w.Code != http.StatusOK {
@@ -239,5 +244,124 @@ func TestCobrWebhookIdempotencia_GuardaDefensiva(t *testing.T) {
 	}
 	if notifCalled.Load() != 0 {
 		t.Fatalf("GetCobrancaNotification não deveria ser chamado com store=nil, foi %d vez(es)", notifCalled.Load())
+	}
+}
+
+// ── Testes da Correção 1: confirmação de status na Efí antes de marcar paga ──
+
+// efiProviderStub é um PaymentProvider configurável para testes de GetCharge.
+type efiProviderStub struct {
+	getChargeStatus string // status que GetCharge vai retornar
+	getChargeCalled atomic.Int32
+}
+
+func (p *efiProviderStub) CreateCharge(_ context.Context, _ ChargeRequest) (ChargeResult, error) {
+	return ChargeResult{}, nil
+}
+func (p *efiProviderStub) GetCharge(_ context.Context, _ string) (ChargeResult, error) {
+	p.getChargeCalled.Add(1)
+	return ChargeResult{Status: p.getChargeStatus}, nil
+}
+func (p *efiProviderStub) ParseWebhook(_ map[string][]string, body []byte) ([]WebhookEvent, error) {
+	if strings.Contains(string(body), "stpay") {
+		return []WebhookEvent{{ID: "EV1", Type: "CHARGE_PAID", CorrelationID: "stpayAAA"}}, nil
+	}
+	return nil, nil
+}
+
+// fakePixWHStore implementa pixWebhookStore para testes sem DB.
+type fakePixWHStore struct {
+	markPaidCalled atomic.Int32
+}
+
+func (f *fakePixWHStore) MarkWebhookSeen(_ context.Context, _, _ string, _ []byte) (bool, error) {
+	return true, nil // sempre fresh (novo evento)
+}
+func (f *fakePixWHStore) MarkChargePaid(_ context.Context, _ string) error {
+	f.markPaidCalled.Add(1)
+	return nil
+}
+func (f *fakePixWHStore) PublicTokenByCorrelation(_ context.Context, _ string) (string, error) {
+	return "", nil // sem token público — efeitos secundários (SSE/email) ignorados
+}
+
+// TestHandleWebhook_ChargePaidConfirmado verifica que quando a Efí confirma status "paid",
+// a charge é marcada paga no store.
+func TestHandleWebhook_ChargePaidConfirmado(t *testing.T) {
+	const secret = "secret-pix-confirm"
+	provider := &efiProviderStub{getChargeStatus: "paid"}
+	store := &fakePixWHStore{}
+
+	s := &Server{
+		cfg:      Config{EFIWebhookSecret: secret},
+		provider: provider,
+		pixWH:    store,
+	}
+	body := `{"pix":[{"txid":"stpayAAA","horario":"2026-06-21T00:00:00Z","valor":"10.00"}]}`
+	req := httptest.NewRequest("POST", "/webhooks/efi/pix?token="+secret, strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleWebhook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	if provider.getChargeCalled.Load() == 0 {
+		t.Fatal("GetCharge deveria ter sido chamado para confirmar status")
+	}
+	if store.markPaidCalled.Load() == 0 {
+		t.Fatal("MarkChargePaid deveria ter sido chamado quando status é 'paid'")
+	}
+}
+
+// TestHandleWebhook_ChargePaidForjaRejeitada verifica que quando a Efí retorna status
+// diferente de "paid" (ex.: "pending"), a charge NÃO é marcada paga — a forja é rejeitada.
+func TestHandleWebhook_ChargePaidForjaRejeitada(t *testing.T) {
+	const secret = "secret-pix-forja"
+	provider := &efiProviderStub{getChargeStatus: "pending"} // Efí diz que não está paga
+	store := &fakePixWHStore{}
+
+	s := &Server{
+		cfg:      Config{EFIWebhookSecret: secret},
+		provider: provider,
+		pixWH:    store,
+	}
+	body := `{"pix":[{"txid":"stpayAAA","horario":"2026-06-21T00:00:00Z","valor":"10.00"}]}`
+	req := httptest.NewRequest("POST", "/webhooks/efi/pix?token="+secret, strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleWebhook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	if provider.getChargeCalled.Load() == 0 {
+		t.Fatal("GetCharge deveria ter sido chamado mesmo para forja")
+	}
+	if store.markPaidCalled.Load() != 0 {
+		t.Fatal("MarkChargePaid NÃO deveria ter sido chamado quando status não é 'paid' (forja rejeitada)")
+	}
+}
+
+// TestHandleWebhook_SecretAusente verifica que sem EFIWebhookSecret o handler
+// responde 503 (fail-closed), independentemente de Production.
+func TestHandleWebhook_SecretAusente(t *testing.T) {
+	for _, prod := range []bool{false, true} {
+		s := &Server{cfg: Config{Production: prod}, provider: efiStub{}}
+		req := httptest.NewRequest("POST", "/webhooks/efi/pix", strings.NewReader(`{"pix":[]}`))
+		w := httptest.NewRecorder()
+		s.handleWebhook(w, req)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("Production=%v: esperado 503 sem secret, veio %d", prod, w.Code)
+		}
+	}
+}
+
+// TestHandleCobrWebhook_SecretAusente verifica fail-closed para o webhook cobr.
+func TestHandleCobrWebhook_SecretAusente(t *testing.T) {
+	s := &Server{cfg: Config{}, provider: efiStub{}}
+	req := httptest.NewRequest("POST", "/webhooks/efi/cobr", strings.NewReader(`{"notification":"x"}`))
+	w := httptest.NewRecorder()
+	s.handleCobrWebhook(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("esperado 503 sem secret, veio %d", w.Code)
 	}
 }
