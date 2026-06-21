@@ -9,6 +9,17 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// productStoreOf devolve s.products se configurado (injeção de teste), senão s.store.
+func (s *Server) productStoreOf() productStore {
+	if s.products != nil {
+		return s.products
+	}
+	if s.store != nil {
+		return s.store
+	}
+	return nil
+}
+
 func (s *Server) handleCreateProduct(w http.ResponseWriter, r *http.Request) {
 	var in Product
 	if err := decodeJSON(r, &in); err != nil {
@@ -17,11 +28,13 @@ func (s *Server) handleCreateProduct(w http.ResponseWriter, r *http.Request) {
 	}
 	in.Slug = strings.TrimSpace(in.Slug)
 	in.Name = strings.TrimSpace(in.Name)
+	in.ImageURL = strings.TrimSpace(in.ImageURL)
+	in.FileURL = strings.TrimSpace(in.FileURL)
 	if err := productValid(in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	if err := s.store.CreateProduct(r.Context(), &in); err != nil {
+	if err := s.productStoreOf().CreateProduct(r.Context(), &in); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao salvar produto (slug duplicado?)")
 		return
 	}
@@ -29,12 +42,23 @@ func (s *Server) handleCreateProduct(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListProducts(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.ListProducts(r.Context())
+	list, err := s.productStoreOf().ListProducts(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar")
 		return
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// handleGetProduct retorna um produto pelo id (admin).
+func (s *Server) handleGetProduct(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	p, err := s.productStoreOf().GetProductByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Produto não encontrado")
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
 }
 
 func (s *Server) handleUpdateProduct(w http.ResponseWriter, r *http.Request) {
@@ -45,11 +69,13 @@ func (s *Server) handleUpdateProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = id
+	in.ImageURL = strings.TrimSpace(in.ImageURL)
+	in.FileURL = strings.TrimSpace(in.FileURL)
 	if err := productUpdateValid(in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	if err := s.store.UpdateProduct(r.Context(), &in); err != nil {
+	if err := s.productStoreOf().UpdateProduct(r.Context(), &in); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "not_found", "Produto não encontrado")
 			return
@@ -62,7 +88,7 @@ func (s *Server) handleUpdateProduct(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteProduct(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err := s.store.DeleteProduct(r.Context(), id); err != nil {
+	if err := s.productStoreOf().DeleteProduct(r.Context(), id); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "not_found", "Produto não encontrado")
 			return
@@ -77,7 +103,7 @@ func (s *Server) handleDeleteProduct(w http.ResponseWriter, r *http.Request) {
 
 // público — usado pela tela de pagamento antes do login
 func (s *Server) handleGetProductBySlug(w http.ResponseWriter, r *http.Request) {
-	p, err := s.store.GetProductBySlug(r.Context(), r.PathValue("slug"))
+	p, err := s.productStoreOf().GetProductBySlug(r.Context(), r.PathValue("slug"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "Produto não encontrado")
 		return

@@ -9,10 +9,20 @@ import (
 
 const maxUploadSize = 5 << 20 // 5 MB
 
-// handleImageUpload recebe uma imagem (multipart, campo "file"), sobe pro R2 e
+// uploadExt resolve a extensão a partir do content-type detectado para o upload
+// genérico de /auth/upload: imagens (png/jpeg/webp/gif) e também PDF. imageExt
+// continua restrito a imagens (usado pelo avatar), então PDF é tratado aqui.
+func uploadExt(ct string) (string, bool) {
+	if ct == "application/pdf" {
+		return "pdf", true
+	}
+	return imageExt(ct)
+}
+
+// handleImageUpload recebe um arquivo (multipart, campo "file"), sobe pro R2 e
 // devolve a URL pública — sem gravar em lugar nenhum. Genérico: serve para fotos
-// de remetente, capas etc. Requer sessão (authGuard). Espelha handleAvatarUpload,
-// mas não toca no perfil do usuário.
+// de remetente, capas, PDFs entregáveis etc. Requer sessão (authGuard). Espelha
+// handleAvatarUpload, mas não toca no perfil do usuário.
 func (s *Server) handleImageUpload(w http.ResponseWriter, r *http.Request) {
 	if s.r2 == nil {
 		writeErr(w, appErr(http.StatusServiceUnavailable, "UPLOAD_DISABLED", "upload não configurado (R2)"))
@@ -47,9 +57,9 @@ func (s *Server) handleImageUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentType := http.DetectContentType(data)
-	ext, ok := imageExt(contentType)
+	ext, ok := uploadExt(contentType)
 	if !ok {
-		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "formato não suportado (use png, jpeg, webp ou gif)"))
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "formato não suportado (use png, jpeg, webp, gif ou pdf)"))
 		return
 	}
 

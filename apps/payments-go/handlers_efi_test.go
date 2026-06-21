@@ -14,7 +14,10 @@ type fakeEfiOps struct {
 	reportStatus string // "done" (default) ou "processing"
 }
 
-func (f fakeEfiOps) GetBalance(context.Context) (int64, error)      { return 12345, nil }
+func (f fakeEfiOps) GetBalance(context.Context) (int64, error) { return 12345, nil }
+func (f fakeEfiOps) SendPix(_ context.Context, idEnvio string, _ int64, _, _ string) (string, string, string, error) {
+	return idEnvio, "E-" + idEnvio, "EM_PROCESSAMENTO", nil
+}
 func (f fakeEfiOps) CancelCharge(_ context.Context, _ string) error { return nil }
 func (f fakeEfiOps) GetReceipt(_ context.Context, _ string) (string, []byte, error) {
 	return "application/pdf", []byte("%PDF-1.4 fake"), nil

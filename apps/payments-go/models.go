@@ -110,6 +110,9 @@ type Product struct {
 	// ChargeOnSubscribe: true = cobra a 1ª parcela logo após autorizar (auto-débito);
 	// false = a 1ª parcela cai no due_day.
 	ChargeOnSubscribe bool `json:"chargeOnSubscribe"`
+	// ImageURL: imagem de capa do produto. FileURL: arquivo entregável (ex. PDF).
+	ImageURL string `json:"imageUrl"`
+	FileURL  string `json:"fileUrl"`
 }
 
 type Customer struct {
@@ -183,7 +186,9 @@ type Withdrawal struct {
 	Status         string    `json:"status"` // "processing" | "completed" | "failed" | "disabled"
 	PublicToken    string    `json:"publicToken"`
 	IdempotencyKey string    `json:"idempotencyKey,omitempty"`
-	Destination    string    `json:"-"` // nunca serializa — não expor no JSON
+	Destination    string    `json:"-"`                    // nunca serializa — não expor no JSON
+	EFIIdEnvio     string    `json:"efiIdEnvio,omitempty"` // idEnvio do Pix Envio na Efí
+	E2EID          string    `json:"e2eId,omitempty"`      // endToEndId do Pix Envio
 	CreatedAt      time.Time `json:"createdAt"`
 }
 
@@ -198,6 +203,19 @@ type Movement struct {
 	CustomerName  string    `json:"customerName,omitempty"`
 	CustomerEmail string    `json:"customerEmail,omitempty"`
 	Date          time.Time `json:"date"`
+}
+
+// Coupon é um cupom de desconto aplicável no checkout. discount_type define o tipo:
+// "fixed" (desconto em centavos) ou "percent" (1–100). max_uses=-1 = ilimitado.
+type Coupon struct {
+	ID            int64     `json:"id"`
+	Code          string    `json:"code"`
+	DiscountType  string    `json:"discountType"`  // "fixed" | "percent"
+	DiscountValue int64     `json:"discountValue"` // centavos (fixed) ou 1–100 (percent)
+	MaxUses       int64     `json:"maxUses"`       // -1 = ilimitado
+	UsedCount     int64     `json:"usedCount"`
+	Active        bool      `json:"active"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 // PaymentLink é um link de pagamento reutilizável. O pagador acessa por /link/{token},

@@ -13,6 +13,17 @@ import (
 
 func (s *Server) uid(r *http.Request) int64 { return r.Context().Value(userIDKey).(int64) }
 
+// checkoutStoreOf devolve s.checkoutSt se configurado (injeção de teste), senão s.store.
+func (s *Server) checkoutStoreOf() checkoutStore {
+	if s.checkoutSt != nil {
+		return s.checkoutSt
+	}
+	if s.store != nil {
+		return s.store
+	}
+	return nil
+}
+
 // handleListCustomers (admin) lista os clientes com agregados das compras.
 func (s *Server) handleListCustomers(w http.ResponseWriter, r *http.Request) {
 	list, err := s.store.ListCustomersWithStats(r.Context())
@@ -157,7 +168,8 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 		// Save controla apenas o pré-preenchimento no frontend (localStorage). O
 		// cliente é sempre registrado pelo CPF nesta cobrança, independentemente disso.
-		Save bool `json:"save"`
+		Save   bool   `json:"save"`
+		Coupon string `json:"coupon"` // código do cupom (opcional)
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", "JSON inválido")
@@ -184,9 +196,14 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uid := s.uid(r)
+	cst := s.checkoutStoreOf()
+	if cst == nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Store indisponível")
+		return
+	}
 	// Cliente único por (conta, CPF): cria/atualiza com os dados do pagador e liga a
 	// cobrança a ele. É aqui que o cliente é materializado (sempre com CPF válido).
-	cust, err := s.store.UpsertCustomer(r.Context(), uid, in.TaxID, in.Phone, in.Name, in.Email)
+	cust, err := cst.UpsertCustomer(r.Context(), uid, in.TaxID, in.Phone, in.Name, in.Email)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha no cliente")
 		return
@@ -200,7 +217,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	var total int64
 	chargeItems := []ChargeItem{}
 	for _, it := range items {
-		p, err := s.store.GetProductByID(r.Context(), it.ProductID)
+		p, err := cst.GetProductByID(r.Context(), it.ProductID)
 		if err != nil {
 			continue
 		}
@@ -220,6 +237,45 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "empty_cart", "Carrinho inválido")
 		return
 	}
+
+	// ── Cupom (opcional) ─────────────────────────────────────────────────────
+	var appliedCouponID int64
+	in.Coupon = strings.TrimSpace(in.Coupon)
+	if in.Coupon != "" {
+		cst := s.couponStoreOf()
+		if cst == nil {
+			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inválido")
+			return
+		}
+		coup, err := cst.GetCouponByCode(r.Context(), in.Coupon)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom não encontrado")
+			return
+		}
+		if !coup.Active {
+			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inativo")
+			return
+		}
+		if coup.MaxUses != -1 && coup.UsedCount >= coup.MaxUses {
+			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom esgotado")
+			return
+		}
+		var discountCents int64
+		if coup.DiscountType == "fixed" {
+			discountCents = coup.DiscountValue
+			if discountCents > total {
+				discountCents = total
+			}
+		} else {
+			discountCents = (total*coup.DiscountValue + 50) / 100
+		}
+		total -= discountCents
+		if total < 0 {
+			total = 0
+		}
+		appliedCouponID = coup.ID
+	}
+
 	cid := cust.ID
 	c := &Charge{
 		Kind: "avulso", CustomerID: &cid, AmountCents: total,
@@ -241,11 +297,16 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "provider_error", "Falha ao gerar a cobrança. Tente novamente.")
 		return
 	}
-	if err := s.store.InsertChargeItems(r.Context(), c.ID, chargeItems); err != nil {
+	if err := cst.InsertChargeItems(r.Context(), c.ID, chargeItems); err != nil {
 		// não falha o pagamento (cobrança já válida na Efí), mas registra para auditoria
 		slog.Warn("falha ao gravar itens da cobrança", "charge_id", c.ID, "err", err)
 	}
 	_ = s.cart.Clear(r.Context(), uid)
+	if appliedCouponID > 0 {
+		if cst := s.couponStoreOf(); cst != nil {
+			_ = cst.IncrementCouponUse(r.Context(), appliedCouponID)
+		}
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token": c.PublicToken, "brCode": c.BRCode, "qrCode": c.QRCode, "amountCents": total,
 	})

@@ -1,0 +1,717 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+// ── Fake store de cupons ──────────────────────────────────────────────────────
+
+// fakeCouponStore é um stub em memória de couponStore para testes sem DB.
+type fakeCouponStore struct {
+	byID   map[int64]*Coupon
+	byCode map[string]*Coupon // indexado por UPPER(code)
+	nextID atomic.Int64
+	failOn string // se não vazio, métodos retornam erro
+	// Contador de chamadas a IncrementCouponUse (verificação em testes de pagamento).
+	incrementCalls atomic.Int64
+}
+
+func newFakeCouponStore() *fakeCouponStore {
+	return &fakeCouponStore{
+		byID:   make(map[int64]*Coupon),
+		byCode: make(map[string]*Coupon),
+	}
+}
+
+func (f *fakeCouponStore) CreateCoupon(_ context.Context, c Coupon) (Coupon, error) {
+	if f.failOn == "create" {
+		return Coupon{}, errors.New("db error fake")
+	}
+	upper := strings.ToUpper(c.Code)
+	if _, exists := f.byCode[upper]; exists {
+		// Simula violação de UNIQUE (code 23505); couponUniqueViolation não irá
+		// detectar este erro fake — o handler testa via erro específico.
+		// Para simplificar, retornamos um sentinel que o handler mapeia para 409.
+		return Coupon{}, errFakeDuplicate
+	}
+	id := f.nextID.Add(1)
+	c.ID = id
+	c.UsedCount = 0
+	c.Active = true
+	c.CreatedAt = time.Now()
+	cp := c
+	f.byID[id] = &cp
+	f.byCode[upper] = &cp
+	return cp, nil
+}
+
+func (f *fakeCouponStore) ListCoupons(_ context.Context) ([]Coupon, error) {
+	if f.failOn == "list" {
+		return nil, errors.New("db error fake")
+	}
+	out := make([]Coupon, 0, len(f.byID))
+	for _, c := range f.byID {
+		out = append(out, *c)
+	}
+	return out, nil
+}
+
+func (f *fakeCouponStore) GetCouponByCode(_ context.Context, code string) (Coupon, error) {
+	if f.failOn == "get" {
+		return Coupon{}, errors.New("db error fake")
+	}
+	upper := strings.ToUpper(code)
+	c, ok := f.byCode[upper]
+	if !ok {
+		return Coupon{}, pgx.ErrNoRows
+	}
+	return *c, nil
+}
+
+func (f *fakeCouponStore) SetCouponActive(_ context.Context, id int64, active bool) error {
+	if f.failOn == "patch" {
+		return errors.New("db error fake")
+	}
+	c, ok := f.byID[id]
+	if !ok {
+		return pgx.ErrNoRows
+	}
+	c.Active = active
+	return nil
+}
+
+func (f *fakeCouponStore) IncrementCouponUse(_ context.Context, id int64) error {
+	f.incrementCalls.Add(1)
+	c, ok := f.byID[id]
+	if !ok {
+		return pgx.ErrNoRows
+	}
+	c.UsedCount++
+	return nil
+}
+
+// errFakeDuplicate é um sentinel de duplicidade usado pelo fake store.
+// O handler usa couponUniqueViolation(err) para detectar o erro real de Postgres,
+// mas no fake precisamos de uma checagem alternativa no stub.
+// A solução: o fakeCouponStore retorna errFakeDuplicate, e
+// o handleCreateCoupon recebe o erro — mas couponUniqueViolation retornará false
+// neste caso (sem PgError). Para cobrir o 409 nos testes sem PgError real, o
+// fake store é estendido com um flag "dupCode" para forçar o erro no 2º create.
+var errFakeDuplicate = errors.New("fake: unique violation")
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// buildCouponServer monta um Server com o fakeCouponStore injetado.
+func buildCouponServer(st *fakeCouponStore) *Server {
+	return &Server{coupons: st}
+}
+
+// couponFixture cria um cupom no fake store e devolve o Coupon resultante.
+func couponFixture(t *testing.T, st *fakeCouponStore, code, dtype string, value, maxUses int64) Coupon {
+	t.Helper()
+	c, err := st.CreateCoupon(context.Background(), Coupon{
+		Code:          code,
+		DiscountType:  dtype,
+		DiscountValue: value,
+		MaxUses:       maxUses,
+	})
+	if err != nil {
+		t.Fatalf("couponFixture: %v", err)
+	}
+	return c
+}
+
+// ── POST /coupons ─────────────────────────────────────────────────────────────
+
+func TestHandleCreateCoupon_Happy(t *testing.T) {
+	st := newFakeCouponStore()
+	s := buildCouponServer(st)
+
+	body := `{"code":"DESCONTO10","discountType":"percent","discountValue":10}`
+	req := httptest.NewRequest("POST", "/coupons", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handleCreateCoupon(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("esperado 201, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out Coupon
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.ID == 0 {
+		t.Fatal("ID deveria ser preenchido")
+	}
+	if out.Code != "DESCONTO10" {
+		t.Fatalf("code esperado DESCONTO10, veio %q", out.Code)
+	}
+	if out.DiscountType != "percent" {
+		t.Fatalf("discountType esperado percent, veio %q", out.DiscountType)
+	}
+	if out.DiscountValue != 10 {
+		t.Fatalf("discountValue esperado 10, veio %d", out.DiscountValue)
+	}
+	if out.MaxUses != -1 {
+		t.Fatalf("maxUses esperado -1 (ilimitado), veio %d", out.MaxUses)
+	}
+	if !out.Active {
+		t.Fatal("active deveria ser true")
+	}
+}
+
+func TestHandleCreateCoupon_Fixed(t *testing.T) {
+	st := newFakeCouponStore()
+	s := buildCouponServer(st)
+
+	body := `{"code":"R50OFF","discountType":"fixed","discountValue":5000,"maxUses":100}`
+	req := httptest.NewRequest("POST", "/coupons", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleCreateCoupon(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("esperado 201, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out Coupon
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out.MaxUses != 100 {
+		t.Fatalf("maxUses esperado 100, veio %d", out.MaxUses)
+	}
+}
+
+func TestHandleCreateCoupon_EmptyCode(t *testing.T) {
+	st := newFakeCouponStore()
+	s := buildCouponServer(st)
+
+	body := `{"code":"","discountType":"percent","discountValue":10}`
+	req := httptest.NewRequest("POST", "/coupons", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleCreateCoupon(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("esperado 400 para code vazio, veio %d", w.Code)
+	}
+	var out map[string]string
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["code"] != "invalid_body" {
+		t.Fatalf("code esperado invalid_body, veio %q", out["code"])
+	}
+}
+
+func TestHandleCreateCoupon_InvalidType(t *testing.T) {
+	st := newFakeCouponStore()
+	s := buildCouponServer(st)
+
+	body := `{"code":"X","discountType":"absolute","discountValue":10}`
+	req := httptest.NewRequest("POST", "/coupons", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleCreateCoupon(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("esperado 400 para tipo inválido, veio %d", w.Code)
+	}
+}
+
+func TestHandleCreateCoupon_PercentOver100(t *testing.T) {
+	st := newFakeCouponStore()
+	s := buildCouponServer(st)
+
+	body := `{"code":"X","discountType":"percent","discountValue":150}`
+	req := httptest.NewRequest("POST", "/coupons", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleCreateCoupon(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("esperado 400 para percent>100, veio %d", w.Code)
+	}
+}
+
+func TestHandleCreateCoupon_ZeroValue(t *testing.T) {
+	st := newFakeCouponStore()
+	s := buildCouponServer(st)
+
+	body := `{"code":"X","discountType":"fixed","discountValue":0}`
+	req := httptest.NewRequest("POST", "/coupons", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleCreateCoupon(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("esperado 400 para discountValue=0, veio %d", w.Code)
+	}
+}
+
+func TestHandleCreateCoupon_Duplicate(t *testing.T) {
+	// O fake store retorna errFakeDuplicate ao criar um código que já existe.
+	// couponUniqueViolation retorna false porque não é PgError, mas o handler
+	// testa a duplicidade via o fake store — para testar o 409, precisamos de um
+	// fakeCouponStore que retorne um PgError ou um wrapper.
+	// Solução pragmática: criar um fake store que retorne um erro contendo "23505"
+	// ou usar um couponStore alternativo que força o 409.
+	// Usamos um wrapper do fakeCouponStore que substitui CreateCoupon.
+	st := newFakeCouponStore()
+	s := &Server{
+		coupons: &fakeDupCouponStore{inner: st},
+	}
+
+	body := `{"code":"PROMO","discountType":"percent","discountValue":5}`
+	req := httptest.NewRequest("POST", "/coupons", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleCreateCoupon(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("esperado 409 para cupom duplicado, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]string
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["code"] != "coupon_exists" {
+		t.Fatalf("code esperado coupon_exists, veio %q", out["code"])
+	}
+}
+
+// ── GET /coupons ──────────────────────────────────────────────────────────────
+
+func TestHandleListCoupons_Empty(t *testing.T) {
+	st := newFakeCouponStore()
+	s := buildCouponServer(st)
+
+	req := httptest.NewRequest("GET", "/coupons", nil)
+	w := httptest.NewRecorder()
+	s.handleListCoupons(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d", w.Code)
+	}
+	var out []Coupon
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if len(out) != 0 {
+		t.Fatalf("esperado lista vazia, veio %d itens", len(out))
+	}
+}
+
+func TestHandleListCoupons_WithItems(t *testing.T) {
+	st := newFakeCouponStore()
+	couponFixture(t, st, "A", "fixed", 1000, -1)
+	couponFixture(t, st, "B", "percent", 20, 50)
+	s := buildCouponServer(st)
+
+	req := httptest.NewRequest("GET", "/coupons", nil)
+	w := httptest.NewRecorder()
+	s.handleListCoupons(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d", w.Code)
+	}
+	var out []Coupon
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if len(out) != 2 {
+		t.Fatalf("esperado 2 cupons, veio %d", len(out))
+	}
+}
+
+// ── PATCH /coupons/{id} ───────────────────────────────────────────────────────
+
+func TestHandlePatchCoupon_Deactivate(t *testing.T) {
+	st := newFakeCouponStore()
+	c := couponFixture(t, st, "ATIVO", "percent", 10, -1)
+	s := buildCouponServer(st)
+
+	body := `{"active":false}`
+	req := httptest.NewRequest("PATCH", "/coupons/1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "1")
+	w := httptest.NewRecorder()
+	s.handlePatchCoupon(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	// Confirma que active mudou no store.
+	stored := st.byID[c.ID]
+	if stored.Active {
+		t.Fatal("active deveria ser false após PATCH")
+	}
+}
+
+func TestHandlePatchCoupon_NotFound(t *testing.T) {
+	st := newFakeCouponStore()
+	s := buildCouponServer(st)
+
+	body := `{"active":false}`
+	req := httptest.NewRequest("PATCH", "/coupons/999", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "999")
+	w := httptest.NewRecorder()
+	s.handlePatchCoupon(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("esperado 404, veio %d", w.Code)
+	}
+}
+
+func TestHandlePatchCoupon_InvalidID(t *testing.T) {
+	st := newFakeCouponStore()
+	s := buildCouponServer(st)
+
+	req := httptest.NewRequest("PATCH", "/coupons/abc", strings.NewReader(`{"active":false}`))
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	s.handlePatchCoupon(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("esperado 400, veio %d", w.Code)
+	}
+}
+
+// ── POST /coupons/apply ───────────────────────────────────────────────────────
+
+func TestHandleApplyCoupon_ValidFixed(t *testing.T) {
+	st := newFakeCouponStore()
+	couponFixture(t, st, "FIXO50", "fixed", 5000, -1) // R$ 50 de desconto
+	s := buildCouponServer(st)
+
+	body := `{"code":"FIXO50","amountCents":20000}` // R$ 200 → desconto R$ 50 → final R$ 150
+	req := httptest.NewRequest("POST", "/coupons/apply", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handleApplyCoupon(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out applyCouponResult
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if !out.Valid {
+		t.Fatalf("válido esperado true, veio false: %s", out.Reason)
+	}
+	if out.DiscountCents != 5000 {
+		t.Fatalf("discountCents esperado 5000, veio %d", out.DiscountCents)
+	}
+	if out.FinalCents != 15000 {
+		t.Fatalf("finalCents esperado 15000, veio %d", out.FinalCents)
+	}
+}
+
+func TestHandleApplyCoupon_ValidPercent(t *testing.T) {
+	st := newFakeCouponStore()
+	couponFixture(t, st, "PCT10", "percent", 10, -1) // 10% de desconto
+	s := buildCouponServer(st)
+
+	body := `{"code":"PCT10","amountCents":10000}` // R$ 100 → desconto R$ 10 → final R$ 90
+	req := httptest.NewRequest("POST", "/coupons/apply", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleApplyCoupon(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out applyCouponResult
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if !out.Valid {
+		t.Fatalf("válido esperado true, veio false: %s", out.Reason)
+	}
+	if out.DiscountCents != 1000 {
+		t.Fatalf("discountCents esperado 1000, veio %d", out.DiscountCents)
+	}
+	if out.FinalCents != 9000 {
+		t.Fatalf("finalCents esperado 9000, veio %d", out.FinalCents)
+	}
+}
+
+func TestHandleApplyCoupon_FixedExceedsAmount(t *testing.T) {
+	// Cupom de R$ 500 em compra de R$ 100 → desconto máximo = R$ 100, final = R$ 0.
+	st := newFakeCouponStore()
+	couponFixture(t, st, "GRATIS", "fixed", 50000, -1)
+	s := buildCouponServer(st)
+
+	body := `{"code":"GRATIS","amountCents":10000}`
+	req := httptest.NewRequest("POST", "/coupons/apply", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleApplyCoupon(w, req)
+
+	var out applyCouponResult
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if !out.Valid {
+		t.Fatalf("válido esperado true, veio false")
+	}
+	if out.DiscountCents != 10000 {
+		t.Fatalf("discountCents esperado 10000 (limitado ao amount), veio %d", out.DiscountCents)
+	}
+	if out.FinalCents != 0 {
+		t.Fatalf("finalCents esperado 0, veio %d", out.FinalCents)
+	}
+}
+
+func TestHandleApplyCoupon_NotFound(t *testing.T) {
+	st := newFakeCouponStore()
+	s := buildCouponServer(st)
+
+	body := `{"code":"INEXISTENTE","amountCents":10000}`
+	req := httptest.NewRequest("POST", "/coupons/apply", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleApplyCoupon(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200 (valid:false), veio %d", w.Code)
+	}
+	var out applyCouponResult
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out.Valid {
+		t.Fatal("válido esperado false para cupom inexistente")
+	}
+	if out.Reason == "" {
+		t.Fatal("reason deveria ser preenchido")
+	}
+}
+
+func TestHandleApplyCoupon_Inactive(t *testing.T) {
+	st := newFakeCouponStore()
+	c := couponFixture(t, st, "INATIVO", "percent", 5, -1)
+	_ = st.SetCouponActive(context.Background(), c.ID, false)
+	s := buildCouponServer(st)
+
+	body := `{"code":"INATIVO","amountCents":10000}`
+	req := httptest.NewRequest("POST", "/coupons/apply", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleApplyCoupon(w, req)
+
+	var out applyCouponResult
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out.Valid {
+		t.Fatal("válido esperado false para cupom inativo")
+	}
+	if out.Reason != "cupom inativo" {
+		t.Fatalf("reason esperado 'cupom inativo', veio %q", out.Reason)
+	}
+}
+
+func TestHandleApplyCoupon_Exhausted(t *testing.T) {
+	st := newFakeCouponStore()
+	c := couponFixture(t, st, "ESGOTADO", "percent", 15, 2) // max_uses=2
+	// Simula 2 usos já feitos.
+	_ = st.IncrementCouponUse(context.Background(), c.ID)
+	_ = st.IncrementCouponUse(context.Background(), c.ID)
+	s := buildCouponServer(st)
+
+	body := `{"code":"ESGOTADO","amountCents":10000}`
+	req := httptest.NewRequest("POST", "/coupons/apply", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleApplyCoupon(w, req)
+
+	var out applyCouponResult
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out.Valid {
+		t.Fatal("válido esperado false para cupom esgotado")
+	}
+	if out.Reason != "cupom esgotado" {
+		t.Fatalf("reason esperado 'cupom esgotado', veio %q", out.Reason)
+	}
+}
+
+// ── Teste de integração: pagamento via link com cupom ────────────────────────
+// Usa o fakeLinkStore + fakeCouponStore + fakePIX provider.
+
+// fakePixProvider implementa PaymentProvider para testes sem Efí real.
+type fakePixProvider struct{}
+
+func (f *fakePixProvider) CreateCharge(_ context.Context, req ChargeRequest) (ChargeResult, error) {
+	return ChargeResult{
+		CorrelationID:    req.CorrelationID,
+		ProviderChargeID: "fake-pix-id",
+		BRCode:           "fake-brcode",
+		QRCode:           "",
+	}, nil
+}
+
+func (f *fakePixProvider) GetCharge(_ context.Context, _ string) (ChargeResult, error) {
+	return ChargeResult{}, nil
+}
+
+func (f *fakePixProvider) ParseWebhook(_ map[string][]string, _ []byte) ([]WebhookEvent, error) {
+	return nil, nil
+}
+
+func TestHandlePayViaLink_WithCouponFixed(t *testing.T) {
+	// Monta: link de R$ 100, cupom fixed de R$ 20 → charge de R$ 80.
+	lSt := newFakeLinkStore()
+	amount := int64(10000) // R$ 100
+	token := linkFixture(t, lSt, &amount, []string{"pix"})
+
+	cSt := newFakeCouponStore()
+	coup := couponFixture(t, cSt, "MINUS20", "fixed", 2000, -1) // R$ 20
+
+	s := &Server{
+		links:              lSt,
+		coupons:            cSt,
+		linkPayRateLimiter: unlimitedLimiter{},
+		provider:           &fakePixProvider{},
+	}
+
+	body := `{"method":"pix","coupon":"MINUS20","customer":{"name":"Ana","taxId":"12345678901"}}`
+	req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	s.handlePayViaLink(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("esperado 201, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out Charge
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out.AmountCents != 8000 {
+		t.Fatalf("amountCents esperado 8000 (com desconto), veio %d", out.AmountCents)
+	}
+	// Verifica que IncrementCouponUse foi chamado.
+	if cSt.incrementCalls.Load() != 1 {
+		t.Fatalf("IncrementCouponUse deveria ter sido chamado 1x, veio %d", cSt.incrementCalls.Load())
+	}
+	// Verifica que used_count foi incrementado no store.
+	if cSt.byID[coup.ID].UsedCount != 1 {
+		t.Fatalf("usedCount esperado 1, veio %d", cSt.byID[coup.ID].UsedCount)
+	}
+}
+
+func TestHandlePayViaLink_WithCouponPercent(t *testing.T) {
+	// Monta: link de R$ 100, cupom percent 25% → desconto R$ 25 → charge de R$ 75.
+	lSt := newFakeLinkStore()
+	amount := int64(10000)
+	token := linkFixture(t, lSt, &amount, []string{"pix"})
+
+	cSt := newFakeCouponStore()
+	couponFixture(t, cSt, "PCT25", "percent", 25, -1)
+
+	s := &Server{
+		links:              lSt,
+		coupons:            cSt,
+		linkPayRateLimiter: unlimitedLimiter{},
+		provider:           &fakePixProvider{},
+	}
+
+	body := `{"method":"pix","coupon":"PCT25","customer":{"name":"Ana","taxId":"12345678901"}}`
+	req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	s.handlePayViaLink(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("esperado 201, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out Charge
+	json.Unmarshal(w.Body.Bytes(), &out)
+	// 25% de 10000 = 2500 de desconto → final = 7500
+	if out.AmountCents != 7500 {
+		t.Fatalf("amountCents esperado 7500, veio %d", out.AmountCents)
+	}
+	if cSt.incrementCalls.Load() != 1 {
+		t.Fatalf("IncrementCouponUse deveria ter sido chamado 1x, veio %d", cSt.incrementCalls.Load())
+	}
+}
+
+func TestHandlePayViaLink_WithInvalidCoupon(t *testing.T) {
+	// Cupom inexistente → 400 invalid_coupon.
+	lSt := newFakeLinkStore()
+	amount := int64(5000)
+	token := linkFixture(t, lSt, &amount, []string{"pix"})
+
+	cSt := newFakeCouponStore()
+
+	s := &Server{
+		links:              lSt,
+		coupons:            cSt,
+		linkPayRateLimiter: unlimitedLimiter{},
+		provider:           &fakePixProvider{},
+	}
+
+	body := `{"method":"pix","coupon":"NAO_EXISTE","customer":{"name":"Ana","taxId":"12345678901"}}`
+	req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	s.handlePayViaLink(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("esperado 400 para cupom inválido, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]string
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["code"] != "invalid_coupon" {
+		t.Fatalf("code esperado invalid_coupon, veio %q", out["code"])
+	}
+	if cSt.incrementCalls.Load() != 0 {
+		t.Fatal("IncrementCouponUse não deveria ter sido chamado para cupom inválido")
+	}
+}
+
+func TestHandlePayViaLink_WithExhaustedCoupon(t *testing.T) {
+	// Cupom esgotado → 400 invalid_coupon.
+	lSt := newFakeLinkStore()
+	amount := int64(5000)
+	token := linkFixture(t, lSt, &amount, []string{"pix"})
+
+	cSt := newFakeCouponStore()
+	c := couponFixture(t, cSt, "ESGOT", "percent", 10, 1)
+	_ = cSt.IncrementCouponUse(context.Background(), c.ID) // esgota o único uso
+	cSt.incrementCalls.Store(0)                            // reseta contador após setup
+
+	s := &Server{
+		links:              lSt,
+		coupons:            cSt,
+		linkPayRateLimiter: unlimitedLimiter{},
+		provider:           &fakePixProvider{},
+	}
+
+	body := `{"method":"pix","coupon":"ESGOT","customer":{"name":"Ana","taxId":"12345678901"}}`
+	req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	s.handlePayViaLink(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("esperado 400 para cupom esgotado, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]string
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["code"] != "invalid_coupon" {
+		t.Fatalf("code esperado invalid_coupon, veio %q", out["code"])
+	}
+}
+
+// ── fakeDupCouponStore: força 409 na criação de cupom duplicado ──────────────
+// Retorna um *pgconn.PgError com Code="23505" para disparar couponUniqueViolation.
+
+type fakeDupCouponStore struct {
+	inner *fakeCouponStore
+}
+
+func (f *fakeDupCouponStore) CreateCoupon(_ context.Context, _ Coupon) (Coupon, error) {
+	return Coupon{}, &pgconn.PgError{Code: "23505"}
+}
+
+func (f *fakeDupCouponStore) ListCoupons(ctx context.Context) ([]Coupon, error) {
+	return f.inner.ListCoupons(ctx)
+}
+
+func (f *fakeDupCouponStore) GetCouponByCode(ctx context.Context, code string) (Coupon, error) {
+	return f.inner.GetCouponByCode(ctx, code)
+}
+
+func (f *fakeDupCouponStore) SetCouponActive(ctx context.Context, id int64, active bool) error {
+	return f.inner.SetCouponActive(ctx, id, active)
+}
+
+func (f *fakeDupCouponStore) IncrementCouponUse(ctx context.Context, id int64) error {
+	return f.inner.IncrementCouponUse(ctx, id)
+}

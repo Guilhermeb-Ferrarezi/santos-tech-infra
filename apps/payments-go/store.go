@@ -718,12 +718,16 @@ func (s *Store) CreateProduct(ctx context.Context, p *Product) error {
 		Periodicity:       nullStrPtr(p.Periodicity),
 		DueDay:            int32PtrFromInt(p.DueDay),
 		ChargeOnSubscribe: p.ChargeOnSubscribe,
+		ImageUrl:          nullStrPtr(p.ImageURL),
+		FileUrl:           nullStrPtr(p.FileURL),
 	})
 	if err != nil {
 		return err
 	}
 	p.ID = row.ID
 	p.Active = row.Active
+	p.ImageURL = row.ImageUrl
+	p.FileURL = row.FileUrl
 	return nil
 }
 
@@ -753,6 +757,8 @@ func (s *Store) ListProducts(ctx context.Context) ([]Product, error) {
 			Periodicity:       strPtrToStr(r.Periodicity),
 			DueDay:            intPtrFromInt32(r.DueDay),
 			ChargeOnSubscribe: r.ChargeOnSubscribe,
+			ImageURL:          r.ImageUrl,
+			FileURL:           r.FileUrl,
 		}
 	}
 	return out, nil
@@ -774,6 +780,8 @@ func (s *Store) GetProductBySlug(ctx context.Context, slug string) (*Product, er
 		Periodicity:       strPtrToStr(r.Periodicity),
 		DueDay:            intPtrFromInt32(r.DueDay),
 		ChargeOnSubscribe: r.ChargeOnSubscribe,
+		ImageURL:          r.ImageUrl,
+		FileURL:           r.FileUrl,
 	}, nil
 }
 
@@ -793,6 +801,8 @@ func (s *Store) GetProductByID(ctx context.Context, id int64) (*Product, error) 
 		Periodicity:       strPtrToStr(r.Periodicity),
 		DueDay:            intPtrFromInt32(r.DueDay),
 		ChargeOnSubscribe: r.ChargeOnSubscribe,
+		ImageURL:          r.ImageUrl,
+		FileURL:           r.FileUrl,
 	}, nil
 }
 
@@ -818,6 +828,8 @@ func (s *Store) UpdateProduct(ctx context.Context, p *Product) error {
 		Periodicity:       nullStrPtr(p.Periodicity),
 		DueDay:            int32PtrFromInt(p.DueDay),
 		ChargeOnSubscribe: p.ChargeOnSubscribe,
+		ImageUrl:          nullStrPtr(p.ImageURL),
+		FileUrl:           nullStrPtr(p.FileURL),
 	})
 	if err != nil {
 		return err
@@ -1337,22 +1349,43 @@ func (s *Store) SetPaymentLinkStatus(ctx context.Context, id int64, status strin
 func (s *Store) CreateWithdrawal(ctx context.Context, w *Withdrawal) error {
 	key := nullStrPtr(w.IdempotencyKey)
 	return s.db.QueryRow(ctx, `
-		INSERT INTO pay_withdrawals (amount_cents, status, public_token, idempotency_key)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO pay_withdrawals (amount_cents, status, public_token, idempotency_key, efi_id_envio, e2e_id)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, created_at`,
 		w.AmountCents, w.Status, w.PublicToken, key,
+		nullStrPtr(w.EFIIdEnvio), nullStrPtr(w.E2EID),
 	).Scan(&w.ID, &w.CreatedAt)
+}
+
+// SetWithdrawalStatus atualiza o status de um saque casando por efi_id_envio OU e2e_id
+// (o webhook de Pix Envio pode trazer qualquer um dos dois). Usado para aplicar o
+// resultado final do payout (REALIZADO→completed / NAO_REALIZADO→failed). idEnvio e/ou
+// e2eId podem vir vazios — strings vazias não casam (efi_id_envio/e2e_id são NULL ou
+// preenchidos). Idempotente: só transiciona saques ainda em "processing".
+func (s *Store) SetWithdrawalStatus(ctx context.Context, idEnvio, e2eID, status string) error {
+	if idEnvio == "" && e2eID == "" {
+		return nil
+	}
+	_, err := s.db.Exec(ctx, `
+		UPDATE pay_withdrawals
+		SET status = $1
+		WHERE status = 'processing'
+		  AND ( (efi_id_envio IS NOT NULL AND efi_id_envio = $2)
+		     OR (e2e_id       IS NOT NULL AND e2e_id       = $3) )`,
+		status, idEnvio, e2eID,
+	)
+	return err
 }
 
 // GetWithdrawalByIdempotencyKey devolve o withdrawal existente com aquela chave,
 // ou nil (sem erro) se não existir.
 func (s *Store) GetWithdrawalByIdempotencyKey(ctx context.Context, key string) (*Withdrawal, error) {
 	var w Withdrawal
-	var ikey *string
+	var ikey, idEnvio, e2e *string
 	err := s.db.QueryRow(ctx, `
-		SELECT id, amount_cents, status, public_token, idempotency_key, created_at
+		SELECT id, amount_cents, status, public_token, idempotency_key, efi_id_envio, e2e_id, created_at
 		FROM pay_withdrawals WHERE idempotency_key = $1`, key).
-		Scan(&w.ID, &w.AmountCents, &w.Status, &w.PublicToken, &ikey, &w.CreatedAt)
+		Scan(&w.ID, &w.AmountCents, &w.Status, &w.PublicToken, &ikey, &idEnvio, &e2e, &w.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -1362,13 +1395,19 @@ func (s *Store) GetWithdrawalByIdempotencyKey(ctx context.Context, key string) (
 	if ikey != nil {
 		w.IdempotencyKey = *ikey
 	}
+	if idEnvio != nil {
+		w.EFIIdEnvio = *idEnvio
+	}
+	if e2e != nil {
+		w.E2EID = *e2e
+	}
 	return &w, nil
 }
 
 // ListWithdrawals lista todos os saques, mais recentes primeiro.
 func (s *Store) ListWithdrawals(ctx context.Context) ([]Withdrawal, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, amount_cents, status, public_token, created_at
+		SELECT id, amount_cents, status, public_token, efi_id_envio, e2e_id, created_at
 		FROM pay_withdrawals
 		ORDER BY created_at DESC`)
 	if err != nil {
@@ -1378,8 +1417,15 @@ func (s *Store) ListWithdrawals(ctx context.Context) ([]Withdrawal, error) {
 	var out []Withdrawal
 	for rows.Next() {
 		var w Withdrawal
-		if err := rows.Scan(&w.ID, &w.AmountCents, &w.Status, &w.PublicToken, &w.CreatedAt); err != nil {
+		var idEnvio, e2e *string
+		if err := rows.Scan(&w.ID, &w.AmountCents, &w.Status, &w.PublicToken, &idEnvio, &e2e, &w.CreatedAt); err != nil {
 			return nil, err
+		}
+		if idEnvio != nil {
+			w.EFIIdEnvio = *idEnvio
+		}
+		if e2e != nil {
+			w.E2EID = *e2e
 		}
 		out = append(out, w)
 	}
@@ -1495,6 +1541,73 @@ func sortMovements(mvs []Movement) {
 			mvs[j], mvs[j-1] = mvs[j-1], mvs[j]
 		}
 	}
+}
+
+// ── Coupons ───────────────────────────────────────────────────────────────────
+
+// CreateCoupon insere um novo cupom. Retorna erro com código único se já existir
+// outro cupom com o mesmo código (case-insensitive via UNIQUE em LOWER(code)).
+func (s *Store) CreateCoupon(ctx context.Context, c Coupon) (Coupon, error) {
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO pay_coupons (code, discount_type, discount_value, max_uses)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, code, discount_type, discount_value, max_uses, used_count, active, created_at`,
+		c.Code, c.DiscountType, c.DiscountValue, c.MaxUses,
+	).Scan(&c.ID, &c.Code, &c.DiscountType, &c.DiscountValue, &c.MaxUses, &c.UsedCount, &c.Active, &c.CreatedAt)
+	return c, err
+}
+
+// ListCoupons lista todos os cupons, mais recentes primeiro.
+func (s *Store) ListCoupons(ctx context.Context) ([]Coupon, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, code, discount_type, discount_value, max_uses, used_count, active, created_at
+		FROM pay_coupons
+		ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Coupon
+	for rows.Next() {
+		var c Coupon
+		if err := rows.Scan(&c.ID, &c.Code, &c.DiscountType, &c.DiscountValue,
+			&c.MaxUses, &c.UsedCount, &c.Active, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// GetCouponByCode resolve um cupom pelo código (case-insensitive).
+func (s *Store) GetCouponByCode(ctx context.Context, code string) (Coupon, error) {
+	var c Coupon
+	err := s.db.QueryRow(ctx, `
+		SELECT id, code, discount_type, discount_value, max_uses, used_count, active, created_at
+		FROM pay_coupons WHERE LOWER(code) = LOWER($1)`, code).
+		Scan(&c.ID, &c.Code, &c.DiscountType, &c.DiscountValue,
+			&c.MaxUses, &c.UsedCount, &c.Active, &c.CreatedAt)
+	return c, err
+}
+
+// SetCouponActive ativa ou desativa um cupom pelo ID.
+func (s *Store) SetCouponActive(ctx context.Context, id int64, active bool) error {
+	tag, err := s.db.Exec(ctx,
+		`UPDATE pay_coupons SET active=$1 WHERE id=$2`, active, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// IncrementCouponUse incrementa used_count do cupom pelo ID.
+func (s *Store) IncrementCouponUse(ctx context.Context, id int64) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE pay_coupons SET used_count = used_count + 1 WHERE id=$1`, id)
+	return err
 }
 
 // InsertChargeWithLink insere uma cobrança vinculada a um link de pagamento.

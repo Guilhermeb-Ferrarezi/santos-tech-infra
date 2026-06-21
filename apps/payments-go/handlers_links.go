@@ -274,6 +274,7 @@ type payLinkInput struct {
 	Customer       CardCustomer       `json:"customer"`       // nome + CPF (obrigatório p/ boleto/card)
 	BillingAddress CardBillingAddress `json:"billingAddress"` // obrigatório para card
 	DueDate        string             `json:"dueDate"`        // YYYY-MM-DD; default hoje+3 para boleto
+	Coupon         string             `json:"coupon"`         // código do cupom (opcional)
 }
 
 // handlePayViaLink (POST /link/{token}/pay) cria uma charge vinculada ao link.
@@ -376,6 +377,47 @@ func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
 		amountCents = *in.AmountCents
 	}
 
+	// ── Cupom (opcional) ─────────────────────────────────────────────────────
+	// Decisão de design: aceitamos qualquer cupom ativo (não restringimos à lista
+	// l.Coupons do link) para máxima flexibilidade. O campo l.Coupons serve como
+	// sugestão visual no checkout, mas não como filtro de validação.
+	var appliedCouponID int64
+	if in.Coupon != "" {
+		cst := s.couponStoreOf()
+		if cst == nil {
+			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inválido")
+			return
+		}
+		coup, err := cst.GetCouponByCode(r.Context(), in.Coupon)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom não encontrado")
+			return
+		}
+		if !coup.Active {
+			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inativo")
+			return
+		}
+		if coup.MaxUses != -1 && coup.UsedCount >= coup.MaxUses {
+			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom esgotado")
+			return
+		}
+		// Aplica o desconto.
+		var discountCents int64
+		if coup.DiscountType == "fixed" {
+			discountCents = coup.DiscountValue
+			if discountCents > amountCents {
+				discountCents = amountCents
+			}
+		} else {
+			discountCents = (amountCents*coup.DiscountValue + 50) / 100
+		}
+		amountCents -= discountCents
+		if amountCents < 0 {
+			amountCents = 0
+		}
+		appliedCouponID = coup.ID
+	}
+
 	// Método card: requer payment_token.
 	if in.Method == "card" {
 		if s.efiCobr == nil {
@@ -426,6 +468,11 @@ func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("pay via link (card): falha ao gravar cobrança", "link", l.ID, "err", err)
 			writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar a cobrança")
 			return
+		}
+		if appliedCouponID > 0 {
+			if cst := s.couponStoreOf(); cst != nil {
+				_ = cst.IncrementCouponUse(r.Context(), appliedCouponID)
+			}
 		}
 		if result.Status == "paid" {
 			_ = st.MarkChargePaid(r.Context(), c.CorrelationID)
@@ -509,6 +556,11 @@ func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar o boleto")
 			return
 		}
+		if appliedCouponID > 0 {
+			if cst := s.couponStoreOf(); cst != nil {
+				_ = cst.IncrementCouponUse(r.Context(), appliedCouponID)
+			}
+		}
 
 		c.Status = res.Status
 		c.PayerName = in.Customer.Name
@@ -572,6 +624,11 @@ func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("pay via link (pix): falha ao gravar cobrança", "link", l.ID, "err", err)
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar o PIX")
 		return
+	}
+	if appliedCouponID > 0 {
+		if cst := s.couponStoreOf(); cst != nil {
+			_ = cst.IncrementCouponUse(r.Context(), appliedCouponID)
+		}
 	}
 
 	if c.QRCode == "" {

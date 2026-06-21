@@ -18,6 +18,40 @@ type pixWebhookStore interface {
 	MarkWebhookSeen(ctx context.Context, id, typ string, payload []byte) (bool, error)
 	MarkChargePaid(ctx context.Context, correlationID string) error
 	PublicTokenByCorrelation(ctx context.Context, correlationID string) (string, error)
+	// SetWithdrawalStatus aplica o resultado final de um Pix Envio (payout), casando o
+	// saque por efi_id_envio OU e2e_id. Usado pelo ramo PAYOUT_RESULT do webhook pix.
+	SetWithdrawalStatus(ctx context.Context, idEnvio, e2eID, status string) error
+}
+
+// productStore define as operações de persistência de produtos usadas pelos
+// handlers de /products. Extraída como interface para facilitar testes sem DB.
+type productStore interface {
+	CreateProduct(ctx context.Context, p *Product) error
+	ListProducts(ctx context.Context) ([]Product, error)
+	UpdateProduct(ctx context.Context, p *Product) error
+	DeleteProduct(ctx context.Context, id int64) error
+	GetProductByID(ctx context.Context, id int64) (*Product, error)
+	GetProductBySlug(ctx context.Context, slug string) (*Product, error)
+}
+
+// couponStore define as operações de persistência de cupons.
+// Extraída como interface para facilitar testes sem DB.
+type couponStore interface {
+	CreateCoupon(ctx context.Context, c Coupon) (Coupon, error)
+	ListCoupons(ctx context.Context) ([]Coupon, error)
+	GetCouponByCode(ctx context.Context, code string) (Coupon, error)
+	SetCouponActive(ctx context.Context, id int64, active bool) error
+	IncrementCouponUse(ctx context.Context, id int64) error
+}
+
+// checkoutStore isola o acesso ao banco usado pelo checkout do carrinho (POST
+// /me/cart/checkout): produto e cliente. O *Store satisfaz em prod; um fake nos
+// testes (sem Postgres). A criação da cobrança usa createAndPersistCharge que
+// por sua vez precisa de store + provider.
+type checkoutStore interface {
+	GetProductByID(ctx context.Context, id int64) (*Product, error)
+	UpsertCustomer(ctx context.Context, userID int64, taxID, phone, name, email string) (*Customer, error)
+	InsertChargeItems(ctx context.Context, chargeID int64, items []ChargeItem) error
 }
 
 // paymentLinkStore define as operações de persistência de links de pagamento.
@@ -40,22 +74,25 @@ type rateLimiterIface interface {
 }
 
 type Server struct {
-	cfg       Config
-	db        *pgxpool.Pool
-	rdb       *redis.Client
-	store     *Store
-	pixWH     pixWebhookStore  // store do webhook PIX; nil usa s.store
-	links     paymentLinkStore // store de links; nil usa s.store
-	payout    withdrawalStore  // store de saques; nil usa s.store
-	analytics analyticsSource
-	charges   chargeReader
-	recs      recurrenceStore
-	subs      subscribeStore
-	cart      *CartStore
-	provider  PaymentProvider
-	efi       efiOps
-	efiCobr   *efiCobrancas // API Cobranças (boleto); nil se EFI_COBR_BASE_URL ausente
-	email     *emailClient
+	cfg        Config
+	db         *pgxpool.Pool
+	rdb        *redis.Client
+	store      *Store
+	pixWH      pixWebhookStore  // store do webhook PIX; nil usa s.store
+	links      paymentLinkStore // store de links; nil usa s.store
+	coupons    couponStore      // store de cupons; nil usa s.store
+	products   productStore     // store de produtos; nil usa s.store
+	checkoutSt checkoutStore    // store do checkout do carrinho; nil usa s.store
+	payout     withdrawalStore  // store de saques; nil usa s.store
+	analytics  analyticsSource
+	charges    chargeReader
+	recs       recurrenceStore
+	subs       subscribeStore
+	cart       *CartStore
+	provider   PaymentProvider
+	efi        efiOps
+	efiCobr    *efiCobrancas // API Cobranças (boleto); nil se EFI_COBR_BASE_URL ausente
+	email      *emailClient
 	// refund store de estorno de cartão; nil usa s.store.
 	refund chargeRefundStore
 	// payoutRateLimiter pode ser substituído em testes; nil usa o global payoutDefaultLimiter.
@@ -135,6 +172,7 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("POST /products", s.requireAdmin(s.handleCreateProduct))
 	mux.HandleFunc("GET /products", s.requireAdmin(s.handleListProducts))
+	mux.HandleFunc("GET /products/{id}", s.requireAdmin(s.handleGetProduct))
 	mux.HandleFunc("PUT /products/{id}", s.requireAdmin(s.handleUpdateProduct))
 	mux.HandleFunc("DELETE /products/{id}", s.requireAdmin(s.handleDeleteProduct))
 	mux.HandleFunc("GET /products/by-slug/{slug}", s.handleGetProductBySlug) // público
@@ -200,6 +238,13 @@ func (s *Server) Routes() http.Handler {
 	// Link público (checkout): resolve dados e aceita pagamento.
 	mux.HandleFunc("GET /link/{token}", s.handleGetLinkByToken)
 	mux.HandleFunc("POST /link/{token}/pay", s.handlePayViaLink)
+
+	// Cupons de desconto.
+	mux.HandleFunc("POST /coupons", s.requireAdmin(s.handleCreateCoupon))
+	mux.HandleFunc("GET /coupons", s.requireAdmin(s.handleListCoupons))
+	mux.HandleFunc("PATCH /coupons/{id}", s.requireAdmin(s.handlePatchCoupon))
+	// /coupons/apply é PÚBLICO — usado pelo checkout para validar o cupom.
+	mux.HandleFunc("POST /coupons/apply", s.handleApplyCoupon)
 
 	// Extrato de movimentos (admin): entradas (cobranças pagas) + saídas (saques).
 	// O CSV de conciliação Efí (GET /efi/reports/*) permanece inalterado.

@@ -72,6 +72,8 @@ type PayProduct struct {
 	Periodicity       *string
 	DueDay            *int32
 	ChargeOnSubscribe bool
+	ImageUrl          *string
+	FileUrl           *string
 	CreatedAt         pgtype.Timestamptz
 }
 
@@ -120,4 +122,13 @@ type PayWebhookEvent struct {
 	Type        string
 	Payload     []byte
 	ProcessedAt pgtype.Timestamptz
+}
+
+type PayWithdrawal struct {
+	ID             int64
+	AmountCents    int64
+	Status         string
+	PublicToken    string
+	IdempotencyKey *string
+	CreatedAt      pgtype.Timestamptz
 }

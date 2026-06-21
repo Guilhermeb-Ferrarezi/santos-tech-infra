@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -276,6 +277,70 @@ func (p *efiProvider) ListMED(ctx context.Context, inicio, fim time.Time) ([]MED
 	return out, nil
 }
 
+// sanitizeIdEnvio normaliza a idempotencyKey para o formato aceito pela Efí no
+// :idEnvio do Pix Envio: alfanumérico, 1–35 chars. Remove qualquer caractere fora
+// de [A-Za-z0-9] (ex.: os hífens de um UUID) e trunca em 35.
+func sanitizeIdEnvio(key string) string {
+	var b strings.Builder
+	for _, r := range key {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			b.WriteRune(r)
+			if b.Len() >= 35 {
+				break
+			}
+		}
+	}
+	return b.String()
+}
+
+// efiEnvioResp — resposta de PUT /v3/gn/pix/{idEnvio} (Pix Envio / payout).
+// status inicial é EM_PROCESSAMENTO (não-final); o resultado (REALIZADO/NAO_REALIZADO)
+// chega depois pelo webhook pix.
+type efiEnvioResp struct {
+	IDEnvio string `json:"idEnvio"`
+	E2EID   string `json:"e2eId"`
+	Valor   string `json:"valor"`
+	Horario string `json:"horario"`
+	Status  string `json:"status"`
+}
+
+// SendPix executa um Pix Envio (payout) via PUT /v3/gn/pix/{idEnvio} — escopo pix.send.
+// O :idEnvio é a chave de idempotência (use a idempotencyKey já recebida pelo handler;
+// é sanitizada para alfanumérico ≤35). pagador.chave é a chave Pix do PAGADOR (p.pixKey);
+// favorecidoChave é a chave Pix de destino. valorCents é convertido em string "12.34".
+// Devolve idEnvio/e2eId/status da Efí (status EM_PROCESSAMENTO é normal — não é final).
+// Em erro do gateway, repassa o *ProviderError (mensagem amigável) sem vazar segredo.
+func (p *efiProvider) SendPix(ctx context.Context, idEnvio string, valorCents int64, favorecidoChave, infoPagador string) (string, string, string, error) {
+	id := sanitizeIdEnvio(idEnvio)
+	if id == "" {
+		return "", "", "", fmt.Errorf("efi pix envio: idEnvio inválido")
+	}
+	valor := strconv.FormatFloat(float64(valorCents)/100, 'f', 2, 64)
+	body := map[string]any{
+		"valor": valor,
+		"pagador": map[string]any{
+			"chave":       p.pixKey,
+			"infoPagador": infoPagador,
+		},
+		"favorecido": map[string]any{
+			"chave": favorecidoChave,
+		},
+	}
+	data, err := p.do(ctx, http.MethodPut, "/v3/gn/pix/"+url.PathEscape(id), body)
+	if err != nil {
+		return "", "", "", err
+	}
+	var r efiEnvioResp
+	if err := json.Unmarshal(data, &r); err != nil {
+		return "", "", "", fmt.Errorf("efi pix envio: parse resposta: %w", err)
+	}
+	out := r.IDEnvio
+	if out == "" {
+		out = id
+	}
+	return out, r.E2EID, r.Status, nil
+}
+
 // GetBalance consulta o saldo disponível da conta Efí (em centavos).
 func (p *efiProvider) GetBalance(ctx context.Context) (int64, error) {
 	data, err := p.do(ctx, http.MethodGet, "/v2/gn/saldo", nil)
@@ -393,11 +458,30 @@ func (p *efiProvider) CancelCharge(ctx context.Context, providerChargeID string)
 type efiPixItem struct {
 	EndToEndID string `json:"endToEndId"`
 	Txid       string `json:"txid"`
+	Status     string `json:"status"`
+	GnExtras   struct {
+		IDEnvio string `json:"idEnvio"`
+	} `json:"gnExtras"`
 }
 
-// ParseWebhook mapeia o payload Pix da Efí ({"pix":[...]}) em eventos CHARGE_PAID.
-// Corpo sem itens (ping de teste do registro) → slice vazio, sem erro.
-// A autenticação (segredo na URL) é feita no handler, não aqui.
+// efiEnvioStatusToApp mapeia o status final de um Pix Envio (payout) para o vocabulário
+// do app. REALIZADO → completed; NAO_REALIZADO → failed; outros (intermediários) → "".
+func efiEnvioStatusToApp(s string) string {
+	switch s {
+	case "REALIZADO":
+		return "completed"
+	case "NAO_REALIZADO":
+		return "failed"
+	default:
+		return "" // EM_PROCESSAMENTO e quaisquer estados não-finais: nada a aplicar
+	}
+}
+
+// ParseWebhook mapeia o payload Pix da Efí ({"pix":[...]}) em eventos.
+// O MESMO webhook pix recebe tanto pix RECEBIDOS (cobrança paga → CHARGE_PAID, casa por
+// txid) quanto o resultado de pix ENVIADOS (payout → PAYOUT_RESULT, casa por idEnvio/e2eId,
+// identificado por gnExtras.idEnvio no item). Corpo sem itens (ping de teste do registro)
+// → slice vazio, sem erro. A autenticação (segredo na URL) é feita no handler, não aqui.
 func (p *efiProvider) ParseWebhook(headers map[string][]string, body []byte) ([]WebhookEvent, error) {
 	var wh struct {
 		Pix []efiPixItem `json:"pix"`
@@ -407,6 +491,24 @@ func (p *efiProvider) ParseWebhook(headers map[string][]string, body []byte) ([]
 	}
 	out := make([]WebhookEvent, 0, len(wh.Pix))
 	for _, it := range wh.Pix {
+		// Ramo ENVIO (payout): identificado por gnExtras.idEnvio. NÃO confundir com o
+		// pix recebido (que casa por txid). Só emitimos evento se houver idEnvio ou e2eId.
+		if it.GnExtras.IDEnvio != "" {
+			id := it.GnExtras.IDEnvio
+			if it.EndToEndID != "" {
+				id = it.EndToEndID
+			}
+			out = append(out, WebhookEvent{
+				ID:           "envio:" + id, // namespace distinto do recebido (idempotência)
+				Type:         "PAYOUT_RESULT",
+				IDEnvio:      it.GnExtras.IDEnvio,
+				E2EID:        it.EndToEndID,
+				PayoutStatus: efiEnvioStatusToApp(it.Status),
+				Raw:          body,
+			})
+			continue
+		}
+		// Ramo RECEBIDO (cobrança paga): casa por txid.
 		if it.Txid == "" {
 			continue
 		}
