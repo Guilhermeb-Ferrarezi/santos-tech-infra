@@ -497,6 +497,18 @@ POST   /charges/manual   body {customerId? | payerName+payerTaxId, payerEmail?, 
 GET    /charges?status=&student_id=                             → [{...}]
 GET    /charges/{id}                                            → {...}
 
+Cartão de crédito (Efí API Cobranças — mesma credencial do boleto, sem certificado):
+Tokenizado NO BROWSER (lib payment-token-efi); o backend recebe SÓ o `paymentToken`
+(PAN/CVV NUNCA chegam — rejeitados por hasSensitiveCardFields, inclusive aninhados).
+Status: new→waiting→approved→paid; unpaid (recusa, refusal{reason,retry}); contested
+(chargeback); refunded; canceled.
+POST   /charges/card   body {token, paymentToken, installments?, holder, holderDocument, billingAddress?}
+         → 201 {id,...,method:"card",status} (admin). Corpo com PAN/CVV → 400 sensitive_fields.
+GET    /installments?brand=&total=   parcelas/juros por bandeira (admin). brand ∈
+         {visa,mastercard,elo,amex,hipercard} (allowlist) → 400 invalid_brand.
+POST   /charges/card/{id}/refund   body {amountCents?}   estorno total/parcial (admin).
+         409 no_provider_id|already_refunded; marca a charge como `refunded` no banco.
+
 PIX Automático (recorrência BACEN via Efí — admin, role=3):
 Débito recorrente padrão BACEN: o pagador AUTORIZA uma vez (jornada 2: o QR/copia-e-cola
 só autoriza, sem débito na hora) e os ciclos seguintes viram cobranças `kind=recorrente`
@@ -562,6 +574,16 @@ GET    /pay/{token}/events   (SSE, text/event-stream)           → event:status
 POST   /pay/{token}/cancel                                      → {status:"canceled"} (cancela cobrança pendente; remove a cob na Efí)
 GET    /pay/{token}/receipt                                     → PDF do comprovante (só se paga; pagador baixa sem login)
 
+Links de Pagamento (admin cria; checkout público REUTILIZÁVEL — vários pagadores):
+POST   /payment-links   body {amountCents?(null=valor livre), productIds[], methods[](pix|card|boleto), coupons?[], finishUrl?, returnUrl?}
+         → 201 {id,publicToken,...,status:"active"} (admin). Valor livre tem teto LINK_MAX_CENTS (default R$10.000) → 400 amount_too_large.
+GET    /payment-links                                          → [{id,publicToken,amountCents?,productIds,methods,coupons,finishUrl,returnUrl,status,createdAt}]
+GET    /payment-links/{id}                                     → {...}
+PATCH  /payment-links/{id}   body {status:active|inactive}     → {status}
+GET    /link/{token}   (PÚBLICO)                               → {id,publicToken,amountCents?,methods,...} (410 se inativo)
+POST   /link/{token}/pay   (PÚBLICO, rate-limit por IP → 429)  body {method:pix|card|boleto, customer:{name,taxId,email}, amountCents?(se valor livre), paymentToken(se card), installments?}
+         → cria uma cobrança vinculada (link_id) pelo método escolhido. PAN/CVV → 400 sensitive_fields.
+
 Carrinho fica no REDIS (hash `cart:{userID}` productID→quantity, TTL 7 dias). O SSE
 usa Redis pub/sub: o webhook CHARGE_PAID publica no canal `pay:charge:{token}` e o
 stream empurra `event: paid` e encerra. Cobranças de cliente usam `customer_id` +
@@ -578,8 +600,20 @@ GET    /analytics?range=7d|30d|90d|12m|all  (default 30d)
          Valores monetários em centavos. deltaPaidPct compara com período anterior de mesmo tamanho.
 
 Dashboard Efí (admin — role=3):
-GET    /efi/balance        saldo disponível na conta Efí em centavos.
-         Resposta: `{availableCents: int64}`. Consulta `GET /v2/gn/saldo` na Efí.
+GET    /efi/balance        saldo detalhado da conta Efí em centavos.
+         Resposta: `{availableCents, processingCents, blockedCents, dailyLimitCents, nightLimitCents}`
+         (extras = 0 enquanto a API Pix Efí não os expõe). Consulta `GET /v2/gn/saldo`.
+GET    /withdrawals        → [{id,amountCents,status,publicToken,createdAt}] (admin; 503 se DB indisponível).
+         Status do saque: processing|completed|failed|disabled.
+POST   /efi/payout         body {amountCents, destination, idempotencyKey}   solicita saque (admin).
+         Guards: SUDO obrigatório (403 sudo_required) · rate-limit (429) · amountCents>0, ≤ saldo e ≤
+         PAYOUT_MAX_CENTS (400) · idempotencyKey única (reenvio devolve o registro existente).
+         A TRANSFERÊNCIA REAL fica atrás da flag PAYOUT_ENABLED (default false → 503 payout_disabled
+         após passar os guards). `destination` nunca é logado/serializado.
+GET    /statement?range=   extrato de movimentos (admin). range ∈ {today,month,7d,30d,90d,12m,all}
+         ou intervalo `YYYY-MM-DD:YYYY-MM-DD`. → [{id,type,direction:in|out,method,valueCents,
+         customerName?,customerEmail?,date}] (entradas=cobranças pagas, saídas=taxas/saques). É distinto
+         do CSV de conciliação (/efi/reports).
 GET    /efi/med            lista infrações MED (disputas Pix) na janela de tempo.
          Query: `?range=7d|30d|90d|12m|all` (padrão 30d). Consulta
          `GET /v2/gn/infracoes?inicio=&fim=` na Efí (scope gn.infractions.read).
@@ -613,12 +647,17 @@ POST   /webhooks/efi/cobr   notificações da API Cobranças (boleto). A Efí PO
          `{"notification":"<token>"}`; o handler busca GET /v1/notification/{token} e
          marca paga a cobrança pelo `charge_id` do Efí (=provider_charge_id), publicando
          no Redis p/ SSE. Mesma auth `?token=<EFI_WEBHOOK_SECRET>`; notification_url
-         registrada por cobrança na emissão do boleto.
+         registrada por cobrança na emissão do boleto. TAMBÉM trata CARTÃO (mesmo fluxo
+         token-based: busca o status real e valida charge_id antes de marcar paga/recusada/estornada).
+Segurança dos webhooks: FAIL-CLOSED — recusam (503) se `EFI_WEBHOOK_SECRET` estiver vazio
+em QUALQUER ambiente. O webhook PIX confirma o status na Efí (`GET /v2/cob/{txid}`) antes de
+marcar pago — não confia no corpo (evita forja).
 
 Tabelas próprias (mesmo Postgres `santos_tech`, prefixo pay_): pay_students,
 pay_plans, pay_subscriptions, pay_charges, pay_webhook_events, pay_products,
-pay_customers, pay_charge_items.
-Env extra (Fase 2): REDIS_URL (carrinho + pub/sub do SSE).
+pay_customers, pay_charge_items, pay_recurrences, pay_payment_links, pay_withdrawals.
+Env extra: REDIS_URL (carrinho + pub/sub do SSE); EFI_COBR_BASE_URL (boleto/cartão);
+LINK_MAX_CENTS, PAYOUT_MAX_CENTS, PAYOUT_ENABLED (default false).
 
 Efí (API Pix): autenticação OAuth2 client_credentials (`EFI_CLIENT_ID` /
 `EFI_CLIENT_SECRET`) com mTLS usando certificado p12 (`EFI_CERT_P12_BASE64` +
