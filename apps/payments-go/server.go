@@ -20,6 +20,16 @@ type pixWebhookStore interface {
 	PublicTokenByCorrelation(ctx context.Context, correlationID string) (string, error)
 }
 
+// couponStore define as operações de persistência de cupons.
+// Extraída como interface para facilitar testes sem DB.
+type couponStore interface {
+	CreateCoupon(ctx context.Context, c Coupon) (Coupon, error)
+	ListCoupons(ctx context.Context) ([]Coupon, error)
+	GetCouponByCode(ctx context.Context, code string) (Coupon, error)
+	SetCouponActive(ctx context.Context, id int64, active bool) error
+	IncrementCouponUse(ctx context.Context, id int64) error
+}
+
 // paymentLinkStore define as operações de persistência de links de pagamento.
 // Extraída como interface para facilitar testes sem DB.
 type paymentLinkStore interface {
@@ -46,6 +56,7 @@ type Server struct {
 	store     *Store
 	pixWH     pixWebhookStore  // store do webhook PIX; nil usa s.store
 	links     paymentLinkStore // store de links; nil usa s.store
+	coupons   couponStore      // store de cupons; nil usa s.store
 	payout    withdrawalStore  // store de saques; nil usa s.store
 	analytics analyticsSource
 	charges   chargeReader
@@ -200,6 +211,13 @@ func (s *Server) Routes() http.Handler {
 	// Link público (checkout): resolve dados e aceita pagamento.
 	mux.HandleFunc("GET /link/{token}", s.handleGetLinkByToken)
 	mux.HandleFunc("POST /link/{token}/pay", s.handlePayViaLink)
+
+	// Cupons de desconto.
+	mux.HandleFunc("POST /coupons", s.requireAdmin(s.handleCreateCoupon))
+	mux.HandleFunc("GET /coupons", s.requireAdmin(s.handleListCoupons))
+	mux.HandleFunc("PATCH /coupons/{id}", s.requireAdmin(s.handlePatchCoupon))
+	// /coupons/apply é PÚBLICO — usado pelo checkout para validar o cupom.
+	mux.HandleFunc("POST /coupons/apply", s.handleApplyCoupon)
 
 	// Extrato de movimentos (admin): entradas (cobranças pagas) + saídas (saques).
 	// O CSV de conciliação Efí (GET /efi/reports/*) permanece inalterado.

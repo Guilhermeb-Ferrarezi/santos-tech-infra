@@ -212,6 +212,18 @@ CREATE TABLE IF NOT EXISTS pay_payment_links (
 );
 ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS link_id BIGINT REFERENCES pay_payment_links(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_pay_charges_link ON pay_charges(link_id) WHERE link_id IS NOT NULL;
+-- Cupons de desconto: código único, tipo (fixed/percent) e valor, com controle de uso.
+CREATE TABLE IF NOT EXISTS pay_coupons (
+  id             BIGSERIAL PRIMARY KEY,
+  code           TEXT NOT NULL UNIQUE,
+  discount_type  TEXT NOT NULL CHECK (discount_type IN ('fixed','percent')),
+  discount_value BIGINT NOT NULL CHECK (discount_value > 0),
+  max_uses       BIGINT NOT NULL DEFAULT -1,
+  used_count     BIGINT NOT NULL DEFAULT 0,
+  active         BOOLEAN NOT NULL DEFAULT true,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_pay_coupons_code ON pay_coupons(LOWER(code));
 -- Saques (payouts): registra cada solicitação de saque do saldo Efí.
 -- destination NÃO é armazenado aqui por segurança (dados bancários são sensíveis).
 CREATE TABLE IF NOT EXISTS pay_withdrawals (

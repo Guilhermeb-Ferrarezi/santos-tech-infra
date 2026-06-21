@@ -1497,6 +1497,73 @@ func sortMovements(mvs []Movement) {
 	}
 }
 
+// ── Coupons ───────────────────────────────────────────────────────────────────
+
+// CreateCoupon insere um novo cupom. Retorna erro com código único se já existir
+// outro cupom com o mesmo código (case-insensitive via UNIQUE em LOWER(code)).
+func (s *Store) CreateCoupon(ctx context.Context, c Coupon) (Coupon, error) {
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO pay_coupons (code, discount_type, discount_value, max_uses)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, code, discount_type, discount_value, max_uses, used_count, active, created_at`,
+		c.Code, c.DiscountType, c.DiscountValue, c.MaxUses,
+	).Scan(&c.ID, &c.Code, &c.DiscountType, &c.DiscountValue, &c.MaxUses, &c.UsedCount, &c.Active, &c.CreatedAt)
+	return c, err
+}
+
+// ListCoupons lista todos os cupons, mais recentes primeiro.
+func (s *Store) ListCoupons(ctx context.Context) ([]Coupon, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, code, discount_type, discount_value, max_uses, used_count, active, created_at
+		FROM pay_coupons
+		ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Coupon
+	for rows.Next() {
+		var c Coupon
+		if err := rows.Scan(&c.ID, &c.Code, &c.DiscountType, &c.DiscountValue,
+			&c.MaxUses, &c.UsedCount, &c.Active, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// GetCouponByCode resolve um cupom pelo código (case-insensitive).
+func (s *Store) GetCouponByCode(ctx context.Context, code string) (Coupon, error) {
+	var c Coupon
+	err := s.db.QueryRow(ctx, `
+		SELECT id, code, discount_type, discount_value, max_uses, used_count, active, created_at
+		FROM pay_coupons WHERE LOWER(code) = LOWER($1)`, code).
+		Scan(&c.ID, &c.Code, &c.DiscountType, &c.DiscountValue,
+			&c.MaxUses, &c.UsedCount, &c.Active, &c.CreatedAt)
+	return c, err
+}
+
+// SetCouponActive ativa ou desativa um cupom pelo ID.
+func (s *Store) SetCouponActive(ctx context.Context, id int64, active bool) error {
+	tag, err := s.db.Exec(ctx,
+		`UPDATE pay_coupons SET active=$1 WHERE id=$2`, active, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// IncrementCouponUse incrementa used_count do cupom pelo ID.
+func (s *Store) IncrementCouponUse(ctx context.Context, id int64) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE pay_coupons SET used_count = used_count + 1 WHERE id=$1`, id)
+	return err
+}
+
 // InsertChargeWithLink insere uma cobrança vinculada a um link de pagamento.
 // Reutiliza o mesmo INSERT de InsertCharge mas adiciona link_id.
 func (s *Store) InsertChargeWithLink(ctx context.Context, c *Charge, linkID int64) error {

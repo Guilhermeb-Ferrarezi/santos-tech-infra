@@ -200,6 +200,19 @@ type Movement struct {
 	Date          time.Time `json:"date"`
 }
 
+// Coupon é um cupom de desconto aplicável no checkout. discount_type define o tipo:
+// "fixed" (desconto em centavos) ou "percent" (1–100). max_uses=-1 = ilimitado.
+type Coupon struct {
+	ID            int64     `json:"id"`
+	Code          string    `json:"code"`
+	DiscountType  string    `json:"discountType"`  // "fixed" | "percent"
+	DiscountValue int64     `json:"discountValue"` // centavos (fixed) ou 1–100 (percent)
+	MaxUses       int64     `json:"maxUses"`       // -1 = ilimitado
+	UsedCount     int64     `json:"usedCount"`
+	Active        bool      `json:"active"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
 // PaymentLink é um link de pagamento reutilizável. O pagador acessa por /link/{token},
 // escolhe o método e cria uma charge vinculada (link_id). AmountCents nil = valor livre.
 type PaymentLink struct {
