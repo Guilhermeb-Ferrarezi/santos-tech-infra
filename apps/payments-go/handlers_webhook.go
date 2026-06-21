@@ -224,7 +224,10 @@ func (s *Server) handleCobrWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	// Idempotência: usa o token de notificação como ID de evento. Se já foi processado,
 	// responde 200 sem re-disparar efeitos (igual ao webhook PIX — MarkWebhookSeen).
-	fresh, err := s.store.MarkWebhookSeen(r.Context(), notification, "cobr_notification", body)
+	// pay_webhook_events.payload é JSONB: o corpo da Efí vem form-urlencoded (não-JSON),
+	// então persistimos um objeto JSON com o token (não o corpo cru, que estoura o jsonb).
+	seenPayload, _ := json.Marshal(map[string]string{"notification": notification})
+	fresh, err := s.store.MarkWebhookSeen(r.Context(), notification, "cobr_notification", seenPayload)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar evento")
 		return
