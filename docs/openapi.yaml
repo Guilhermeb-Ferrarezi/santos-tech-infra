@@ -53,6 +53,8 @@ tags:
     description: Gestão administrativa (requer role Admin)
   - name: System
     description: Saúde do serviço
+  - name: Payments
+    description: Pagamentos (payments-go — prefixo /payments em produção)
 
 paths:
   /health:
@@ -1478,6 +1480,56 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
               example: { code: NOT_FOUND, message: "Aplicação não encontrada" }
 
+  # ── payments-go: Extrato (GET /statement) ────────────────────────────────
+  # Serviço: apps/payments-go · prefixo em produção: /payments (via proxy reverso)
+  # TODO: atualizar llms.txt central (api.santos-tech.com/llms.txt) com esta rota.
+  /payments/statement:
+    get:
+      tags: [Payments]
+      summary: Extrato de movimentos financeiros (admin)
+      description: |
+        Retorna a lista de movimentos financeiros do período selecionado, ordenada
+        por data decrescente. Combina:
+        - **Entradas** (`direction: "in"`): cobranças pagas — `type` em `pix_in`,
+          `boleto_in`, `card_in`.
+        - **Saídas** (`direction: "out"`): saques registrados — `type: "payout"`.
+
+        O CSV de conciliação Efí (`GET /payments/efi/reports/{id}`) permanece
+        independente — trata-se de extratos diferentes (local vs. liquidação Efí).
+
+        Usa as mesmas janelas de tempo do analytics: `7d`, `30d` (padrão), `90d`,
+        `12m`, `all`.
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: range
+          schema:
+            type: string
+            enum: [7d, 30d, 90d, 12m, all]
+            default: 30d
+          description: Janela de tempo do extrato.
+      responses:
+        "200":
+          description: Lista de movimentos ordenada por data decrescente.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Movement"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          description: Erro ao consultar movimentos no banco de dados.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: db_error, message: "Falha ao consultar extrato" }
+
 components:
   securitySchemes:
     cookieAuth:
@@ -1543,6 +1595,47 @@ components:
         code: { type: string, description: "Código estável legível por máquina" }
         message: { type: string, description: "Mensagem em português para humanos" }
       required: [code, message]
+
+    # ── payments-go schemas ────────────────────────────────────────────────
+    Movement:
+      type: object
+      description: |
+        Movimento financeiro do extrato: entrada (pagamento recebido) ou saída (saque).
+        Derivado de cobranças pagas e saques registrados em payments-go.
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: ID da cobrança (direction=in) ou do saque (direction=out).
+        type:
+          type: string
+          enum: [pix_in, boleto_in, card_in, fee, payout]
+          description: >
+            Tipo do movimento: `pix_in`/`boleto_in`/`card_in` para entradas por método;
+            `fee` para taxas; `payout` para saques.
+        direction:
+          type: string
+          enum: [in, out]
+          description: "`in` = entrada de valor; `out` = saída de valor."
+        method:
+          type: string
+          enum: [pix, boleto, card, ""]
+          description: Método de pagamento (vazio para saques).
+        valueCents:
+          type: integer
+          format: int64
+          description: Valor em centavos (sempre positivo).
+        customerName:
+          type: string
+          description: Nome do pagador (present only for entries).
+        customerEmail:
+          type: string
+          description: Email do pagador (presente apenas em entradas).
+        date:
+          type: string
+          format: date-time
+          description: Data do movimento (paid_at para cobranças, created_at para saques).
+      required: [id, type, direction, method, valueCents, date]
 
     RegisterRequest:
       type: object

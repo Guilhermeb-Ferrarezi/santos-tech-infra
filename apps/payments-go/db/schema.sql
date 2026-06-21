@@ -132,3 +132,15 @@ CREATE TABLE pay_charge_items (
 );
 
 CREATE INDEX idx_pay_charge_items_charge ON pay_charge_items(charge_id);
+
+-- Saques (payouts): registra cada solicitação de saque do saldo Efí.
+-- destination NÃO é armazenado aqui por segurança (dados bancários são sensíveis).
+CREATE TABLE pay_withdrawals (
+  id               BIGSERIAL PRIMARY KEY,
+  amount_cents     BIGINT NOT NULL CHECK (amount_cents > 0),
+  status           TEXT NOT NULL DEFAULT 'processing'
+                     CHECK (status IN ('processing','completed','failed','disabled')),
+  public_token     TEXT NOT NULL UNIQUE,
+  idempotency_key  TEXT UNIQUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -26,6 +27,12 @@ type Config struct {
 	EFIWebhookURL    string // URL pública a registrar no webhook da Efí (sem ?token)
 	PublicPayURL     string // base pública da tela de pagamento (links de email): {base}/pay/{token}
 	Production       bool
+	// PayoutEnabled habilita a transferência real de saldo Efí (saque).
+	// Default FALSE — ativar só após validar a operação de saque na conta Efí em produção.
+	PayoutEnabled bool
+	// PayoutMaxCents é o valor máximo permitido por saque (em centavos).
+	// Default 50000 = R$ 500,00.
+	PayoutMaxCents int64
 }
 
 func LoadConfig() Config {
@@ -49,7 +56,22 @@ func LoadConfig() Config {
 		EFIWebhookURL:    strings.TrimRight(getEnv("EFI_WEBHOOK_URL", ""), "/"),
 		PublicPayURL:     strings.TrimRight(getEnv("PUBLIC_PAY_URL", "https://pagar.santos-tech.com"), "/"),
 		Production:       getEnv("NODE_ENV", "development") == "production",
+		PayoutEnabled:    getEnv("PAYOUT_ENABLED", "false") == "true",
+		PayoutMaxCents:   parseInt64Env("PAYOUT_MAX_CENTS", 50000),
 	}
+}
+
+// parseInt64Env lê uma env var como int64; usa def se ausente ou inválida.
+func parseInt64Env(k string, def int64) int64 {
+	v := os.Getenv(k)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 func getEnv(k, def string) string {

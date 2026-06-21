@@ -184,28 +184,54 @@ func (s *Server) handleCobrWebhook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
-	evs, err := s.efiCobr.GetNotification(r.Context(), payload.Notification)
+	// Idempotência: usa o token de notificação como ID de evento. Se já foi processado,
+	// responde 200 sem re-disparar efeitos (igual ao webhook PIX — MarkWebhookSeen).
+	fresh, err := s.store.MarkWebhookSeen(r.Context(), payload.Notification, "cobr_notification", body)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar evento")
+		return
+	}
+	if !fresh {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+	// NÃO confiamos no corpo do webhook — buscamos o status real na Efí pelo token.
+	evs, err := s.efiCobr.GetCobrancaNotification(r.Context(), payload.Notification)
 	if err != nil {
 		slog.Warn("webhook cobr: falha ao buscar notificação", "err", err)
 		writeError(w, http.StatusBadGateway, "efi_error", "Falha ao consultar a notificação")
 		return
 	}
 	for _, ev := range evs {
-		if ev.Status != "paid" && ev.Status != "settled" {
-			continue
-		}
-		marked, err := s.store.MarkChargePaidByProviderID(r.Context(), ev.ChargeID)
-		if err != nil {
-			slog.Warn("webhook cobr: falha ao marcar paga", "charge_id", ev.ChargeID, "err", err)
-			continue
-		}
-		if !marked {
-			continue // já estava paga/cancelada, ou charge_id desconhecido
-		}
-		if tok, e := s.store.PublicTokenByProviderID(r.Context(), ev.ChargeID); e == nil && tok != "" {
-			s.invalidateChargeStatus(r.Context(), tok)
-			s.publishChargePaid(r.Context(), tok)
-			s.enqueueNotifyPaid(r.Context(), tok)
+		switch ev.Status {
+		case "paid", "settled", "approved":
+			// Validamos o charge_id contra o banco (MarkChargePaidByProviderID retorna false
+			// se o provider_charge_id não existir localmente — evita transições espúrias).
+			marked, err := s.store.MarkChargePaidByProviderID(r.Context(), ev.ChargeID)
+			if err != nil {
+				slog.Warn("webhook cobr: falha ao marcar paga", "charge_id", ev.ChargeID, "err", err)
+				continue
+			}
+			if !marked {
+				continue // já estava paga/cancelada, ou charge_id desconhecido
+			}
+			if tok, e := s.store.PublicTokenByProviderID(r.Context(), ev.ChargeID); e == nil && tok != "" {
+				s.invalidateChargeStatus(r.Context(), tok)
+				s.publishChargePaid(r.Context(), tok)
+				s.enqueueNotifyPaid(r.Context(), tok)
+			}
+
+		case "unpaid":
+			// Cartão recusado: mantém pendente (não marca pago). Logamos para acompanhamento;
+			// a UI já sabe que o status permanece waiting/unpaid via polling/SSE.
+			slog.Info("webhook cobr: cobrança recusada (unpaid)", "charge_id", ev.ChargeID)
+
+		case "contested", "refunded":
+			// Disputa ou estorno: sem ação automática no DB por ora — log para acompanhamento.
+			slog.Info("webhook cobr: status avançado recebido", "charge_id", ev.ChargeID, "status", ev.Status)
+
+		default:
+			slog.Info("webhook cobr: status ignorado", "charge_id", ev.ChargeID, "status", ev.Status)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

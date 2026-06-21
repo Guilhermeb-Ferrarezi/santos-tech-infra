@@ -12,11 +12,32 @@ import (
 	"github.com/santos-tech/golog"
 )
 
+// paymentLinkStore define as operações de persistência de links de pagamento.
+// Extraída como interface para facilitar testes sem DB.
+type paymentLinkStore interface {
+	CreatePaymentLink(ctx context.Context, l *PaymentLink) error
+	GetPaymentLinkByToken(ctx context.Context, token string) (*PaymentLink, error)
+	GetPaymentLink(ctx context.Context, id int64) (*PaymentLink, error)
+	ListPaymentLinks(ctx context.Context) ([]PaymentLink, error)
+	SetPaymentLinkStatus(ctx context.Context, id int64, status string) error
+	InsertChargeWithLink(ctx context.Context, c *Charge, linkID int64) error
+	// MarkChargePaid é necessário para marcar cobrança paga após cartão sincronamente.
+	MarkChargePaid(ctx context.Context, correlationID string) error
+}
+
+// rateLimiterIface permite injetar limiters alternativos nos testes (sem depender
+// da variável global). Em produção, usamos *rate.Limiter diretamente.
+type rateLimiterIface interface {
+	Allow() bool
+}
+
 type Server struct {
 	cfg       Config
 	db        *pgxpool.Pool
 	rdb       *redis.Client
 	store     *Store
+	links     paymentLinkStore // store de links; nil usa s.store
+	payout    withdrawalStore  // store de saques; nil usa s.store
 	analytics analyticsSource
 	charges   chargeReader
 	recs      recurrenceStore
@@ -26,6 +47,10 @@ type Server struct {
 	efi       efiOps
 	efiCobr   *efiCobrancas // API Cobranças (boleto); nil se EFI_COBR_BASE_URL ausente
 	email     *emailClient
+	// payoutRateLimiter pode ser substituído em testes; nil usa o global payoutDefaultLimiter.
+	payoutRateLimiter rateLimiterIface
+	// statement store de extrato; nil usa s.store.
+	statement statementStore
 	// queue enfileira tasks asynq (notificação de pagamento). Pode ser nil em
 	// testes que não montam a fila — os callers tratam o nil com fallback.
 	queue *asynq.Client
@@ -134,11 +159,37 @@ func (s *Server) Routes() http.Handler {
 	// mudança de status; o handler busca o detalhe e marca a cobrança paga pelo charge_id.
 	mux.HandleFunc("POST /webhooks/efi/cobr", s.handleCobrWebhook)
 
+	// Cartão de crédito (API Cobranças Efí — Basic Auth, sem mTLS).
+	// POST /charges/card: recebe somente payment_token + dados não-sensíveis (sem PAN/CVV).
+	mux.HandleFunc("POST /charges/card", s.requireAdmin(s.handleCreateCardCharge))
+	// GET /installments: parcelas por bandeira e valor (admin).
+	mux.HandleFunc("GET /installments", s.requireAdmin(s.handleGetInstallments))
+	// POST /charges/card/{id}/refund: estorno (admin).
+	mux.HandleFunc("POST /charges/card/{id}/refund", s.requireAdmin(s.handleRefundCard))
+
 	mux.HandleFunc("GET /efi/balance", s.requireAdmin(s.handleEfiBalance))
 	mux.HandleFunc("GET /efi/med", s.requireAdmin(s.handleEfiMED))
 	mux.HandleFunc("GET /charges/{id}/receipt", s.requireAdmin(s.handleReceipt))
 	mux.HandleFunc("POST /efi/reports", s.requireAdmin(s.handleReportRequest))
 	mux.HandleFunc("GET /efi/reports/{id}", s.requireAdmin(s.handleReportGet))
+
+	// Saques (payout): admin-only + sudo + rate-limit + flag PAYOUT_ENABLED.
+	mux.HandleFunc("POST /efi/payout", s.requireAdmin(s.handlePayout))
+	mux.HandleFunc("GET /withdrawals", s.requireAdmin(s.handleListWithdrawals))
+
+	// Links de pagamento (admin).
+	mux.HandleFunc("POST /payment-links", s.requireAdmin(s.handleCreatePaymentLink))
+	mux.HandleFunc("GET /payment-links", s.requireAdmin(s.handleListPaymentLinks))
+	mux.HandleFunc("GET /payment-links/{id}", s.requireAdmin(s.handleGetPaymentLink))
+	mux.HandleFunc("PATCH /payment-links/{id}", s.requireAdmin(s.handlePatchPaymentLink))
+
+	// Link público (checkout): resolve dados e aceita pagamento.
+	mux.HandleFunc("GET /link/{token}", s.handleGetLinkByToken)
+	mux.HandleFunc("POST /link/{token}/pay", s.handlePayViaLink)
+
+	// Extrato de movimentos (admin): entradas (cobranças pagas) + saídas (saques).
+	// O CSV de conciliação Efí (GET /efi/reports/*) permanece inalterado.
+	mux.HandleFunc("GET /statement", s.requireAdmin(s.handleStatement))
 
 	return golog.RequestLogger(s.cors(metricsMiddleware(mux)))
 }

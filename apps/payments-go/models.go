@@ -29,29 +29,31 @@ type Subscription struct {
 }
 
 type Charge struct {
-	ID               int64      `json:"id"`
-	Kind             string     `json:"kind"`
-	SubscriptionID   *int64     `json:"subscriptionId,omitempty"`
-	RecurrenceID     *int64     `json:"recurrenceId,omitempty"`
-	StudentID        *int64     `json:"studentId,omitempty"`
-	CustomerID       *int64     `json:"customerId,omitempty"`
-	AmountCents      int64      `json:"amountCents"`
-	DueDate          string     `json:"dueDate"`                  // YYYY-MM-DD
-	ReferenceMonth   *string    `json:"referenceMonth,omitempty"` // YYYY-MM
-	Status           string     `json:"status"`
-	Provider         string     `json:"provider"`
-	ProviderChargeID string     `json:"providerChargeId"`
-	CorrelationID    string     `json:"correlationId"`
-	PublicToken      string     `json:"publicToken,omitempty"`
-	Method           string     `json:"method"` // pix | boleto
-	BRCode           string     `json:"brCode"` // pix: copia-e-cola · boleto: linha digitável
-	QRCode           string     `json:"qrCode"`
-	PDFURL           string     `json:"pdfUrl,omitempty"`  // boleto: link do PDF
-	Barcode          string     `json:"barcode,omitempty"` // boleto: código de barras
-	PaidAt           *time.Time `json:"paidAt,omitempty"`
-	CreatedAt        time.Time  `json:"createdAt"`
-	PayerName        string     `json:"payerName,omitempty"`
-	PayerEmail       string     `json:"payerEmail,omitempty"` // só preenchido na listagem (busca)
+	ID               int64            `json:"id"`
+	Kind             string           `json:"kind"`
+	SubscriptionID   *int64           `json:"subscriptionId,omitempty"`
+	RecurrenceID     *int64           `json:"recurrenceId,omitempty"`
+	StudentID        *int64           `json:"studentId,omitempty"`
+	CustomerID       *int64           `json:"customerId,omitempty"`
+	AmountCents      int64            `json:"amountCents"`
+	DueDate          string           `json:"dueDate"`                  // YYYY-MM-DD
+	ReferenceMonth   *string          `json:"referenceMonth,omitempty"` // YYYY-MM
+	Status           string           `json:"status"`
+	Provider         string           `json:"provider"`
+	ProviderChargeID string           `json:"providerChargeId"`
+	CorrelationID    string           `json:"correlationId"`
+	PublicToken      string           `json:"publicToken,omitempty"`
+	Method           string           `json:"method"` // pix | boleto
+	BRCode           string           `json:"brCode"` // pix: copia-e-cola · boleto: linha digitável
+	QRCode           string           `json:"qrCode"`
+	PDFURL           string           `json:"pdfUrl,omitempty"`  // boleto: link do PDF
+	Barcode          string           `json:"barcode,omitempty"` // boleto: código de barras
+	PaidAt           *time.Time       `json:"paidAt,omitempty"`
+	CreatedAt        time.Time        `json:"createdAt"`
+	PayerName        string           `json:"payerName,omitempty"`
+	PayerEmail       string           `json:"payerEmail,omitempty"` // só preenchido na listagem (busca)
+	Refusal          *CardRefusalInfo `json:"refusal,omitempty"`    // cartão: motivo de recusa (status unpaid)
+	LinkID           *int64           `json:"linkId,omitempty"`     // link de pagamento de origem (opcional)
 
 	payerTaxID string // snapshot p/ insert; não serializa
 }
@@ -170,4 +172,45 @@ type ChargeItem struct {
 	Name       string `json:"name"`
 	PriceCents int64  `json:"priceCents"`
 	Quantity   int    `json:"quantity"`
+}
+
+// Withdrawal representa um saque (payout) do saldo Efí para a conta bancária.
+// A transferência real só acontece quando PAYOUT_ENABLED=true; caso contrário,
+// o registro fica em status "disabled" (flag desligada — a operação não foi executada).
+type Withdrawal struct {
+	ID             int64     `json:"id"`
+	AmountCents    int64     `json:"amountCents"`
+	Status         string    `json:"status"` // "processing" | "completed" | "failed" | "disabled"
+	PublicToken    string    `json:"publicToken"`
+	IdempotencyKey string    `json:"idempotencyKey,omitempty"`
+	Destination    string    `json:"-"` // nunca serializa — não expor no JSON
+	CreatedAt      time.Time `json:"createdAt"`
+}
+
+// Movement representa um movimento financeiro no extrato: entrada (pagamento recebido)
+// ou saída (taxa, saque). Derivado de cobranças pagas, taxas estimadas e saques.
+type Movement struct {
+	ID            int64     `json:"id"`
+	Type          string    `json:"type"`       // "pix_in" | "boleto_in" | "card_in" | "fee" | "payout"
+	Direction     string    `json:"direction"`  // "in" | "out"
+	Method        string    `json:"method"`     // "pix" | "boleto" | "card" | ""
+	ValueCents    int64     `json:"valueCents"` // sempre positivo
+	CustomerName  string    `json:"customerName,omitempty"`
+	CustomerEmail string    `json:"customerEmail,omitempty"`
+	Date          time.Time `json:"date"`
+}
+
+// PaymentLink é um link de pagamento reutilizável. O pagador acessa por /link/{token},
+// escolhe o método e cria uma charge vinculada (link_id). AmountCents nil = valor livre.
+type PaymentLink struct {
+	ID          int64     `json:"id"`
+	PublicToken string    `json:"publicToken"`
+	AmountCents *int64    `json:"amountCents,omitempty"` // nil = valor a definir pelo pagador
+	ProductIDs  []int     `json:"productIds"`
+	Methods     []string  `json:"methods"` // "pix" | "card" | "boleto"
+	Coupons     []string  `json:"coupons"`
+	FinishURL   string    `json:"finishUrl,omitempty"`
+	ReturnURL   string    `json:"returnUrl,omitempty"`
+	Status      string    `json:"status"` // "active" | "inactive"
+	CreatedAt   time.Time `json:"createdAt"`
 }

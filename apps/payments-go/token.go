@@ -7,6 +7,25 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// parseClaims valida um JWT HS256 e devolve o MapClaims completo.
+// Usado para acessar claims arbitrárias (ex.: sudo_exp) além do sub.
+func parseClaims(token, secret string) (jwt.MapClaims, error) {
+	t, err := jwt.Parse(token, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok || t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+			return nil, errors.New("alg inesperado")
+		}
+		return []byte(secret), nil
+	})
+	if err != nil || !t.Valid {
+		return nil, errors.New("token inválido")
+	}
+	claims, ok := t.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, errors.New("claims inválidas")
+	}
+	return claims, nil
+}
+
 // verifyToken valida um JWT HS256 e retorna o userID (claim sub). Espelha o token.go do api-go.
 func verifyToken(token, secret string) (int64, error) {
 	t, err := jwt.Parse(token, func(t *jwt.Token) (any, error) {

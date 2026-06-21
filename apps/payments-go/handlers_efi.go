@@ -3,10 +3,34 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 )
+
+// EfiBalance agrupa o saldo disponível e os campos complementares.
+// A API Pix da Efí só expõe o saldo total disponível; os demais campos
+// (processingCents, blockedCents, dailyLimitCents, nightLimitCents) não possuem
+// endpoint equivalente neste gateway — retornamos 0 por ora.
+// TODO: consultar endpoint de limites/extrato da Efí quando disponível ou usar
+// dados de analytics local para estimar os valores em processamento/bloqueados.
+type EfiBalance struct {
+	AvailableCents  int64 `json:"availableCents"`
+	ProcessingCents int64 `json:"processingCents"` // TODO: sem endpoint Efí → sempre 0
+	BlockedCents    int64 `json:"blockedCents"`    // TODO: sem endpoint Efí → sempre 0
+	DailyLimitCents int64 `json:"dailyLimitCents"` // TODO: sem endpoint Efí → sempre 0
+	NightLimitCents int64 `json:"nightLimitCents"` // TODO: sem endpoint Efí → sempre 0
+}
+
+// withdrawalStore isola as operações de persistência de saques.
+type withdrawalStore interface {
+	CreateWithdrawal(ctx context.Context, w *Withdrawal) error
+	ListWithdrawals(ctx context.Context) ([]Withdrawal, error)
+	// GetWithdrawalByIdempotencyKey devolve o withdrawal existente com aquela chave,
+	// ou nil (sem erro) se não existir. Usado para dedupe de saques.
+	GetWithdrawalByIdempotencyKey(ctx context.Context, key string) (*Withdrawal, error)
+}
 
 // efiOps isola as operações Efí expostas via dashboard (o *efiProvider em prod, fake nos testes).
 type efiOps interface {
@@ -65,7 +89,34 @@ func (s *Server) handleEfiBalance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "efi_error", "Falha ao consultar saldo na Efí")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]int64{"availableCents": cents})
+	// processingCents, blockedCents, dailyLimitCents e nightLimitCents não são expostos
+	// pela API Pix Efí via endpoint único. Retornamos 0 e anotamos o TODO.
+	writeJSON(w, http.StatusOK, EfiBalance{
+		AvailableCents:  cents,
+		ProcessingCents: 0, // TODO: sem endpoint Efí disponível
+		BlockedCents:    0, // TODO: sem endpoint Efí disponível
+		DailyLimitCents: 0, // TODO: sem endpoint Efí disponível
+		NightLimitCents: 0, // TODO: sem endpoint Efí disponível
+	})
+}
+
+// handleListWithdrawals (GET /withdrawals) lista todos os saques. Requer admin.
+func (s *Server) handleListWithdrawals(w http.ResponseWriter, r *http.Request) {
+	ws := s.withdrawalStoreOf()
+	if ws == nil {
+		writeJSON(w, http.StatusOK, []Withdrawal{})
+		return
+	}
+	list, err := ws.ListWithdrawals(r.Context())
+	if err != nil {
+		slog.Warn("withdrawals: falha ao listar", "err", err)
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar saques")
+		return
+	}
+	if list == nil {
+		list = []Withdrawal{}
+	}
+	writeJSON(w, http.StatusOK, list)
 }
 
 func (s *Server) handleReceipt(w http.ResponseWriter, r *http.Request) {
