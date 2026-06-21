@@ -39,11 +39,10 @@ func writeErr(w http.ResponseWriter, err error) {
 		return
 	}
 	slog.Error("erro interno", "err", err)
-	msg := "Erro interno do servidor"
+	body := map[string]string{"code": "INTERNAL_ERROR", "message": "Erro interno do servidor"}
 	if rid != "" {
-		msg = fmt.Sprintf("Erro interno do servidor (ref: %s)", rid)
+		body["message"] = fmt.Sprintf("Erro interno do servidor (ref: %s)", rid)
+		body["request_id"] = rid
 	}
-	writeJSON(w, http.StatusInternalServerError, map[string]string{
-		"code": "INTERNAL_ERROR", "message": msg,
-	})
+	writeJSON(w, http.StatusInternalServerError, body)
 }
