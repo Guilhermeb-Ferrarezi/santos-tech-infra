@@ -23,6 +23,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		Method:      strings.TrimSpace(q.Get("method")),
 		Path:        strings.TrimSpace(q.Get("path")),
 		RequestID:   strings.TrimSpace(q.Get("request_id")),
+		User:        strings.TrimSpace(q.Get("user")),
 		Search:      strings.TrimSpace(q.Get("q")),
 		MinDurMs:    lokiAtoiOr(q.Get("min_dur"), 0),
 		HTTPOnly:    q.Get("http_only") == "1",

@@ -118,6 +118,7 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
+		golog.SetUserID(r.Context(), uid)
 		next(w, r.WithContext(context.WithValue(r.Context(), userIDKey, uid)))
 	}
 }
@@ -146,6 +147,7 @@ func (s *Server) authGuardUser(next http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
+		golog.SetUserID(r.Context(), uid)
 		next(w, r.WithContext(context.WithValue(r.Context(), userIDKey, uid)))
 	}
 }
