@@ -146,6 +146,113 @@ func TestEfiCreateChargeProviderError(t *testing.T) {
 	}
 }
 
+// TestEfiSendPix verifica que SendPix monta o PUT /v3/gn/pix/{idEnvio} com o corpo
+// correto (valor "12.34", pagador.chave = pixKey do provider, favorecido.chave = destino)
+// e parseia a resposta (idEnvio/e2eId/status). idEnvio é sanitizado (hífens removidos, ≤35).
+func TestEfiSendPix(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "tok", "expires_in": 3600})
+	})
+	mux.HandleFunc("/v3/gn/pix/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("método esperado PUT, veio %s", r.Method)
+		}
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		idEnvio := strings.TrimPrefix(r.URL.Path, "/v3/gn/pix/")
+		json.NewEncoder(w).Encode(map[string]any{
+			"idEnvio": idEnvio,
+			"e2eId":   "E2EABC123",
+			"valor":   "12.34",
+			"horario": "2026-06-21T12:00:00Z",
+			"status":  "EM_PROCESSAMENTO",
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	p := newTestEfi(srv.URL) // pixKey = "chave@pix"
+	idEnvio, e2e, status, err := p.SendPix(context.Background(), "uuid-AB-12-cd", 1234, "destino@pix.com", "Saque Santos Tech")
+	if err != nil {
+		t.Fatalf("SendPix: %v", err)
+	}
+	// idEnvio sanitizado (hífens removidos).
+	if gotPath != "/v3/gn/pix/uuidAB12cd" {
+		t.Fatalf("path esperado /v3/gn/pix/uuidAB12cd, veio %q", gotPath)
+	}
+	if idEnvio != "uuidAB12cd" {
+		t.Fatalf("idEnvio devolvido esperado uuidAB12cd, veio %q", idEnvio)
+	}
+	if e2e != "E2EABC123" {
+		t.Fatalf("e2eId esperado E2EABC123, veio %q", e2e)
+	}
+	if status != "EM_PROCESSAMENTO" {
+		t.Fatalf("status esperado EM_PROCESSAMENTO, veio %q", status)
+	}
+	// Corpo: valor string 2 casas, pagador.chave = pixKey, favorecido.chave = destino.
+	if gotBody["valor"] != "12.34" {
+		t.Fatalf("valor esperado \"12.34\", veio %v", gotBody["valor"])
+	}
+	pagador, _ := gotBody["pagador"].(map[string]any)
+	if pagador["chave"] != "chave@pix" {
+		t.Fatalf("pagador.chave esperado chave@pix, veio %v", pagador["chave"])
+	}
+	if pagador["infoPagador"] != "Saque Santos Tech" {
+		t.Fatalf("infoPagador esperado, veio %v", pagador["infoPagador"])
+	}
+	favorecido, _ := gotBody["favorecido"].(map[string]any)
+	if favorecido["chave"] != "destino@pix.com" {
+		t.Fatalf("favorecido.chave esperado destino@pix.com, veio %v", favorecido["chave"])
+	}
+}
+
+// TestEfiSendPixErroGateway: erro do gateway vira ProviderError (mensagem amigável).
+func TestEfiSendPixErroGateway(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "t", "expires_in": 3600})
+	})
+	mux.HandleFunc("/v3/gn/pix/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]any{"nome": "chave_invalida", "mensagem": "Chave Pix inválida"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	p := newTestEfi(srv.URL)
+	_, _, _, err := p.SendPix(context.Background(), "idemkey1", 100, "x", "y")
+	var pe *ProviderError
+	if err == nil || !errors.As(err, &pe) || pe.Message != "Chave Pix inválida" {
+		t.Fatalf("esperava ProviderError com a mensagem da Efí, veio %v", err)
+	}
+}
+
+// TestEfiParseWebhookEnvio: o webhook pix com gnExtras.idEnvio vira PAYOUT_RESULT
+// (não CHARGE_PAID), com PayoutStatus mapeado.
+func TestEfiParseWebhookEnvio(t *testing.T) {
+	p := newTestEfi("http://x")
+	body := []byte(`{"pix":[{"endToEndId":"E9","status":"REALIZADO","gnExtras":{"idEnvio":"IDE9"}}]}`)
+	evs, err := p.ParseWebhook(nil, body)
+	if err != nil {
+		t.Fatalf("ParseWebhook: %v", err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("esperava 1 evento, veio %d", len(evs))
+	}
+	ev := evs[0]
+	if ev.Type != "PAYOUT_RESULT" {
+		t.Fatalf("type esperado PAYOUT_RESULT, veio %q", ev.Type)
+	}
+	if ev.IDEnvio != "IDE9" || ev.E2EID != "E9" || ev.PayoutStatus != "completed" {
+		t.Fatalf("evento de envio inesperado: %+v", ev)
+	}
+	if ev.CorrelationID != "" {
+		t.Fatalf("envio não deve ter CorrelationID (não é cobrança), veio %q", ev.CorrelationID)
+	}
+}
+
 func TestEfiParseWebhookMultiplosPix(t *testing.T) {
 	p := newTestEfi("http://x")
 	body := []byte(`{"pix":[{"endToEndId":"E1","txid":"stpayAAA"},{"endToEndId":"E2","txid":"stpayBBB"}]}`)

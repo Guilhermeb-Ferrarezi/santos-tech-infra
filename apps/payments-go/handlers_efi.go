@@ -35,6 +35,10 @@ type withdrawalStore interface {
 // efiOps isola as operações Efí expostas via dashboard (o *efiProvider em prod, fake nos testes).
 type efiOps interface {
 	GetBalance(ctx context.Context) (int64, error)
+	// SendPix executa um Pix Envio (payout) via PUT /v3/gn/pix/{idEnvio}. idEnvio é a chave
+	// de idempotência; favorecidoChave é a chave Pix de destino; infoPagador é a descrição.
+	// Devolve idEnvio/e2eId/status da Efí (status EM_PROCESSAMENTO é normal — não-final).
+	SendPix(ctx context.Context, idEnvio string, valorCents int64, favorecidoChave, infoPagador string) (idEnvioOut, e2eID, status string, err error)
 	// CancelCharge remove uma cobrança ativa no gateway (invalida o QR na hora).
 	CancelCharge(ctx context.Context, providerChargeID string) error
 	// GetReceipt baixa o comprovante de um Pix pelo txid (= correlationID da cobrança).

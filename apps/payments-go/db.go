@@ -238,6 +238,12 @@ CREATE TABLE IF NOT EXISTS pay_withdrawals (
   idempotency_key  TEXT UNIQUE,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Rastreio do Pix Envio (payout real) na Efí: idEnvio (idempotência) e e2eId (rastreio BACEN).
+-- O webhook pix atualiza o status do saque casando por esses identificadores.
+ALTER TABLE pay_withdrawals ADD COLUMN IF NOT EXISTS efi_id_envio TEXT;
+ALTER TABLE pay_withdrawals ADD COLUMN IF NOT EXISTS e2e_id       TEXT;
+CREATE INDEX IF NOT EXISTS idx_pay_withdrawals_efi_id_envio ON pay_withdrawals(efi_id_envio);
+CREATE INDEX IF NOT EXISTS idx_pay_withdrawals_e2e_id       ON pay_withdrawals(e2e_id);
 `
 
 func migrate(ctx context.Context, db *pgxpool.Pool) error {

@@ -186,7 +186,9 @@ type Withdrawal struct {
 	Status         string    `json:"status"` // "processing" | "completed" | "failed" | "disabled"
 	PublicToken    string    `json:"publicToken"`
 	IdempotencyKey string    `json:"idempotencyKey,omitempty"`
-	Destination    string    `json:"-"` // nunca serializa — não expor no JSON
+	Destination    string    `json:"-"`                    // nunca serializa — não expor no JSON
+	EFIIdEnvio     string    `json:"efiIdEnvio,omitempty"` // idEnvio do Pix Envio na Efí
+	E2EID          string    `json:"e2eId,omitempty"`      // endToEndId do Pix Envio
 	CreatedAt      time.Time `json:"createdAt"`
 }
 

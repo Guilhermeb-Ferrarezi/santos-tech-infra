@@ -1349,22 +1349,43 @@ func (s *Store) SetPaymentLinkStatus(ctx context.Context, id int64, status strin
 func (s *Store) CreateWithdrawal(ctx context.Context, w *Withdrawal) error {
 	key := nullStrPtr(w.IdempotencyKey)
 	return s.db.QueryRow(ctx, `
-		INSERT INTO pay_withdrawals (amount_cents, status, public_token, idempotency_key)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO pay_withdrawals (amount_cents, status, public_token, idempotency_key, efi_id_envio, e2e_id)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, created_at`,
 		w.AmountCents, w.Status, w.PublicToken, key,
+		nullStrPtr(w.EFIIdEnvio), nullStrPtr(w.E2EID),
 	).Scan(&w.ID, &w.CreatedAt)
+}
+
+// SetWithdrawalStatus atualiza o status de um saque casando por efi_id_envio OU e2e_id
+// (o webhook de Pix Envio pode trazer qualquer um dos dois). Usado para aplicar o
+// resultado final do payout (REALIZADO→completed / NAO_REALIZADO→failed). idEnvio e/ou
+// e2eId podem vir vazios — strings vazias não casam (efi_id_envio/e2e_id são NULL ou
+// preenchidos). Idempotente: só transiciona saques ainda em "processing".
+func (s *Store) SetWithdrawalStatus(ctx context.Context, idEnvio, e2eID, status string) error {
+	if idEnvio == "" && e2eID == "" {
+		return nil
+	}
+	_, err := s.db.Exec(ctx, `
+		UPDATE pay_withdrawals
+		SET status = $1
+		WHERE status = 'processing'
+		  AND ( (efi_id_envio IS NOT NULL AND efi_id_envio = $2)
+		     OR (e2e_id       IS NOT NULL AND e2e_id       = $3) )`,
+		status, idEnvio, e2eID,
+	)
+	return err
 }
 
 // GetWithdrawalByIdempotencyKey devolve o withdrawal existente com aquela chave,
 // ou nil (sem erro) se não existir.
 func (s *Store) GetWithdrawalByIdempotencyKey(ctx context.Context, key string) (*Withdrawal, error) {
 	var w Withdrawal
-	var ikey *string
+	var ikey, idEnvio, e2e *string
 	err := s.db.QueryRow(ctx, `
-		SELECT id, amount_cents, status, public_token, idempotency_key, created_at
+		SELECT id, amount_cents, status, public_token, idempotency_key, efi_id_envio, e2e_id, created_at
 		FROM pay_withdrawals WHERE idempotency_key = $1`, key).
-		Scan(&w.ID, &w.AmountCents, &w.Status, &w.PublicToken, &ikey, &w.CreatedAt)
+		Scan(&w.ID, &w.AmountCents, &w.Status, &w.PublicToken, &ikey, &idEnvio, &e2e, &w.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -1374,13 +1395,19 @@ func (s *Store) GetWithdrawalByIdempotencyKey(ctx context.Context, key string) (
 	if ikey != nil {
 		w.IdempotencyKey = *ikey
 	}
+	if idEnvio != nil {
+		w.EFIIdEnvio = *idEnvio
+	}
+	if e2e != nil {
+		w.E2EID = *e2e
+	}
 	return &w, nil
 }
 
 // ListWithdrawals lista todos os saques, mais recentes primeiro.
 func (s *Store) ListWithdrawals(ctx context.Context) ([]Withdrawal, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, amount_cents, status, public_token, created_at
+		SELECT id, amount_cents, status, public_token, efi_id_envio, e2e_id, created_at
 		FROM pay_withdrawals
 		ORDER BY created_at DESC`)
 	if err != nil {
@@ -1390,8 +1417,15 @@ func (s *Store) ListWithdrawals(ctx context.Context) ([]Withdrawal, error) {
 	var out []Withdrawal
 	for rows.Next() {
 		var w Withdrawal
-		if err := rows.Scan(&w.ID, &w.AmountCents, &w.Status, &w.PublicToken, &w.CreatedAt); err != nil {
+		var idEnvio, e2e *string
+		if err := rows.Scan(&w.ID, &w.AmountCents, &w.Status, &w.PublicToken, &idEnvio, &e2e, &w.CreatedAt); err != nil {
 			return nil, err
+		}
+		if idEnvio != nil {
+			w.EFIIdEnvio = *idEnvio
+		}
+		if e2e != nil {
+			w.E2EID = *e2e
 		}
 		out = append(out, w)
 	}

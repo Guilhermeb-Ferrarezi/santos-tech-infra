@@ -86,6 +86,17 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 				s.publishChargePaid(r.Context(), tok)
 				s.enqueueNotifyPaid(r.Context(), tok)
 			}
+		case "PAYOUT_RESULT":
+			// Resultado final de um Pix Envio (saque). PayoutStatus já vem mapeado:
+			// "completed" (REALIZADO) | "failed" (NAO_REALIZADO) | "" (não-final, ignora).
+			// Casa o saque por idEnvio/e2eId — NÃO confunde com o pix recebido (CHARGE_PAID).
+			if ev.PayoutStatus == "" {
+				slog.Info("webhook pix: envio em estado não-final, sem ação", "idEnvio", ev.IDEnvio)
+				continue
+			}
+			if err := wh.SetWithdrawalStatus(r.Context(), ev.IDEnvio, ev.E2EID, ev.PayoutStatus); err != nil {
+				slog.Warn("webhook pix: falha ao atualizar status do saque", "idEnvio", ev.IDEnvio, "status", ev.PayoutStatus, "err", err)
+			}
 		default:
 			slog.Info("evento efi ignorado", "type", ev.Type)
 		}

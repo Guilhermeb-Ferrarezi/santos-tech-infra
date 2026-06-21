@@ -18,6 +18,9 @@ type pixWebhookStore interface {
 	MarkWebhookSeen(ctx context.Context, id, typ string, payload []byte) (bool, error)
 	MarkChargePaid(ctx context.Context, correlationID string) error
 	PublicTokenByCorrelation(ctx context.Context, correlationID string) (string, error)
+	// SetWithdrawalStatus aplica o resultado final de um Pix Envio (payout), casando o
+	// saque por efi_id_envio OU e2e_id. Usado pelo ramo PAYOUT_RESULT do webhook pix.
+	SetWithdrawalStatus(ctx context.Context, idEnvio, e2eID, status string) error
 }
 
 // productStore define as operações de persistência de produtos usadas pelos

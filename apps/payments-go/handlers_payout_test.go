@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,10 +55,43 @@ type fakeEfiOpsBalance struct {
 	fakeEfiOps
 	balanceCents int64
 	balanceErr   error
+	// Configuração do SendPix (payout): valores devolvidos e erro opcional. Quando
+	// sendErr != nil, SendPix falha (simula erro do gateway). Captura de argumentos
+	// recebidos para asserções.
+	sendIDEnvio    string
+	sendE2EID      string
+	sendStatus     string
+	sendErr        error
+	gotSendIDEnvio string
+	gotSendCents   int64
+	gotSendFav     string
+	gotSendInfo    string
+	sendCalls      int
 }
 
 func (f fakeEfiOpsBalance) GetBalance(_ context.Context) (int64, error) {
 	return f.balanceCents, f.balanceErr
+}
+
+// SendPix de fakeEfiOpsBalance (ponteiro p/ capturar args). Sobrepõe o de fakeEfiOps.
+func (f *fakeEfiOpsBalance) SendPix(_ context.Context, idEnvio string, valorCents int64, fav, info string) (string, string, string, error) {
+	f.sendCalls++
+	f.gotSendIDEnvio = idEnvio
+	f.gotSendCents = valorCents
+	f.gotSendFav = fav
+	f.gotSendInfo = info
+	if f.sendErr != nil {
+		return "", "", "", f.sendErr
+	}
+	out := f.sendIDEnvio
+	if out == "" {
+		out = idEnvio
+	}
+	status := f.sendStatus
+	if status == "" {
+		status = "EM_PROCESSAMENTO"
+	}
+	return out, f.sendE2EID, status, nil
 }
 
 // unlimitedLimiter é um rateLimiterIface que nunca limita (burst infinito).
@@ -121,7 +155,7 @@ func basePayoutServer(balanceCents int64, payoutEnabled bool, rateLim rateLimite
 			JWTSecret:     testPayoutSecret,
 			PayoutEnabled: payoutEnabled,
 		},
-		efi:               fakeEfiOpsBalance{balanceCents: balanceCents},
+		efi:               &fakeEfiOpsBalance{balanceCents: balanceCents},
 		payout:            &fakeWithdrawalStore{},
 		payoutRateLimiter: lim,
 	}
@@ -209,7 +243,7 @@ func TestPayout_FlagDesligada(t *testing.T) {
 			PayoutEnabled:  false, // FLAG DESLIGADA
 			PayoutMaxCents: 100_000,
 		},
-		efi:               fakeEfiOpsBalance{balanceCents: 100_000},
+		efi:               &fakeEfiOpsBalance{balanceCents: 100_000},
 		payout:            ws,
 		payoutRateLimiter: unlimitedLimiter{},
 	}
@@ -298,7 +332,7 @@ func TestPayout_WithdrawalNaoContemDestination(t *testing.T) {
 			PayoutEnabled:  true, // flag ON → cria withdrawal
 			PayoutMaxCents: 100_000,
 		},
-		efi:               fakeEfiOpsBalance{balanceCents: 100_000},
+		efi:               &fakeEfiOpsBalance{balanceCents: 100_000},
 		payout:            ws,
 		payoutRateLimiter: unlimitedLimiter{},
 	}
@@ -349,7 +383,7 @@ func TestListWithdrawals_Vazio(t *testing.T) {
 
 // TestEfiBalance_Detalhado: GET /efi/balance retorna EfiBalance com os 5 campos.
 func TestEfiBalance_Detalhado(t *testing.T) {
-	s := &Server{efi: fakeEfiOpsBalance{balanceCents: 50_000}}
+	s := &Server{efi: &fakeEfiOpsBalance{balanceCents: 50_000}}
 	w := httptest.NewRecorder()
 	s.handleEfiBalance(w, httptest.NewRequest(http.MethodGet, "/efi/balance", nil))
 	if w.Code != http.StatusOK {
@@ -412,7 +446,7 @@ func TestPayout_IdempotencyKeyDuplica(t *testing.T) {
 			PayoutEnabled:  true,
 			PayoutMaxCents: 100_000,
 		},
-		efi:               fakeEfiOpsBalance{balanceCents: 100_000},
+		efi:               &fakeEfiOpsBalance{balanceCents: 100_000},
 		payout:            ws,
 		payoutRateLimiter: unlimitedLimiter{},
 	}
@@ -452,7 +486,7 @@ func TestPayout_ValorAcimaDoMaximo(t *testing.T) {
 			PayoutEnabled:  false,
 			PayoutMaxCents: 50_000, // R$ 500,00
 		},
-		efi:               fakeEfiOpsBalance{balanceCents: 999_999},
+		efi:               &fakeEfiOpsBalance{balanceCents: 999_999},
 		payout:            ws,
 		payoutRateLimiter: unlimitedLimiter{},
 	}
@@ -472,6 +506,137 @@ func TestPayout_ValorAcimaDoMaximo(t *testing.T) {
 	// Nenhum withdrawal criado.
 	if len(ws.created) != 0 {
 		t.Fatalf("esperado 0 withdrawals criados, veio %d", len(ws.created))
+	}
+}
+
+// TestPayout_FlagLigada_ChamaEfiECriaWithdrawal: PAYOUT_ENABLED=true + Efí 200 →
+// SendPix chamado com os args certos; withdrawal criado com idEnvio/e2eId e status
+// "processing" (EM_PROCESSAMENTO mapeado). Status 202.
+func TestPayout_FlagLigada_ChamaEfiECriaWithdrawal(t *testing.T) {
+	ws := &fakeWithdrawalStore{}
+	efi := &fakeEfiOpsBalance{
+		balanceCents: 100_000,
+		sendIDEnvio:  "IDENVIO-OUT-1",
+		sendE2EID:    "E2E-OUT-1",
+		sendStatus:   "EM_PROCESSAMENTO",
+	}
+	s := &Server{
+		cfg: Config{
+			JWTSecret:      testPayoutSecret,
+			PayoutEnabled:  true,
+			PayoutMaxCents: 100_000,
+		},
+		efi:               efi,
+		payout:            ws,
+		payoutRateLimiter: unlimitedLimiter{},
+	}
+	tok := makeSudoTok(testPayoutSecret, 15*time.Minute)
+
+	w := httptest.NewRecorder()
+	s.handlePayout(w, newPayoutReq(tok, map[string]any{
+		"amountCents":    7500,
+		"destination":    "chave-pix-destino@ex.com",
+		"idempotencyKey": "Idem-Key-Abc-123", // com hífens — sanitizado no SendPix real
+	}))
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("esperado 202, veio %d: %s", w.Code, w.Body.String())
+	}
+	if efi.sendCalls != 1 {
+		t.Fatalf("SendPix chamado %d vezes, esperado 1", efi.sendCalls)
+	}
+	// Args repassados à Efí.
+	if efi.gotSendCents != 7500 {
+		t.Fatalf("valorCents repassado: %d, esperado 7500", efi.gotSendCents)
+	}
+	if efi.gotSendFav != "chave-pix-destino@ex.com" {
+		t.Fatalf("favorecidoChave: %q", efi.gotSendFav)
+	}
+	if efi.gotSendIDEnvio != "Idem-Key-Abc-123" {
+		t.Fatalf("idEnvio passado ao provider: %q (sanitização ocorre dentro do provider)", efi.gotSendIDEnvio)
+	}
+	// Withdrawal criado com idEnvio/e2eId e status processing.
+	if len(ws.created) != 1 {
+		t.Fatalf("esperado 1 withdrawal, veio %d", len(ws.created))
+	}
+	got := ws.created[0]
+	if got.Status != "processing" {
+		t.Fatalf("status esperado processing, veio %q", got.Status)
+	}
+	if got.EFIIdEnvio != "IDENVIO-OUT-1" || got.E2EID != "E2E-OUT-1" {
+		t.Fatalf("idEnvio/e2eId no withdrawal: %q/%q", got.EFIIdEnvio, got.E2EID)
+	}
+}
+
+// TestPayout_FlagLigada_ErroEfi: SendPix falha → 502 payout_failed e nenhum withdrawal criado.
+func TestPayout_FlagLigada_ErroEfi(t *testing.T) {
+	ws := &fakeWithdrawalStore{}
+	efi := &fakeEfiOpsBalance{
+		balanceCents: 100_000,
+		sendErr:      errors.New("gateway recusou (não deve vazar)"),
+	}
+	s := &Server{
+		cfg: Config{
+			JWTSecret:      testPayoutSecret,
+			PayoutEnabled:  true,
+			PayoutMaxCents: 100_000,
+		},
+		efi:               efi,
+		payout:            ws,
+		payoutRateLimiter: unlimitedLimiter{},
+	}
+	tok := makeSudoTok(testPayoutSecret, 15*time.Minute)
+
+	w := httptest.NewRecorder()
+	s.handlePayout(w, newPayoutReq(tok, map[string]any{
+		"amountCents":    5000,
+		"destination":    "chave-pix",
+		"idempotencyKey": "idem-erro-efi",
+	}))
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("esperado 502, veio %d: %s", w.Code, w.Body.String())
+	}
+	assertCode(t, w.Body.Bytes(), "payout_failed")
+	// A mensagem crua do gateway NÃO pode vazar no corpo.
+	if strings.Contains(w.Body.String(), "não deve vazar") {
+		t.Fatalf("SEGURANÇA: mensagem crua do gateway vazou: %s", w.Body.String())
+	}
+	// Nenhum withdrawal registrado (transferência não confirmada).
+	if len(ws.created) != 0 {
+		t.Fatalf("esperado 0 withdrawals em erro da Efí, veio %d", len(ws.created))
+	}
+}
+
+// TestPayout_FlagDesligada_NaoChamaEfi: PAYOUT_ENABLED=false → 503 e SendPix NÃO é chamado.
+func TestPayout_FlagDesligada_NaoChamaEfi(t *testing.T) {
+	ws := &fakeWithdrawalStore{}
+	efi := &fakeEfiOpsBalance{balanceCents: 100_000}
+	s := &Server{
+		cfg: Config{
+			JWTSecret:      testPayoutSecret,
+			PayoutEnabled:  false,
+			PayoutMaxCents: 100_000,
+		},
+		efi:               efi,
+		payout:            ws,
+		payoutRateLimiter: unlimitedLimiter{},
+	}
+	tok := makeSudoTok(testPayoutSecret, 15*time.Minute)
+
+	w := httptest.NewRecorder()
+	s.handlePayout(w, newPayoutReq(tok, map[string]any{
+		"amountCents":    5000,
+		"destination":    "chave-pix",
+		"idempotencyKey": "idem-flag-off-noefi",
+	}))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("esperado 503, veio %d: %s", w.Code, w.Body.String())
+	}
+	assertCode(t, w.Body.Bytes(), "payout_disabled")
+	if efi.sendCalls != 0 {
+		t.Fatalf("SendPix NÃO deveria ser chamado com flag OFF, veio %d chamadas", efi.sendCalls)
 	}
 }
 
