@@ -389,6 +389,14 @@ func (s *Server) setMFA(ctx context.Context, userID int64, enabled bool, secret 
 	return err
 }
 
+func (s *Server) setEmailVerified(ctx context.Context, userID int64) error {
+	_, err := s.db.Exec(ctx, `UPDATE users SET email_verified_at=now() WHERE id=$1`, userID)
+	if err == nil {
+		s.invalidateUserCache(userID)
+	}
+	return err
+}
+
 // upsertPreferences faz merge parcial do objeto JSON `patch` no JSONB users.preferences
 // (chaves novas entram, existentes são sobrescritas) e devolve o resultado final.
 func (s *Server) upsertPreferences(ctx context.Context, userID int64, patch []byte) (json.RawMessage, error) {

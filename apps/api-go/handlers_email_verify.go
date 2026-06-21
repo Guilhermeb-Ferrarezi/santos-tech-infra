@@ -107,11 +107,10 @@ func (s *Server) handleEmailVerifyConfirm(w http.ResponseWriter, r *http.Request
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código incorreto"))
 		return
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE users SET email_verified_at=now() WHERE id=$1`, uid); err != nil {
+	if err := s.setEmailVerified(r.Context(), uid); err != nil {
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao confirmar a verificação"))
 		return
 	}
-	s.invalidateUserCache(uid)
 	if err := s.rdb.Del(r.Context(), emailVerifyKey(uid), emailVerifyAttKey(uid), emailVerifyCDKey(uid)).Err(); err != nil {
 		slog.Warn("email_verify_confirm: falha ao limpar chaves de verificação após sucesso", "uid", uid, "err", err)
 	}
