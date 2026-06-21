@@ -718,12 +718,16 @@ func (s *Store) CreateProduct(ctx context.Context, p *Product) error {
 		Periodicity:       nullStrPtr(p.Periodicity),
 		DueDay:            int32PtrFromInt(p.DueDay),
 		ChargeOnSubscribe: p.ChargeOnSubscribe,
+		ImageUrl:          nullStrPtr(p.ImageURL),
+		FileUrl:           nullStrPtr(p.FileURL),
 	})
 	if err != nil {
 		return err
 	}
 	p.ID = row.ID
 	p.Active = row.Active
+	p.ImageURL = row.ImageUrl
+	p.FileURL = row.FileUrl
 	return nil
 }
 
@@ -753,6 +757,8 @@ func (s *Store) ListProducts(ctx context.Context) ([]Product, error) {
 			Periodicity:       strPtrToStr(r.Periodicity),
 			DueDay:            intPtrFromInt32(r.DueDay),
 			ChargeOnSubscribe: r.ChargeOnSubscribe,
+			ImageURL:          r.ImageUrl,
+			FileURL:           r.FileUrl,
 		}
 	}
 	return out, nil
@@ -774,6 +780,8 @@ func (s *Store) GetProductBySlug(ctx context.Context, slug string) (*Product, er
 		Periodicity:       strPtrToStr(r.Periodicity),
 		DueDay:            intPtrFromInt32(r.DueDay),
 		ChargeOnSubscribe: r.ChargeOnSubscribe,
+		ImageURL:          r.ImageUrl,
+		FileURL:           r.FileUrl,
 	}, nil
 }
 
@@ -793,6 +801,8 @@ func (s *Store) GetProductByID(ctx context.Context, id int64) (*Product, error) 
 		Periodicity:       strPtrToStr(r.Periodicity),
 		DueDay:            intPtrFromInt32(r.DueDay),
 		ChargeOnSubscribe: r.ChargeOnSubscribe,
+		ImageURL:          r.ImageUrl,
+		FileURL:           r.FileUrl,
 	}, nil
 }
 
@@ -818,6 +828,8 @@ func (s *Store) UpdateProduct(ctx context.Context, p *Product) error {
 		Periodicity:       nullStrPtr(p.Periodicity),
 		DueDay:            int32PtrFromInt(p.DueDay),
 		ChargeOnSubscribe: p.ChargeOnSubscribe,
+		ImageUrl:          nullStrPtr(p.ImageURL),
+		FileUrl:           nullStrPtr(p.FileURL),
 	})
 	if err != nil {
 		return err

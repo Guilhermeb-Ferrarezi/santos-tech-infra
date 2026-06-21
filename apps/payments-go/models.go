@@ -110,6 +110,9 @@ type Product struct {
 	// ChargeOnSubscribe: true = cobra a 1ª parcela logo após autorizar (auto-débito);
 	// false = a 1ª parcela cai no due_day.
 	ChargeOnSubscribe bool `json:"chargeOnSubscribe"`
+	// ImageURL: imagem de capa do produto. FileURL: arquivo entregável (ex. PDF).
+	ImageURL string `json:"imageUrl"`
+	FileURL  string `json:"fileUrl"`
 }
 
 type Customer struct {

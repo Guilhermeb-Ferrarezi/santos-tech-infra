@@ -110,6 +110,9 @@ ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS due_day     INT;
 -- charge_on_subscribe: true = cobra a 1ª parcela logo após a autorização (auto-débito);
 -- false = a 1ª parcela cai no due_day (ciclo normal).
 ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS charge_on_subscribe BOOLEAN NOT NULL DEFAULT false;
+-- Imagem de capa (image_url) e arquivo entregável (file_url, ex. PDF) do produto.
+ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS image_url TEXT;
+ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS file_url  TEXT;
 CREATE TABLE IF NOT EXISTS pay_customers (
   id         BIGSERIAL PRIMARY KEY,
   user_id    BIGINT NOT NULL,

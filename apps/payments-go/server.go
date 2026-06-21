@@ -20,6 +20,17 @@ type pixWebhookStore interface {
 	PublicTokenByCorrelation(ctx context.Context, correlationID string) (string, error)
 }
 
+// productStore define as operações de persistência de produtos usadas pelos
+// handlers de /products. Extraída como interface para facilitar testes sem DB.
+type productStore interface {
+	CreateProduct(ctx context.Context, p *Product) error
+	ListProducts(ctx context.Context) ([]Product, error)
+	UpdateProduct(ctx context.Context, p *Product) error
+	DeleteProduct(ctx context.Context, id int64) error
+	GetProductByID(ctx context.Context, id int64) (*Product, error)
+	GetProductBySlug(ctx context.Context, slug string) (*Product, error)
+}
+
 // couponStore define as operações de persistência de cupons.
 // Extraída como interface para facilitar testes sem DB.
 type couponStore interface {
@@ -67,6 +78,7 @@ type Server struct {
 	pixWH      pixWebhookStore  // store do webhook PIX; nil usa s.store
 	links      paymentLinkStore // store de links; nil usa s.store
 	coupons    couponStore      // store de cupons; nil usa s.store
+	products   productStore     // store de produtos; nil usa s.store
 	checkoutSt checkoutStore    // store do checkout do carrinho; nil usa s.store
 	payout     withdrawalStore  // store de saques; nil usa s.store
 	analytics  analyticsSource
@@ -157,6 +169,7 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("POST /products", s.requireAdmin(s.handleCreateProduct))
 	mux.HandleFunc("GET /products", s.requireAdmin(s.handleListProducts))
+	mux.HandleFunc("GET /products/{id}", s.requireAdmin(s.handleGetProduct))
 	mux.HandleFunc("PUT /products/{id}", s.requireAdmin(s.handleUpdateProduct))
 	mux.HandleFunc("DELETE /products/{id}", s.requireAdmin(s.handleDeleteProduct))
 	mux.HandleFunc("GET /products/by-slug/{slug}", s.handleGetProductBySlug) // público
