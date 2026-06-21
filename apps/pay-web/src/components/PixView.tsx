@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, Download, Loader2, XCircle } from "lucide-react";
+import { ArrowLeft, Check, Copy, Download, Loader2, QrCode, XCircle } from "lucide-react";
 import { api, downloadPayReceipt, type PayData } from "../lib/api";
 import { Button } from "./ui/button";
 
@@ -13,10 +13,14 @@ export type PixStatus = "loading" | "pending" | "paid" | "unavailable" | "error"
 export function PixView({
   token,
   onStatusChange,
+  onBack,
   recurring = false,
 }: {
   token: string;
   onStatusChange?: (status: PixStatus) => void;
+  // Callback para voltar à seleção de método (exibe seta ←). Omitir quando não
+  // há etapa anterior (ex.: rota /pay direta).
+  onBack?: () => void;
   // Quando true, a 1ª cobr é de uma assinatura (PIX Automático): os rótulos mudam para
   // "autorizar e pagar a 1ª parcela" / "Assinatura ativa".
   recurring?: boolean;
@@ -97,77 +101,136 @@ export function PixView({
     }
   }
 
+  // ——— Cabeçalho comum (voltar + título) ———
+  const heading = (
+    <div className="mb-6 flex items-center gap-3">
+      {onBack && (
+        <button
+          onClick={onBack}
+          className="grid size-8 shrink-0 place-items-center rounded-lg text-[#496b84] transition-colors hover:bg-[#eef2f6] hover:text-[#0e2937]"
+          aria-label="Voltar"
+        >
+          <ArrowLeft className="size-4" />
+        </button>
+      )}
+      <div className="flex items-center gap-2">
+        <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-[#0db88f]/10 text-[#0db88f]">
+          <QrCode className="size-4" aria-hidden />
+        </div>
+        <h2 className="text-lg font-bold text-[#0e2937]">Pagamento com PIX</h2>
+      </div>
+    </div>
+  );
+
   if (err) {
     return (
-      <div className="space-y-3 py-2 text-center">
-        <XCircle className="mx-auto size-12 text-rose-400" />
-        <p className="text-slate-600">{err}</p>
+      <div>
+        {heading}
+        <div className="space-y-3 py-2 text-center">
+          <XCircle className="mx-auto size-12 text-rose-400" />
+          <p className="text-slate-600">{err}</p>
+        </div>
       </div>
     );
   }
 
   if (paid) {
     return (
-      <div className="space-y-4 py-6 text-center">
-        <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-emerald-100">
-          <Check className="size-8 text-emerald-600" />
+      <div>
+        {heading}
+        <div className="space-y-4 py-6 text-center">
+          <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-[#0db88f]/15">
+            <Check className="size-8 text-[#0db88f]" />
+          </div>
+          <h3 className="text-lg font-bold text-[#0e2937]">
+            {recurring ? "Assinatura ativa!" : "Pagamento confirmado!"}
+          </h3>
+          <p className="text-sm text-[#496b84]">
+            {recurring
+              ? "Sua assinatura está ativa e a 1ª parcela foi paga."
+              : "Obrigado. Tudo certo com a sua compra."}
+          </p>
+          <Button
+            variant="outline"
+            className="mx-auto h-11 gap-2"
+            onClick={baixarComprovante}
+            disabled={busy}
+          >
+            {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+            {busy ? "Gerando…" : "Baixar comprovante"}
+          </Button>
+          {actionErr && <p className="text-sm text-amber-600">{actionErr}</p>}
         </div>
-        <h3 className="text-lg font-bold text-[#0e2937]">
-          {recurring ? "Assinatura ativa!" : "Pagamento confirmado!"}
-        </h3>
-        <p className="text-sm text-slate-600">
-          {recurring
-            ? "Sua assinatura está ativa e a 1ª parcela foi paga."
-            : "Obrigado. Tudo certo com a sua compra."}
-        </p>
-        <Button
-          variant="outline"
-          className="mx-auto h-11 gap-2"
-          onClick={baixarComprovante}
-          disabled={busy}
-        >
-          {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-          {busy ? "Gerando…" : "Baixar comprovante"}
-        </Button>
-        {actionErr && <p className="text-sm text-amber-600">{actionErr}</p>}
       </div>
     );
   }
 
   if (!data) {
     return (
-      <div className="flex items-center justify-center gap-2 py-12 text-slate-500">
-        <Loader2 className="size-4 animate-spin" /> Gerando seu Pix…
+      <div>
+        {heading}
+        <div className="flex items-center justify-center gap-2 py-12 text-[#496b84]">
+          <Loader2 className="size-4 animate-spin" /> Gerando seu Pix…
+        </div>
       </div>
     );
   }
 
   if (canceled || data.status === "expired" || data.status === "canceled") {
     return (
-      <div className="space-y-3 py-2 text-center">
-        <XCircle className="mx-auto size-12 text-slate-300" />
-        <p className="text-slate-600">Esta cobrança não está mais disponível para pagamento.</p>
+      <div>
+        {heading}
+        <div className="space-y-3 py-2 text-center">
+          <XCircle className="mx-auto size-12 text-[#dbe4ea]" />
+          <p className="text-[#496b84]">Esta cobrança não está mais disponível para pagamento.</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-5">
+    <div>
+      {heading}
+
+      {/* Instruções em 2 passos */}
+      <ol className="mb-6 space-y-2">
+        <li className="flex items-start gap-3 text-sm text-[#496b84]">
+          <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-[#0e2937] text-[10px] font-bold text-white">
+            1
+          </span>
+          <span>
+            {recurring
+              ? "Abra o app do seu banco e escaneie o QR Code abaixo para autorizar a assinatura."
+              : "Abra o app do seu banco e escaneie o QR Code abaixo."}
+          </span>
+        </li>
+        <li className="flex items-start gap-3 text-sm text-[#496b84]">
+          <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-[#0e2937] text-[10px] font-bold text-white">
+            2
+          </span>
+          <span>
+            Ou copie o código Pix e cole no campo "Pix Copia e Cola" do seu banco.
+          </span>
+        </li>
+      </ol>
+
+      {/* QR Code */}
       {data.qrCode && (
-        <img
-          src={data.qrCode}
-          alt="QR Code do Pix"
-          className="mx-auto h-56 w-56 rounded-xl border border-slate-100"
-        />
+        <div className="mb-5 flex justify-center">
+          <div className="rounded-2xl border border-[#e3eaf0] bg-white p-4 shadow-sm">
+            <img
+              src={data.qrCode}
+              alt="QR Code do Pix"
+              className="h-52 w-52 rounded-lg"
+            />
+          </div>
+        </div>
       )}
-      <p className="text-center text-sm text-slate-500">
-        {recurring
-          ? "Escaneie para autorizar a assinatura e pagar a 1ª parcela no app do seu banco."
-          : "Escaneie o QR ou copie o código no app do seu banco."}
-      </p>
+
+      {/* Botão copiar */}
       <Button
         onClick={copy}
-        className="h-12 w-full gap-2 bg-[#0db88f] text-base hover:bg-[#0aa17d]"
+        className="h-12 w-full gap-2 bg-[#0db88f] text-base font-semibold hover:bg-[#0aa17d] active:scale-[0.98]"
       >
         {copied ? (
           <>
@@ -179,17 +242,25 @@ export function PixView({
           </>
         )}
       </Button>
-      <div className="flex items-center justify-center gap-2 text-sm text-amber-600">
-        <Loader2 className="size-4 animate-spin" /> Aguardando pagamento…
+
+      {/* Status aguardando */}
+      <div className="mt-5 flex items-center justify-center gap-2 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+        <Loader2 className="size-4 shrink-0 animate-spin" />
+        <span>Aguardando confirmação do pagamento…</span>
       </div>
-      <button
-        onClick={cancelar}
-        disabled={busy}
-        className="mx-auto block text-sm text-slate-400 underline-offset-2 hover:text-slate-600 hover:underline disabled:opacity-50"
-      >
-        Cancelar pagamento
-      </button>
-      {actionErr && <p className="text-center text-sm text-amber-600">{actionErr}</p>}
+
+      {/* Cancelar */}
+      <div className="mt-4 text-center">
+        <button
+          onClick={cancelar}
+          disabled={busy}
+          className="text-sm text-[#496b84] underline-offset-2 hover:text-[#0e2937] hover:underline disabled:opacity-50"
+        >
+          Cancelar pagamento
+        </button>
+      </div>
+
+      {actionErr && <p className="mt-2 text-center text-sm text-amber-600">{actionErr}</p>}
     </div>
   );
 }
