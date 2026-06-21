@@ -65,6 +65,7 @@ type lokiQueryFilters struct {
 	Method      string
 	Path        string
 	RequestID   string
+	User        string // filtra por user_id (numérico) ou user_name (substring, case-insensitive)
 	Search      string
 	MinDurMs    int  // filtra requisições com dur_ms >= este valor; 0 = sem filtro
 	HTTPOnly    bool // só linhas de requisição HTTP (têm o campo method) — "Só REST"
@@ -234,7 +235,8 @@ func buildLokiQL(q lokiQueryFilters, appLabel string) string {
 		sb.WriteString(` |= ` + lokiQuote(s))
 	}
 	needJSON := q.Level != "" || q.StatusClass != "" || q.StatusCode != 0 ||
-		q.Method != "" || strings.TrimSpace(q.Path) != "" || q.RequestID != "" || q.MinDurMs > 0 || q.HTTPOnly
+		q.Method != "" || strings.TrimSpace(q.Path) != "" || q.RequestID != "" ||
+		q.User != "" || q.MinDurMs > 0 || q.HTTPOnly
 	if needJSON {
 		sb.WriteString(` | json`)
 		if lv := strings.TrimSpace(q.Level); lv != "" {
@@ -242,6 +244,13 @@ func buildLokiQL(q lokiQueryFilters, appLabel string) string {
 		}
 		if q.RequestID != "" {
 			sb.WriteString(` | request_id=` + lokiQuote(strings.TrimSpace(q.RequestID)))
+		}
+		if u := strings.TrimSpace(q.User); u != "" {
+			if isAllDigits(u) {
+				sb.WriteString(` | user_id=` + lokiQuote(u))
+			} else {
+				sb.WriteString(` | user_name=~` + lokiQuote("(?i).*"+regexp.QuoteMeta(u)+".*"))
+			}
 		}
 		if q.Method != "" {
 			sb.WriteString(` | method=` + lokiQuote(strings.ToUpper(strings.TrimSpace(q.Method))))
@@ -268,6 +277,20 @@ func buildLokiQL(q lokiQueryFilters, appLabel string) string {
 		}
 	}
 	return sb.String()
+}
+
+// isAllDigits retorna true se s contiver apenas dígitos decimais (0-9).
+// Usado para distinguir filtro por user_id (número) de user_name (string).
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func lokiRegexAlt(vals []string) string {

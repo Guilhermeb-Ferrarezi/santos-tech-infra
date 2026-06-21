@@ -278,6 +278,7 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "Não autenticado")
 			return
 		}
+		golog.SetUserID(r.Context(), uid)
 		next(w, r.WithContext(context.WithValue(r.Context(), userIDKey, uid)))
 	}
 }
@@ -287,11 +288,13 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return s.authGuard(func(w http.ResponseWriter, r *http.Request) {
 		uid := r.Context().Value(userIDKey).(int64)
 		var role int
-		err := s.db.QueryRow(r.Context(), `SELECT role FROM users WHERE id=$1`, uid).Scan(&role)
+		var name string
+		err := s.db.QueryRow(r.Context(), `SELECT role, name FROM users WHERE id=$1`, uid).Scan(&role, &name)
 		if err != nil || role != 3 {
 			writeError(w, http.StatusForbidden, "forbidden", "Acesso restrito a administradores")
 			return
 		}
+		golog.SetUserName(r.Context(), name)
 		next(w, r)
 	})
 }
