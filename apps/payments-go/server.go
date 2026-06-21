@@ -56,8 +56,13 @@ type Server struct {
 	efi       efiOps
 	efiCobr   *efiCobrancas // API Cobranças (boleto); nil se EFI_COBR_BASE_URL ausente
 	email     *emailClient
+	// refund store de estorno de cartão; nil usa s.store.
+	refund chargeRefundStore
 	// payoutRateLimiter pode ser substituído em testes; nil usa o global payoutDefaultLimiter.
 	payoutRateLimiter rateLimiterIface
+	// linkPayRateLimiter substitui o rate-limit por IP de /link/{token}/pay em testes;
+	// nil usa o limitador global por IP (payLinkLimiterFor).
+	linkPayRateLimiter rateLimiterIface
 	// statement store de extrato; nil usa s.store.
 	statement statementStore
 	// queue enfileira tasks asynq (notificação de pagamento). Pode ser nil em

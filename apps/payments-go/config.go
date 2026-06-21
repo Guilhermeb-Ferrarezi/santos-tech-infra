@@ -33,6 +33,9 @@ type Config struct {
 	// PayoutMaxCents é o valor máximo permitido por saque (em centavos).
 	// Default 50000 = R$ 500,00.
 	PayoutMaxCents int64
+	// LinkMaxCents é o teto de valor para cobranças via link com valor livre (em centavos).
+	// Default 1000000 = R$ 10.000,00.
+	LinkMaxCents int64
 }
 
 func LoadConfig() Config {
@@ -58,6 +61,7 @@ func LoadConfig() Config {
 		Production:       getEnv("NODE_ENV", "development") == "production",
 		PayoutEnabled:    getEnv("PAYOUT_ENABLED", "false") == "true",
 		PayoutMaxCents:   parseInt64Env("PAYOUT_MAX_CENTS", 50000),
+		LinkMaxCents:     parseInt64Env("LINK_MAX_CENTS", 1000000),
 	}
 }
 

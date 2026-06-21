@@ -637,6 +637,17 @@ func (s *Store) MarkChargeExpired(ctx context.Context, correlationID string) err
 	return s.q.MarkChargeExpired(ctx, correlationID)
 }
 
+// MarkChargeRefunded marca a cobrança como estornada (status='refunded') pelo
+// correlationID. Fecha a janela de double-refund: uma 2ª chamada de RefundCard
+// é bloqueada antes de chegar ao gateway (o handler verifica c.Status == "refunded").
+// O status 'refunded' não está no CHECK atual de pay_charges — adicionamos via migration.
+func (s *Store) MarkChargeRefunded(ctx context.Context, correlationID string) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE pay_charges SET status='refunded' WHERE correlation_id=$1 AND status='paid'`,
+		correlationID)
+	return err
+}
+
 // ExpireOverdueCharges marca como expiradas as cobranças pendentes vencidas (job
 // periódico). Devolve quantas foram expiradas.
 func (s *Store) ExpireOverdueCharges(ctx context.Context) (int64, error) {

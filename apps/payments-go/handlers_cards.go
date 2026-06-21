@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -46,6 +47,41 @@ var knownTopLevelFields = map[string]bool{
 // CardChargeInput (incluindo "number" que poderia ser PAN).
 func containsSensitiveKey(v any) bool {
 	return checkSensitive(v, true)
+}
+
+// hasSensitiveCardFieldsDeep verifica apenas chaves inequivocamente de PAN/CVV em
+// qualquer nível de aninhamento, SEM checar campos raiz desconhecidos.
+// Use esta versão quando o body não segue o schema de CardChargeInput (ex: payLinkInput).
+func hasSensitiveCardFieldsDeep(raw []byte) bool {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return false
+	}
+	return checkSensitiveDeep(v)
+}
+
+func checkSensitiveDeep(v any) bool {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, child := range t {
+			kl := strings.ToLower(k)
+			for _, f := range panCVVFieldsDeep {
+				if kl == f {
+					return true
+				}
+			}
+			if checkSensitiveDeep(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range t {
+			if checkSensitiveDeep(item) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func checkSensitive(v any, isRoot bool) bool {
@@ -125,7 +161,8 @@ func (s *Server) handleCreateCardCharge(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		var pe *ProviderError
 		if errors.As(err, &pe) {
-			slog.Warn("card charge: erro do gateway", "status", pe.Status, "message", pe.Message)
+			// Não loga pe.Message bruto — pode conter dados do gateway com info sensível.
+			slog.Warn("card charge: erro do gateway", "status", pe.Status)
 			writeError(w, http.StatusUnprocessableEntity, "provider_error", clientSafeGatewayMsg(pe.Message))
 			return
 		}
@@ -178,6 +215,15 @@ func (s *Server) handleCreateCardCharge(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, c)
 }
 
+// allowedCardBrands são as bandeiras aceitas pela API Cobranças Efí.
+var allowedCardBrands = map[string]bool{
+	"visa":       true,
+	"mastercard": true,
+	"elo":        true,
+	"amex":       true,
+	"hipercard":  true,
+}
+
 // handleGetInstallments (GET /installments) consulta as parcelas disponíveis
 // para uma bandeira e valor total.
 func (s *Server) handleGetInstallments(w http.ResponseWriter, r *http.Request) {
@@ -185,9 +231,13 @@ func (s *Server) handleGetInstallments(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "card_unavailable", "Pagamento com cartão indisponível no momento")
 		return
 	}
-	brand := r.URL.Query().Get("brand")
+	brand := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("brand")))
 	if brand == "" {
 		writeError(w, http.StatusBadRequest, "invalid_body", "brand é obrigatório")
+		return
+	}
+	if !allowedCardBrands[brand] {
+		writeError(w, http.StatusBadRequest, "invalid_brand", "Bandeira não suportada. Use: visa, mastercard, elo, amex ou hipercard")
 		return
 	}
 	totalStr := r.URL.Query().Get("total")
@@ -206,6 +256,24 @@ func (s *Server) handleGetInstallments(w http.ResponseWriter, r *http.Request) {
 		installments = []Installment{}
 	}
 	writeJSON(w, http.StatusOK, installments)
+}
+
+// chargeRefundStore isola as operações de banco necessárias para handleRefundCard.
+type chargeRefundStore interface {
+	GetCharge(ctx context.Context, id int64) (*Charge, error)
+	MarkChargeRefunded(ctx context.Context, correlationID string) error
+}
+
+// refundStoreOf devolve o store de estorno: usa s.refund quando injetado (testes),
+// e cai para s.store em produção.
+func (s *Server) refundStoreOf() chargeRefundStore {
+	if s.refund != nil {
+		return s.refund
+	}
+	if s.store != nil {
+		return s.store
+	}
+	return nil
 }
 
 // handleRefundCard (POST /charges/card/{id}/refund) solicita o estorno de uma
@@ -228,27 +296,34 @@ func (s *Server) handleRefundCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.store == nil {
+	rs := s.refundStoreOf()
+	if rs == nil {
 		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Serviço de dados indisponível")
 		return
 	}
-	providerChargeID := chargeIDStr // será substituído pelo provider_charge_id abaixo
-	if s.store != nil {
-		c, err := s.store.GetCharge(r.Context(), chargeIDInt)
-		if err != nil || c == nil {
-			writeError(w, http.StatusNotFound, "not_found", "Cobrança não encontrada")
-			return
-		}
-		if c.Method != "card" {
-			writeError(w, http.StatusConflict, "invalid_method", "Estorno disponível apenas para cobranças com cartão")
-			return
-		}
-		if c.Status != "paid" {
-			writeError(w, http.StatusConflict, "not_paid", "Somente cobranças pagas podem ser estornadas")
-			return
-		}
-		providerChargeID = c.ProviderChargeID
+
+	c, err := rs.GetCharge(r.Context(), chargeIDInt)
+	if err != nil || c == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Cobrança não encontrada")
+		return
 	}
+	if c.Method != "card" {
+		writeError(w, http.StatusConflict, "invalid_method", "Estorno disponível apenas para cobranças com cartão")
+		return
+	}
+	if c.Status == "refunded" {
+		writeError(w, http.StatusConflict, "already_refunded", "Esta cobrança já foi estornada")
+		return
+	}
+	if c.Status != "paid" {
+		writeError(w, http.StatusConflict, "not_paid", "Somente cobranças pagas podem ser estornadas")
+		return
+	}
+	if c.ProviderChargeID == "" {
+		writeError(w, http.StatusConflict, "no_provider_id", "Cobrança sem ID do gateway; estorno manual necessário")
+		return
+	}
+	providerChargeID := c.ProviderChargeID
 
 	// Valor parcial (opcional).
 	var amountCents *int64
@@ -264,6 +339,8 @@ func (s *Server) handleRefundCard(w http.ResponseWriter, r *http.Request) {
 	if err := s.efiCobr.RefundCard(r.Context(), providerChargeID, amountCents); err != nil {
 		var pe *ProviderError
 		if errors.As(err, &pe) {
+			// Não loga pe.Message bruto — pode conter dados sensíveis do gateway.
+			slog.Warn("refund card: erro do gateway", "status", pe.Status)
 			writeError(w, http.StatusUnprocessableEntity, "provider_error", clientSafeGatewayMsg(pe.Message))
 			return
 		}
@@ -271,5 +348,12 @@ func (s *Server) handleRefundCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "efi_error", "Falha ao solicitar estorno na Efí")
 		return
 	}
+
+	// Marca a cobrança como estornada no banco (fecha double-refund).
+	if err := rs.MarkChargeRefunded(r.Context(), c.CorrelationID); err != nil {
+		slog.Warn("refund card: falha ao marcar estornada", "err", err)
+		// Não retorna erro ao cliente — o estorno já foi executado no gateway.
+	}
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

@@ -489,5 +489,16 @@ func assertCode(t *testing.T, body []byte, expected string) {
 	}
 }
 
+// [Fix 11] handleListWithdrawals com store nil → 503 db_unavailable (não 200 []).
+func TestListWithdrawals_StoreNil(t *testing.T) {
+	s := &Server{} // payout=nil, store=nil → withdrawalStoreOf() retorna nil
+	w := httptest.NewRecorder()
+	s.handleListWithdrawals(w, httptest.NewRequest(http.MethodGet, "/withdrawals", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("[Fix11] esperado 503, veio %d: %s", w.Code, w.Body.String())
+	}
+	assertCode(t, w.Body.Bytes(), "db_unavailable")
+}
+
 // Garante que rate.NewLimiter está em uso (evita "imported and not used").
 var _ = rate.NewLimiter

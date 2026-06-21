@@ -4,8 +4,62 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// parseStatementRange é um superconjunto de parseRange para o extrato.
+// Aceita todos os tokens do contrato da UI:
+//   - today, month, 7d, 30d, 90d, 12m, all (repassados ao parseRange)
+//   - AAAA-MM-DD:AAAA-MM-DD (intervalo explícito)
+//
+// Tokens não reconhecidos caem para o default de parseRange (30d).
+// NÃO altera o comportamento de parseRange (usado em analytics).
+func parseStatementRange(s string) AnalyticsRange {
+	// Tenta intervalo explícito "AAAA-MM-DD:AAAA-MM-DD".
+	if idx := strings.IndexByte(s, ':'); idx > 0 && idx < len(s)-1 {
+		fromStr := s[:idx]
+		toStr := s[idx+1:]
+		from, errF := time.Parse("2006-01-02", fromStr)
+		to, errT := time.Parse("2006-01-02", toStr)
+		if errF == nil && errT == nil && !from.After(to) {
+			// "to" é um dia inclusivo: avança um dia para que o intervalo seja [from, to+1d).
+			toEnd := to.AddDate(0, 0, 1)
+			r := AnalyticsRange{
+				Key:    s,
+				Bucket: "day",
+				From:   from,
+				To:     toEnd,
+			}
+			window := toEnd.Sub(from)
+			r.PrevTo = from
+			r.PrevFrom = from.Add(-window)
+			return r
+		}
+	}
+	// today: meia-noite local até agora.
+	if s == "today" {
+		now := time.Now()
+		from := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		r := AnalyticsRange{Key: "today", Bucket: "day", From: from, To: now}
+		window := now.Sub(from)
+		r.PrevTo = from
+		r.PrevFrom = from.Add(-window)
+		return r
+	}
+	// month: 1º dia do mês corrente até agora.
+	if s == "month" {
+		now := time.Now()
+		from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		r := AnalyticsRange{Key: "month", Bucket: "day", From: from, To: now}
+		window := now.Sub(from)
+		r.PrevTo = from
+		r.PrevFrom = from.Add(-window)
+		return r
+	}
+	// Demais tokens (7d, 30d, 90d, 12m, all e fallback).
+	return parseRange(s)
+}
 
 // statementStore isola as operações de extrato (o *Store em prod, fake nos testes).
 type statementStore interface {
@@ -36,7 +90,7 @@ func (s *Server) handleStatement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rng := parseRange(r.URL.Query().Get("range"))
+	rng := parseStatementRange(r.URL.Query().Get("range"))
 	mvs, err := st.ListMovements(r.Context(), rng.From, rng.To)
 	if err != nil {
 		slog.Warn("statement: falha ao listar movimentos", "err", err)

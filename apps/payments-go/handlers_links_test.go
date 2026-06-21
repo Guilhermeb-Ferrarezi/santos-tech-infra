@@ -114,14 +114,15 @@ func (f *fakeLinkStore) MarkChargePaid(_ context.Context, _ string) error {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // buildLinkServer monta um Server com o fakeLinkStore injetado.
+// Injeta um rate-limiter ilimitado para evitar interferência entre testes.
 func buildLinkServer(st *fakeLinkStore) *Server {
-	return &Server{links: st}
+	return &Server{links: st, linkPayRateLimiter: unlimitedLimiter{}}
 }
 
 // buildLinkServerWithCard monta um Server com link store + efiCobr apontando para srv de teste.
 func buildLinkServerWithCard(st *fakeLinkStore, efiBase string) *Server {
 	cobr := newTestCobr(efiBase)
-	return &Server{links: st, efiCobr: cobr}
+	return &Server{links: st, efiCobr: cobr, linkPayRateLimiter: unlimitedLimiter{}}
 }
 
 // linkFixture cria um link ativo no fake store e devolve o token.
@@ -629,5 +630,141 @@ func TestHandlePayViaLink_TokenNotFound(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("esperado 404, veio %d", w.Code)
+	}
+}
+
+// ── Testes das correções de revisão ──────────────────────────────────────────
+
+// [Fix 2] handlePayViaLink rejeita corpo com PAN/CVV (guard PCI para rota pública).
+func TestHandlePayViaLink_RejectPAN(t *testing.T) {
+	st := newFakeLinkStore()
+	amount := int64(5000)
+	token := linkFixture(t, st, &amount, []string{"pix"})
+	s := buildLinkServer(st)
+
+	// CVV aninhado — deve ser rejeitado com 400 sensitive_fields.
+	body := `{"method":"pix","amountCents":5000,"customer":{"name":"X","taxId":"1"},"card":{"cvv":"123"}}`
+	req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	s.handlePayViaLink(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("[Fix2] esperado 400 para CVV no body, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]string
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["code"] != "sensitive_fields" {
+		t.Fatalf("[Fix2] code esperado sensitive_fields, veio %q", out["code"])
+	}
+}
+
+// [Fix 3] Rate-limit por IP: após N requests, deve retornar 429.
+func TestHandlePayViaLink_RateLimitIP(t *testing.T) {
+	st := newFakeLinkStore()
+	amount := int64(5000)
+	token := linkFixture(t, st, &amount, []string{"pix"})
+	// Usa o rate-limiter global real — primeiro Allow() passa, segundo bloqueia com burst=0.
+	s := &Server{links: st, linkPayRateLimiter: blockedLimiter{}}
+
+	body := `{"method":"pix","amountCents":5000,"customer":{"name":"X","taxId":"12345678901"}}`
+	req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	s.handlePayViaLink(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("[Fix3] esperado 429 rate_limited, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]string
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["code"] != "rate_limited" {
+		t.Fatalf("[Fix3] code esperado rate_limited, veio %q", out["code"])
+	}
+}
+
+// [Fix 5] PIX via link requer customer.name e customer.taxId.
+func TestHandlePayViaLink_PixMissingCustomer(t *testing.T) {
+	st := newFakeLinkStore()
+	amount := int64(5000)
+	token := linkFixture(t, st, &amount, []string{"pix"})
+	s := buildLinkServer(st)
+
+	// Body sem customer.name.
+	body := `{"method":"pix","customer":{"taxId":"12345678901"}}`
+	req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	s.handlePayViaLink(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("[Fix5] esperado 400 sem customer.name, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]string
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["code"] != "invalid_body" {
+		t.Fatalf("[Fix5] code esperado invalid_body, veio %q", out["code"])
+	}
+}
+
+// [Fix 7] Teto de valor livre: amountCents > LinkMaxCents → 400 amount_too_large.
+func TestHandlePayViaLink_AmountTooLarge(t *testing.T) {
+	st := newFakeLinkStore()
+	// Link de valor livre (AmountCents=nil).
+	token := linkFixture(t, st, nil, []string{"pix"})
+	s := &Server{
+		links:              st,
+		linkPayRateLimiter: unlimitedLimiter{},
+		cfg:                Config{LinkMaxCents: 100_000}, // teto = R$ 1.000,00
+	}
+
+	body := `{"method":"pix","amountCents":200000,"customer":{"name":"X","taxId":"12345678901"}}`
+	req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	s.handlePayViaLink(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("[Fix7] esperado 400 amount_too_large, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]string
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["code"] != "amount_too_large" {
+		t.Fatalf("[Fix7] code esperado amount_too_large, veio %q", out["code"])
+	}
+}
+
+// [Fix 7] Valor dentro do teto passa normalmente (sem provider, espera-se 503 pix_unavailable, não 400).
+func TestHandlePayViaLink_AmountWithinLimit(t *testing.T) {
+	st := newFakeLinkStore()
+	token := linkFixture(t, st, nil, []string{"pix"})
+	s := &Server{
+		links:              st,
+		linkPayRateLimiter: unlimitedLimiter{},
+		cfg:                Config{LinkMaxCents: 100_000},
+		// provider=nil → 503 pix_unavailable, mas não 400 amount_too_large
+	}
+
+	body := `{"method":"pix","amountCents":99999,"customer":{"name":"Ana","taxId":"12345678901"}}`
+	req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	s.handlePayViaLink(w, req)
+
+	// Sem provider PIX → 503, mas NÃO 400 amount_too_large.
+	if w.Code == http.StatusBadRequest {
+		var out map[string]string
+		json.Unmarshal(w.Body.Bytes(), &out)
+		if out["code"] == "amount_too_large" {
+			t.Fatal("[Fix7] valor dentro do teto não deveria retornar amount_too_large")
+		}
+	}
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("[Fix7] esperado 503 (pix_unavailable), veio %d: %s", w.Code, w.Body.String())
 	}
 }

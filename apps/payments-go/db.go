@@ -187,7 +187,15 @@ BEGIN
   ALTER TABLE pay_charges DROP CONSTRAINT IF EXISTS pay_charges_method_check;
   ALTER TABLE pay_charges ADD CONSTRAINT pay_charges_method_check
     CHECK (method IN ('pix','boleto','card'));
-EXCEPTION WHEN others THEN NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END$$;
+-- Estorno: alarga o CHECK de status para incluir 'refunded'.
+DO $$
+BEGIN
+  ALTER TABLE pay_charges DROP CONSTRAINT IF EXISTS pay_charges_status_check;
+  ALTER TABLE pay_charges ADD CONSTRAINT pay_charges_status_check
+    CHECK (status IN ('pending','paid','expired','canceled','refunded'));
+EXCEPTION WHEN duplicate_object THEN NULL;
 END$$;
 -- Links de pagamento reutilizáveis.
 CREATE TABLE IF NOT EXISTS pay_payment_links (
@@ -204,6 +212,17 @@ CREATE TABLE IF NOT EXISTS pay_payment_links (
 );
 ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS link_id BIGINT REFERENCES pay_payment_links(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_pay_charges_link ON pay_charges(link_id) WHERE link_id IS NOT NULL;
+-- Saques (payouts): registra cada solicitação de saque do saldo Efí.
+-- destination NÃO é armazenado aqui por segurança (dados bancários são sensíveis).
+CREATE TABLE IF NOT EXISTS pay_withdrawals (
+  id               BIGSERIAL PRIMARY KEY,
+  amount_cents     BIGINT NOT NULL CHECK (amount_cents > 0),
+  status           TEXT NOT NULL DEFAULT 'processing'
+                     CHECK (status IN ('processing','completed','failed','disabled')),
+  public_token     TEXT NOT NULL UNIQUE,
+  idempotency_key  TEXT UNIQUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 func migrate(ctx context.Context, db *pgxpool.Pool) error {

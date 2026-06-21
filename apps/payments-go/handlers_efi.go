@@ -104,7 +104,7 @@ func (s *Server) handleEfiBalance(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListWithdrawals(w http.ResponseWriter, r *http.Request) {
 	ws := s.withdrawalStoreOf()
 	if ws == nil {
-		writeJSON(w, http.StatusOK, []Withdrawal{})
+		writeError(w, http.StatusServiceUnavailable, "db_unavailable", "Banco de dados não disponível")
 		return
 	}
 	list, err := ws.ListWithdrawals(r.Context())

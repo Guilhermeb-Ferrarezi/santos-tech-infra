@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -201,7 +202,7 @@ func (p *efiCobrancas) CancelBoleto(ctx context.Context, chargeID string) error 
 // Installments consulta as opções de parcelamento para um cartão
 // (GET /v1/installments?brand=<brand>&total=<totalCents>).
 func (p *efiCobrancas) Installments(ctx context.Context, brand string, totalCents int) ([]Installment, error) {
-	path := fmt.Sprintf("/v1/installments?brand=%s&total=%d", brand, totalCents)
+	path := fmt.Sprintf("/v1/installments?brand=%s&total=%d", url.QueryEscape(brand), totalCents)
 	data, err := p.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err

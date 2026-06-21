@@ -495,6 +495,168 @@ func TestHasSensitiveCardFields(t *testing.T) {
 	}
 }
 
+// ── Testes das correções de revisão ──────────────────────────────────────────
+
+// [Fix 4] handleRefundCard: ProviderChargeID vazio → 409 no_provider_id.
+func TestHandleRefundCard_NoProviderID(t *testing.T) {
+	srv := cobrMux(t, nil) // gateway NÃO deve ser chamado
+	defer srv.Close()
+
+	fakeStore := &fakeStoreForRefund{charge: &Charge{
+		ID:               55,
+		Method:           "card",
+		Status:           "paid",
+		ProviderChargeID: "", // vazio — deve gerar 409 no_provider_id
+		CorrelationID:    "corr-55",
+	}}
+	s := &Server{efiCobr: newTestCobrCard(srv.URL), refund: fakeStore}
+	req := httptest.NewRequest("POST", "/charges/card/55/refund", strings.NewReader("{}"))
+	req.SetPathValue("id", "55")
+	w := httptest.NewRecorder()
+	s.handleRefundCard(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("[Fix4] esperado 409 no_provider_id, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]string
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["code"] != "no_provider_id" {
+		t.Fatalf("[Fix4] code esperado no_provider_id, veio %q", out["code"])
+	}
+}
+
+// [Fix 8] handleRefundCard: já refunded → 409 already_refunded.
+func TestHandleRefundCard_AlreadyRefunded(t *testing.T) {
+	srv := cobrMux(t, nil)
+	defer srv.Close()
+
+	fakeStore := &fakeStoreForRefund{charge: &Charge{
+		ID:               66,
+		Method:           "card",
+		Status:           "refunded", // já estornado
+		ProviderChargeID: "ch_66",
+		CorrelationID:    "corr-66",
+	}}
+	s := &Server{efiCobr: newTestCobrCard(srv.URL), refund: fakeStore}
+	req := httptest.NewRequest("POST", "/charges/card/66/refund", strings.NewReader("{}"))
+	req.SetPathValue("id", "66")
+	w := httptest.NewRecorder()
+	s.handleRefundCard(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("[Fix8] esperado 409 already_refunded, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]string
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["code"] != "already_refunded" {
+		t.Fatalf("[Fix8] code esperado already_refunded, veio %q", out["code"])
+	}
+}
+
+// [Fix 8] handleRefundCard happy path: gateway OK → chama MarkChargeRefunded.
+func TestHandleRefundCard_MarksRefunded(t *testing.T) {
+	var refundCalled atomic.Bool
+	srv := cobrMux(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("/v1/charge/card/ch_77/refund", func(w http.ResponseWriter, r *http.Request) {
+			refundCalled.Store(true)
+			json.NewEncoder(w).Encode(map[string]any{"code": 200})
+		})
+	})
+	defer srv.Close()
+
+	fakeStore := &fakeStoreForRefund{charge: &Charge{
+		ID:               77,
+		Method:           "card",
+		Status:           "paid",
+		ProviderChargeID: "ch_77",
+		CorrelationID:    "corr-77",
+	}}
+	s := &Server{efiCobr: newTestCobrCard(srv.URL), refund: fakeStore}
+	req := httptest.NewRequest("POST", "/charges/card/77/refund", strings.NewReader("{}"))
+	req.SetPathValue("id", "77")
+	w := httptest.NewRecorder()
+	s.handleRefundCard(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("[Fix8] esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	if !refundCalled.Load() {
+		t.Fatal("[Fix8] endpoint de estorno não foi chamado no gateway")
+	}
+	if fakeStore.refundedCorrelationID != "corr-77" {
+		t.Fatalf("[Fix8] MarkChargeRefunded não foi chamado com correlationID correto, veio %q",
+			fakeStore.refundedCorrelationID)
+	}
+}
+
+// [Fix 6] handleGetInstallments rejeita bandeira inválida → 400 invalid_brand.
+func TestHandleGetInstallments_InvalidBrand(t *testing.T) {
+	srv := cobrMux(t, nil) // gateway NÃO deve ser chamado
+	defer srv.Close()
+
+	s := buildCardServer(srv.URL)
+	req := httptest.NewRequest("GET", "/installments?brand=bitcoin&total=5000", nil)
+	w := httptest.NewRecorder()
+	s.handleGetInstallments(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("[Fix6] esperado 400 para bandeira inválida, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]string
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["code"] != "invalid_brand" {
+		t.Fatalf("[Fix6] code esperado invalid_brand, veio %q", out["code"])
+	}
+}
+
+// [Fix 6] bandeiras válidas passam sem 400 invalid_brand (a Efí pode dar erro depois, ok).
+func TestHandleGetInstallments_ValidBrands(t *testing.T) {
+	for _, brand := range []string{"visa", "mastercard", "elo", "amex", "hipercard"} {
+		brand := brand
+		t.Run(brand, func(t *testing.T) {
+			srv := cobrMux(t, func(mux *http.ServeMux) {
+				mux.HandleFunc("/v1/installments", func(w http.ResponseWriter, r *http.Request) {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code": 200,
+						"data": map[string]any{"installments": []any{}},
+					})
+				})
+			})
+			defer srv.Close()
+			s := buildCardServer(srv.URL)
+			req := httptest.NewRequest("GET", "/installments?brand="+brand+"&total=5000", nil)
+			w := httptest.NewRecorder()
+			s.handleGetInstallments(w, req)
+			if w.Code == http.StatusBadRequest {
+				var out map[string]string
+				json.Unmarshal(w.Body.Bytes(), &out)
+				if out["code"] == "invalid_brand" {
+					t.Fatalf("[Fix6] brand %q válida foi rejeitada como inválida", brand)
+				}
+			}
+		})
+	}
+}
+
+// fakeStoreForRefund implementa a interface mínima para handleRefundCard.
+type fakeStoreForRefund struct {
+	charge                *Charge
+	refundedCorrelationID string
+}
+
+func (f *fakeStoreForRefund) GetCharge(_ context.Context, _ int64) (*Charge, error) {
+	if f.charge == nil {
+		return nil, nil
+	}
+	c := *f.charge
+	return &c, nil
+}
+
+func (f *fakeStoreForRefund) MarkChargeRefunded(_ context.Context, correlationID string) error {
+	f.refundedCorrelationID = correlationID
+	return nil
+}
+
 // TestHandleCreateCardCharge_RejectNestedPAN verifica que PAN aninhado em "card.number"
 // também é rejeitado com 400 sensitive_fields (Fix 1).
 func TestHandleCreateCardCharge_RejectNestedPAN(t *testing.T) {

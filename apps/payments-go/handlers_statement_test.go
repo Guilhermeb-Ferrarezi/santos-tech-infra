@@ -289,6 +289,122 @@ func TestSortMovements(t *testing.T) {
 	}
 }
 
+// ── Testes de parseStatementRange ─────────────────────────────────────────────
+
+// [Fix 12] parseStatementRange aceita todos os tokens do contrato da UI.
+func TestParseStatementRange_AllTokens(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		token     string
+		expectKey string
+		checkFrom func(from time.Time) bool
+	}{
+		{"7d", "7d", func(from time.Time) bool { return now.Sub(from) >= 7*24*time.Hour-time.Minute }},
+		{"30d", "30d", func(from time.Time) bool { return now.Sub(from) >= 30*24*time.Hour-time.Minute }},
+		{"90d", "90d", func(from time.Time) bool { return now.Sub(from) >= 90*24*time.Hour-time.Minute }},
+		{"12m", "12m", func(from time.Time) bool { return now.Sub(from) >= 365*24*time.Hour-time.Minute }},
+		{"all", "all", func(from time.Time) bool { return from.Year() <= 2020 }},
+		{"today", "today", func(from time.Time) bool {
+			midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+			return from.Equal(midnight) || from.After(midnight.Add(-time.Second))
+		}},
+		{"month", "month", func(from time.Time) bool {
+			firstDay := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+			return from.Equal(firstDay) || from.After(firstDay.Add(-time.Second))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.token, func(t *testing.T) {
+			r := parseStatementRange(tc.token)
+			if r.Key != tc.expectKey {
+				t.Fatalf("[Fix12] token=%q: key esperado %q, veio %q", tc.token, tc.expectKey, r.Key)
+			}
+			if r.From.IsZero() {
+				t.Fatalf("[Fix12] token=%q: From não deve ser zero", tc.token)
+			}
+			if r.To.IsZero() {
+				t.Fatalf("[Fix12] token=%q: To não deve ser zero", tc.token)
+			}
+			if !tc.checkFrom(r.From) {
+				t.Fatalf("[Fix12] token=%q: From=%v não satisfaz a condição esperada", tc.token, r.From)
+			}
+		})
+	}
+}
+
+// [Fix 12] parseStatementRange aceita intervalo explícito AAAA-MM-DD:AAAA-MM-DD.
+func TestParseStatementRange_ExplicitInterval(t *testing.T) {
+	r := parseStatementRange("2024-01-01:2024-03-31")
+	if r.Key != "2024-01-01:2024-03-31" {
+		t.Fatalf("[Fix12] key esperado '2024-01-01:2024-03-31', veio %q", r.Key)
+	}
+	expectedFrom := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	if !r.From.Equal(expectedFrom) {
+		t.Fatalf("[Fix12] From esperado %v, veio %v", expectedFrom, r.From)
+	}
+	// To deve ser 2024-04-01 (dia seguinte ao 31/03, inclusivo).
+	expectedTo := time.Date(2024, 4, 1, 0, 0, 0, 0, time.UTC)
+	if !r.To.Equal(expectedTo) {
+		t.Fatalf("[Fix12] To esperado %v, veio %v", expectedTo, r.To)
+	}
+}
+
+// [Fix 12] parseStatementRange com intervalo inválido cai para o default (30d).
+func TestParseStatementRange_InvalidInterval(t *testing.T) {
+	r := parseStatementRange("invalido:data")
+	// Deve ser o default (30d).
+	if r.Key != "30d" {
+		t.Fatalf("[Fix12] intervalo inválido deveria virar 30d, veio %q", r.Key)
+	}
+}
+
+// [Fix 12] parseStatementRange: "today" abrange desde meia-noite até agora.
+func TestParseStatementRange_Today(t *testing.T) {
+	r := parseStatementRange("today")
+	now := time.Now()
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	if r.From.Before(midnight.Add(-time.Second)) {
+		t.Fatalf("[Fix12] today: From=%v deveria ser ≥ meia-noite (%v)", r.From, midnight)
+	}
+	if r.To.Before(midnight) {
+		t.Fatalf("[Fix12] today: To=%v deveria ser após meia-noite", r.To)
+	}
+}
+
+// [Fix 12] handleStatement aceita token "today" e retorna 200.
+func TestHandleStatement_TokenToday(t *testing.T) {
+	now := time.Now().UTC()
+	st := &fakeStatementStore{
+		movements: []Movement{
+			{ID: 1, Type: "pix_in", Direction: "in", Method: "pix", ValueCents: 500, Date: now.Add(-1 * time.Hour)},
+		},
+	}
+	s := buildStatementServer(st)
+	req := httptest.NewRequest(http.MethodGet, "/statement?range=today", nil)
+	w := httptest.NewRecorder()
+	s.handleStatement(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("[Fix12] esperado 200 para range=today, veio %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// [Fix 12] handleStatement aceita token "month" e retorna 200.
+func TestHandleStatement_TokenMonth(t *testing.T) {
+	now := time.Now().UTC()
+	st := &fakeStatementStore{
+		movements: []Movement{
+			{ID: 2, Type: "boleto_in", Direction: "in", Method: "boleto", ValueCents: 999, Date: now.Add(-12 * time.Hour)},
+		},
+	}
+	s := buildStatementServer(st)
+	req := httptest.NewRequest(http.MethodGet, "/statement?range=month", nil)
+	w := httptest.NewRecorder()
+	s.handleStatement(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("[Fix12] esperado 200 para range=month, veio %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // errFake é um erro genérico para os testes de falha no store.
 // Evita importar errors (pacote já importado por outros arquivos de teste no pacote).
 type fakeError struct{ msg string }

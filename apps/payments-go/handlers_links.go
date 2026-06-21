@@ -1,15 +1,72 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/time/rate"
 )
+
+// ── Rate-limit por IP para POST /link/{token}/pay ────────────────────────────
+// Process-level (in-memory); em produção com múltiplas instâncias, combine com
+// Redis (deferred). Cada IP tem um bucket: 5 req/min, burst=5.
+// NOTA: Em deploy com múltiplas instâncias, use rate-limit distribuído via Redis
+// (deferred — ver seção "Deferred" no código-fonte).
+
+type ipLimiterEntry struct {
+	lim     *rate.Limiter
+	lastUse time.Time
+}
+
+var (
+	ipLimiters   = make(map[string]*ipLimiterEntry)
+	ipLimitersMu sync.Mutex
+)
+
+// payLinkLimiterFor devolve (ou cria) o rate-limiter associado ao IP dado.
+// Limpa entradas ociosas (>5 min) na mesma passagem para evitar crescimento ilimitado.
+func payLinkLimiterFor(ip string) *rate.Limiter {
+	ipLimitersMu.Lock()
+	defer ipLimitersMu.Unlock()
+	now := time.Now()
+	// Limpeza lazy: remove entradas não usadas nos últimos 5 min.
+	for k, e := range ipLimiters {
+		if now.Sub(e.lastUse) > 5*time.Minute {
+			delete(ipLimiters, k)
+		}
+	}
+	e, ok := ipLimiters[ip]
+	if !ok {
+		e = &ipLimiterEntry{lim: rate.NewLimiter(rate.Every(time.Minute/5), 5)}
+		ipLimiters[ip] = e
+	}
+	e.lastUse = now
+	return e.lim
+}
+
+// clientIP extrai o IP do request (X-Forwarded-For ou RemoteAddr).
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Primeiro IP da lista é o cliente original.
+		if idx := strings.IndexByte(xff, ','); idx != -1 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
+	// RemoteAddr pode incluir porta: "1.2.3.4:5678"
+	if idx := strings.LastIndexByte(r.RemoteAddr, ':'); idx != -1 {
+		return r.RemoteAddr[:idx]
+	}
+	return r.RemoteAddr
+}
 
 // linkStoreOf devolve s.links se configurado (injeção de teste), senão s.store.
 func (s *Server) linkStoreOf() paymentLinkStore {
@@ -221,7 +278,21 @@ type payLinkInput struct {
 
 // handlePayViaLink (POST /link/{token}/pay) cria uma charge vinculada ao link.
 // Rota PÚBLICA — sem guard de autenticação.
+// Guards: rate-limit por IP (5 req/min, process-level) e inspeção PCI de PAN/CVV.
 func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
+	// ── Rate-limit por IP (process-level; ver deferred para Redis) ──────────
+	ip := clientIP(r)
+	var linkLimiter rateLimiterIface
+	if s.linkPayRateLimiter != nil {
+		linkLimiter = s.linkPayRateLimiter
+	} else {
+		linkLimiter = payLinkLimiterFor(ip)
+	}
+	if !linkLimiter.Allow() {
+		writeError(w, http.StatusTooManyRequests, "rate_limited", "Muitas requisições. Aguarde e tente novamente.")
+		return
+	}
+
 	token := r.PathValue("token")
 	if token == "" {
 		writeError(w, http.StatusBadRequest, "invalid_body", "token obrigatório")
@@ -248,8 +319,21 @@ func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ── Guard PCI: inspeção de PAN/CVV ANTES do decode (idêntico ao handleCreateCardCharge) ──
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Corpo inválido")
+		return
+	}
+	if hasSensitiveCardFieldsDeep(raw) {
+		slog.Warn("handlePayViaLink: corpo rejeitado por conter campos sensíveis de cartão",
+			"link", l.ID, "ip", ip)
+		writeError(w, http.StatusBadRequest, "sensitive_fields", "O corpo da requisição não deve conter número de cartão ou CVV. Use payment_token.")
+		return
+	}
+
 	var in payLinkInput
-	if err := decodeJSON(r, &in); err != nil {
+	if err := json.Unmarshal(raw, &in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", "JSON inválido")
 		return
 	}
@@ -278,6 +362,15 @@ func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
 	} else {
 		if in.AmountCents == nil || *in.AmountCents <= 0 {
 			writeError(w, http.StatusBadRequest, "invalid_body", "amountCents obrigatório para links com valor livre")
+			return
+		}
+		// Teto de valor (configurável via LINK_MAX_CENTS, default R$ 10.000).
+		maxCents := s.cfg.LinkMaxCents
+		if maxCents <= 0 {
+			maxCents = 1_000_000
+		}
+		if *in.AmountCents > maxCents {
+			writeError(w, http.StatusBadRequest, "amount_too_large", "Valor excede o teto permitido para links de valor livre")
 			return
 		}
 		amountCents = *in.AmountCents
@@ -425,6 +518,10 @@ func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Método pix (padrão).
+	if in.Customer.Name == "" || in.Customer.TaxID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_body", "customer.name e customer.taxId obrigatórios para pix")
+		return
+	}
 	if s.provider == nil {
 		writeError(w, http.StatusServiceUnavailable, "pix_unavailable", "PIX indisponível no momento")
 		return
