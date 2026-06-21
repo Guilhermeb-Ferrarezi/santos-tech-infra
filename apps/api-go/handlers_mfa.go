@@ -87,6 +87,11 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := strings.TrimSpace(body.Code)
+	// Código TOTP tem 6 dígitos: rejeita comprimento inválido antes de validar.
+	if len(code) != 6 {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
+		return
+	}
 	if !totp.Validate(code, secret) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
 		return
