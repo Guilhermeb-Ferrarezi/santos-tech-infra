@@ -31,3 +31,18 @@ func TestImageExt(t *testing.T) {
 		t.Error("pdf não deveria ser aceito")
 	}
 }
+
+func TestUploadExt(t *testing.T) {
+	// PDF é aceito no upload genérico de /auth/upload.
+	if got, ok := uploadExt("application/pdf"); !ok || got != "pdf" {
+		t.Errorf("uploadExt(pdf) = %q,%v; quer \"pdf\",true", got, ok)
+	}
+	// Imagens continuam aceitas (delegando a imageExt).
+	if got, ok := uploadExt("image/png"); !ok || got != "png" {
+		t.Errorf("uploadExt(png) = %q,%v; quer \"png\",true", got, ok)
+	}
+	// Tipo não suportado segue recusado.
+	if _, ok := uploadExt("application/zip"); ok {
+		t.Error("application/zip não deveria ser aceito")
+	}
+}

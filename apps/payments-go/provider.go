@@ -31,10 +31,14 @@ type ChargeResult struct {
 
 type WebhookEvent struct {
 	ID               string // id único do evento (idempotência)
-	Type             string // CHARGE_PAID | CHARGE_EXPIRED | CHARGE_CREATED
+	Type             string // CHARGE_PAID | CHARGE_EXPIRED | CHARGE_CREATED | PAYOUT_RESULT
 	CorrelationID    string
 	ProviderChargeID string
 	Raw              []byte
+	// Campos do resultado de Pix Envio (payout): preenchidos só quando Type == "PAYOUT_RESULT".
+	IDEnvio      string // gnExtras.idEnvio do envio
+	E2EID        string // endToEndId do envio
+	PayoutStatus string // status mapeado: "completed" (REALIZADO) | "failed" (NAO_REALIZADO)
 }
 
 // RecurrenceRequest é a entrada para criar um contrato de PIX Automático na Efí

@@ -49,6 +49,8 @@ CREATE TABLE pay_products (
   periodicity  TEXT,
   due_day      INT,
   charge_on_subscribe BOOLEAN NOT NULL DEFAULT false,
+  image_url    TEXT,
+  file_url     TEXT,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

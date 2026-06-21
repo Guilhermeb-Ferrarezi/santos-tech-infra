@@ -89,6 +89,8 @@ interface CardViewProps {
   /** Quando true, exige campo de endereço de cobrança (CEP + número + complemento). */
   requireBillingAddress?: boolean;
   onStatusChange?: (status: PixStatus) => void;
+  /** Código de cupom a ser enviado junto ao pagamento (opcional). */
+  coupon?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +102,7 @@ export function CardView({
   totalCents,
   requireBillingAddress = false,
   onStatusChange,
+  coupon,
 }: CardViewProps) {
   // --- campos do formulário (dados sensíveis ficam só aqui) ---
   const [cardNumber, setCardNumber] = useState(""); // PAN — nunca vai ao backend
@@ -256,7 +259,7 @@ export function CardView({
         ...(requireBillingAddress
           ? { billingAddress: { zipCode: cep.replace(/\D/g, ""), number: addressNum, complement } }
           : {}),
-      });
+      }, coupon);
     } catch (err: unknown) {
       // 400 = erro de validação / dados rejeitados → volta ao formulário com mensagem.
       // Outros status (5xx, rede) podem ter chegado ao processador; aguardamos o SSE.

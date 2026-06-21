@@ -7,12 +7,14 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createProduct = `-- name: CreateProduct :one
-INSERT INTO pay_products (slug, name, description, price_cents, recurring, periodicity, due_day, charge_on_subscribe)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe, created_at
+INSERT INTO pay_products (slug, name, description, price_cents, recurring, periodicity, due_day, charge_on_subscribe, image_url, file_url)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe, COALESCE(image_url, '') AS image_url, COALESCE(file_url, '') AS file_url, created_at
 `
 
 type CreateProductParams struct {
@@ -24,9 +26,27 @@ type CreateProductParams struct {
 	Periodicity       *string
 	DueDay            *int32
 	ChargeOnSubscribe bool
+	ImageUrl          *string
+	FileUrl           *string
 }
 
-func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (PayProduct, error) {
+type CreateProductRow struct {
+	ID                int64
+	Slug              string
+	Name              string
+	Description       string
+	PriceCents        int64
+	Active            bool
+	Recurring         bool
+	Periodicity       *string
+	DueDay            *int32
+	ChargeOnSubscribe bool
+	ImageUrl          string
+	FileUrl           string
+	CreatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (CreateProductRow, error) {
 	row := q.db.QueryRow(ctx, createProduct,
 		arg.Slug,
 		arg.Name,
@@ -36,8 +56,10 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		arg.Periodicity,
 		arg.DueDay,
 		arg.ChargeOnSubscribe,
+		arg.ImageUrl,
+		arg.FileUrl,
 	)
-	var i PayProduct
+	var i CreateProductRow
 	err := row.Scan(
 		&i.ID,
 		&i.Slug,
@@ -49,6 +71,8 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		&i.Periodicity,
 		&i.DueDay,
 		&i.ChargeOnSubscribe,
+		&i.ImageUrl,
+		&i.FileUrl,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -67,7 +91,7 @@ func (q *Queries) DeleteProduct(ctx context.Context, id int64) (int64, error) {
 }
 
 const getProductByID = `-- name: GetProductByID :one
-SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe
+SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe, COALESCE(image_url, '') AS image_url, COALESCE(file_url, '') AS file_url
 FROM pay_products
 WHERE id = $1 AND active = true
 `
@@ -83,6 +107,8 @@ type GetProductByIDRow struct {
 	Periodicity       *string
 	DueDay            *int32
 	ChargeOnSubscribe bool
+	ImageUrl          string
+	FileUrl           string
 }
 
 func (q *Queries) GetProductByID(ctx context.Context, id int64) (GetProductByIDRow, error) {
@@ -99,12 +125,14 @@ func (q *Queries) GetProductByID(ctx context.Context, id int64) (GetProductByIDR
 		&i.Periodicity,
 		&i.DueDay,
 		&i.ChargeOnSubscribe,
+		&i.ImageUrl,
+		&i.FileUrl,
 	)
 	return i, err
 }
 
 const getProductBySlug = `-- name: GetProductBySlug :one
-SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe
+SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe, COALESCE(image_url, '') AS image_url, COALESCE(file_url, '') AS file_url
 FROM pay_products
 WHERE slug = $1 AND active = true
 `
@@ -120,6 +148,8 @@ type GetProductBySlugRow struct {
 	Periodicity       *string
 	DueDay            *int32
 	ChargeOnSubscribe bool
+	ImageUrl          string
+	FileUrl           string
 }
 
 func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (GetProductBySlugRow, error) {
@@ -136,12 +166,14 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (GetProduct
 		&i.Periodicity,
 		&i.DueDay,
 		&i.ChargeOnSubscribe,
+		&i.ImageUrl,
+		&i.FileUrl,
 	)
 	return i, err
 }
 
 const listProducts = `-- name: ListProducts :many
-SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe
+SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe, COALESCE(image_url, '') AS image_url, COALESCE(file_url, '') AS file_url
 FROM pay_products
 ORDER BY name
 `
@@ -157,6 +189,8 @@ type ListProductsRow struct {
 	Periodicity       *string
 	DueDay            *int32
 	ChargeOnSubscribe bool
+	ImageUrl          string
+	FileUrl           string
 }
 
 func (q *Queries) ListProducts(ctx context.Context) ([]ListProductsRow, error) {
@@ -179,6 +213,8 @@ func (q *Queries) ListProducts(ctx context.Context) ([]ListProductsRow, error) {
 			&i.Periodicity,
 			&i.DueDay,
 			&i.ChargeOnSubscribe,
+			&i.ImageUrl,
+			&i.FileUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -192,7 +228,7 @@ func (q *Queries) ListProducts(ctx context.Context) ([]ListProductsRow, error) {
 
 const updateProduct = `-- name: UpdateProduct :execrows
 UPDATE pay_products
-SET name = $2, description = $3, price_cents = $4, active = $5, recurring = $6, periodicity = $7, due_day = $8, charge_on_subscribe = $9
+SET name = $2, description = $3, price_cents = $4, active = $5, recurring = $6, periodicity = $7, due_day = $8, charge_on_subscribe = $9, image_url = $10, file_url = $11
 WHERE id = $1
 `
 
@@ -206,6 +242,8 @@ type UpdateProductParams struct {
 	Periodicity       *string
 	DueDay            *int32
 	ChargeOnSubscribe bool
+	ImageUrl          *string
+	FileUrl           *string
 }
 
 func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (int64, error) {
@@ -219,6 +257,8 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (i
 		arg.Periodicity,
 		arg.DueDay,
 		arg.ChargeOnSubscribe,
+		arg.ImageUrl,
+		arg.FileUrl,
 	)
 	if err != nil {
 		return 0, err

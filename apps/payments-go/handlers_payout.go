@@ -160,19 +160,43 @@ func (s *Server) handlePayout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ── 6. Flag ON: registra e (futuro) chama a Efí ──────────────────────────
-	// TODO(llms.txt): implementar chamada ao endpoint de transferência da Efí
-	// quando o endpoint estiver disponível e a conta validada em produção.
+	// ── 6. Flag ON: chama a Efí (Pix Envio real) e registra o saque ───────────
+	// PUT /v3/gn/pix/{idEnvio} (escopo pix.send). O idempotencyKey vira o :idEnvio
+	// (sanitizado p/ alfanumérico ≤35). NUNCA logamos destination (chave Pix de destino).
+	// O status final (REALIZADO/NAO_REALIZADO) chega depois pelo webhook pix.
+	idEnvioOut, e2eID, efiStatus, err := s.efi.SendPix(r.Context(), in.IdempotencyKey, in.AmountCents, dest, "Saque Santos Tech")
+	if err != nil {
+		// Não vazamos a mensagem crua do gateway (pode conter dados sensíveis); logamos a
+		// causa internamente e devolvemos um erro genérico. O saque NÃO é registrado como
+		// concluído — não houve transferência confirmada.
+		slog.Error("payout: falha ao executar Pix Envio na Efí", "err", err, "amountCents", in.AmountCents)
+		writeError(w, http.StatusBadGateway, "payout_failed", "Falha ao executar o saque. Tente novamente mais tarde.")
+		return
+	}
+
+	// EM_PROCESSAMENTO (esperado) → "processing". Qualquer outro estado não-final mapeia
+	// igual; estados finais por aqui não acontecem (vêm pelo webhook). efiEnvioStatusToApp
+	// devolve "" para EM_PROCESSAMENTO, então normalizamos para "processing".
+	status := "processing"
+	if mapped := efiEnvioStatusToApp(efiStatus); mapped != "" {
+		status = mapped // raro: a Efí já devolveu o resultado final na resposta síncrona
+	}
+
 	withdrawal := &Withdrawal{
 		AmountCents:    in.AmountCents,
-		Status:         "processing",
+		Status:         status,
 		PublicToken:    newPublicToken(),
 		IdempotencyKey: in.IdempotencyKey,
+		EFIIdEnvio:     idEnvioOut,
+		E2EID:          e2eID,
 		// Destination NÃO é gravado no banco — propositalmente omitido.
 	}
 	if ws != nil {
 		if err := ws.CreateWithdrawal(r.Context(), withdrawal); err != nil {
-			slog.Warn("payout: falha ao registrar saque", "err", err)
+			// A transferência já foi disparada na Efí. Logamos com os identificadores para
+			// reconciliação manual; o webhook ainda dará o status final por idEnvio/e2eId.
+			slog.Error("payout: Pix Envio disparado mas falha ao registrar saque no banco",
+				"err", err, "idEnvio", idEnvioOut, "e2eId", e2eID)
 			writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar o saque")
 			return
 		}

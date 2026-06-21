@@ -56,6 +56,37 @@ components:
         returnUrl: { type: string }
         status: { type: string, enum: [active, inactive] }
         createdAt: { type: string, format: date-time }
+    Coupon:
+      type: object
+      description: Cupom de desconto aplicável no checkout
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string, description: Código único do cupom }
+        discountType:
+          type: string
+          enum: [fixed, percent]
+          description: "fixed = centavos; percent = 1–100"
+        discountValue:
+          type: integer
+          format: int64
+          description: "Centavos quando fixed; percentual (1–100) quando percent"
+        maxUses:
+          type: integer
+          format: int64
+          description: "-1 = ilimitado"
+        usedCount: { type: integer, format: int64 }
+        active: { type: boolean }
+        createdAt: { type: string, format: date-time }
+    ApplyCouponResult:
+      type: object
+      properties:
+        valid: { type: boolean }
+        reason: { type: string, description: "Motivo da invalidade (somente quando valid=false)" }
+        code: { type: string }
+        discountType: { type: string, enum: [fixed, percent] }
+        discountValue: { type: integer, format: int64 }
+        discountCents: { type: integer, format: int64, description: Valor do desconto em centavos }
+        finalCents: { type: integer, format: int64, description: Valor final após desconto }
     Student:
       type: object
       properties:
@@ -1343,3 +1374,130 @@ paths:
         "410": { description: Link inativo, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "422": { description: Erro no gateway, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "503": { description: Método de pagamento indisponível, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ── Cupons ────────────────────────────────────────────────────────────────────
+
+  /coupons:
+    post:
+      summary: Criar cupom
+      description: Cria um cupom de desconto. Requer admin (role=3).
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, discountType, discountValue]
+              properties:
+                code: { type: string, description: Código único do cupom }
+                discountType:
+                  type: string
+                  enum: [fixed, percent]
+                discountValue:
+                  type: integer
+                  format: int64
+                  description: "Centavos para fixed; 1–100 para percent"
+                maxUses:
+                  type: integer
+                  format: int64
+                  description: "Omitir ou -1 = ilimitado"
+      responses:
+        "201":
+          description: Cupom criado
+          content: { application/json: { schema: { $ref: "#/components/schemas/Coupon" } } }
+        "400": { description: Dados inválidos, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409":
+          description: Código já existe
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: coupon_exists, message: "Já existe um cupom com este código" }
+    get:
+      summary: Listar cupons
+      description: Lista todos os cupons. Requer admin (role=3).
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Lista de cupons
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Coupon" }
+
+  /coupons/{id}:
+    patch:
+      summary: Ativar/desativar cupom
+      description: Altera o campo active de um cupom. Requer admin (role=3).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [active]
+              properties:
+                active: { type: boolean }
+      responses:
+        "200":
+          description: Estado atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active: { type: boolean }
+        "404": { description: Cupom não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /coupons/apply:
+    post:
+      summary: Validar e calcular desconto de cupom
+      description: >
+        Rota pública (sem autenticação) usada pelo checkout para validar um
+        cupom e calcular o desconto. Não incrementa o uso — a contagem só
+        acontece ao criar a charge com o campo `coupon`. Sempre retorna HTTP
+        200; válido no campo `valid`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, amountCents]
+              properties:
+                code: { type: string, description: Código do cupom }
+                amountCents:
+                  type: integer
+                  format: int64
+                  description: Valor original da compra em centavos (>0)
+      responses:
+        "200":
+          description: Resultado da validação (sempre 200)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplyCouponResult" }
+              examples:
+                valid:
+                  summary: Cupom válido
+                  value:
+                    valid: true
+                    code: "PROMO10"
+                    discountType: "percent"
+                    discountValue: 10
+                    discountCents: 1000
+                    finalCents: 9000
+                invalid:
+                  summary: Cupom inválido
+                  value:
+                    valid: false
+                    reason: "cupom esgotado"
+
+# TODO: atualizar llms.txt central (santos-tech-infra/apps/api-go/llms.txt) com as rotas de cupons.

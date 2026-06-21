@@ -110,6 +110,9 @@ ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS due_day     INT;
 -- charge_on_subscribe: true = cobra a 1ª parcela logo após a autorização (auto-débito);
 -- false = a 1ª parcela cai no due_day (ciclo normal).
 ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS charge_on_subscribe BOOLEAN NOT NULL DEFAULT false;
+-- Imagem de capa (image_url) e arquivo entregável (file_url, ex. PDF) do produto.
+ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS image_url TEXT;
+ALTER TABLE pay_products ADD COLUMN IF NOT EXISTS file_url  TEXT;
 CREATE TABLE IF NOT EXISTS pay_customers (
   id         BIGSERIAL PRIMARY KEY,
   user_id    BIGINT NOT NULL,
@@ -212,6 +215,18 @@ CREATE TABLE IF NOT EXISTS pay_payment_links (
 );
 ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS link_id BIGINT REFERENCES pay_payment_links(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_pay_charges_link ON pay_charges(link_id) WHERE link_id IS NOT NULL;
+-- Cupons de desconto: código único, tipo (fixed/percent) e valor, com controle de uso.
+CREATE TABLE IF NOT EXISTS pay_coupons (
+  id             BIGSERIAL PRIMARY KEY,
+  code           TEXT NOT NULL UNIQUE,
+  discount_type  TEXT NOT NULL CHECK (discount_type IN ('fixed','percent')),
+  discount_value BIGINT NOT NULL CHECK (discount_value > 0),
+  max_uses       BIGINT NOT NULL DEFAULT -1,
+  used_count     BIGINT NOT NULL DEFAULT 0,
+  active         BOOLEAN NOT NULL DEFAULT true,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_pay_coupons_code ON pay_coupons(LOWER(code));
 -- Saques (payouts): registra cada solicitação de saque do saldo Efí.
 -- destination NÃO é armazenado aqui por segurança (dados bancários são sensíveis).
 CREATE TABLE IF NOT EXISTS pay_withdrawals (
@@ -223,6 +238,12 @@ CREATE TABLE IF NOT EXISTS pay_withdrawals (
   idempotency_key  TEXT UNIQUE,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Rastreio do Pix Envio (payout real) na Efí: idEnvio (idempotência) e e2eId (rastreio BACEN).
+-- O webhook pix atualiza o status do saque casando por esses identificadores.
+ALTER TABLE pay_withdrawals ADD COLUMN IF NOT EXISTS efi_id_envio TEXT;
+ALTER TABLE pay_withdrawals ADD COLUMN IF NOT EXISTS e2e_id       TEXT;
+CREATE INDEX IF NOT EXISTS idx_pay_withdrawals_efi_id_envio ON pay_withdrawals(efi_id_envio);
+CREATE INDEX IF NOT EXISTS idx_pay_withdrawals_e2e_id       ON pay_withdrawals(e2e_id);
 `
 
 func migrate(ctx context.Context, db *pgxpool.Pool) error {

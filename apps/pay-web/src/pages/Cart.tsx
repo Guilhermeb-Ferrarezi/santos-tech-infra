@@ -47,6 +47,7 @@ export default function CheckoutPage() {
   const [err, setErr] = useState("");
   const [pixToken, setPixToken] = useState<string | null>(null);
   const [pixStatus, setPixStatus] = useState<PixStatus>("loading");
+  const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null);
 
   // A rota é o produto (/<slug>): garante esse produto no carrinho ao abrir a página,
   // venha do botão "Comprar" (já adicionado) ou de acesso direto à URL (carrinho vazio).
@@ -81,7 +82,7 @@ export default function CheckoutPage() {
     priceCents: l.product.priceCents,
     quantity: l.quantity,
   }));
-  const totalCents = items.reduce((s, it) => s + it.priceCents * it.quantity, 0);
+  const subtotalCents = items.reduce((s, it) => s + it.priceCents * it.quantity, 0);
 
   async function generatePix() {
     const v = validatePayer(payer);
@@ -98,6 +99,7 @@ export default function CheckoutPage() {
         payer.name.trim(),
         payer.email.trim(),
         payer.save,
+        appliedCoupon ?? undefined,
       );
       setPixToken(r.token);
       setStep("pix");
@@ -178,7 +180,17 @@ export default function CheckoutPage() {
   return (
     <CheckoutShell
       left={left}
-      right={<OrderSummary items={items} totalCents={totalCents} action={action} />}
+      right={
+        <OrderSummary
+          items={items}
+          totalCents={subtotalCents}
+          action={action}
+          allowCoupon={step === "data"}
+          onCouponApplied={(code) => {
+            setAppliedCoupon(code);
+          }}
+        />
+      }
     />
   );
 }

@@ -132,14 +132,29 @@ export interface LinkChargeData {
   barcode?: string;
 }
 
+export interface ApplyCouponResult {
+  valid: boolean;
+  reason?: string;
+  code?: string;
+  discountType?: string;
+  discountValue?: number;
+  discountCents?: number;
+  finalCents?: number;
+}
+
 export const api = {
+  applyCoupon: (code: string, amountCents: number) =>
+    req<ApplyCouponResult>(`/coupons/apply`, {
+      method: "POST",
+      body: JSON.stringify({ code, amountCents }),
+    }),
   product: (slug: string) => req<Product>(`/products/by-slug/${seg(slug)}`),
   cart: () => req<CartLine[]>(`/me/cart`),
   addToCart: (slug: string) => req<{ ok: boolean }>(`/me/cart`, { method: "POST", body: JSON.stringify({ slug }) }),
   removeFromCart: (productId: number) => req<{ ok: boolean }>(`/me/cart/${seg(Number(productId))}`, { method: "DELETE" }),
-  checkout: (taxId: string, phone: string, name: string, email: string, save: boolean) =>
+  checkout: (taxId: string, phone: string, name: string, email: string, save: boolean, coupon?: string) =>
     req<{ token: string; brCode: string; qrCode: string; amountCents: number }>(`/me/cart/checkout`,
-      { method: "POST", body: JSON.stringify({ taxId, phone, name, email, save }) }),
+      { method: "POST", body: JSON.stringify({ taxId, phone, name, email, save, ...(coupon ? { coupon } : {}) }) }),
   // subscribe — checkout de produto recorrente (item único, fora do carrinho). Cria a
   // recorrência (PIX Automático, Jornada 2) e devolve o QR de AUTORIZAÇÃO. A 1ª cobrança
   // vem depois (no dia do vencimento ou logo após aprovar, conforme o produto).
@@ -164,10 +179,10 @@ export const api = {
 
   // POST /link/{token}/pay — efetua o pagamento com cartão.
   // NUNCA inclua PAN/CVV/validade no payload — apenas o payment_token (opaco) e metadados.
-  payCard: (token: string, payload: CardPayPayload) =>
+  payCard: (token: string, payload: CardPayPayload, coupon?: string) =>
     req<{ status: string }>(`/link/${seg(token)}/pay`, {
       method: "POST",
-      body: JSON.stringify({ method: "card", ...payload }),
+      body: JSON.stringify({ method: "card", ...payload, ...(coupon ? { coupon } : {}) }),
     }),
 
   // --- Link de Pagamento reutilizável ---

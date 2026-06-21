@@ -272,6 +272,11 @@ func (p *efiProviderStub) ParseWebhook(_ map[string][]string, body []byte) ([]We
 // fakePixWHStore implementa pixWebhookStore para testes sem DB.
 type fakePixWHStore struct {
 	markPaidCalled atomic.Int32
+	// captura de SetWithdrawalStatus (ramo PAYOUT_RESULT).
+	wdStatusCalls atomic.Int32
+	lastWDIDEnvio string
+	lastWDE2EID   string
+	lastWDStatus  string
 }
 
 func (f *fakePixWHStore) MarkWebhookSeen(_ context.Context, _, _ string, _ []byte) (bool, error) {
@@ -283,6 +288,13 @@ func (f *fakePixWHStore) MarkChargePaid(_ context.Context, _ string) error {
 }
 func (f *fakePixWHStore) PublicTokenByCorrelation(_ context.Context, _ string) (string, error) {
 	return "", nil // sem token público — efeitos secundários (SSE/email) ignorados
+}
+func (f *fakePixWHStore) SetWithdrawalStatus(_ context.Context, idEnvio, e2eID, status string) error {
+	f.wdStatusCalls.Add(1)
+	f.lastWDIDEnvio = idEnvio
+	f.lastWDE2EID = e2eID
+	f.lastWDStatus = status
+	return nil
 }
 
 // TestHandleWebhook_ChargePaidConfirmado verifica que quando a Efí confirma status "paid",
@@ -338,6 +350,85 @@ func TestHandleWebhook_ChargePaidForjaRejeitada(t *testing.T) {
 	}
 	if store.markPaidCalled.Load() != 0 {
 		t.Fatal("MarkChargePaid NÃO deveria ter sido chamado quando status não é 'paid' (forja rejeitada)")
+	}
+}
+
+// TestHandleWebhook_PayoutRealizado: webhook de Pix Envio com status REALIZADO atualiza
+// o saque casado por idEnvio/e2eId para "completed" (via SetWithdrawalStatus). Usa o
+// efiProvider real (ParseWebhook é parser puro, sem rede) para exercer o ramo de envio.
+func TestHandleWebhook_PayoutRealizado(t *testing.T) {
+	const secret = "secret-payout-realizado"
+	store := &fakePixWHStore{}
+	s := &Server{
+		cfg:      Config{EFIWebhookSecret: secret},
+		provider: &efiProvider{}, // só ParseWebhook é usado (sem rede)
+		pixWH:    store,
+	}
+	body := `{"pix":[{"endToEndId":"E99887766","status":"REALIZADO","gnExtras":{"idEnvio":"IDENV123"}}]}`
+	req := httptest.NewRequest("POST", "/webhooks/efi/pix?token="+secret, strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleWebhook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	if store.wdStatusCalls.Load() != 1 {
+		t.Fatalf("SetWithdrawalStatus chamado %d vezes, esperado 1", store.wdStatusCalls.Load())
+	}
+	if store.lastWDStatus != "completed" {
+		t.Fatalf("status esperado completed, veio %q", store.lastWDStatus)
+	}
+	if store.lastWDIDEnvio != "IDENV123" || store.lastWDE2EID != "E99887766" {
+		t.Fatalf("idEnvio/e2eId errados: %q/%q", store.lastWDIDEnvio, store.lastWDE2EID)
+	}
+	// NÃO deve marcar cobrança paga (não é pix recebido).
+	if store.markPaidCalled.Load() != 0 {
+		t.Fatal("MarkChargePaid NÃO deveria ser chamado num evento de payout")
+	}
+}
+
+// TestHandleWebhook_PayoutNaoRealizado: status NAO_REALIZADO → "failed".
+func TestHandleWebhook_PayoutNaoRealizado(t *testing.T) {
+	const secret = "secret-payout-falho"
+	store := &fakePixWHStore{}
+	s := &Server{
+		cfg:      Config{EFIWebhookSecret: secret},
+		provider: &efiProvider{},
+		pixWH:    store,
+	}
+	body := `{"pix":[{"endToEndId":"E55","status":"NAO_REALIZADO","gnExtras":{"idEnvio":"IDENV55"}}]}`
+	req := httptest.NewRequest("POST", "/webhooks/efi/pix?token="+secret, strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleWebhook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	if store.wdStatusCalls.Load() != 1 || store.lastWDStatus != "failed" {
+		t.Fatalf("esperado 1 chamada com status failed; veio %d chamadas, status %q", store.wdStatusCalls.Load(), store.lastWDStatus)
+	}
+}
+
+// TestHandleWebhook_PayoutEmProcessamento: status não-final (EM_PROCESSAMENTO) NÃO
+// dispara atualização de status (PayoutStatus mapeia para "" → sem ação).
+func TestHandleWebhook_PayoutEmProcessamento(t *testing.T) {
+	const secret = "secret-payout-proc"
+	store := &fakePixWHStore{}
+	s := &Server{
+		cfg:      Config{EFIWebhookSecret: secret},
+		provider: &efiProvider{},
+		pixWH:    store,
+	}
+	body := `{"pix":[{"endToEndId":"E77","status":"EM_PROCESSAMENTO","gnExtras":{"idEnvio":"IDENV77"}}]}`
+	req := httptest.NewRequest("POST", "/webhooks/efi/pix?token="+secret, strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleWebhook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	if store.wdStatusCalls.Load() != 0 {
+		t.Fatalf("SetWithdrawalStatus NÃO deveria ser chamado em estado não-final, veio %d", store.wdStatusCalls.Load())
 	}
 }
 
