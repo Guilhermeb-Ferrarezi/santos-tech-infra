@@ -298,6 +298,49 @@ claude mcp add --transport http santos-tech https://api.santos-tech.com/mcp \
   `santos-tech://openapi/auth` (contrato OpenAPI da auth)
 - `GET /mcp/health` — liveness (sem auth)
 
+## Cron (agendador de tarefas) — `api.santos-tech.com/cron`
+
+Serviço Go autônomo (porta 3337). Agenda e executa tarefas recorrentes ou únicas
+contra endpoints internos do ecossistema (catálogo de ações) ou URLs arbitrárias
+(flag `CRON_ALLOW_RAW_HTTP`). Suporta expressões cron com fuso horário (ex.:
+`TZ=America/Sao_Paulo 0 8 * * 1-5`). Auth: JWT HS256 do ecossistema; todas as
+rotas `/cron/*` exigem role admin (3). Erros no padrão `{code,message}`.
+
+Campos do jobInput (POST/PATCH body):
+  name, description, scheduleCron, timezone, actionKind (catalog|http),
+  actionRef (catalog) ou httpMethod+httpUrl (http), httpHeaders (objeto JSON,
+  aplicado ao request de dispatch), httpBody (string; se não vazio, enviado como
+  corpo; senão params é enviado se não for `{}`), params (objeto JSON; enviado
+  como corpo quando httpBody vazio e params ≠ `{}`), timeoutSecs, maxRetries.
+
+Gestão de jobs (admin):
+POST   /cron/jobs           body jobInput → 201 {job}
+GET    /cron/jobs           → {jobs:[...]}
+GET    /cron/jobs/{id}      → {job}
+PATCH  /cron/jobs/{id}      body jobInput → {job}
+DELETE /cron/jobs/{id}      → 204
+
+Controle de execução (admin):
+POST   /cron/jobs/{id}/pause   → 200 {"status":"paused"}
+POST   /cron/jobs/{id}/resume  → 200 {"status":"resumed"}
+POST   /cron/jobs/{id}/run     → 200 {"status":"executed"}  (síncrono; dispara fora do scheduler e aguarda)
+
+Histórico de execuções (admin):
+GET    /cron/jobs/{id}/runs    → {"runs":[{id,jobId,status,startedAt,finishedAt,durationMs,exitCode,excerpt,attempt},...]}
+  (sem paginação; retorna até 50 runs mais recentes; NÃO existe GET /cron/runs/{runId})
+
+Catálogo de ações (admin):
+GET    /cron/catalog           → {"actions":[{id,label,method,scheme,host,path},...]}
+
+Endpoints operacionais (sem auth):
+GET    /health   liveness (200 OK se o processo está vivo)
+GET    /ready    readiness (200 se Postgres responde; 503 caso contrário)
+GET    /metrics  métricas Prometheus (latência, contagem por rota/status, pool Postgres)
+
+Tabelas próprias (prefixo `cron_`): cron_jobs, cron_runs.
+Env relevante: DATABASE_URL, PORT (3337), AUTH_ME_URL, CRON_SERVICE_PAT,
+CRON_HOST_ALLOWLIST (CSV de sufixos; default `.santos-tech.com`), CRON_ALLOW_RAW_HTTP.
+
 ## Como um agente acessa este arquivo
 
 ```bash
