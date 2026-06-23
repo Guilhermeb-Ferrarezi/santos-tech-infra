@@ -11,6 +11,13 @@ import (
 	"github.com/santos-tech/cron-go/db"
 )
 
+// Limites superiores de entrada — evitam jobs mal-configurados que segurariam
+// goroutines/conexões por tempo absurdo (ex.: maxRetries gigante × backoff).
+const (
+	maxTimeoutSecs int32 = 300 // 5 min — teto do timeout por disparo
+	maxRetriesCap  int32 = 10  // teto de tentativas por execução
+)
+
 type jobInput struct {
 	Name         string          `json:"name"`
 	Description  string          `json:"description"`
@@ -33,9 +40,13 @@ func (in *jobInput) defaults() {
 	}
 	if in.TimeoutSecs <= 0 {
 		in.TimeoutSecs = 30
+	} else if in.TimeoutSecs > maxTimeoutSecs {
+		in.TimeoutSecs = maxTimeoutSecs
 	}
 	if in.MaxRetries <= 0 {
 		in.MaxRetries = 3
+	} else if in.MaxRetries > maxRetriesCap {
+		in.MaxRetries = maxRetriesCap
 	}
 	if len(in.HTTPHeaders) == 0 {
 		in.HTTPHeaders = []byte("{}")
@@ -144,7 +155,11 @@ func (s *Server) handleUpdateJob(w http.ResponseWriter, r *http.Request) {
 		MaxRetries: in.MaxRetries, NextRunAt: pgTimestamp(next),
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", "falha ao atualizar job")
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "not_found", "job não encontrado")
+		} else {
+			writeError(w, http.StatusInternalServerError, "db_error", "falha ao atualizar job")
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
@@ -154,6 +169,14 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "id inválido")
+		return
+	}
+	if _, err := s.q.GetJob(r.Context(), id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "not_found", "job não encontrado")
+		} else {
+			writeError(w, http.StatusInternalServerError, "db_error", "falha ao buscar job")
+		}
 		return
 	}
 	if s.q.DeleteJob(r.Context(), id) != nil {

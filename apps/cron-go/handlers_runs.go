@@ -23,6 +23,10 @@ func (s *Server) handlePauseJob(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if _, err := s.q.GetJob(r.Context(), id); err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "job não encontrado")
+		return
+	}
 	if s.q.SetJobEnabled(r.Context(), db.SetJobEnabledParams{ID: id, Enabled: false, NextRunAt: pgtype.Timestamptz{}}) != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "falha ao pausar")
 		return
