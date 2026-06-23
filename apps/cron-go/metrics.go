@@ -6,6 +6,19 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+// Métricas específicas de cron (registradas no init via promauto).
+var (
+	cronRunsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cron_go_runs_total",
+		Help: "Total de execuções de jobs por status (success/failed/skipped_overlap).",
+	}, []string{"status"})
+	cronRunDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "cron_go_run_duration_seconds",
+		Help:    "Duração de uma execução de job (início ao fim, incluindo retries).",
+		Buckets: prometheus.DefBuckets,
+	})
+)
+
 func registerDBMetrics(pool *pgxpool.Pool) {
 	if pool == nil {
 		return

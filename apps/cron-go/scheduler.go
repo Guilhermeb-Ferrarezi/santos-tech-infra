@@ -111,6 +111,7 @@ func (s *Server) runJobOnce(ctx context.Context, job db.CronJob) {
 				Attempt: 1,
 			})
 		}
+		cronRunsTotal.WithLabelValues("skipped_overlap").Inc()
 		slog.Warn("runJobOnce: overlap detectado, pulando", "job", job.ID)
 		return
 	}
@@ -125,6 +126,7 @@ func (s *Server) runJobOnce(ctx context.Context, job db.CronJob) {
 		return
 	}
 
+	start := time.Now()
 	var last dispatchResult
 	attempt := 1
 	maxRetries := int(job.MaxRetries)
@@ -147,6 +149,9 @@ func (s *Server) runJobOnce(ctx context.Context, job db.CronJob) {
 		status = "failed"
 		errStr = last.Err.Error()
 	}
+
+	cronRunDuration.Observe(time.Since(start).Seconds())
+	cronRunsTotal.WithLabelValues(status).Inc()
 
 	var httpStatus *int32
 	if last.HTTPStatus != 0 {
