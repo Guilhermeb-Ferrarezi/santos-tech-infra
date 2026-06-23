@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -78,9 +79,9 @@ type CreateJobParams struct {
 	ActionRef    string             `json:"action_ref"`
 	HttpMethod   string             `json:"http_method"`
 	HttpUrl      string             `json:"http_url"`
-	HttpHeaders  []byte             `json:"http_headers"`
+	HttpHeaders  json.RawMessage    `json:"http_headers"`
 	HttpBody     string             `json:"http_body"`
-	Params       []byte             `json:"params"`
+	Params       json.RawMessage    `json:"params"`
 	TimeoutSecs  int32              `json:"timeout_secs"`
 	MaxRetries   int32              `json:"max_retries"`
 	NextRunAt    pgtype.Timestamptz `json:"next_run_at"`
@@ -253,9 +254,9 @@ type UpdateJobParams struct {
 	ActionRef    string             `json:"action_ref"`
 	HttpMethod   string             `json:"http_method"`
 	HttpUrl      string             `json:"http_url"`
-	HttpHeaders  []byte             `json:"http_headers"`
+	HttpHeaders  json.RawMessage    `json:"http_headers"`
 	HttpBody     string             `json:"http_body"`
-	Params       []byte             `json:"params"`
+	Params       json.RawMessage    `json:"params"`
 	TimeoutSecs  int32              `json:"timeout_secs"`
 	MaxRetries   int32              `json:"max_retries"`
 	NextRunAt    pgtype.Timestamptz `json:"next_run_at"`

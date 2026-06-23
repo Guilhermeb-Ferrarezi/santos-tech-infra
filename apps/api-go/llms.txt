@@ -330,7 +330,11 @@ GET    /cron/jobs/{id}/runs    → {"runs":[{id,jobId,status,startedAt,finishedA
   (sem paginação; retorna até 50 runs mais recentes; NÃO existe GET /cron/runs/{runId})
 
 Catálogo de ações (admin):
-GET    /cron/catalog           → {"actions":[{id,label,method,scheme,host,path},...]}
+GET    /cron/catalog           → {"actions":[{id,label},...]}  (método/host/path são internos, não expostos)
+
+Prévia de agendamento (admin):
+POST   /cron/preview           body {scheduleCron, timezone?, count? (≤10, default 3)}
+  → 200 {"next":[<ISO UTC>,...]}  (próximas execuções; mesmo motor nextRun() do scheduler)
 
 Endpoints operacionais (sem auth):
 GET    /health   liveness (200 OK se o processo está vivo)
