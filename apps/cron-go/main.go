@@ -24,11 +24,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
-	// TODO(Task 2): habilitar migrate()
-	// if err := migrate(ctx, pool); err != nil {
-	// 	slog.Error("falha na migração", "err", err)
-	// 	os.Exit(1)
-	// }
+	if err := migrate(ctx, pool); err != nil {
+		slog.Error("falha na migração", "err", err)
+		os.Exit(1)
+	}
 	registerDBMetrics(pool)
 
 	srv := NewServer(cfg, pool)
