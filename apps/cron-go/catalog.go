@@ -6,6 +6,7 @@ type CatalogAction struct {
 	ID     string `json:"id"`
 	Label  string `json:"label"`
 	Method string `json:"-"`
+	Scheme string `json:"-"` // opcional; default "https" — use "http" apenas em testes
 	Host   string `json:"-"`
 	Path   string `json:"-"`
 }
