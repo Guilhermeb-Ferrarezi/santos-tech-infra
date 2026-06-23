@@ -40,18 +40,21 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /ready", s.handleReady)
 	mux.Handle("GET /metrics", promhttp.Handler())
-	// rotas /cron/* — todas protegidas por requireAdmin
-	mux.HandleFunc("GET /cron/catalog", s.requireAdmin(s.handleListCatalog))
-	mux.HandleFunc("POST /cron/preview", s.requireAdmin(s.handlePreview))
-	mux.HandleFunc("GET /cron/jobs", s.requireAdmin(s.handleListJobs))
-	mux.HandleFunc("POST /cron/jobs", s.requireAdmin(s.handleCreateJob))
-	mux.HandleFunc("GET /cron/jobs/{id}", s.requireAdmin(s.handleGetJob))
-	mux.HandleFunc("PATCH /cron/jobs/{id}", s.requireAdmin(s.handleUpdateJob))
-	mux.HandleFunc("DELETE /cron/jobs/{id}", s.requireAdmin(s.handleDeleteJob))
-	mux.HandleFunc("POST /cron/jobs/{id}/pause", s.requireAdmin(s.handlePauseJob))
-	mux.HandleFunc("POST /cron/jobs/{id}/resume", s.requireAdmin(s.handleResumeJob))
-	mux.HandleFunc("POST /cron/jobs/{id}/run", s.requireAdmin(s.handleRunJob))
-	mux.HandleFunc("GET /cron/jobs/{id}/runs", s.requireAdmin(s.handleListRuns))
+	// Rotas da API admin — registradas SEM o prefixo /cron porque o Traefik da
+	// Coolify roteia api.santos-tech.com/cron → este serviço STRIPANDO o /cron
+	// (mesma convenção do payments-go em /payments). Externamente as rotas são
+	// /cron/jobs etc.; aqui chegam bare (/jobs…). Todas protegidas por requireAdmin.
+	mux.HandleFunc("GET /catalog", s.requireAdmin(s.handleListCatalog))
+	mux.HandleFunc("POST /preview", s.requireAdmin(s.handlePreview))
+	mux.HandleFunc("GET /jobs", s.requireAdmin(s.handleListJobs))
+	mux.HandleFunc("POST /jobs", s.requireAdmin(s.handleCreateJob))
+	mux.HandleFunc("GET /jobs/{id}", s.requireAdmin(s.handleGetJob))
+	mux.HandleFunc("PATCH /jobs/{id}", s.requireAdmin(s.handleUpdateJob))
+	mux.HandleFunc("DELETE /jobs/{id}", s.requireAdmin(s.handleDeleteJob))
+	mux.HandleFunc("POST /jobs/{id}/pause", s.requireAdmin(s.handlePauseJob))
+	mux.HandleFunc("POST /jobs/{id}/resume", s.requireAdmin(s.handleResumeJob))
+	mux.HandleFunc("POST /jobs/{id}/run", s.requireAdmin(s.handleRunJob))
+	mux.HandleFunc("GET /jobs/{id}/runs", s.requireAdmin(s.handleListRuns))
 	return golog.RequestLogger(mux)
 }
 
