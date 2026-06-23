@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,6 +21,22 @@ type Server struct {
 	// allowlist de produção. Testes podem sobrescrever para bypassar a checagem
 	// sem afrouxar o guard de produção.
 	hostCheck func(host string) bool
+	// wg rastreia os dispatches em voo para drená-los no shutdown.
+	wg sync.WaitGroup
+}
+
+// WaitDrain aguarda os dispatches em voo terminarem, até `timeout`. Chamado no
+// shutdown depois que o scheduler parou de reivindicar novos jobs.
+func (s *Server) WaitDrain(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+	}
 }
 
 func NewServer(cfg Config, pool *pgxpool.Pool) *Server {

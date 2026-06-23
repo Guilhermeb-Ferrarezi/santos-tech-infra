@@ -72,9 +72,16 @@ func (s *Server) tick(ctx context.Context) {
 		return
 	}
 
-	// Dispara fora da tx — chamadas HTTP não devem segurar locks.
+	// Dispara fora da tx — chamadas HTTP não devem segurar locks. O WaitGroup
+	// permite drenar os dispatches em voo no shutdown (ver Server.WaitDrain).
+	// Usa context.Background() de propósito: um run em andamento deve COMPLETAR
+	// (gravar o cron_run) mesmo durante o shutdown, não ser cancelado no meio.
 	for _, job := range jobs {
-		go s.runJobOnce(context.Background(), job)
+		s.wg.Add(1)
+		go func(j db.CronJob) {
+			defer s.wg.Done()
+			s.runJobOnce(context.Background(), j)
+		}(job)
 	}
 }
 
@@ -104,6 +111,7 @@ func (s *Server) runJobOnce(ctx context.Context, job db.CronJob) {
 				Attempt: 1,
 			})
 		}
+		cronRunsTotal.WithLabelValues("skipped_overlap").Inc()
 		slog.Warn("runJobOnce: overlap detectado, pulando", "job", job.ID)
 		return
 	}
@@ -118,6 +126,7 @@ func (s *Server) runJobOnce(ctx context.Context, job db.CronJob) {
 		return
 	}
 
+	start := time.Now()
 	var last dispatchResult
 	attempt := 1
 	maxRetries := int(job.MaxRetries)
@@ -140,6 +149,9 @@ func (s *Server) runJobOnce(ctx context.Context, job db.CronJob) {
 		status = "failed"
 		errStr = last.Err.Error()
 	}
+
+	cronRunDuration.Observe(time.Since(start).Seconds())
+	cronRunsTotal.WithLabelValues(status).Inc()
 
 	var httpStatus *int32
 	if last.HTTPStatus != 0 {

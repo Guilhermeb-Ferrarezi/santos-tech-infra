@@ -57,9 +57,14 @@ func main() {
 
 	<-rootCtx.Done()
 	slog.Info("shutdown iniciado")
+	// schedCtx já foi cancelado (deriva de rootCtx): o scheduler para de
+	// reivindicar novos jobs. Drena o HTTP e os dispatches em voo.
 	shutCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutCtx); err != nil {
 		slog.Error("shutdown com erro", "err", err)
 	}
+	slog.Info("drenando dispatches em voo")
+	srv.WaitDrain(15 * time.Second)
+	slog.Info("shutdown concluído")
 }

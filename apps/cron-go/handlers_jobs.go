@@ -94,7 +94,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		Timezone: in.Timezone, Enabled: true, ActionKind: in.ActionKind, ActionRef: in.ActionRef,
 		HttpMethod: in.HTTPMethod, HttpUrl: in.HTTPURL, HttpHeaders: in.HTTPHeaders,
 		HttpBody: in.HTTPBody, Params: in.Params, TimeoutSecs: in.TimeoutSecs,
-		MaxRetries: in.MaxRetries, NextRunAt: pgTimestamp(next), CreatedBy: "",
+		MaxRetries: in.MaxRetries, NextRunAt: pgTimestamp(next), CreatedBy: userFromContext(r.Context()),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "falha ao criar job")

@@ -1,9 +1,23 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 )
+
+type ctxKey int
+
+const userCtxKey ctxKey = 0
+
+// userFromContext devolve o identificador do usuário autenticado (email) posto
+// pelo requireAdmin, ou "" se ausente.
+func userFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(userCtxKey).(string); ok {
+		return v
+	}
+	return ""
+}
 
 // requireAdmin repassa os cookies da request para a Auth API (/auth/me) e só
 // segue se a resposta indicar papel Admin (role 3). Fail-closed.
@@ -33,13 +47,15 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 		}
 		var me struct {
 			User struct {
-				Role int `json:"role"`
+				Role  int    `json:"role"`
+				Email string `json:"email"`
 			} `json:"user"`
 		}
 		if json.NewDecoder(resp.Body).Decode(&me) != nil || me.User.Role != 3 {
 			writeError(w, http.StatusForbidden, "forbidden", "requer papel Admin")
 			return
 		}
-		next(w, r)
+		ctx := context.WithValue(r.Context(), userCtxKey, me.User.Email)
+		next(w, r.WithContext(ctx))
 	}
 }

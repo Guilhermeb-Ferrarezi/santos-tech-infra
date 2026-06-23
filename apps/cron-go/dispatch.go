@@ -81,6 +81,10 @@ func (s *Server) buildTargetURL(job db.CronJob) (method, rawURL string, err erro
 		if !s.cfg.AllowRawHTTP {
 			return "", "", fmt.Errorf("HTTP cru desabilitado (CRON_ALLOW_RAW_HTTP)")
 		}
+		// Exige https: o Bearer da conta de serviço nunca pode trafegar em plaintext.
+		if !strings.HasPrefix(strings.ToLower(job.HttpUrl), "https://") {
+			return "", "", fmt.Errorf("URL crua precisa ser https:// (Bearer não vai em plaintext)")
+		}
 		m := job.HttpMethod
 		if m == "" {
 			m = http.MethodPost
