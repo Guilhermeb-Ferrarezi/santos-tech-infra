@@ -1,8 +1,8 @@
 package main
 
 import (
-	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -65,7 +65,8 @@ func (s *Server) handleLogLabels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"apps": apps})
 }
 
-// handleTopIPs devolve os N IPs com mais requisições no intervalo via Loki metric query.
+// handleTopIPs devolve os N IPs com mais requisições no intervalo.
+// Busca entradas de log com campo "ip" no Loki e agrega em Go.
 // Parâmetros: range (15m/1h/6h/24h/7d, default 1h), limit (default 20, max 50).
 func (s *Server) handleTopIPs(w http.ResponseWriter, r *http.Request) {
 	if s.loki == nil || !s.loki.enabled() {
@@ -82,34 +83,38 @@ func (s *Server) handleTopIPs(w http.ResponseWriter, r *http.Request) {
 		limit = 20
 	}
 	appLabel := s.loki.getLokiAppLabel(r.Context())
-	logql := fmt.Sprintf(`topk(%d, sum by(ip) (count_over_time({%s=~".+"} | json [%s])))`,
-		limit, appLabel, lokiDurStr(dur))
-	ips, err := s.loki.lokiInstantQuery(r.Context(), logql)
+	// Busca entradas HTTP (que têm campo "ip") e agrega em Go.
+	// Limite de 500 entradas cobre picos normais; ajustar LOG_BODY_MAX_BYTES
+	// no serviço se precisar de janelas maiores.
+	logql := `{` + appLabel + `=~".+"} | json | ip != ""`
+	end := time.Now()
+	page, err := s.loki.lokiQuery(r.Context(), logql, lokiPageParams{
+		Start: end.Add(-dur),
+		End:   end,
+		Limit: 500,
+	})
 	if err != nil {
 		writeErr(w, appErr(http.StatusBadGateway, "LOKI_ERROR", "Erro ao consultar Loki"))
 		return
 	}
-	if ips == nil {
-		ips = []topIPEntry{}
+	counts := make(map[string]int64, 64)
+	for _, e := range page.Entries {
+		if e.Fields == nil {
+			continue
+		}
+		if ip, ok := e.Fields["ip"].(string); ok && ip != "" {
+			counts[ip]++
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ips": ips})
-}
-
-func lokiDurStr(d time.Duration) string {
-	switch d {
-	case 15 * time.Minute:
-		return "15m"
-	case time.Hour:
-		return "1h"
-	case 6 * time.Hour:
-		return "6h"
-	case 24 * time.Hour:
-		return "24h"
-	case 7 * 24 * time.Hour:
-		return "7d"
-	default:
-		return "1h"
+	out := make([]topIPEntry, 0, len(counts))
+	for ip, c := range counts {
+		out = append(out, topIPEntry{IP: ip, Count: c})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ips": out})
 }
 
 func lokiAtoiOr(s string, def int) int {
