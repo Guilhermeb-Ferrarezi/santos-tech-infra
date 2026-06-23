@@ -55,7 +55,29 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /jobs/{id}/resume", s.requireAdmin(s.handleResumeJob))
 	mux.HandleFunc("POST /jobs/{id}/run", s.requireAdmin(s.handleRunJob))
 	mux.HandleFunc("GET /jobs/{id}/runs", s.requireAdmin(s.handleListRuns))
-	return golog.RequestLogger(mux)
+	return golog.RequestLogger(s.cors(mux))
+}
+
+// cors ecoa a Origin se estiver na allowlist (com credentials) e responde ao
+// preflight OPTIONS. Mesma convenção do payments-go/api-go.
+func (s *Server) cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		for _, o := range s.cfg.CORSOrigins {
+			if o == origin {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				break
+			}
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
