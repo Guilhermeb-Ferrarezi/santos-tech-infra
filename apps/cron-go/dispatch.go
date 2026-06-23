@@ -18,9 +18,9 @@ type dispatchResult struct {
 	Err        error
 }
 
-// hostAllowed: bloqueia localhost/IP privado/link-local; permite match exato ou
-// sufixo da allowlist (ex.: ".santos-tech.com").
-// Match exato na allowlist tem prioridade sobre bloqueios — permite httptest em testes.
+// hostAllowed: bloqueia localhost/IP privado/link-local/unspecified de forma
+// INCONDICIONAL — a allowlist nunca pode reabilitar esses endereços (guard anti-SSRF).
+// Só depois dos bloqueios é que match exato ou sufixo da allowlist decide o true.
 func hostAllowed(host string, allowlist []string) bool {
 	h := host
 	if i := strings.IndexByte(h, ':'); i >= 0 {
@@ -30,24 +30,24 @@ func hostAllowed(host string, allowlist []string) bool {
 		return false
 	}
 
-	// Match exato (host com porta ou sem) tem prioridade: se está explicitamente
-	// na allowlist, passa — permite targets de teste como 127.0.0.1:PORT.
-	for _, suf := range allowlist {
-		if suf == "" {
-			continue
-		}
-		if host == suf || h == suf {
-			return true
-		}
-	}
-
-	// Bloqueios de segurança: localhost, IPs privados, link-local, metadata cloud.
+	// Bloqueios INCONDICIONAIS (anti-SSRF): nenhuma entrada da allowlist pode
+	// sobrepor estes. Verificados antes de qualquer match de allowlist.
 	if h == "localhost" {
 		return false
 	}
 	if ip := net.ParseIP(h); ip != nil {
 		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
 			return false
+		}
+	}
+
+	// Match exato (host com porta ou sem).
+	for _, suf := range allowlist {
+		if suf == "" {
+			continue
+		}
+		if host == suf || h == suf {
+			return true
 		}
 	}
 
@@ -98,7 +98,7 @@ func (s *Server) dispatch(ctx context.Context, job db.CronJob) dispatchResult {
 	if err != nil {
 		return dispatchResult{Err: err}
 	}
-	if !hostAllowed(req.URL.Host, s.cfg.HostAllowlist) {
+	if !s.hostCheck(req.URL.Host) {
 		return dispatchResult{Err: fmt.Errorf("host fora da allowlist: %s", req.URL.Host)}
 	}
 	if s.cfg.ServicePAT != "" {
