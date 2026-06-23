@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/santos-tech/cron-go/db"
 )
 
@@ -107,7 +109,11 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	}
 	job, err := s.q.GetJob(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "job não encontrado")
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "not_found", "job não encontrado")
+		} else {
+			writeError(w, http.StatusInternalServerError, "db_error", "falha ao buscar job")
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, job)

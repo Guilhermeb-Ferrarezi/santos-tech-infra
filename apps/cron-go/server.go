@@ -12,9 +12,10 @@ import (
 )
 
 type Server struct {
-	cfg Config
-	db  *pgxpool.Pool
-	q   *db.Queries
+	cfg        Config
+	db         *pgxpool.Pool
+	q          *db.Queries
+	authClient *http.Client
 	// hostCheck é o seam de teste: por padrão delega para hostAllowed com a
 	// allowlist de produção. Testes podem sobrescrever para bypassar a checagem
 	// sem afrouxar o guard de produção.
@@ -22,7 +23,12 @@ type Server struct {
 }
 
 func NewServer(cfg Config, pool *pgxpool.Pool) *Server {
-	s := &Server{cfg: cfg, db: pool, q: db.New(pool)}
+	s := &Server{
+		cfg:        cfg,
+		db:         pool,
+		q:          db.New(pool),
+		authClient: &http.Client{Timeout: 5 * time.Second},
+	}
 	s.hostCheck = func(host string) bool {
 		return hostAllowed(host, s.cfg.HostAllowlist)
 	}

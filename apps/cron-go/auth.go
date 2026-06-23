@@ -21,12 +21,16 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 		if h := r.Header.Get("Authorization"); h != "" {
 			req.Header.Set("Authorization", h)
 		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil || resp.StatusCode != http.StatusOK {
+		resp, err := s.authClient.Do(req)
+		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "sessão inválida")
 			return
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "sessão inválida")
+			return
+		}
 		var me struct {
 			User struct {
 				Role int `json:"role"`
