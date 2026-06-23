@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/santos-tech/golog"
 )
 
@@ -30,7 +31,18 @@ func main() {
 	}
 	registerDBMetrics(pool)
 
-	srv := NewServer(cfg, pool)
+	var rdb *redis.Client
+	if cfg.RedisURL != "" {
+		ropt, err := redis.ParseURL(cfg.RedisURL)
+		if err != nil {
+			slog.Warn("REDIS_URL inválida — ban check desabilitado", "err", err)
+		} else {
+			rdb = redis.NewClient(ropt)
+			defer rdb.Close()
+		}
+	}
+
+	srv := NewServer(cfg, pool, rdb)
 	httpSrv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Routes(),

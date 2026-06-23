@@ -45,6 +45,15 @@ type CustomRole struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
+type IpBan struct {
+	ID        int64
+	Ip        string
+	Reason    *string
+	BannedBy  pgtype.Int4
+	ExpiresAt pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type OauthAccount struct {
 	ID         int32
 	UserID     int32

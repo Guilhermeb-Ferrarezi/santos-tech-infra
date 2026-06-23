@@ -213,7 +213,7 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	return golog.RequestLogger(metricsMiddleware(mux))
+	return golog.RequestLogger(s.ipBanCheck(metricsMiddleware(mux)))
 }
 
 // dashMiddleware adiciona CORS e verifica X-Dash-Key.

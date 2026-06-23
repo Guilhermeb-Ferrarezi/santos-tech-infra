@@ -70,7 +70,7 @@ func (s *Server) Routes() http.Handler {
 	s.registerAuthRoutes(mux)
 	// metricsMiddleware fica DENTRO do mux (após o roteamento) para enxergar o
 	// padrão de rota casado (r.Pattern) e evitar explosão de cardinalidade.
-	return golog.RequestLogger(s.cors(s.globalRateLimit(metricsMiddleware(mux))))
+	return golog.RequestLogger(s.cors(s.ipBanCheck(s.globalRateLimit(metricsMiddleware(mux)))))
 }
 
 // ── CORS (com credenciais, igual ao Fastify) ─────────────────────────────────

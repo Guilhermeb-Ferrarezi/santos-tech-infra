@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	"github.com/santos-tech/cron-go/db"
 	"github.com/santos-tech/golog"
 )
@@ -17,12 +20,48 @@ type Server struct {
 	db         *pgxpool.Pool
 	q          *db.Queries
 	authClient *http.Client
+	rdb        *redis.Client // opcional; nil = ban check desabilitado
 	// hostCheck é o seam de teste: por padrão delega para hostAllowed com a
 	// allowlist de produção. Testes podem sobrescrever para bypassar a checagem
 	// sem afrouxar o guard de produção.
 	hostCheck func(host string) bool
 	// wg rastreia os dispatches em voo para drená-los no shutdown.
 	wg sync.WaitGroup
+}
+
+func clientIP(r *http.Request) string {
+	if ip := r.Header.Get("CF-Connecting-IP"); ip != "" {
+		return ip
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return strings.TrimSpace(strings.Split(xff, ",")[0])
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// ipBanCheck bloqueia IPs banidos consultando Redis ("global:ip-ban:<ip>").
+// Fail-open: Redis nil ou indisponível → passa. Endpoints operacionais são isentos.
+func (s *Server) ipBanCheck(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health", "/ready", "/metrics":
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.rdb != nil {
+			if n, err := s.rdb.Exists(r.Context(), "global:ip-ban:"+clientIP(r)).Result(); err == nil && n > 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"code":"FORBIDDEN","message":"Acesso não autorizado."}`))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // WaitDrain aguarda os dispatches em voo terminarem, até `timeout`. Chamado no
@@ -39,12 +78,13 @@ func (s *Server) WaitDrain(timeout time.Duration) {
 	}
 }
 
-func NewServer(cfg Config, pool *pgxpool.Pool) *Server {
+func NewServer(cfg Config, pool *pgxpool.Pool, rdb *redis.Client) *Server {
 	s := &Server{
 		cfg:        cfg,
 		db:         pool,
 		q:          db.New(pool),
 		authClient: &http.Client{Timeout: 5 * time.Second},
+		rdb:        rdb,
 	}
 	s.hostCheck = func(host string) bool {
 		return hostAllowed(host, s.cfg.HostAllowlist)
@@ -72,7 +112,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /jobs/{id}/resume", s.requireAdmin(s.handleResumeJob))
 	mux.HandleFunc("POST /jobs/{id}/run", s.requireAdmin(s.handleRunJob))
 	mux.HandleFunc("GET /jobs/{id}/runs", s.requireAdmin(s.handleListRuns))
-	return golog.RequestLogger(s.cors(mux))
+	return golog.RequestLogger(s.ipBanCheck(s.cors(mux)))
 }
 
 // cors ecoa a Origin se estiver na allowlist (com credentials) e responde ao

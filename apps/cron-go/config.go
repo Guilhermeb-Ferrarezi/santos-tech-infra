@@ -14,6 +14,7 @@ type Config struct {
 	HostAllowlist []string // sufixos de host permitidos (ex.: ".santos-tech.com")
 	AuthMeURL     string   // URL do /auth/me para validar sessão (guard de admin)
 	CORSOrigins   []string // origens permitidas no CORS (CSV em CORS_ORIGIN)
+	RedisURL      string   // opcional; se vazio, ban check é desabilitado
 }
 
 func LoadConfig() Config {
@@ -48,5 +49,6 @@ func LoadConfig() Config {
 		HostAllowlist: parts,
 		AuthMeURL:     authMeURL,
 		CORSOrigins:   cors,
+		RedisURL:      os.Getenv("REDIS_URL"),
 	}
 }

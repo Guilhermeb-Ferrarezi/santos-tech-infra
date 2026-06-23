@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	"github.com/santos-tech/golog"
 )
 
@@ -18,12 +20,48 @@ const version = "0.1.0"
 type Server struct {
 	cfg     Config
 	client  *apiClient
-	fetch   *http.Client // busca imagens de URLs do usuário (anti-SSRF; trocável em teste)
-	openapi []byte       // docs/openapi.yaml carregado no boot (vazio = resource indisponível)
+	fetch   *http.Client  // busca imagens de URLs do usuário (anti-SSRF; trocável em teste)
+	openapi []byte        // docs/openapi.yaml carregado no boot (vazio = resource indisponível)
+	rdb     *redis.Client // opcional; nil = ban check desabilitado
 }
 
-func NewServer(cfg Config, openapi []byte) *Server {
-	return &Server{cfg: cfg, client: newAPIClient(), fetch: newFetchClient(), openapi: openapi}
+func NewServer(cfg Config, openapi []byte, rdb *redis.Client) *Server {
+	return &Server{cfg: cfg, client: newAPIClient(), fetch: newFetchClient(), openapi: openapi, rdb: rdb}
+}
+
+func clientIP(r *http.Request) string {
+	if ip := r.Header.Get("CF-Connecting-IP"); ip != "" {
+		return ip
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return strings.TrimSpace(strings.Split(xff, ",")[0])
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// ipBanCheck bloqueia IPs banidos consultando Redis ("global:ip-ban:<ip>").
+// Fail-open: Redis nil ou indisponível → passa. Endpoints operacionais são isentos.
+func (s *Server) ipBanCheck(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health", "/ready", "/metrics", "/mcp/health", "/mcp/ready":
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.rdb != nil {
+			if n, err := s.rdb.Exists(r.Context(), "global:ip-ban:"+clientIP(r)).Result(); err == nil && n > 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"code":"FORBIDDEN","message":"Acesso não autorizado."}`))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // MCP monta o servidor MCP com todas as tools e resources.
@@ -38,6 +76,7 @@ func (s *Server) MCP() *mcp.Server {
 	s.addClaudeTools(srv)
 	s.addUploadTools(srv)
 	s.addBotTools(srv)
+	s.addPaymentsTools(srv)
 	s.addResources(srv)
 	return srv
 }
@@ -79,7 +118,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /mcp/.well-known/oauth-protected-resource", prm)
 
 	mux.Handle("/", s.requireAuth(streamable))
-	return golog.RequestLogger(metricsMiddleware(mux))
+	return golog.RequestLogger(s.ipBanCheck(metricsMiddleware(mux)))
 }
 
 // ready pinga a API central (AuthBaseURL) com timeout curto: se ela não responder,

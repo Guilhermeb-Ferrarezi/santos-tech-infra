@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -62,6 +63,53 @@ func (s *Server) handleLogLabels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"apps": apps})
+}
+
+// handleTopIPs devolve os N IPs com mais requisições no intervalo via Loki metric query.
+// Parâmetros: range (15m/1h/6h/24h/7d, default 1h), limit (default 20, max 50).
+func (s *Server) handleTopIPs(w http.ResponseWriter, r *http.Request) {
+	if s.loki == nil || !s.loki.enabled() {
+		writeErr(w, appErr(http.StatusServiceUnavailable, "LOGS_UNAVAILABLE", "Logs indisponível: LOKI_URL não configurado"))
+		return
+	}
+	q := r.URL.Query()
+	dur, ok := lokiRangePresets[q.Get("range")]
+	if !ok {
+		dur = time.Hour
+	}
+	limit := lokiAtoiOr(q.Get("limit"), 20)
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	appLabel := s.loki.getLokiAppLabel(r.Context())
+	logql := fmt.Sprintf(`topk(%d, sum by(ip) (count_over_time({%s=~".+"} | json [%s])))`,
+		limit, appLabel, lokiDurStr(dur))
+	ips, err := s.loki.lokiInstantQuery(r.Context(), logql)
+	if err != nil {
+		writeErr(w, appErr(http.StatusBadGateway, "LOKI_ERROR", "Erro ao consultar Loki"))
+		return
+	}
+	if ips == nil {
+		ips = []topIPEntry{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ips": ips})
+}
+
+func lokiDurStr(d time.Duration) string {
+	switch d {
+	case 15 * time.Minute:
+		return "15m"
+	case time.Hour:
+		return "1h"
+	case 6 * time.Hour:
+		return "6h"
+	case 24 * time.Hour:
+		return "24h"
+	case 7 * 24 * time.Hour:
+		return "7d"
+	default:
+		return "1h"
+	}
 }
 
 func lokiAtoiOr(s string, def int) int {

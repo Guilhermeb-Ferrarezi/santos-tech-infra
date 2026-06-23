@@ -183,6 +183,15 @@ ALTER TABLE social_posts ADD CONSTRAINT social_posts_programa_check
 ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_receita_check;
 ALTER TABLE social_posts ADD CONSTRAINT social_posts_receita_check
   CHECK (receita IN ('','capa_gancho','hero_numero','versus','antes_depois','desenvolvimento','cta_fechamento','checklist','passo_a_passo','citacao_depoimento','poster_anuncio'));
+CREATE TABLE IF NOT EXISTS ip_bans (
+  id         BIGSERIAL PRIMARY KEY,
+  ip         TEXT NOT NULL UNIQUE,
+  reason     TEXT,
+  banned_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ip_bans_ip ON ip_bans(ip);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

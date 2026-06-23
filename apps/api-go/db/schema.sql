@@ -142,3 +142,12 @@ CREATE TABLE IF NOT EXISTS social_post_status_history (
 
 -- mfa_email_codes table (kept as comment — handled via Redis, not DB)
 -- No separate table needed.
+
+CREATE TABLE IF NOT EXISTS ip_bans (
+  id         BIGSERIAL PRIMARY KEY,
+  ip         TEXT NOT NULL UNIQUE,
+  reason     TEXT,
+  banned_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

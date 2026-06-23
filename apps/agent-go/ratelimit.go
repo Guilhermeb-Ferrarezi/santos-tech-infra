@@ -49,6 +49,25 @@ func (s *Server) rateLimit(max int, window time.Duration, next http.HandlerFunc)
 	}
 }
 
+// ipBanCheck bloqueia IPs banidos consultando Redis ("global:ip-ban:<ip>").
+// Fail-open: Redis indisponível → passa. Endpoints operacionais são isentos.
+func (s *Server) ipBanCheck(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/claude/health", "/claude/ready", "/claude/metrics":
+			next.ServeHTTP(w, r)
+			return
+		}
+		if n, err := s.rdb.Exists(r.Context(), "global:ip-ban:"+clientIP(r)).Result(); err == nil && n > 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"code":"FORBIDDEN","message":"Acesso não autorizado."}`))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // globalRateLimit limita o total de requisições por IP (proteção geral).
 func (s *Server) globalRateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

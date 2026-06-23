@@ -251,7 +251,7 @@ func (s *Server) Routes() http.Handler {
 	// O CSV de conciliação Efí (GET /efi/reports/*) permanece inalterado.
 	mux.HandleFunc("GET /statement", s.requireAdmin(s.handleStatement))
 
-	return golog.RequestLogger(s.cors(metricsMiddleware(mux)))
+	return golog.RequestLogger(s.cors(s.ipBanCheck(metricsMiddleware(mux))))
 }
 
 // handleReady verifica as dependências (Postgres e Redis) com timeout curto.

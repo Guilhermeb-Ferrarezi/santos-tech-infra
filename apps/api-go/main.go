@@ -64,6 +64,7 @@ func main() {
 
 	srv := NewServer(cfg, db, portalDB, rdb)
 	srv.queue = queueClient
+	srv.syncBansToRedis(ctx)
 
 	// asynq.Server embutido: processa a fila de emails. Roda numa goroutine com
 	// recover() e é parado no graceful shutdown (Stop deixa de puxar tasks novas,

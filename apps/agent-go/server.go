@@ -45,7 +45,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /claude/ready", s.handleReady)
 	mux.Handle("GET /claude/metrics", metricsHandler())
 	s.registerRoutes(mux)
-	return golog.RequestLogger(metricsMiddleware(s.cors(s.globalRateLimit(mux))))
+	return golog.RequestLogger(metricsMiddleware(s.cors(s.ipBanCheck(s.globalRateLimit(mux)))))
 }
 
 // handleReady é o readiness probe: pinga Redis e Postgres com timeout curto e

@@ -99,7 +99,7 @@ func main() {
 
 	httpSrv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           golog.RequestLogger(metricsMiddleware(httpMux)),
+		Handler:           golog.RequestLogger(ipBanMiddleware(rdb, metricsMiddleware(httpMux))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      60 * time.Second,

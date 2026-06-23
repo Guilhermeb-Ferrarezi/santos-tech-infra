@@ -128,7 +128,7 @@ func TestUploadImagePorURL(t *testing.T) {
 	}))
 	defer fake.Close()
 
-	s := NewServer(Config{AuthBaseURL: fake.URL}, nil)
+	s := NewServer(Config{AuthBaseURL: fake.URL}, nil, nil)
 	s.fetch = http.DefaultClient // httptest é 127.0.0.1 — o guard anti-SSRF bloquearia
 	session := newTestSessionFor(t, s, "Bearer st_up")
 
@@ -153,7 +153,7 @@ func TestUploadImagePorURL(t *testing.T) {
 func TestFetchClientBloqueiaIPPrivado(t *testing.T) {
 	// O guard anti-SSRF deve recusar loopback/privados — o MCP roda dentro da
 	// rede da infra e não pode virar proxy para serviços internos.
-	s := NewServer(Config{}, nil)
+	s := NewServer(Config{}, nil, nil)
 	for _, target := range []string{"http://127.0.0.1:5432/x", "http://10.0.0.1/x", "http://localhost/x"} {
 		_, errMsg := s.fetchImage(context.Background(), target)
 		if errMsg == "" {

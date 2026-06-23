@@ -46,6 +46,11 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /auth/admin/oauth-clients/{id}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateOAuthClient)))
 	mux.HandleFunc("DELETE /auth/admin/oauth-clients/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteOAuthClient)))
 
+	// Gestão admin de IPs banidos
+	mux.HandleFunc("GET /auth/admin/ip-bans", s.adminGuard(s.handleListIPBans))
+	mux.HandleFunc("POST /auth/admin/ip-bans", s.rateLimit(20, min, s.adminGuard(s.handleCreateIPBan)))
+	mux.HandleFunc("DELETE /auth/admin/ip-bans/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteIPBan)))
+
 	// Gestão admin de cargos personalizados
 	mux.HandleFunc("GET /auth/admin/custom-roles", s.adminGuard(s.handleListCustomRoles))
 	mux.HandleFunc("POST /auth/admin/custom-roles", s.rateLimit(10, min, s.adminGuard(s.handleCreateCustomRole)))
@@ -86,6 +91,7 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Logs do ecossistema (Loki) — admin-only. Responde 503 se LOKI_URL não configurado.
 	mux.HandleFunc("GET /logs", s.rateLimit(30, min, s.adminGuard(s.handleLogs)))
 	mux.HandleFunc("GET /logs/labels", s.rateLimit(30, min, s.adminGuard(s.handleLogLabels)))
+	mux.HandleFunc("GET /logs/top-ips", s.rateLimit(20, min, s.adminGuard(s.handleTopIPs)))
 
 	// Saúde agregada do ecossistema — autenticada (sessão ou PAT)
 	mux.HandleFunc("GET /status", s.rateLimit(30, min, s.authGuard(s.handleStatus)))

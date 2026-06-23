@@ -28,7 +28,7 @@ func (a *authRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
 // via Streamable HTTP. Devolve a sessão pronta para CallTool/ReadResource.
 func newTestSession(t *testing.T, cfg Config, openapi []byte, token string) *mcp.ClientSession {
 	t.Helper()
-	return newTestSessionFor(t, NewServer(cfg, openapi), token)
+	return newTestSessionFor(t, NewServer(cfg, openapi, nil), token)
 }
 
 // newTestSessionFor permite ajustar o *Server antes (ex.: trocar o fetch
@@ -66,7 +66,7 @@ func toolText(t *testing.T, res *mcp.CallToolResult) string {
 }
 
 func TestRequireAuth(t *testing.T) {
-	srv := httptest.NewServer(NewServer(Config{PublicURL: "https://api.example.com/mcp"}, nil).Handler())
+	srv := httptest.NewServer(NewServer(Config{PublicURL: "https://api.example.com/mcp"}, nil, nil).Handler())
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL, "application/json",
@@ -86,7 +86,7 @@ func TestRequireAuth(t *testing.T) {
 }
 
 func TestProtectedResourceMetadataEndpoint(t *testing.T) {
-	srv := httptest.NewServer(NewServer(Config{PublicURL: "https://api.example.com/mcp"}, nil).Handler())
+	srv := httptest.NewServer(NewServer(Config{PublicURL: "https://api.example.com/mcp"}, nil, nil).Handler())
 	defer srv.Close()
 
 	for _, path := range []string{"/.well-known/oauth-protected-resource", "/mcp/.well-known/oauth-protected-resource"} {
@@ -109,7 +109,7 @@ func TestProtectedResourceMetadataEndpoint(t *testing.T) {
 }
 
 func TestHealthSemAuth(t *testing.T) {
-	srv := httptest.NewServer(NewServer(Config{}, nil).Handler())
+	srv := httptest.NewServer(NewServer(Config{}, nil, nil).Handler())
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/health")
@@ -133,7 +133,7 @@ func TestReadyChecaDownstream(t *testing.T) {
 	}))
 	defer okAuth.Close()
 
-	srvOK := httptest.NewServer(NewServer(Config{AuthBaseURL: okAuth.URL}, nil).Handler())
+	srvOK := httptest.NewServer(NewServer(Config{AuthBaseURL: okAuth.URL}, nil, nil).Handler())
 	defer srvOK.Close()
 	resp, err := http.Get(srvOK.URL + "/ready") // público: sem Authorization
 	if err != nil {
@@ -150,7 +150,7 @@ func TestReadyChecaDownstream(t *testing.T) {
 	}))
 	defer badAuth.Close()
 
-	srvBad := httptest.NewServer(NewServer(Config{AuthBaseURL: badAuth.URL}, nil).Handler())
+	srvBad := httptest.NewServer(NewServer(Config{AuthBaseURL: badAuth.URL}, nil, nil).Handler())
 	defer srvBad.Close()
 	resp2, err := http.Get(srvBad.URL + "/ready")
 	if err != nil {
@@ -163,7 +163,7 @@ func TestReadyChecaDownstream(t *testing.T) {
 }
 
 func TestMetricsPublico(t *testing.T) {
-	srv := httptest.NewServer(NewServer(Config{}, nil).Handler())
+	srv := httptest.NewServer(NewServer(Config{}, nil, nil).Handler())
 	defer srv.Close()
 
 	// Uma requisição antes para semear a série http_requests_total no registry.
@@ -343,6 +343,8 @@ func TestTodasAsToolsRegistradas(t *testing.T) {
 		"email_metrics", "email_logs", "agent_generate", "agent_conversations",
 		"upload_image",
 		"bookings_list", "leads_list", "conversations_list", "conversation_messages",
+		"payments_stats", "payments_analytics", "charges_list", "charges_get",
+		"subscriptions_list", "recurrences_list", "efi_balance", "efi_med",
 	}
 	got := map[string]bool{}
 	for _, tl := range res.Tools {

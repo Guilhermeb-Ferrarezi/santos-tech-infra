@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/santos-tech/golog"
 )
 
@@ -23,7 +24,18 @@ func main() {
 			"path", cfg.OpenAPIPath, "err", err)
 	}
 
-	srv := NewServer(cfg, openapi)
+	var rdb *redis.Client
+	if cfg.RedisURL != "" {
+		ropt, err := redis.ParseURL(cfg.RedisURL)
+		if err != nil {
+			slog.Warn("REDIS_URL inválida — ban check desabilitado", "err", err)
+		} else {
+			rdb = redis.NewClient(ropt)
+			defer rdb.Close()
+		}
+	}
+
+	srv := NewServer(cfg, openapi, rdb)
 
 	// WriteTimeout folgado (60s) cobre respostas SSE do Streamable HTTP sem deixar
 	// conexão pendurada para sempre; ReadHeaderTimeout/IdleTimeout protegem do resto.

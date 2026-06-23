@@ -165,6 +165,50 @@ func (s *Server) rateLimit(max int, window time.Duration, next http.HandlerFunc)
 	}
 }
 
+// ipBanCheck bloqueia requisições de IPs banidos. Consulta o Redis (chave
+// "global:ip-ban:<ip>") antes de qualquer rate-limit ou auth. Fail-open: se o
+// Redis estiver indisponível, não bloqueia (prefere disponibilidade). Endpoints
+// operacionais (/health, /ready, /metrics) passam sem verificação.
+func (s *Server) ipBanCheck(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health", "/ready", "/metrics":
+			next.ServeHTTP(w, r)
+			return
+		}
+		ip := clientIP(r)
+		if n, err := s.rdb.Exists(r.Context(), "global:ip-ban:"+ip).Result(); err == nil && n > 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"code":"FORBIDDEN","message":"Acesso não autorizado."}`))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// syncBansToRedis carrega todos os bans ativos do Postgres para o Redis no boot.
+// Garante que o Redis fique consistente mesmo após flush/restart.
+func (s *Server) syncBansToRedis(ctx context.Context) {
+	bans, err := s.q.ListActiveBans(ctx)
+	if err != nil {
+		slog.Warn("syncBansToRedis: erro ao carregar bans", "err", err)
+		return
+	}
+	for _, ban := range bans {
+		key := "global:ip-ban:" + ban.Ip
+		if ban.ExpiresAt.Valid {
+			ttl := time.Until(ban.ExpiresAt.Time)
+			if ttl > 0 {
+				_ = s.rdb.Set(ctx, key, "1", ttl).Err()
+			}
+		} else {
+			_ = s.rdb.Set(ctx, key, "1", 0).Err()
+		}
+	}
+	slog.Info("ip bans sincronizados com Redis", "count", len(bans))
+}
+
 // globalRateLimit limita o total de requisições por IP (proteção geral).
 // Fail-OPEN: como cobre TODAS as rotas (inclusive as públicas e não-sensíveis),
 // uma queda do Redis não deve derrubar o site inteiro; as rotas sensíveis têm o

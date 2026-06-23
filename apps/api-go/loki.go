@@ -312,3 +312,46 @@ func lokiNonEmpty(vals []string) []string {
 	}
 	return out
 }
+
+type topIPEntry struct {
+	IP    string `json:"ip"`
+	Count int64  `json:"count"`
+}
+
+// lokiInstantQuery executa uma métrica instantânea (ex.: topk) no endpoint
+// /loki/api/v1/query e devolve os resultados como pares (label "ip", valor).
+func (c *lokiClient) lokiInstantQuery(ctx context.Context, logql string) ([]topIPEntry, error) {
+	if !c.enabled() {
+		return nil, fmt.Errorf("loki desabilitado")
+	}
+	q := url.Values{}
+	q.Set("query", logql)
+	q.Set("time", strconv.FormatInt(time.Now().UnixNano(), 10))
+
+	var body struct {
+		Data struct {
+			Result []struct {
+				Metric map[string]string `json:"metric"`
+				Value  []interface{}     `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := c.lokiGet(ctx, "/loki/api/v1/query", q, &body); err != nil {
+		return nil, err
+	}
+	out := make([]topIPEntry, 0, len(body.Data.Result))
+	for _, r := range body.Data.Result {
+		ip := r.Metric["ip"]
+		if ip == "" {
+			continue
+		}
+		var count int64
+		if len(r.Value) >= 2 {
+			if s, ok := r.Value[1].(string); ok {
+				count, _ = strconv.ParseInt(s, 10, 64)
+			}
+		}
+		out = append(out, topIPEntry{IP: ip, Count: count})
+	}
+	return out, nil
+}
