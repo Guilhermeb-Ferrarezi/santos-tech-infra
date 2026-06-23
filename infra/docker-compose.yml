@@ -68,6 +68,32 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  cron-go:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.cron-go
+    ports:
+      - "3337:3337"
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    environment:
+      <<: *db-env
+      PORT: "3337"
+      AUTH_ME_URL: http://api:3000/auth/me
+    # Imagem distroless :debug traz o wget do busybox (em /busybox).
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3337/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
   agent-go:
     build:
       context: ..

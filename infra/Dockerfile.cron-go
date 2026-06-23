@@ -1,0 +1,17 @@
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+# Pacote compartilhado (replace local ../../packages/golog no go.mod do serviço).
+COPY packages/golog ./packages/golog
+COPY apps/cron-go/go.mod apps/cron-go/go.sum ./apps/cron-go/
+WORKDIR /src/apps/cron-go
+RUN go mod download
+COPY apps/cron-go/ .
+RUN CGO_ENABLED=0 go build -trimpath -o /cron-go .
+
+# Tag :debug inclui um busybox (shell + wget) p/ o HEALTHCHECK do compose,
+# sem deixar de ser distroless (sem gerenciador de pacotes, roda non-root).
+FROM gcr.io/distroless/static-debian12:debug
+COPY --from=build /cron-go /cron-go
+EXPOSE 3337
+USER nonroot:nonroot
+ENTRYPOINT ["/cron-go"]

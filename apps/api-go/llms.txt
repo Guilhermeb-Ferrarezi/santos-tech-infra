@@ -298,6 +298,38 @@ claude mcp add --transport http santos-tech https://api.santos-tech.com/mcp \
   `santos-tech://openapi/auth` (contrato OpenAPI da auth)
 - `GET /mcp/health` — liveness (sem auth)
 
+## Cron (agendador de tarefas) — `api.santos-tech.com/cron`
+
+Serviço Go autônomo (porta 3337). Agenda e executa tarefas recorrentes ou únicas
+contra endpoints internos do ecossistema (catálogo de ações) ou URLs arbitrárias
+(flag `CRON_ALLOW_RAW_HTTP`). Suporta expressões cron com fuso horário (ex.:
+`TZ=America/Sao_Paulo 0 8 * * 1-5`). Auth: JWT HS256 do ecossistema; todas as
+rotas `/cron/*` exigem role admin (3). Erros no padrão `{code,message}`.
+
+Gestão de jobs (admin):
+POST   /cron/jobs           body {name,cronExpr,actionKind,actionTarget,actionPayload?,enabled?}
+         → 201 {id,...}  (actionKind: catalog | http)
+GET    /cron/jobs           → [{id,name,cronExpr,actionKind,actionTarget,enabled,nextRunAt,createdAt}]
+GET    /cron/jobs/{id}      → {job}
+PATCH  /cron/jobs/{id}      body {name?,cronExpr?,actionKind?,actionTarget?,actionPayload?,enabled?}
+         → {job}
+DELETE /cron/jobs/{id}      → 204
+POST   /cron/jobs/{id}/run  → 202 {runId}  (dispara execução imediata, fora do scheduler)
+PATCH  /cron/jobs/{id}/enabled  body {enabled:true|false}  → {enabled}  (pause/resume)
+
+Histórico de execuções (admin):
+GET    /cron/jobs/{id}/runs?page=&limit=  → {items:[{id,jobId,status,startedAt,finishedAt,durationMs,error?}],total,pagination}
+GET    /cron/runs/{runId}                 → {run}
+
+Endpoints operacionais (sem auth):
+GET    /health   liveness (200 OK se o processo está vivo)
+GET    /ready    readiness (200 se Postgres responde; 503 caso contrário)
+GET    /metrics  métricas Prometheus (latência, contagem por rota/status, pool Postgres)
+
+Tabelas próprias (prefixo `cron_`): cron_jobs, cron_runs.
+Env relevante: DATABASE_URL, PORT (3337), AUTH_ME_URL, CRON_SERVICE_PAT,
+CRON_HOST_ALLOWLIST (CSV de sufixos; default `.santos-tech.com`), CRON_ALLOW_RAW_HTTP.
+
 ## Como um agente acessa este arquivo
 
 ```bash
