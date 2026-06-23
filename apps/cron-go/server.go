@@ -27,6 +27,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /ready", s.handleReady)
 	mux.Handle("GET /metrics", promhttp.Handler())
 	// rotas /cron/* adicionadas nas Tasks 4–9
+	mux.HandleFunc("GET /cron/catalog", s.handleListCatalog) // TODO(Task 6): embrulhar com s.requireAdmin
 	return golog.RequestLogger(mux)
 }
 
