@@ -15,11 +15,9 @@ type CatalogAction struct {
 var Catalog = map[string]CatalogAction{
 	"payments.gerar-cobrancas-mes": {
 		ID: "payments.gerar-cobrancas-mes", Label: "Gerar cobranças do mês",
-		Method: "POST", Host: "payments.santos-tech.com", Path: "/internal/gerar-cobrancas",
-	},
-	"email.relatorio-semanal": {
-		ID: "email.relatorio-semanal", Label: "Enviar relatório semanal",
-		Method: "POST", Host: "mails.santos-tech.com", Path: "/internal/relatorio-semanal",
+		// Traefik roteia api.santos-tech.com/payments → payments-go (stripando /payments),
+		// então a rota real lá é /internal/gerar-cobrancas. Idempotente (txid determinístico).
+		Method: "POST", Host: "api.santos-tech.com", Path: "/payments/internal/gerar-cobrancas",
 	},
 }
 

@@ -154,6 +154,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /subscriptions", s.requireAdmin(s.handleListSubscriptions))
 	mux.HandleFunc("PATCH /subscriptions/{id}", s.requireAdmin(s.handlePatchSubscription))
 
+	mux.HandleFunc("POST /internal/gerar-cobrancas", s.requireAdmin(s.handleInternalGenerateCharges))
 	mux.HandleFunc("GET /stats", s.requireAdmin(s.handleStats))
 	mux.HandleFunc("GET /analytics", s.requireAdmin(s.handleAnalytics))
 	mux.HandleFunc("POST /charges", s.requireAdmin(s.handleCreateCharge))
