@@ -47,6 +47,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /cron/jobs/{id}", s.requireAdmin(s.handleGetJob))
 	mux.HandleFunc("PATCH /cron/jobs/{id}", s.requireAdmin(s.handleUpdateJob))
 	mux.HandleFunc("DELETE /cron/jobs/{id}", s.requireAdmin(s.handleDeleteJob))
+	mux.HandleFunc("POST /cron/jobs/{id}/pause", s.requireAdmin(s.handlePauseJob))
+	mux.HandleFunc("POST /cron/jobs/{id}/resume", s.requireAdmin(s.handleResumeJob))
+	mux.HandleFunc("POST /cron/jobs/{id}/run", s.requireAdmin(s.handleRunJob))
+	mux.HandleFunc("GET /cron/jobs/{id}/runs", s.requireAdmin(s.handleListRuns))
 	return golog.RequestLogger(mux)
 }
 
