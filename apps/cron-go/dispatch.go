@@ -110,7 +110,18 @@ func (s *Server) dispatch(ctx context.Context, job db.CronJob) dispatchResult {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("muitos redirects (>= 5)")
+			}
+			if !s.hostCheck(req.URL.Host) {
+				return fmt.Errorf("redirect bloqueado: host fora da allowlist: %s", req.URL.Host)
+			}
+			return nil
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return dispatchResult{Err: err}

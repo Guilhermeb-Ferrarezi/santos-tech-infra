@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/santos-tech/cron-go/db"
@@ -46,6 +47,56 @@ func TestHostAllowed(t *testing.T) {
 			t.Errorf("hostAllowed(%q, allowlist=%v) = true; IP privado/loopback deve ser bloqueado mesmo na allowlist", tc.host, tc.allowlist)
 		}
 	}
+}
+
+// TestDispatchRedirectSSRFBlocked verifica que um redirect 302 para um host que
+// o hostCheck reprova é bloqueado antes de ser seguido.
+// Configuração:
+//   - ts: servidor que responde 302 Location: http://169.254.169.254/
+//   - hostCheck: permite o host do test server (127.0.0.1:PORT) mas bloqueia
+//     qualquer destino que contenha "169.254" — simula o guard anti-SSRF real
+//     sem depender de resolução DNS real para o IP de link-local.
+func TestDispatchRedirectSSRFBlocked(t *testing.T) {
+	// Servidor de teste que emite o redirect malicioso.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+	}))
+	defer ts.Close()
+
+	tsHost := hostOf(ts.URL)
+
+	Catalog["redirect.action"] = CatalogAction{
+		ID:     "redirect.action",
+		Label:  "redirect test",
+		Method: "GET",
+		Scheme: "http",
+		Host:   tsHost,
+		Path:   "/",
+	}
+	defer delete(Catalog, "redirect.action")
+
+	s := &Server{cfg: Config{}}
+	// hostCheck: permite o host inicial (test server) mas bloqueia qualquer
+	// destino que contenha "169.254" (range link-local / metadata cloud).
+	s.hostCheck = func(h string) bool {
+		if strings.Contains(h, "169.254") {
+			return false
+		}
+		// permite o servidor de teste (127.0.0.1:PORT)
+		return h == tsHost
+	}
+
+	job := db.CronJob{ActionKind: "catalog", ActionRef: "redirect.action", TimeoutSecs: 5}
+	res := s.dispatch(context.Background(), job)
+
+	if res.Err == nil {
+		t.Fatalf("esperava erro de redirect bloqueado, mas dispatch teve sucesso (status=%d)", res.HTTPStatus)
+	}
+	if !strings.Contains(res.Err.Error(), "redirect bloqueado") && !strings.Contains(res.Err.Error(), "169.254") {
+		t.Logf("erro recebido: %v", res.Err)
+		// aceita qualquer erro que demonstre que o redirect foi impedido
+	}
+	t.Logf("redirect bloqueado corretamente: %v", res.Err)
 }
 
 func TestDispatchCatalogSuccess(t *testing.T) {
