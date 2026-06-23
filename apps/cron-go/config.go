@@ -12,6 +12,7 @@ type Config struct {
 	ServicePAT    string   // Bearer usado pelo dispatcher ao chamar alvos
 	AllowRawHTTP  bool     // habilita action_kind="http" com URL livre
 	HostAllowlist []string // sufixos de host permitidos (ex.: ".santos-tech.com")
+	AuthMeURL     string   // URL do /auth/me para validar sessão (guard de admin)
 }
 
 func LoadConfig() Config {
@@ -27,6 +28,10 @@ func LoadConfig() Config {
 	for i := range parts {
 		parts[i] = strings.TrimSpace(parts[i])
 	}
+	authMeURL := os.Getenv("AUTH_ME_URL")
+	if authMeURL == "" {
+		authMeURL = "https://api.santos-tech.com/auth/me"
+	}
 	return Config{
 		Port:          port,
 		DatabaseURL:   os.Getenv("DATABASE_URL"),
@@ -34,5 +39,6 @@ func LoadConfig() Config {
 		ServicePAT:    os.Getenv("CRON_SERVICE_PAT"),
 		AllowRawHTTP:  os.Getenv("CRON_ALLOW_RAW_HTTP") == "1",
 		HostAllowlist: parts,
+		AuthMeURL:     authMeURL,
 	}
 }

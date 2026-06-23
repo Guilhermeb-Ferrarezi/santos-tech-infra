@@ -34,8 +34,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /ready", s.handleReady)
 	mux.Handle("GET /metrics", promhttp.Handler())
-	// rotas /cron/* adicionadas nas Tasks 4–9
-	mux.HandleFunc("GET /cron/catalog", s.handleListCatalog) // TODO(Task 6): embrulhar com s.requireAdmin
+	// rotas /cron/* — todas protegidas por requireAdmin
+	mux.HandleFunc("GET /cron/catalog", s.requireAdmin(s.handleListCatalog))
+	mux.HandleFunc("GET /cron/jobs", s.requireAdmin(s.handleListJobs))
+	mux.HandleFunc("POST /cron/jobs", s.requireAdmin(s.handleCreateJob))
+	mux.HandleFunc("GET /cron/jobs/{id}", s.requireAdmin(s.handleGetJob))
+	mux.HandleFunc("PATCH /cron/jobs/{id}", s.requireAdmin(s.handleUpdateJob))
+	mux.HandleFunc("DELETE /cron/jobs/{id}", s.requireAdmin(s.handleDeleteJob))
 	return golog.RequestLogger(mux)
 }
 
