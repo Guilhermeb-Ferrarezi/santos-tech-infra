@@ -43,7 +43,9 @@ func main() {
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// scheduler iniciado na Task 7: go srv.RunScheduler(schedCtx)
+	schedCtx, cancelSched := context.WithCancel(rootCtx)
+	defer cancelSched()
+	go srv.RunScheduler(schedCtx)
 
 	go func() {
 		slog.Info("cron-go ouvindo", "port", cfg.Port)
