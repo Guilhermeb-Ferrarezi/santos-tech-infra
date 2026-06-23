@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -89,22 +91,51 @@ func (s *Server) buildTargetURL(job db.CronJob) (method, rawURL string, err erro
 	}
 }
 
+// bodyReader retorna o reader de corpo a usar no request, conforme prioridade:
+// 1. HttpBody (string) não-vazio → usa como está.
+// 2. Params (JSON) não-vazio e diferente de "{}" / "null" / "" → usa como JSON.
+// 3. Caso contrário → nil (sem corpo).
+func bodyReader(job db.CronJob) io.Reader {
+	if job.HttpBody != "" {
+		return bytes.NewReader([]byte(job.HttpBody))
+	}
+	p := strings.TrimSpace(string(job.Params))
+	if p != "" && p != "{}" && p != "null" {
+		return bytes.NewReader(job.Params)
+	}
+	return nil
+}
+
 func (s *Server) dispatch(ctx context.Context, job db.CronJob) dispatchResult {
 	method, rawURL, err := s.buildTargetURL(job)
 	if err != nil {
 		return dispatchResult{Err: err}
 	}
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, bodyReader(job))
 	if err != nil {
 		return dispatchResult{Err: err}
 	}
 	if !s.hostCheck(req.URL.Host) {
 		return dispatchResult{Err: fmt.Errorf("host fora da allowlist: %s", req.URL.Host)}
 	}
+	// Aplica headers customizados ANTES do Authorization/Content-Type padrão,
+	// para que o Bearer nunca seja sobrescrito por um header custom.
+	if len(job.HttpHeaders) > 0 {
+		var customHeaders map[string]string
+		if json.Unmarshal(job.HttpHeaders, &customHeaders) == nil {
+			for k, v := range customHeaders {
+				req.Header.Set(k, v)
+			}
+		}
+	}
+	// Authorization Bearer sempre por último — prevalece sobre qualquer header custom.
 	if s.cfg.ServicePAT != "" {
 		req.Header.Set("Authorization", "Bearer "+s.cfg.ServicePAT)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	// Content-Type padrão só se o header custom não definiu um.
+	if req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	timeout := time.Duration(job.TimeoutSecs) * time.Second
 	if timeout <= 0 {

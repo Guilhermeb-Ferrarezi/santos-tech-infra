@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -123,4 +124,99 @@ func TestDispatchCatalogSuccess(t *testing.T) {
 	if res.Err != nil || res.HTTPStatus != http.StatusOK {
 		t.Fatalf("esperava sucesso 200, veio status=%d err=%v", res.HTTPStatus, res.Err)
 	}
+}
+
+// TestDispatchBodyAndHeaders verifica que HttpBody, Params e HttpHeaders são
+// realmente enviados ao alvo — e que Authorization Bearer prevalece sobre headers custom.
+func TestDispatchBodyAndHeaders(t *testing.T) {
+	var gotBody []byte
+	var gotCustomHeader string
+	var gotAuthHeader string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		gotCustomHeader = r.Header.Get("X-Custom-Header")
+		gotAuthHeader = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	Catalog["body.action"] = CatalogAction{
+		ID: "body.action", Label: "body test", Method: "POST",
+		Scheme: "http", Host: hostOf(ts.URL), Path: "/",
+	}
+	defer delete(Catalog, "body.action")
+
+	t.Run("HttpBody enviado", func(t *testing.T) {
+		gotBody = nil
+		gotCustomHeader = ""
+		gotAuthHeader = ""
+
+		s := &Server{cfg: Config{ServicePAT: "test-pat"}}
+		s.hostCheck = func(string) bool { return true }
+		job := db.CronJob{
+			ActionKind:  "catalog",
+			ActionRef:   "body.action",
+			TimeoutSecs: 5,
+			HttpBody:    `{"hello":"world"}`,
+			HttpHeaders: []byte(`{"X-Custom-Header":"valor-custom"}`),
+		}
+		res := s.dispatch(context.Background(), job)
+		if res.Err != nil {
+			t.Fatalf("dispatch falhou: %v", res.Err)
+		}
+		if string(gotBody) != `{"hello":"world"}` {
+			t.Errorf("body recebido=%q, queria %q", gotBody, `{"hello":"world"}`)
+		}
+		if gotCustomHeader != "valor-custom" {
+			t.Errorf("X-Custom-Header=%q, queria %q", gotCustomHeader, "valor-custom")
+		}
+		// Bearer deve prevalecer — nunca sobrescrito por header custom.
+		if gotAuthHeader != "Bearer test-pat" {
+			t.Errorf("Authorization=%q, queria %q", gotAuthHeader, "Bearer test-pat")
+		}
+	})
+
+	t.Run("Params enviado quando HttpBody vazio", func(t *testing.T) {
+		gotBody = nil
+		gotCustomHeader = ""
+
+		s := &Server{cfg: Config{ServicePAT: "test-pat"}}
+		s.hostCheck = func(string) bool { return true }
+		job := db.CronJob{
+			ActionKind:  "catalog",
+			ActionRef:   "body.action",
+			TimeoutSecs: 5,
+			HttpBody:    "",
+			Params:      []byte(`{"param":"valor"}`),
+		}
+		res := s.dispatch(context.Background(), job)
+		if res.Err != nil {
+			t.Fatalf("dispatch falhou: %v", res.Err)
+		}
+		if string(gotBody) != `{"param":"valor"}` {
+			t.Errorf("body (params) recebido=%q, queria %q", gotBody, `{"param":"valor"}`)
+		}
+	})
+
+	t.Run("Params vazio/nulo não envia corpo", func(t *testing.T) {
+		gotBody = nil
+
+		s := &Server{cfg: Config{ServicePAT: "test-pat"}}
+		s.hostCheck = func(string) bool { return true }
+		job := db.CronJob{
+			ActionKind:  "catalog",
+			ActionRef:   "body.action",
+			TimeoutSecs: 5,
+			HttpBody:    "",
+			Params:      []byte(`{}`),
+		}
+		res := s.dispatch(context.Background(), job)
+		if res.Err != nil {
+			t.Fatalf("dispatch falhou: %v", res.Err)
+		}
+		if len(gotBody) != 0 {
+			t.Errorf("esperava body vazio, mas recebeu: %q", gotBody)
+		}
+	})
 }
