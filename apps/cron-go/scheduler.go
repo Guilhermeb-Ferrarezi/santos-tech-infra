@@ -86,7 +86,11 @@ func (s *Server) runJobOnce(ctx context.Context, job db.CronJob) {
 	}()
 
 	// Skip de sobreposição: já existe run 'running' para este job.
-	running, _ := s.q.HasRunningRun(ctx, job.ID)
+	running, err := s.q.HasRunningRun(ctx, job.ID)
+	if err != nil {
+		slog.Error("runJobOnce: erro ao checar overlap", "job", job.ID, "err", err)
+		return
+	}
 	if running {
 		run, err := s.q.CreateRun(ctx, db.CreateRunParams{
 			JobID:   job.ID,
@@ -149,7 +153,7 @@ func (s *Server) runJobOnce(ctx context.Context, job db.CronJob) {
 		HttpStatus:      httpStatus,
 		ResponseExcerpt: redact(last.Excerpt),
 		Error:           errStr,
-		Attempt:         int32(attempt),
+		Attempt:         int32(min(attempt, maxRetries)),
 	}); err != nil {
 		slog.Error("falha ao finalizar run", "job", job.ID, "run", run.ID, "err", err)
 	}

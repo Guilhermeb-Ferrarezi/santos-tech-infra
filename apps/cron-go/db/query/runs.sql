@@ -10,6 +10,10 @@ WHERE id=$1;
 SELECT * FROM cron_runs WHERE job_id=$1 ORDER BY started_at DESC LIMIT $2;
 
 -- name: HasRunningRun :one
+-- Janela de 1h cura runs órfãos de dispatch interrompido (SIGTERM/crash):
+-- sem o filtro de staleness, um run travado em 'running' bloquearia o job para sempre.
 SELECT EXISTS(
-    SELECT 1 FROM cron_runs WHERE job_id=$1 AND status='running'
+    SELECT 1 FROM cron_runs
+    WHERE job_id=$1 AND status='running'
+      AND started_at > now() - interval '1 hour'
 ) AS running;

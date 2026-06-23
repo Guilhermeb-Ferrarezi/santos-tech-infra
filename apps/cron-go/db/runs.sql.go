@@ -65,10 +65,14 @@ func (q *Queries) FinishRun(ctx context.Context, arg FinishRunParams) error {
 
 const hasRunningRun = `-- name: HasRunningRun :one
 SELECT EXISTS(
-    SELECT 1 FROM cron_runs WHERE job_id=$1 AND status='running'
+    SELECT 1 FROM cron_runs
+    WHERE job_id=$1 AND status='running'
+      AND started_at > now() - interval '1 hour'
 ) AS running
 `
 
+// Janela de 1h cura runs órfãos de dispatch interrompido (SIGTERM/crash):
+// sem o filtro de staleness, um run travado em 'running' bloquearia o job para sempre.
 func (q *Queries) HasRunningRun(ctx context.Context, jobID int64) (bool, error) {
 	row := q.db.QueryRow(ctx, hasRunningRun, jobID)
 	var running bool
