@@ -72,9 +72,16 @@ func (s *Server) tick(ctx context.Context) {
 		return
 	}
 
-	// Dispara fora da tx — chamadas HTTP não devem segurar locks.
+	// Dispara fora da tx — chamadas HTTP não devem segurar locks. O WaitGroup
+	// permite drenar os dispatches em voo no shutdown (ver Server.WaitDrain).
+	// Usa context.Background() de propósito: um run em andamento deve COMPLETAR
+	// (gravar o cron_run) mesmo durante o shutdown, não ser cancelado no meio.
 	for _, job := range jobs {
-		go s.runJobOnce(context.Background(), job)
+		s.wg.Add(1)
+		go func(j db.CronJob) {
+			defer s.wg.Done()
+			s.runJobOnce(context.Background(), j)
+		}(job)
 	}
 }
 
