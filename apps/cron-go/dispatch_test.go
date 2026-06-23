@@ -92,9 +92,8 @@ func TestDispatchRedirectSSRFBlocked(t *testing.T) {
 	if res.Err == nil {
 		t.Fatalf("esperava erro de redirect bloqueado, mas dispatch teve sucesso (status=%d)", res.HTTPStatus)
 	}
-	if !strings.Contains(res.Err.Error(), "redirect bloqueado") && !strings.Contains(res.Err.Error(), "169.254") {
-		t.Logf("erro recebido: %v", res.Err)
-		// aceita qualquer erro que demonstre que o redirect foi impedido
+	if !strings.Contains(res.Err.Error(), "redirect bloqueado") {
+		t.Fatalf("esperava erro contendo \"redirect bloqueado\" (CheckRedirect), mas got: %v", res.Err)
 	}
 	t.Logf("redirect bloqueado corretamente: %v", res.Err)
 }
