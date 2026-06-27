@@ -118,12 +118,18 @@ func TestLiveSessionStopMantemProcessoVivo(t *testing.T) {
 	ls.Send("turno longo", nil)
 	time.Sleep(50 * time.Millisecond)
 	ls.Stop()
-	_ = collectResults(t, events, 1) // result (interrupted) chega
+	// O fake emite 2 results na fase de interrupção:
+	//   1) result(success)     — o fake dorme 400ms e só então emite o result do turno
+	//   2) result(interrupted) — ao ler o control_request já bufferizado no stdin
+	// Drenamos os dois para limpar o canal antes de enviar o próximo turno.
+	_ = collectResults(t, events, 2)
 
-	// processo deve continuar vivo: um novo Send produz outro result
+	// Canal limpo: qualquer result a partir daqui é do NOVO turno.
+	// Se o processo estiver morto ou ignorando stdin, collectResults esgota o timeout
+	// e retorna len==0, reprovando o teste.
 	ls.Send("depois do stop", nil)
 	if got := collectResults(t, events, 1); len(got) != 1 {
-		t.Fatalf("processo deveria seguir vivo após Stop; results=%d", len(got))
+		t.Fatalf("processo deveria seguir vivo e rodar novo turno após Stop; results=%d", len(got))
 	}
 	select {
 	case <-ls.done:
