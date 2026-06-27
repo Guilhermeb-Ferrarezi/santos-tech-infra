@@ -284,6 +284,48 @@ func TestEnsureLiveErroQuandoCheioESemOciosa(t *testing.T) {
 	}
 }
 
+func TestReapIdleHibernaSessaoOciosa(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+	// força ociosidade antiga e estado idle
+	ls.mu.Lock()
+	ls.state = StatusIdle
+	ls.lastUsed = time.Now().Add(-time.Hour)
+	ls.mu.Unlock()
+
+	m.reapIdle(15 * time.Minute) // TTL menor que 1h => deve hibernar
+
+	m.mu.Lock()
+	_, still := m.live["c1"]
+	m.mu.Unlock()
+	if still {
+		t.Fatalf("sessão ociosa > TTL deveria ter sido hibernada")
+	}
+}
+
+func TestReapIdleNaoHibernaRunning(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	ls, _ := m.ensureLive(context.Background(), conv)
+	ls.mu.Lock()
+	ls.state = StatusRunning
+	ls.lastUsed = time.Now().Add(-time.Hour)
+	ls.mu.Unlock()
+	m.reapIdle(15 * time.Minute)
+	m.mu.Lock()
+	_, still := m.live["c1"]
+	m.mu.Unlock()
+	if !still {
+		t.Fatalf("sessão RUNNING não deveria ser hibernada mesmo ociosa")
+	}
+}
+
 func TestFakeClaudeRespondeStreamJSON(t *testing.T) {
 	cmd := exec.Command(fakeClaudeBin(t), "-test.run=TestHelperProcess")
 	cmd.Env = fakeEnv()

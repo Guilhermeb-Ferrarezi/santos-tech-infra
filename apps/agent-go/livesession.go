@@ -176,6 +176,14 @@ func (ls *liveSession) Stop() {
 	_, _ = ls.stdin.Write([]byte(`{"type":"control_request","request":{"subtype":"interrupt"}}` + "\n"))
 }
 
+// close encerra a sessão de forma limpa: fecha o stdin, o que faz o CLI sair e salvar
+// a sessão no disco (base da ressurreição via --resume).
+func (ls *liveSession) close() {
+	if ls.stdin != nil {
+		_ = ls.stdin.Close()
+	}
+}
+
 // onTurnEnd marca o fim de um turno: volta a idle e, se houver fila, dispara a próxima.
 func (ls *liveSession) onTurnEnd() {
 	ls.mu.Lock()

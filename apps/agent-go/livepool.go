@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"syscall"
 	"time"
@@ -90,6 +91,63 @@ func (m *SessionManager) lruIdleLocked() string {
 		}
 	}
 	return oldest
+}
+
+// reapIdle hiberna sessões idle ociosas há mais que ttl e sem ninguém conectado (WS).
+// Coleta as vítimas sob o lock, depois as fecha fora do lock para evitar I/O travado.
+// Nota: hasSubs adquire m.mu, então verificamos m.subs diretamente (já dentro do lock).
+func (m *SessionManager) reapIdle(ttl time.Duration) {
+	now := time.Now()
+	var victims []*liveSession
+	m.mu.Lock()
+	for id, ls := range m.live {
+		ls.mu.Lock()
+		idle := ls.state == StatusIdle && now.Sub(ls.lastUsed) > ttl
+		ls.mu.Unlock()
+		if idle && len(m.subs[id]) == 0 {
+			victims = append(victims, ls)
+			delete(m.live, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, ls := range victims {
+		slog.Info("hibernando sessão viva ociosa", "conv", ls.conv.ID)
+		ls.close()
+	}
+}
+
+// StartReaper roda reapIdle periodicamente até o ctx ser cancelado.
+func (m *SessionManager) StartReaper(ctx context.Context) {
+	ttl := 15 * time.Minute
+	if m.s.cfg.IdleTTL > 0 {
+		ttl = m.s.cfg.IdleTTL
+	}
+	go func() {
+		t := time.NewTicker(ttl / 3)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				m.reapIdle(ttl)
+			}
+		}
+	}()
+}
+
+// ShutdownLive fecha todas as sessões vivas (graceful) no desligamento do servidor.
+func (m *SessionManager) ShutdownLive() {
+	m.mu.Lock()
+	all := make([]*liveSession, 0, len(m.live))
+	for id, ls := range m.live {
+		all = append(all, ls)
+		delete(m.live, id)
+	}
+	m.mu.Unlock()
+	for _, ls := range all {
+		ls.close()
+	}
 }
 
 // Evict mata e remove a sessão viva de uma conversa (usado por /clear, /compact, /model
