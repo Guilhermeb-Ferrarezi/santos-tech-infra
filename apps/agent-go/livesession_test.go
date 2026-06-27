@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -64,6 +65,65 @@ func TestHelperProcess(t *testing.T) {
 		out.Flush()
 	}
 	os.Exit(0)
+}
+
+// liveTestManager cria um SessionManager apontando o ClaudeBin para o fake.
+func liveTestManager(t *testing.T) *SessionManager {
+	t.Helper()
+	s := &Server{cfg: Config{WorkspaceRoot: t.TempDir(), ClaudeBin: fakeClaudeBin(t), DefaultModel: "sonnet"}}
+	return newSessionManager(s)
+}
+
+func TestLiveSessionDoisTurnosMesmoProcesso(t *testing.T) {
+	m := liveTestManager(t)
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	ls := m.newLiveSession(conv)
+	// força o fake em vez do CLI real e marca os args de teste
+	ls.testArgs = []string{"-test.run=TestHelperProcess"}
+	ls.testEnv = fakeEnv()
+
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+	if err := ls.start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	ls.Send("primeira", nil)
+	ls.Send("segunda", nil) // deve enfileirar (1º turno ocupa) e rodar depois
+
+	results := collectResults(t, events, 2)
+	if len(results) != 2 {
+		t.Fatalf("esperava 2 results, veio %d", len(results))
+	}
+}
+
+// collectResults lê eventos até ver n eventos do tipo "result" (ou estourar timeout).
+func collectResults(t *testing.T, events <-chan turnEvent, n int) []turnEvent {
+	t.Helper()
+	var out []turnEvent
+	timeout := time.After(5 * time.Second)
+	for len(out) < n {
+		select {
+		case ev := <-events:
+			if ev.Type == "result" {
+				out = append(out, ev)
+			}
+		case <-timeout:
+			return out
+		}
+	}
+	return out
+}
+
+func TestUserMessageJSONFormato(t *testing.T) {
+	b := userMessageJSON("oi")
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("json inválido: %v", err)
+	}
+	if m["type"] != "user" {
+		t.Fatalf("type errado: %v", m["type"])
+	}
 }
 
 func TestFakeClaudeRespondeStreamJSON(t *testing.T) {

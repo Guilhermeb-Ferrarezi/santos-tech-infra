@@ -291,6 +291,9 @@ func (s *Server) rotateSession(ctx context.Context, id string, userID int64, new
 // ── Mensagens ────────────────────────────────────────────────────────────────
 
 func (s *Server) insertMessage(ctx context.Context, m *Message) error {
+	if s.q == nil {
+		return nil // sem banco (ex.: testes unitários)
+	}
 	content, _ := json.Marshal(m.Content)
 	var usage []byte
 	if m.Usage != nil {
