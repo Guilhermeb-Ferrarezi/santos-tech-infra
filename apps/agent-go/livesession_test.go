@@ -239,6 +239,16 @@ func TestEnsureLiveEvictaLRUQuandoCheio(t *testing.T) {
 	if _, err := m.ensureLive(context.Background(), c1); err != nil {
 		t.Fatalf("ensureLive c1: %v", err)
 	}
+	// pré-condição: c1 deve estar ociosa para poder ser evictada pelo LRU
+	m.mu.Lock()
+	ls1 := m.live["c1"]
+	m.mu.Unlock()
+	ls1.mu.Lock()
+	c1state := ls1.state
+	ls1.mu.Unlock()
+	if c1state != StatusIdle {
+		t.Fatalf("pré-condição: c1 deveria estar %q antes da evicção, está %q", StatusIdle, c1state)
+	}
 	if _, err := m.ensureLive(context.Background(), c2); err != nil {
 		t.Fatalf("ensureLive c2: %v", err)
 	}
@@ -248,6 +258,29 @@ func TestEnsureLiveEvictaLRUQuandoCheio(t *testing.T) {
 	m.mu.Unlock()
 	if has1 || !has2 {
 		t.Fatalf("cap=1: c1 deveria ter sido evictada, c2 ativa (has1=%v has2=%v)", has1, has2)
+	}
+}
+
+func TestEnsureLiveErroQuandoCheioESemOciosa(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 1
+	c1 := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	c2 := &Conversation{ID: "c2", SessionID: "s2", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	if _, err := m.ensureLive(context.Background(), c1); err != nil {
+		t.Fatalf("ensureLive c1: %v", err)
+	}
+	// força c1 para StatusRunning — não pode ser evictada pelo LRU
+	m.mu.Lock()
+	ls1 := m.live["c1"]
+	m.mu.Unlock()
+	ls1.mu.Lock()
+	ls1.state = StatusRunning
+	ls1.mu.Unlock()
+
+	// pool cheio (1/1) e única sessão está rodando — deve retornar erro
+	_, err := m.ensureLive(context.Background(), c2)
+	if err == nil {
+		t.Fatalf("esperava erro de pool cheio sem ociosa, mas ensureLive teve êxito")
 	}
 }
 
