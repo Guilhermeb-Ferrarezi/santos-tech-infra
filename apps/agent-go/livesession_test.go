@@ -49,8 +49,13 @@ func TestHelperProcess(t *testing.T) {
 		if json.Unmarshal(line, &in) != nil {
 			continue
 		}
+		if in["type"] == "control_request" {
+			fmt.Fprintln(out, `{"type":"result","subtype":"interrupted"}`)
+			out.Flush()
+			continue
+		}
 		if in["type"] != "user" {
-			continue // ignora control_request etc. no fake base
+			continue
 		}
 		turn++
 		if emitInit {
@@ -94,6 +99,36 @@ func TestLiveSessionDoisTurnosMesmoProcesso(t *testing.T) {
 	results := collectResults(t, events, 2)
 	if len(results) != 2 {
 		t.Fatalf("esperava 2 results, veio %d", len(results))
+	}
+}
+
+func TestLiveSessionStopMantemProcessoVivo(t *testing.T) {
+	m := liveTestManager(t)
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	ls := m.newLiveSession(conv)
+	ls.testArgs = []string{"-test.run=TestHelperProcess"}
+	ls.testEnv = fakeEnv("FAKE_DELAY_MS=400")
+
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+	if err := ls.start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	ls.Send("turno longo", nil)
+	time.Sleep(50 * time.Millisecond)
+	ls.Stop()
+	_ = collectResults(t, events, 1) // result (interrupted) chega
+
+	// processo deve continuar vivo: um novo Send produz outro result
+	ls.Send("depois do stop", nil)
+	if got := collectResults(t, events, 1); len(got) != 1 {
+		t.Fatalf("processo deveria seguir vivo após Stop; results=%d", len(got))
+	}
+	select {
+	case <-ls.done:
+		t.Fatalf("processo morreu após Stop — não deveria")
+	default:
 	}
 }
 

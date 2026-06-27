@@ -162,6 +162,20 @@ func (ls *liveSession) readLoop(ctx context.Context, stdout io.Reader) {
 	}
 }
 
+// Stop interrompe o TURNO atual sem matar o processo: envia um control_request de
+// interrupt pelo stdin. O CLI encerra o turno e emite um "result"; o readLoop então
+// volta a sessão para idle. (Mecanismo confirmado no spike — Task 1.)
+func (ls *liveSession) Stop() {
+	ls.mu.Lock()
+	running := ls.state == StatusRunning
+	ls.queue = nil // descarta a fila ao parar
+	ls.mu.Unlock()
+	if !running || ls.stdin == nil {
+		return
+	}
+	_, _ = ls.stdin.Write([]byte(`{"type":"control_request","request":{"subtype":"interrupt"}}` + "\n"))
+}
+
 // onTurnEnd marca o fim de um turno: volta a idle e, se houver fila, dispara a próxima.
 func (ls *liveSession) onTurnEnd() {
 	ls.mu.Lock()
