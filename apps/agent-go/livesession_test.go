@@ -140,6 +140,70 @@ func TestLiveSessionStopMantemProcessoVivo(t *testing.T) {
 	}
 }
 
+// waitForEvent lê eventos até ver um do tipo dado (ou estourar timeout). Retorna se viu.
+func waitForEvent(t *testing.T, events <-chan turnEvent, typ string) bool {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.Type == typ {
+				return true
+			}
+		case <-timeout:
+			return false
+		}
+	}
+}
+
+// TestLiveSessionMarcaSessionStartedAposTurno garante a paridade que habilita a
+// hibernação/ressurreição: após um turno completo, conv.SessionStarted vira true (sem
+// isso a ressurreição reusaria --session-id em vez de --resume e quebraria).
+func TestLiveSessionMarcaSessionStartedAposTurno(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "cSS", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+	ls.Send("oi", nil)
+	// "done" é despachado em onTurnEnd APÓS markSessionStarted; o receive no canal
+	// estabelece happens-before, então a leitura de SessionStarted abaixo é segura.
+	if !waitForEvent(t, events, "done") {
+		t.Fatalf("timeout esperando o fim do turno (done)")
+	}
+	if !conv.SessionStarted {
+		t.Fatalf("após um turno completo, conv.SessionStarted deveria ser true")
+	}
+}
+
+// TestReadLoopRemoveDoPoolAoMorrer garante que a morte do processo remove a sessão do
+// pool, para que a próxima mensagem a ressuscite via --resume.
+func TestReadLoopRemoveDoPoolAoMorrer(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "cMorte", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+	ls.close() // fecha o stdin: o fake sai e o readLoop encerra
+	select {
+	case <-ls.done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout esperando o processo encerrar")
+	}
+	m.mu.Lock()
+	_, still := m.live[conv.ID]
+	m.mu.Unlock()
+	if still {
+		t.Fatalf("morte do processo deveria ter removido a sessão do pool")
+	}
+}
+
 // collectResults lê eventos até ver n eventos do tipo "result" (ou estourar timeout).
 func collectResults(t *testing.T, events <-chan turnEvent, n int) []turnEvent {
 	t.Helper()
@@ -168,7 +232,10 @@ func (errWriter) Close() error                { return nil }
 // volta a StatusIdle e a fila é zerada — impedindo o deadlock do finding #2.
 func TestPersistAndWriteResetaEstadoEmFalha(t *testing.T) {
 	m := liveTestManager(t)
-	conv := &Conversation{ID: "c2", SessionID: "s2", Model: "sonnet", Workdir: t.TempDir()}
+	title := "titulo"
+	// Title preenchido pula o auto-título: assim o ÚNICO evento emitido é o WRITE_FAILED,
+	// isolando o caminho de falha de escrita (paridade adicionou o evento "title" antes do write).
+	conv := &Conversation{ID: "c2", SessionID: "s2", Model: "sonnet", Workdir: t.TempDir(), Title: &title}
 	ls := m.newLiveSession(conv)
 	ls.stdin = errWriter{} // substitui stdin por um que sempre falha
 

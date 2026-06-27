@@ -150,6 +150,17 @@ func (m *SessionManager) ShutdownLive() {
 	}
 }
 
+// removeLive remove esta sessão do pool, mas SÓ se o mapa ainda apontar para ESTA
+// instância — uma sessão mais nova (ressuscitada após hibernação/evicção) pode já ter
+// tomado o lugar dela. Chamado pelo readLoop quando o processo morre.
+func (m *SessionManager) removeLive(convID string, ls *liveSession) {
+	m.mu.Lock()
+	if m.live[convID] == ls {
+		delete(m.live, convID)
+	}
+	m.mu.Unlock()
+}
+
 // Evict mata e remove a sessão viva de uma conversa (usado por /clear, /compact, /model
 // — que mudam parâmetros de boot, exigindo reinício). A próxima mensagem ressuscita.
 func (m *SessionManager) Evict(convID string) {

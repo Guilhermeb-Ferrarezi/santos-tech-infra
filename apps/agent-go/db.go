@@ -261,6 +261,9 @@ func (s *Server) updateConversationTitle(ctx context.Context, id string, userID 
 
 // setTitleIfEmpty define o título só se ainda estiver vazio (usado pelo auto-título).
 func (s *Server) setTitleIfEmpty(ctx context.Context, id, title string) error {
+	if s.q == nil {
+		return nil // só em teste (Server sem banco); produção sempre tem q.
+	}
 	return s.q.SetTitleIfEmpty(ctx, agentdb.SetTitleIfEmptyParams{
 		Title:   &title,
 		Column2: uuidFromStr(id),
@@ -268,6 +271,9 @@ func (s *Server) setTitleIfEmpty(ctx context.Context, id, title string) error {
 }
 
 func (s *Server) setConversationStatus(ctx context.Context, id, status string) error {
+	if s.q == nil {
+		return nil // só em teste (Server sem banco); produção sempre tem q.
+	}
 	return s.q.SetConversationStatus(ctx, agentdb.SetConversationStatusParams{
 		Status:  status,
 		Column2: uuidFromStr(id),
@@ -276,6 +282,9 @@ func (s *Server) setConversationStatus(ctx context.Context, id, status string) e
 
 // markSessionStarted marca que o 1º turno da sessão atual já rodou (próximos usam --resume).
 func (s *Server) markSessionStarted(ctx context.Context, id string) error {
+	if s.q == nil {
+		return nil // só em teste (Server sem banco); produção sempre tem q.
+	}
 	return s.q.MarkSessionStarted(ctx, uuidFromStr(id))
 }
 

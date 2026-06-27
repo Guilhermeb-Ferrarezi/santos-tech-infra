@@ -37,6 +37,9 @@ func (s *Server) releaseTurn(ctx context.Context, convID string) {
 }
 
 func (s *Server) setState(ctx context.Context, convID, status string) {
+	if s.rdb == nil {
+		return // só em teste (Server sem Redis); produção sempre tem rdb.
+	}
 	s.rdb.Set(ctx, stateKey(convID), status, time.Hour)
 }
 

@@ -111,22 +111,75 @@ func (ls *liveSession) Send(prompt string, atts []Attachment) {
 	ls.persistAndWrite(prompt, atts)
 }
 
-// persistAndWrite grava a mensagem do usuário no transcript e a escreve no stdin do
-// processo (a ordem garante transcript correto mesmo com fila).
+// resetToIdle volta a sessão ao estado idle e zera a fila (usado quando um turno é
+// abortado antes de chegar ao processo: mídia inválida ou falha de escrita no stdin).
+func (ls *liveSession) resetToIdle() {
+	ls.mu.Lock()
+	ls.state = StatusIdle
+	ls.queue = nil
+	ls.mu.Unlock()
+}
+
+// persistAndWrite roda o preâmbulo de UM turno e o escreve no stdin do processo vivo.
+// Espelha o RunTurn antigo (paridade de comportamento) NA MESMA ORDEM: valida/grava
+// mídia, marca running, persiste a mensagem do usuário, auto-título, monta o prompt
+// efetivo (nota de mídia + seed de /compact) e só então escreve no stdin. É chamada no
+// começo de todo turno (1º Send e cada drenagem da fila), com state já em Running.
 func (ls *liveSession) persistAndWrite(prompt string, atts []Attachment) {
-	if err := ls.mgr.s.insertMessage(context.Background(), &Message{
-		ConversationID: ls.conv.ID, Role: "user", Kind: "text",
+	ctx := context.Background()
+	m := ls.mgr
+	conv := ls.conv
+
+	// 1. Mídia: valida e grava em <workdir>/media ANTES de qualquer efeito — anexo
+	// inválido aborta o turno inteiro (fail-closed) e devolve a sessão a idle.
+	if err := validateAttachments(atts); err != nil {
+		ls.resetToIdle()
+		m.dispatch(conv.ID, turnEvent{Type: "error", Code: "BAD_ATTACHMENT", Message: err.Error()})
+		return
+	}
+	mediaPaths, err := saveAttachments(conv.Workdir, atts)
+	if err != nil {
+		ls.resetToIdle()
+		m.dispatch(conv.ID, turnEvent{Type: "error", Code: "BAD_ATTACHMENT", Message: err.Error()})
+		return
+	}
+
+	// 2. Status running (Postgres + Redis).
+	_ = m.s.setConversationStatus(ctx, conv.ID, StatusRunning)
+	m.s.setState(ctx, conv.ID, StatusRunning)
+
+	// 3. Persiste a mensagem do usuário (texto ORIGINAL + marcadores de mídia; nunca o base64).
+	if err := m.s.insertMessage(ctx, &Message{
+		ConversationID: conv.ID, Role: "user", Kind: "text",
 		Content: map[string]any{"text": prompt + mediaMarkers(atts)},
 	}); err != nil {
-		slog.Warn("falha ao persistir mensagem do usuário", "conv", ls.conv.ID, "err", err)
+		slog.Warn("falha ao persistir mensagem do usuário", "conv", conv.ID, "err", err)
 	}
-	if err := ls.writeUser(prompt); err != nil {
-		slog.Error("falha ao escrever no stdin da sessão viva", "conv", ls.conv.ID, "err", err)
-		ls.mu.Lock()
-		ls.state = StatusIdle
-		ls.queue = nil
-		ls.mu.Unlock()
-		ls.mgr.dispatch(ls.conv.ID, turnEvent{Type: "error", Code: "WRITE_FAILED", Message: err.Error()})
+
+	// 4. Auto-título no 1º turno, se ainda não tiver (sobre o prompt ORIGINAL).
+	if (conv.Title == nil || *conv.Title == "") && !conv.SessionStarted {
+		if title := deriveTitle(prompt); title != "" {
+			_ = m.s.setTitleIfEmpty(ctx, conv.ID, title)
+			conv.Title = &title
+			m.dispatch(conv.ID, turnEvent{Type: "title", Text: title})
+		}
+	}
+
+	// 5. Prompt efetivo: nota de mídia + prompt; seed pendente (deixado por /compact) na frente.
+	effective := mediaPromptNote(mediaPaths) + prompt
+	if m.s.rdb != nil {
+		if seed, _ := m.s.rdb.GetDel(ctx, "claude:seed:"+conv.ID).Result(); seed != "" {
+			effective = seed + "\n\n---\n\n" + effective
+		}
+	}
+
+	// 6. Escreve o prompt EFETIVO no stdin do processo vivo.
+	if err := ls.writeUser(effective); err != nil {
+		slog.Error("falha ao escrever no stdin da sessão viva", "conv", conv.ID, "err", err)
+		ls.resetToIdle()
+		_ = m.s.setConversationStatus(ctx, conv.ID, StatusError)
+		m.s.setState(ctx, conv.ID, StatusError)
+		m.dispatch(conv.ID, turnEvent{Type: "error", Code: "WRITE_FAILED", Message: err.Error()})
 	}
 }
 
@@ -159,6 +212,26 @@ func (ls *liveSession) readLoop(ctx context.Context, stdout io.Reader) {
 	}
 	if err := ls.cmd.Wait(); err != nil {
 		slog.Debug("processo da sessão viva encerrado", "conv", ls.conv.ID, "err", err)
+	}
+
+	// O processo SAIU (crash, kill ou close limpo de hibernação). Limpa o estado e
+	// remove esta sessão do pool para que a PRÓXIMA mensagem a ressuscite via --resume.
+	ls.mu.Lock()
+	wasRunning := ls.state == StatusRunning
+	ls.state = StatusIdle
+	ls.queue = nil
+	ls.mu.Unlock()
+	ls.mgr.removeLive(ls.conv.ID, ls)
+
+	// Se morreu NO MEIO de um turno (wasRunning), foi crash — reporta erro. Um close()
+	// limpo de hibernação termina com o estado já idle (wasRunning=false): só remove do pool.
+	if wasRunning {
+		_ = ls.mgr.s.setConversationStatus(ctx, ls.conv.ID, StatusError)
+		ls.mgr.s.setState(ctx, ls.conv.ID, StatusError)
+		emit(turnEvent{Type: "error", Code: "TURN_FAILED", Message: "processo encerrou inesperadamente"})
+		if !ls.mgr.hasSubs(ls.conv.ID) {
+			ls.mgr.s.notifyTurnDone(ctx, ls.conv, StatusError)
+		}
 	}
 }
 
@@ -197,5 +270,19 @@ func (ls *liveSession) onTurnEnd() {
 	}
 	ls.state = StatusIdle
 	ls.mu.Unlock()
+
+	// Fila vazia: a conversa fica verdadeiramente ociosa. Espelha o fim de turno do
+	// RunTurn antigo — status idle, marca a sessão como iniciada (habilita hibernação/
+	// ressurreição via --resume) e dispara push se ninguém estiver assistindo.
+	ctx := context.Background()
+	_ = ls.mgr.s.setConversationStatus(ctx, ls.conv.ID, StatusIdle)
+	ls.mgr.s.setState(ctx, ls.conv.ID, StatusIdle)
+	if !ls.conv.SessionStarted {
+		_ = ls.mgr.s.markSessionStarted(ctx, ls.conv.ID)
+		ls.conv.SessionStarted = true
+	}
 	ls.mgr.dispatch(ls.conv.ID, turnEvent{Type: "done"})
+	if !ls.mgr.hasSubs(ls.conv.ID) {
+		ls.mgr.s.notifyTurnDone(ctx, ls.conv, StatusIdle)
+	}
 }
