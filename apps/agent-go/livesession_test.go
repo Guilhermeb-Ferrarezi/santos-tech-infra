@@ -115,6 +115,54 @@ func collectResults(t *testing.T, events <-chan turnEvent, n int) []turnEvent {
 	return out
 }
 
+// errWriter é um io.WriteCloser que sempre falha na escrita, simulando stdin quebrado.
+type errWriter struct{}
+
+func (errWriter) Write(p []byte) (int, error) { return 0, fmt.Errorf("stdin quebrado (simulado)") }
+func (errWriter) Close() error                { return nil }
+
+// TestPersistAndWriteResetaEstadoEmFalha verifica que, ao falhar writeUser, o estado
+// volta a StatusIdle e a fila é zerada — impedindo o deadlock do finding #2.
+func TestPersistAndWriteResetaEstadoEmFalha(t *testing.T) {
+	m := liveTestManager(t)
+	conv := &Conversation{ID: "c2", SessionID: "s2", Model: "sonnet", Workdir: t.TempDir()}
+	ls := m.newLiveSession(conv)
+	ls.stdin = errWriter{} // substitui stdin por um que sempre falha
+
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+
+	// Simula o estado Running (como se um turno tivesse acabado de começar)
+	ls.mu.Lock()
+	ls.state = StatusRunning
+	ls.mu.Unlock()
+
+	ls.persistAndWrite("prompt teste", nil)
+
+	// O estado deve ter voltado a Idle após a falha
+	ls.mu.Lock()
+	state := ls.state
+	qlen := len(ls.queue)
+	ls.mu.Unlock()
+
+	if state != StatusIdle {
+		t.Errorf("estado esperado %q, veio %q", StatusIdle, state)
+	}
+	if qlen != 0 {
+		t.Errorf("fila esperada vazia, tem %d itens", qlen)
+	}
+
+	// Um evento error/WRITE_FAILED deve ter sido emitido
+	select {
+	case ev := <-events:
+		if ev.Type != "error" || ev.Code != "WRITE_FAILED" {
+			t.Errorf("evento esperado error/WRITE_FAILED, veio %+v", ev)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("timeout aguardando evento de erro WRITE_FAILED")
+	}
+}
+
 func TestUserMessageJSONFormato(t *testing.T) {
 	b := userMessageJSON("oi")
 	var m map[string]any

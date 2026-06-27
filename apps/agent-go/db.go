@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"time"
 
@@ -292,7 +293,8 @@ func (s *Server) rotateSession(ctx context.Context, id string, userID int64, new
 
 func (s *Server) insertMessage(ctx context.Context, m *Message) error {
 	if s.q == nil {
-		return nil // sem banco (ex.: testes unitários)
+		slog.Warn("insertMessage: queries nil (esperado só em teste; em produção indica misconfiguração)")
+		return nil
 	}
 	content, _ := json.Marshal(m.Content)
 	var usage []byte

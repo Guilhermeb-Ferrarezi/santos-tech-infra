@@ -114,12 +114,18 @@ func (ls *liveSession) Send(prompt string, atts []Attachment) {
 // persistAndWrite grava a mensagem do usuário no transcript e a escreve no stdin do
 // processo (a ordem garante transcript correto mesmo com fila).
 func (ls *liveSession) persistAndWrite(prompt string, atts []Attachment) {
-	_ = ls.mgr.s.insertMessage(context.Background(), &Message{
+	if err := ls.mgr.s.insertMessage(context.Background(), &Message{
 		ConversationID: ls.conv.ID, Role: "user", Kind: "text",
 		Content: map[string]any{"text": prompt + mediaMarkers(atts)},
-	})
+	}); err != nil {
+		slog.Warn("falha ao persistir mensagem do usuário", "conv", ls.conv.ID, "err", err)
+	}
 	if err := ls.writeUser(prompt); err != nil {
 		slog.Error("falha ao escrever no stdin da sessão viva", "conv", ls.conv.ID, "err", err)
+		ls.mu.Lock()
+		ls.state = StatusIdle
+		ls.queue = nil
+		ls.mu.Unlock()
 		ls.mgr.dispatch(ls.conv.ID, turnEvent{Type: "error", Code: "WRITE_FAILED", Message: err.Error()})
 	}
 }
@@ -150,6 +156,9 @@ func (ls *liveSession) readLoop(ctx context.Context, stdout io.Reader) {
 		if ev["type"] == "result" {
 			ls.onTurnEnd()
 		}
+	}
+	if err := ls.cmd.Wait(); err != nil {
+		slog.Debug("processo da sessão viva encerrado", "conv", ls.conv.ID, "err", err)
 	}
 }
 
