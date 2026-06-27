@@ -317,6 +317,14 @@ func (m *SessionManager) claudeArgs(conv *Conversation, mediaGlob string) []stri
 	return args
 }
 
+// claudeArgsLive monta os args do modo SESSÃO VIVA: igual ao claudeArgs (que já põe
+// --output-format stream-json) mais o input em streaming, para o processo ficar vivo
+// lendo mensagens do stdin em vez de ler um prompt e sair.
+func (m *SessionManager) claudeArgsLive(conv *Conversation, mediaGlob string) []string {
+	args := m.claudeArgs(conv, mediaGlob)
+	return append(args, "--input-format", "stream-json", "--replay-user-messages")
+}
+
 // claudeEnv monta o ambiente MÍNIMO e EXPLÍCITO do processo `claude`.
 //
 // SEGURANÇA (#1): o processo roda com --dangerously-skip-permissions, então um
