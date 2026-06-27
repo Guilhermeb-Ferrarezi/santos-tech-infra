@@ -393,6 +393,24 @@ func TestReapIdleNaoHibernaRunning(t *testing.T) {
 	}
 }
 
+// TestEnsureLiveDepoisSendProduzResultado é o smoke test do caminho de produção
+// WS→ensureLive→Send: garante que a sessão viva produz um result de ponta a ponta.
+func TestEnsureLiveDepoisSendProduzResultado(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "cWS", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+	ls.Send("oi", nil)
+	if got := collectResults(t, events, 1); len(got) != 1 {
+		t.Fatalf("esperava 1 result pelo caminho ensureLive+Send")
+	}
+}
+
 func TestFakeClaudeRespondeStreamJSON(t *testing.T) {
 	cmd := exec.Command(fakeClaudeBin(t), "-test.run=TestHelperProcess")
 	cmd.Env = fakeEnv()

@@ -245,18 +245,21 @@ func (m *SessionManager) RunTurn(conv *Conversation, prompt string, atts []Attac
 	}
 }
 
-// RunTurnCollect roda um turno e coleta o texto do assistente (usado pelo /compact).
+// RunTurnCollect roda um turno e coleta o texto do assistente (usado pelo /compact),
+// agora pela sessão viva da conversa.
 func (m *SessionManager) RunTurnCollect(conv *Conversation, prompt string) (string, error) {
 	events, unsub := m.Subscribe(conv.ID)
 	defer unsub()
-	go m.RunTurn(conv, prompt, nil)
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		return "", err
+	}
+	ls.Send(prompt, nil)
 	var b strings.Builder
 	for ev := range events {
 		switch ev.Type {
 		case "delta":
 			b.WriteString(ev.Text)
-		case "busy":
-			return "", errBusy
 		case "error":
 			return b.String(), fmt.Errorf("%s", ev.Message)
 		case "done":
