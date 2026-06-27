@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -38,6 +39,9 @@ type Config struct {
 	// /claude/generate sem JWT de usuário. Ausente = desabilitado.
 	InternalSecret string
 
+	// Máximo de sessões vivas simultâneas (processos de longa duração por conversa).
+	MaxLive int
+
 	Production bool
 }
 
@@ -62,6 +66,8 @@ func LoadConfig() Config {
 
 		InternalSecret: getEnv("INTERNAL_SECRET", ""),
 
+		MaxLive: envInt("CLAUDE_MAX_LIVE", 4),
+
 		Production: getEnv("NODE_ENV", "development") == "production",
 	}
 }
@@ -80,6 +86,15 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
 }
 
 func splitCSV(s string) []string {

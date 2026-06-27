@@ -58,10 +58,11 @@ type SessionManager struct {
 	mu   sync.Mutex
 	runs map[string]*exec.Cmd               // convID -> processo do turno atual (para interrupção)
 	subs map[string]map[chan turnEvent]bool // convID -> WSs conectados (assinantes dos eventos)
+	live map[string]*liveSession            // convID -> sessão viva (processo de longa duração)
 }
 
 func newSessionManager(s *Server) *SessionManager {
-	return &SessionManager{s: s, runs: map[string]*exec.Cmd{}, subs: map[string]map[chan turnEvent]bool{}}
+	return &SessionManager{s: s, runs: map[string]*exec.Cmd{}, subs: map[string]map[chan turnEvent]bool{}, live: map[string]*liveSession{}}
 }
 
 // Subscribe registra um assinante (WS) para os eventos de uma conversa. O turno roda

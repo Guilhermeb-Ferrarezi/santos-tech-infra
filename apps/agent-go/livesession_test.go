@@ -217,6 +217,40 @@ func TestUserMessageJSONFormato(t *testing.T) {
 	}
 }
 
+func TestEnsureLiveReusaMesmaConversa(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	a, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+	b, _ := m.ensureLive(context.Background(), conv)
+	if a != b {
+		t.Fatalf("ensureLive deveria reusar a sessão viva da mesma conversa")
+	}
+}
+
+func TestEnsureLiveEvictaLRUQuandoCheio(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 1
+	c1 := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	c2 := &Conversation{ID: "c2", SessionID: "s2", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	if _, err := m.ensureLive(context.Background(), c1); err != nil {
+		t.Fatalf("ensureLive c1: %v", err)
+	}
+	if _, err := m.ensureLive(context.Background(), c2); err != nil {
+		t.Fatalf("ensureLive c2: %v", err)
+	}
+	m.mu.Lock()
+	_, has1 := m.live["c1"]
+	_, has2 := m.live["c2"]
+	m.mu.Unlock()
+	if has1 || !has2 {
+		t.Fatalf("cap=1: c1 deveria ter sido evictada, c2 ativa (has1=%v has2=%v)", has1, has2)
+	}
+}
+
 func TestFakeClaudeRespondeStreamJSON(t *testing.T) {
 	cmd := exec.Command(fakeClaudeBin(t), "-test.run=TestHelperProcess")
 	cmd.Env = fakeEnv()
