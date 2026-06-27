@@ -1,0 +1,491 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+// fakeClaudeBin devolve um "claude" falso: re-executa o binário de teste com
+// GO_WANT_FAKE_CLAUDE=1, fazendo-o entrar em TestHelperProcess.
+func fakeClaudeBin(t *testing.T) string {
+	t.Helper()
+	return os.Args[0]
+}
+
+// fakeEnv monta o ambiente que ativa o fake e o configura.
+func fakeEnv(extra ...string) []string {
+	env := append(os.Environ(), "GO_WANT_FAKE_CLAUDE=1")
+	return append(env, extra...)
+}
+
+// TestHelperProcess NÃO é um teste de verdade: quando GO_WANT_FAKE_CLAUDE=1 está
+// setado, age como o CLI claude em modo stream-json — lê mensagens JSON do stdin
+// (uma por linha) e, para cada uma, emite eventos stream-json no stdout.
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_FAKE_CLAUDE") != "1" {
+		return
+	}
+	delay := 0
+	if v, err := strconv.Atoi(os.Getenv("FAKE_DELAY_MS")); err == nil {
+		delay = v
+	}
+	emitInit := os.Getenv("FAKE_EMIT_INIT") == "1"
+	out := bufio.NewWriter(os.Stdout)
+	defer out.Flush()
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
+	turn := 0
+	for sc.Scan() {
+		line := sc.Bytes()
+		var in map[string]any
+		if json.Unmarshal(line, &in) != nil {
+			continue
+		}
+		if in["type"] == "control_request" {
+			fmt.Fprintln(out, `{"type":"result","subtype":"interrupted"}`)
+			out.Flush()
+			continue
+		}
+		if in["type"] != "user" {
+			continue
+		}
+		turn++
+		if emitInit {
+			fmt.Fprintln(out, `{"type":"system","subtype":"init"}`)
+		}
+		fmt.Fprintf(out, `{"type":"assistant","message":{"content":[{"type":"text","text":"resposta %d"}]}}`+"\n", turn)
+		out.Flush()
+		if delay > 0 {
+			time.Sleep(time.Duration(delay) * time.Millisecond)
+		}
+		fmt.Fprintf(out, `{"type":"result","subtype":"success","turn":%d}`+"\n", turn)
+		out.Flush()
+	}
+	os.Exit(0)
+}
+
+// liveTestManager cria um SessionManager apontando o ClaudeBin para o fake.
+func liveTestManager(t *testing.T) *SessionManager {
+	t.Helper()
+	s := &Server{cfg: Config{WorkspaceRoot: t.TempDir(), ClaudeBin: fakeClaudeBin(t), DefaultModel: "sonnet"}}
+	return newSessionManager(s)
+}
+
+func TestLiveSessionDoisTurnosMesmoProcesso(t *testing.T) {
+	m := liveTestManager(t)
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	ls := m.newLiveSession(conv)
+	// força o fake em vez do CLI real e marca os args de teste
+	ls.testArgs = []string{"-test.run=TestHelperProcess"}
+	ls.testEnv = fakeEnv()
+
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+	if err := ls.start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	ls.Send("primeira", nil)
+	ls.Send("segunda", nil) // deve enfileirar (1º turno ocupa) e rodar depois
+
+	results := collectResults(t, events, 2)
+	if len(results) != 2 {
+		t.Fatalf("esperava 2 results, veio %d", len(results))
+	}
+}
+
+func TestLiveSessionStopMantemProcessoVivo(t *testing.T) {
+	m := liveTestManager(t)
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	ls := m.newLiveSession(conv)
+	ls.testArgs = []string{"-test.run=TestHelperProcess"}
+	ls.testEnv = fakeEnv("FAKE_DELAY_MS=400")
+
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+	if err := ls.start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	ls.Send("turno longo", nil)
+	time.Sleep(50 * time.Millisecond)
+	ls.Stop()
+	// O fake emite 2 results na fase de interrupção:
+	//   1) result(success)     — o fake dorme 400ms e só então emite o result do turno
+	//   2) result(interrupted) — ao ler o control_request já bufferizado no stdin
+	// Drenamos os dois para limpar o canal antes de enviar o próximo turno.
+	if drained := collectResults(t, events, 2); len(drained) != 2 {
+		t.Fatalf("esperava drenar 2 results do turno interrompido, veio %d", len(drained))
+	}
+
+	// Canal limpo: qualquer result a partir daqui é do NOVO turno.
+	// Se o processo estiver morto ou ignorando stdin, collectResults esgota o timeout
+	// e retorna len==0, reprovando o teste.
+	ls.Send("depois do stop", nil)
+	if got := collectResults(t, events, 1); len(got) != 1 {
+		t.Fatalf("processo deveria seguir vivo e rodar novo turno após Stop; results=%d", len(got))
+	}
+	select {
+	case <-ls.done:
+		t.Fatalf("processo morreu após Stop — não deveria")
+	default:
+	}
+}
+
+// waitForEvent lê eventos até ver um do tipo dado (ou estourar timeout). Retorna se viu.
+func waitForEvent(t *testing.T, events <-chan turnEvent, typ string) bool {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.Type == typ {
+				return true
+			}
+		case <-timeout:
+			return false
+		}
+	}
+}
+
+// TestLiveSessionMarcaSessionStartedAposTurno garante a paridade que habilita a
+// hibernação/ressurreição: após um turno completo, conv.SessionStarted vira true (sem
+// isso a ressurreição reusaria --session-id em vez de --resume e quebraria).
+func TestLiveSessionMarcaSessionStartedAposTurno(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "cSS", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+	ls.Send("oi", nil)
+	// "done" é despachado em onTurnEnd APÓS markSessionStarted; o receive no canal
+	// estabelece happens-before, então a leitura de SessionStarted abaixo é segura.
+	if !waitForEvent(t, events, "done") {
+		t.Fatalf("timeout esperando o fim do turno (done)")
+	}
+	if !conv.SessionStarted {
+		t.Fatalf("após um turno completo, conv.SessionStarted deveria ser true")
+	}
+}
+
+// TestReadLoopRemoveDoPoolAoMorrer garante que a morte do processo remove a sessão do
+// pool, para que a próxima mensagem a ressuscite via --resume.
+func TestReadLoopRemoveDoPoolAoMorrer(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "cMorte", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+	ls.close() // fecha o stdin: o fake sai e o readLoop encerra
+	select {
+	case <-ls.done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout esperando o processo encerrar")
+	}
+	m.mu.Lock()
+	_, still := m.live[conv.ID]
+	m.mu.Unlock()
+	if still {
+		t.Fatalf("morte do processo deveria ter removido a sessão do pool")
+	}
+}
+
+// collectResults lê eventos até ver n eventos do tipo "result" (ou estourar timeout).
+func collectResults(t *testing.T, events <-chan turnEvent, n int) []turnEvent {
+	t.Helper()
+	var out []turnEvent
+	timeout := time.After(5 * time.Second)
+	for len(out) < n {
+		select {
+		case ev := <-events:
+			if ev.Type == "result" {
+				out = append(out, ev)
+			}
+		case <-timeout:
+			return out
+		}
+	}
+	return out
+}
+
+// errWriter é um io.WriteCloser que sempre falha na escrita, simulando stdin quebrado.
+type errWriter struct{}
+
+func (errWriter) Write(p []byte) (int, error) { return 0, fmt.Errorf("stdin quebrado (simulado)") }
+func (errWriter) Close() error                { return nil }
+
+// TestPersistAndWriteResetaEstadoEmFalha verifica que, ao falhar writeUser, o estado
+// volta a StatusIdle e a fila é zerada — impedindo o deadlock do finding #2.
+func TestPersistAndWriteResetaEstadoEmFalha(t *testing.T) {
+	m := liveTestManager(t)
+	title := "titulo"
+	// Title preenchido pula o auto-título: assim o ÚNICO evento emitido é o WRITE_FAILED,
+	// isolando o caminho de falha de escrita (paridade adicionou o evento "title" antes do write).
+	conv := &Conversation{ID: "c2", SessionID: "s2", Model: "sonnet", Workdir: t.TempDir(), Title: &title}
+	ls := m.newLiveSession(conv)
+	ls.stdin = errWriter{} // substitui stdin por um que sempre falha
+
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+
+	// Simula o estado Running (como se um turno tivesse acabado de começar)
+	ls.mu.Lock()
+	ls.state = StatusRunning
+	ls.mu.Unlock()
+
+	ls.persistAndWrite("prompt teste", nil)
+
+	// O estado deve ter voltado a Idle após a falha
+	ls.mu.Lock()
+	state := ls.state
+	qlen := len(ls.queue)
+	ls.mu.Unlock()
+
+	if state != StatusIdle {
+		t.Errorf("estado esperado %q, veio %q", StatusIdle, state)
+	}
+	if qlen != 0 {
+		t.Errorf("fila esperada vazia, tem %d itens", qlen)
+	}
+
+	// Um evento error/WRITE_FAILED deve ter sido emitido
+	select {
+	case ev := <-events:
+		if ev.Type != "error" || ev.Code != "WRITE_FAILED" {
+			t.Errorf("evento esperado error/WRITE_FAILED, veio %+v", ev)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("timeout aguardando evento de erro WRITE_FAILED")
+	}
+}
+
+// TestSessionStartedRaceRegression garante que conv.SessionStarted e conv.Title são
+// acessados sob ls.mu tanto em onTurnEnd quanto em persistAndWrite. Sem os locks, o
+// race detector (-race) captura a corrida nesta sequência de dois turnos adjacentes:
+// o 2º Send chega imediatamente após o "done" do 1º turno, momento em que onTurnEnd
+// pode ainda estar escrevendo SessionStarted enquanto persistAndWrite já o está lendo.
+func TestSessionStartedRaceRegression(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "cRace", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+
+	// Turno 1: envia e aguarda "done". Imediatamente, sem pausa, envia o turno 2.
+	// A adjacência exercita a janela de corrida entre onTurnEnd (escritor de
+	// SessionStarted/Title) e persistAndWrite (leitor/escritor dos mesmos campos).
+	ls.Send("turno 1", nil)
+	if !waitForEvent(t, events, "done") {
+		t.Fatalf("timeout aguardando done do turno 1")
+	}
+	ls.Send("turno 2", nil)
+	if !waitForEvent(t, events, "done") {
+		t.Fatalf("timeout aguardando done do turno 2")
+	}
+
+	ls.mu.Lock()
+	started := conv.SessionStarted
+	ls.mu.Unlock()
+	if !started {
+		t.Fatal("conv.SessionStarted deve ser true após dois turnos completos")
+	}
+}
+
+func TestUserMessageJSONFormato(t *testing.T) {
+	b := userMessageJSON("oi")
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("json inválido: %v", err)
+	}
+	if m["type"] != "user" {
+		t.Fatalf("type errado: %v", m["type"])
+	}
+}
+
+func TestEnsureLiveReusaMesmaConversa(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	a, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+	b, _ := m.ensureLive(context.Background(), conv)
+	if a != b {
+		t.Fatalf("ensureLive deveria reusar a sessão viva da mesma conversa")
+	}
+}
+
+func TestEnsureLiveEvictaLRUQuandoCheio(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 1
+	c1 := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	c2 := &Conversation{ID: "c2", SessionID: "s2", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	if _, err := m.ensureLive(context.Background(), c1); err != nil {
+		t.Fatalf("ensureLive c1: %v", err)
+	}
+	// pré-condição: c1 deve estar ociosa para poder ser evictada pelo LRU
+	m.mu.Lock()
+	ls1 := m.live["c1"]
+	m.mu.Unlock()
+	ls1.mu.Lock()
+	c1state := ls1.state
+	ls1.mu.Unlock()
+	if c1state != StatusIdle {
+		t.Fatalf("pré-condição: c1 deveria estar %q antes da evicção, está %q", StatusIdle, c1state)
+	}
+	if _, err := m.ensureLive(context.Background(), c2); err != nil {
+		t.Fatalf("ensureLive c2: %v", err)
+	}
+	m.mu.Lock()
+	_, has1 := m.live["c1"]
+	_, has2 := m.live["c2"]
+	m.mu.Unlock()
+	if has1 || !has2 {
+		t.Fatalf("cap=1: c1 deveria ter sido evictada, c2 ativa (has1=%v has2=%v)", has1, has2)
+	}
+}
+
+func TestEnsureLiveErroQuandoCheioESemOciosa(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 1
+	c1 := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	c2 := &Conversation{ID: "c2", SessionID: "s2", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	if _, err := m.ensureLive(context.Background(), c1); err != nil {
+		t.Fatalf("ensureLive c1: %v", err)
+	}
+	// força c1 para StatusRunning — não pode ser evictada pelo LRU
+	m.mu.Lock()
+	ls1 := m.live["c1"]
+	m.mu.Unlock()
+	ls1.mu.Lock()
+	ls1.state = StatusRunning
+	ls1.mu.Unlock()
+
+	// pool cheio (1/1) e única sessão está rodando — deve retornar erro
+	_, err := m.ensureLive(context.Background(), c2)
+	if err == nil {
+		t.Fatalf("esperava erro de pool cheio sem ociosa, mas ensureLive teve êxito")
+	}
+}
+
+func TestReapIdleHibernaSessaoOciosa(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+	// força ociosidade antiga e estado idle
+	ls.mu.Lock()
+	ls.state = StatusIdle
+	ls.lastUsed = time.Now().Add(-time.Hour)
+	ls.mu.Unlock()
+
+	m.reapIdle(15 * time.Minute) // TTL menor que 1h => deve hibernar
+
+	m.mu.Lock()
+	_, still := m.live["c1"]
+	m.mu.Unlock()
+	if still {
+		t.Fatalf("sessão ociosa > TTL deveria ter sido hibernada")
+	}
+}
+
+func TestReapIdleNaoHibernaRunning(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	ls, _ := m.ensureLive(context.Background(), conv)
+	ls.mu.Lock()
+	ls.state = StatusRunning
+	ls.lastUsed = time.Now().Add(-time.Hour)
+	ls.mu.Unlock()
+	m.reapIdle(15 * time.Minute)
+	m.mu.Lock()
+	_, still := m.live["c1"]
+	m.mu.Unlock()
+	if !still {
+		t.Fatalf("sessão RUNNING não deveria ser hibernada mesmo ociosa")
+	}
+}
+
+// TestEnsureLiveDepoisSendProduzResultado é o smoke test do caminho de produção
+// WS→ensureLive→Send: garante que a sessão viva produz um result de ponta a ponta.
+func TestEnsureLiveDepoisSendProduzResultado(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "cWS", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+	ls.Send("oi", nil)
+	if got := collectResults(t, events, 1); len(got) != 1 {
+		t.Fatalf("esperava 1 result pelo caminho ensureLive+Send")
+	}
+}
+
+func TestFakeClaudeRespondeStreamJSON(t *testing.T) {
+	cmd := exec.Command(fakeClaudeBin(t), "-test.run=TestHelperProcess")
+	cmd.Env = fakeEnv()
+	cmd.Stdin = strings.NewReader(`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"oi"}]}}` + "\n")
+	outBytes, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("fake claude falhou: %v", err)
+	}
+	got := string(outBytes)
+	if !strings.Contains(got, `"type":"assistant"`) || !strings.Contains(got, `"type":"result"`) {
+		t.Fatalf("saída do fake não tem assistant+result: %q", got)
+	}
+}
+
+// TestCompactRejeitaTurnoEmAndamento garante que RunTurnCollect retorna errBusy (409)
+// quando a sessão viva já tem um turno em andamento — impede enfileirar o prompt de
+// sumarização e coletar o resultado de outro turno como resumo (corrupção de memória).
+// Determinístico: não usa processos reais nem sleeps — força o estado via ls.mu.
+func TestCompactRejeitaTurnoEmAndamento(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{
+		ID: "cCompactBusy", SessionID: "s1", Model: "sonnet",
+		Workdir: t.TempDir(), ToolsDisabled: true, SessionStarted: true,
+	}
+
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+
+	// Simula turno em andamento (igual ao padrão dos outros testes desta suite).
+	ls.mu.Lock()
+	ls.state = StatusRunning
+	ls.mu.Unlock()
+
+	_, gotErr := m.RunTurnCollect(conv, "resuma a conversa")
+	if !errors.Is(gotErr, errBusy) {
+		t.Fatalf("esperava errBusy, veio %v", gotErr)
+	}
+}

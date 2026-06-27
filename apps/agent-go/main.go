@@ -75,6 +75,10 @@ func main() {
 	shutCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Inicia o reaper de sessões ociosas, ligado ao contexto de vida do servidor.
+	// Quando shutCtx for cancelado (SIGINT/SIGTERM), a goroutine do reaper para sozinha.
+	srv.mgr.StartReaper(shutCtx)
+
 	go func() {
 		slog.Info("agent-go ouvindo", "port", cfg.Port)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -90,4 +94,7 @@ func main() {
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("shutdown forçado", "err", err)
 	}
+	// Fecha todas as sessões vivas de forma limpa antes de encerrar o processo.
+	// Fechar o stdin faz o CLI salvar a sessão no disco (base do --resume).
+	srv.mgr.ShutdownLive()
 }

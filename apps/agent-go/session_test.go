@@ -93,6 +93,20 @@ func TestClaudeArgsMediaScopedRead(t *testing.T) {
 	assertPairValue(t, args, "--allowed-tools", "WebSearch,Read(/ws/abc/media/**)")
 }
 
+func TestClaudeArgsLiveAdicionaInputStreaming(t *testing.T) {
+	m := testManager()
+	conv := &Conversation{ID: "c1", SessionID: "s1", Model: "sonnet", Workdir: "/tmp/agent-test/c1"}
+	args := m.claudeArgsLive(conv, "")
+
+	assertPairValue(t, args, "--input-format", "stream-json")
+	assertPairValue(t, args, "--output-format", "stream-json")
+	if !slices.Contains(args, "--replay-user-messages") {
+		t.Fatalf("modo live deveria passar --replay-user-messages: %v", args)
+	}
+	// herda o comportamento de sessão do claudeArgs
+	assertPairValue(t, args, "--session-id", "s1")
+}
+
 func TestDeltaTextExtractsTextDelta(t *testing.T) {
 	var ev map[string]any
 	_ = json.Unmarshal([]byte(`{

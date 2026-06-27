@@ -41,6 +41,10 @@ type expoMessage struct {
 // notifyTurnDone envia push para os dispositivos do usuário quando o turno termina
 // e ninguém está conectado (app em background). Requer Expo push tokens registrados.
 func (s *Server) notifyTurnDone(ctx context.Context, conv *Conversation, status string) {
+	if s.q == nil {
+		slog.Warn("notifyTurnDone: queries nil (esperado só em teste; em produção indica misconfiguração)")
+		return
+	}
 	tokens, err := s.pushTokensForUser(ctx, conv.UserID)
 	if err != nil || len(tokens) == 0 {
 		return

@@ -58,10 +58,11 @@ type SessionManager struct {
 	mu   sync.Mutex
 	runs map[string]*exec.Cmd               // convID -> processo do turno atual (para interrupção)
 	subs map[string]map[chan turnEvent]bool // convID -> WSs conectados (assinantes dos eventos)
+	live map[string]*liveSession            // convID -> sessão viva (processo de longa duração)
 }
 
 func newSessionManager(s *Server) *SessionManager {
-	return &SessionManager{s: s, runs: map[string]*exec.Cmd{}, subs: map[string]map[chan turnEvent]bool{}}
+	return &SessionManager{s: s, runs: map[string]*exec.Cmd{}, subs: map[string]map[chan turnEvent]bool{}, live: map[string]*liveSession{}}
 }
 
 // Subscribe registra um assinante (WS) para os eventos de uma conversa. O turno roda
@@ -244,18 +245,29 @@ func (m *SessionManager) RunTurn(conv *Conversation, prompt string, atts []Attac
 	}
 }
 
-// RunTurnCollect roda um turno e coleta o texto do assistente (usado pelo /compact).
+// RunTurnCollect roda um turno e coleta o texto do assistente (usado pelo /compact),
+// agora pela sessão viva da conversa. Rejeita com errBusy se já há um turno em
+// andamento — evita enfileirar o prompt de sumarização e coletar o resultado de outro
+// turno como resumo (corrupção silenciosa de memória).
 func (m *SessionManager) RunTurnCollect(conv *Conversation, prompt string) (string, error) {
 	events, unsub := m.Subscribe(conv.ID)
 	defer unsub()
-	go m.RunTurn(conv, prompt, nil)
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		return "", err
+	}
+	ls.mu.Lock()
+	busy := ls.state == StatusRunning
+	ls.mu.Unlock()
+	if busy {
+		return "", errBusy
+	}
+	ls.Send(prompt, nil)
 	var b strings.Builder
 	for ev := range events {
 		switch ev.Type {
 		case "delta":
 			b.WriteString(ev.Text)
-		case "busy":
-			return "", errBusy
 		case "error":
 			return b.String(), fmt.Errorf("%s", ev.Message)
 		case "done":
@@ -315,6 +327,14 @@ func (m *SessionManager) claudeArgs(conv *Conversation, mediaGlob string) []stri
 		args = append(args, "--session-id", conv.SessionID)
 	}
 	return args
+}
+
+// claudeArgsLive monta os args do modo SESSÃO VIVA: igual ao claudeArgs (que já põe
+// --output-format stream-json) mais o input em streaming, para o processo ficar vivo
+// lendo mensagens do stdin em vez de ler um prompt e sair.
+func (m *SessionManager) claudeArgsLive(conv *Conversation, mediaGlob string) []string {
+	args := m.claudeArgs(conv, mediaGlob)
+	return append(args, "--input-format", "stream-json", "--replay-user-messages")
 }
 
 // claudeEnv monta o ambiente MÍNIMO e EXPLÍCITO do processo `claude`.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"time"
 
@@ -260,6 +261,10 @@ func (s *Server) updateConversationTitle(ctx context.Context, id string, userID 
 
 // setTitleIfEmpty define o título só se ainda estiver vazio (usado pelo auto-título).
 func (s *Server) setTitleIfEmpty(ctx context.Context, id, title string) error {
+	if s.q == nil {
+		slog.Warn("setTitleIfEmpty: queries nil (esperado só em teste; em produção indica misconfiguração)")
+		return nil
+	}
 	return s.q.SetTitleIfEmpty(ctx, agentdb.SetTitleIfEmptyParams{
 		Title:   &title,
 		Column2: uuidFromStr(id),
@@ -267,6 +272,10 @@ func (s *Server) setTitleIfEmpty(ctx context.Context, id, title string) error {
 }
 
 func (s *Server) setConversationStatus(ctx context.Context, id, status string) error {
+	if s.q == nil {
+		slog.Warn("setConversationStatus: queries nil (esperado só em teste; em produção indica misconfiguração)")
+		return nil
+	}
 	return s.q.SetConversationStatus(ctx, agentdb.SetConversationStatusParams{
 		Status:  status,
 		Column2: uuidFromStr(id),
@@ -275,6 +284,10 @@ func (s *Server) setConversationStatus(ctx context.Context, id, status string) e
 
 // markSessionStarted marca que o 1º turno da sessão atual já rodou (próximos usam --resume).
 func (s *Server) markSessionStarted(ctx context.Context, id string) error {
+	if s.q == nil {
+		slog.Warn("markSessionStarted: queries nil (esperado só em teste; em produção indica misconfiguração)")
+		return nil
+	}
 	return s.q.MarkSessionStarted(ctx, uuidFromStr(id))
 }
 
@@ -291,6 +304,10 @@ func (s *Server) rotateSession(ctx context.Context, id string, userID int64, new
 // ── Mensagens ────────────────────────────────────────────────────────────────
 
 func (s *Server) insertMessage(ctx context.Context, m *Message) error {
+	if s.q == nil {
+		slog.Warn("insertMessage: queries nil (esperado só em teste; em produção indica misconfiguração)")
+		return nil
+	}
 	content, _ := json.Marshal(m.Content)
 	var usage []byte
 	if m.Usage != nil {

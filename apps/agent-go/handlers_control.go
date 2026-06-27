@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -41,6 +42,7 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conv.Model = model
+	s.mgr.Evict(conv.ID) // modelo é flag de boot: reinicia a sessão viva para o novo modelo valer
 	writeJSON(w, http.StatusOK, conv)
 }
 
@@ -67,9 +69,19 @@ func (s *Server) handleRenameConversation(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, conv)
 }
 
-// POST /claude/stop-all — kill switch: encerra todos os turnos em andamento.
+// POST /claude/stop-all — kill switch: encerra todos os turnos em andamento (sessões
+// vivas via Stop + turnos one-shot legados via InterruptAll).
 func (s *Server) handleStopAll(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"stopped": s.mgr.InterruptAll()})
+	s.mgr.mu.Lock()
+	live := make([]*liveSession, 0, len(s.mgr.live))
+	for _, ls := range s.mgr.live {
+		live = append(live, ls)
+	}
+	s.mgr.mu.Unlock()
+	for _, ls := range live {
+		ls.Stop()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stopped": len(live) + s.mgr.InterruptAll()})
 }
 
 // POST /claude/conversations/{id}/clear — zera o contexto (rotaciona o session_id).
@@ -87,6 +99,7 @@ func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {
 		ConversationID: conv.ID, Role: "system", Kind: "text",
 		Content: map[string]any{"note": "context_cleared"},
 	})
+	s.mgr.Evict(conv.ID) // rotacionou session_id: reinicia a sessão viva (ressuscita com --session-id novo)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "sessionId": newSession})
 }
 
@@ -109,7 +122,13 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		"para servir de memória ao continuar numa nova sessão. Responda apenas com o resumo."
 	raw, err := s.mgr.RunTurnCollect(conv, prompt)
 	if err != nil {
-		writeErr(w, appErr(http.StatusBadGateway, "COMPACT_FAILED", "Falha ao resumir: "+err.Error()))
+		// errBusy (e qualquer outro *AppError) já carrega o status correto — repassa
+		// diretamente. Erros genéricos de sumarização viram 502 COMPACT_FAILED.
+		if errors.Is(err, errBusy) {
+			writeErr(w, errBusy)
+		} else {
+			writeErr(w, appErr(http.StatusBadGateway, "COMPACT_FAILED", "Falha ao resumir: "+err.Error()))
+		}
 		return
 	}
 	summary := strings.TrimSpace(raw)
@@ -120,6 +139,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	s.mgr.Evict(conv.ID) // nova sessão semeada: reinicia o processo vivo para pegar o seed
 	if summary != "" {
 		s.rdb.Set(ctx, "claude:seed:"+conv.ID, "Resumo da conversa anterior:\n"+summary, 7*24*time.Hour)
 	}

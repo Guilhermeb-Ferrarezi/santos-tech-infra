@@ -3,7 +3,9 @@ package main
 import (
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Config carrega o ambiente do serviço. Espelha o padrão de apps/api-go/config.go,
@@ -38,6 +40,12 @@ type Config struct {
 	// /claude/generate sem JWT de usuário. Ausente = desabilitado.
 	InternalSecret string
 
+	// Máximo de sessões vivas simultâneas (processos de longa duração por conversa).
+	MaxLive int
+
+	// Tempo ocioso máximo antes de hibernar uma sessão viva sem WS conectado.
+	IdleTTL time.Duration
+
 	Production bool
 }
 
@@ -62,6 +70,9 @@ func LoadConfig() Config {
 
 		InternalSecret: getEnv("INTERNAL_SECRET", ""),
 
+		MaxLive: envInt("CLAUDE_MAX_LIVE", 4),
+		IdleTTL: envDuration("CLAUDE_IDLE_TTL", 15*time.Minute),
+
 		Production: getEnv("NODE_ENV", "development") == "production",
 	}
 }
@@ -80,6 +91,24 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
 }
 
 func splitCSV(s string) []string {
