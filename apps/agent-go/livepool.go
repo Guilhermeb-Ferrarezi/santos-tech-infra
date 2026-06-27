@@ -52,12 +52,20 @@ func (m *SessionManager) ensureLive(ctx context.Context, conv *Conversation) (*l
 		return nil, err
 	}
 
-	// insere só após start OK; re-check de corrida (outra goroutine pode ter criado a sessão)
+	// insere só após start OK; re-check de corrida (outra goroutine pode ter criado a sessão
+	// ou preenchido o pool durante o spawn — ambos exigem descartar a sessão recém-nascida).
 	m.mu.Lock()
 	if existing := m.live[conv.ID]; existing != nil {
 		m.mu.Unlock()
 		killProcessGroup(ls.cmd) // descarta o duplicado
 		return existing, nil
+	}
+	// re-valida cap: duas goroutines podem ter obtido vaga simultaneamente (evicção concorrente);
+	// a que chegar depois encontra o pool cheio e deve descartar a sessão que acabou de spawnar.
+	if len(m.live) >= m.maxLive() {
+		m.mu.Unlock()
+		killProcessGroup(ls.cmd)
+		return nil, fmt.Errorf("pool de sessões vivas cheio (%d/%d) após spawn concorrente", len(m.live), m.maxLive())
 	}
 	m.live[conv.ID] = ls
 	m.mu.Unlock()
