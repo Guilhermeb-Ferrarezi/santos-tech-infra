@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -458,5 +459,33 @@ func TestFakeClaudeRespondeStreamJSON(t *testing.T) {
 	got := string(outBytes)
 	if !strings.Contains(got, `"type":"assistant"`) || !strings.Contains(got, `"type":"result"`) {
 		t.Fatalf("saída do fake não tem assistant+result: %q", got)
+	}
+}
+
+// TestCompactRejeitaTurnoEmAndamento garante que RunTurnCollect retorna errBusy (409)
+// quando a sessão viva já tem um turno em andamento — impede enfileirar o prompt de
+// sumarização e coletar o resultado de outro turno como resumo (corrupção de memória).
+// Determinístico: não usa processos reais nem sleeps — força o estado via ls.mu.
+func TestCompactRejeitaTurnoEmAndamento(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{
+		ID: "cCompactBusy", SessionID: "s1", Model: "sonnet",
+		Workdir: t.TempDir(), ToolsDisabled: true, SessionStarted: true,
+	}
+
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+
+	// Simula turno em andamento (igual ao padrão dos outros testes desta suite).
+	ls.mu.Lock()
+	ls.state = StatusRunning
+	ls.mu.Unlock()
+
+	_, gotErr := m.RunTurnCollect(conv, "resuma a conversa")
+	if !errors.Is(gotErr, errBusy) {
+		t.Fatalf("esperava errBusy, veio %v", gotErr)
 	}
 }

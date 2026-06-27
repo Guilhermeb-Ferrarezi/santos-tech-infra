@@ -246,13 +246,21 @@ func (m *SessionManager) RunTurn(conv *Conversation, prompt string, atts []Attac
 }
 
 // RunTurnCollect roda um turno e coleta o texto do assistente (usado pelo /compact),
-// agora pela sessão viva da conversa.
+// agora pela sessão viva da conversa. Rejeita com errBusy se já há um turno em
+// andamento — evita enfileirar o prompt de sumarização e coletar o resultado de outro
+// turno como resumo (corrupção silenciosa de memória).
 func (m *SessionManager) RunTurnCollect(conv *Conversation, prompt string) (string, error) {
 	events, unsub := m.Subscribe(conv.ID)
 	defer unsub()
 	ls, err := m.ensureLive(context.Background(), conv)
 	if err != nil {
 		return "", err
+	}
+	ls.mu.Lock()
+	busy := ls.state == StatusRunning
+	ls.mu.Unlock()
+	if busy {
+		return "", errBusy
 	}
 	ls.Send(prompt, nil)
 	var b strings.Builder

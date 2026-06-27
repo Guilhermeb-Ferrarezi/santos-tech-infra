@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -121,7 +122,13 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		"para servir de memória ao continuar numa nova sessão. Responda apenas com o resumo."
 	raw, err := s.mgr.RunTurnCollect(conv, prompt)
 	if err != nil {
-		writeErr(w, appErr(http.StatusBadGateway, "COMPACT_FAILED", "Falha ao resumir: "+err.Error()))
+		// errBusy (e qualquer outro *AppError) já carrega o status correto — repassa
+		// diretamente. Erros genéricos de sumarização viram 502 COMPACT_FAILED.
+		if errors.Is(err, errBusy) {
+			writeErr(w, errBusy)
+		} else {
+			writeErr(w, appErr(http.StatusBadGateway, "COMPACT_FAILED", "Falha ao resumir: "+err.Error()))
+		}
 		return
 	}
 	summary := strings.TrimSpace(raw)
