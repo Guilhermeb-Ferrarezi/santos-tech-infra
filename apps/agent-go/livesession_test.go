@@ -122,7 +122,9 @@ func TestLiveSessionStopMantemProcessoVivo(t *testing.T) {
 	//   1) result(success)     — o fake dorme 400ms e só então emite o result do turno
 	//   2) result(interrupted) — ao ler o control_request já bufferizado no stdin
 	// Drenamos os dois para limpar o canal antes de enviar o próximo turno.
-	_ = collectResults(t, events, 2)
+	if drained := collectResults(t, events, 2); len(drained) != 2 {
+		t.Fatalf("esperava drenar 2 results do turno interrompido, veio %d", len(drained))
+	}
 
 	// Canal limpo: qualquer result a partir daqui é do NOVO turno.
 	// Se o processo estiver morto ou ignorando stdin, collectResults esgota o timeout
