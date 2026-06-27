@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -38,7 +39,8 @@ func (s *Server) releaseTurn(ctx context.Context, convID string) {
 
 func (s *Server) setState(ctx context.Context, convID, status string) {
 	if s.rdb == nil {
-		return // só em teste (Server sem Redis); produção sempre tem rdb.
+		slog.Warn("setState: rdb nil (esperado só em teste; em produção indica misconfiguração)")
+		return
 	}
 	s.rdb.Set(ctx, stateKey(convID), status, time.Hour)
 }

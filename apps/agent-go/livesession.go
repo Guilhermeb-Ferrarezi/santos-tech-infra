@@ -157,12 +157,21 @@ func (ls *liveSession) persistAndWrite(prompt string, atts []Attachment) {
 	}
 
 	// 4. Auto-título no 1º turno, se ainda não tiver (sobre o prompt ORIGINAL).
-	if (conv.Title == nil || *conv.Title == "") && !conv.SessionStarted {
-		if title := deriveTitle(prompt); title != "" {
-			_ = m.s.setTitleIfEmpty(ctx, conv.ID, title)
-			conv.Title = &title
-			m.dispatch(conv.ID, turnEvent{Type: "title", Text: title})
+	// Leitura de conv.SessionStarted e escrita de conv.Title são feitas sob ls.mu para
+	// não correr com onTurnEnd, que também escreve esses campos no fim do turno.
+	ls.mu.Lock()
+	needTitle := (conv.Title == nil || *conv.Title == "") && !conv.SessionStarted
+	var derivedTitle string
+	if needTitle {
+		if t := deriveTitle(prompt); t != "" {
+			derivedTitle = t
+			conv.Title = &derivedTitle // escrita sincronizada
 		}
+	}
+	ls.mu.Unlock()
+	if derivedTitle != "" {
+		_ = m.s.setTitleIfEmpty(ctx, conv.ID, derivedTitle) // I/O fora do lock
+		m.dispatch(conv.ID, turnEvent{Type: "title", Text: derivedTitle})
 	}
 
 	// 5. Prompt efetivo: nota de mídia + prompt; seed pendente (deixado por /compact) na frente.
@@ -269,6 +278,14 @@ func (ls *liveSession) onTurnEnd() {
 		return
 	}
 	ls.state = StatusIdle
+	// SessionStarted e Title são lidos/escritos por persistAndWrite concorrentemente;
+	// capturamos e escrevemos sob ls.mu. O I/O (markSessionStarted) é feito APÓS soltar
+	// o lock — é idempotente e pode repetir sem problema.
+	needMark := !ls.conv.SessionStarted
+	if needMark {
+		ls.conv.SessionStarted = true
+	}
+	titleSnap := ls.conv.Title // snapshot do *string sob o lock para notifyTurnDone
 	ls.mu.Unlock()
 
 	// Fila vazia: a conversa fica verdadeiramente ociosa. Espelha o fim de turno do
@@ -277,12 +294,14 @@ func (ls *liveSession) onTurnEnd() {
 	ctx := context.Background()
 	_ = ls.mgr.s.setConversationStatus(ctx, ls.conv.ID, StatusIdle)
 	ls.mgr.s.setState(ctx, ls.conv.ID, StatusIdle)
-	if !ls.conv.SessionStarted {
+	if needMark {
 		_ = ls.mgr.s.markSessionStarted(ctx, ls.conv.ID)
-		ls.conv.SessionStarted = true
 	}
 	ls.mgr.dispatch(ls.conv.ID, turnEvent{Type: "done"})
 	if !ls.mgr.hasSubs(ls.conv.ID) {
-		ls.mgr.s.notifyTurnDone(ctx, ls.conv, StatusIdle)
+		// Usa snapshot de Title (lido sob ls.mu) para não correr com persistAndWrite.
+		convSnap := *ls.conv
+		convSnap.Title = titleSnap
+		ls.mgr.s.notifyTurnDone(ctx, &convSnap, StatusIdle)
 	}
 }

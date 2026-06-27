@@ -273,6 +273,42 @@ func TestPersistAndWriteResetaEstadoEmFalha(t *testing.T) {
 	}
 }
 
+// TestSessionStartedRaceRegression garante que conv.SessionStarted e conv.Title são
+// acessados sob ls.mu tanto em onTurnEnd quanto em persistAndWrite. Sem os locks, o
+// race detector (-race) captura a corrida nesta sequência de dois turnos adjacentes:
+// o 2º Send chega imediatamente após o "done" do 1º turno, momento em que onTurnEnd
+// pode ainda estar escrevendo SessionStarted enquanto persistAndWrite já o está lendo.
+func TestSessionStartedRaceRegression(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "cRace", SessionID: "s1", Model: "sonnet", Workdir: t.TempDir(), ToolsDisabled: true}
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+	ls, err := m.ensureLive(context.Background(), conv)
+	if err != nil {
+		t.Fatalf("ensureLive: %v", err)
+	}
+
+	// Turno 1: envia e aguarda "done". Imediatamente, sem pausa, envia o turno 2.
+	// A adjacência exercita a janela de corrida entre onTurnEnd (escritor de
+	// SessionStarted/Title) e persistAndWrite (leitor/escritor dos mesmos campos).
+	ls.Send("turno 1", nil)
+	if !waitForEvent(t, events, "done") {
+		t.Fatalf("timeout aguardando done do turno 1")
+	}
+	ls.Send("turno 2", nil)
+	if !waitForEvent(t, events, "done") {
+		t.Fatalf("timeout aguardando done do turno 2")
+	}
+
+	ls.mu.Lock()
+	started := conv.SessionStarted
+	ls.mu.Unlock()
+	if !started {
+		t.Fatal("conv.SessionStarted deve ser true após dois turnos completos")
+	}
+}
+
 func TestUserMessageJSONFormato(t *testing.T) {
 	b := userMessageJSON("oi")
 	var m map[string]any

@@ -49,7 +49,12 @@ func (m *SessionManager) ensureLive(ctx context.Context, conv *Conversation) (*l
 		ls.testArgs = []string{"-test.run=TestHelperProcess"}
 		ls.testEnv = append(os.Environ(), "GO_WANT_FAKE_CLAUDE=1")
 	}
-	if err := ls.start(ctx); err != nil {
+	// O processo sobrevive à desconexão do cliente e é terminado por close()/killProcessGroup
+	// (stdin fechado → EOF → readLoop encerra). NÃO passamos o ctx do caller (WS): quando o
+	// cliente desconecta, o ctx é cancelado e as chamadas de DB/Redis dentro do readLoop
+	// (insertMessage, markSessionStarted, etc.) falhariam silenciosamente, perdendo persistência.
+	_ = ctx
+	if err := ls.start(context.Background()); err != nil {
 		return nil, err
 	}
 
