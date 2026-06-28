@@ -9,9 +9,8 @@ A validação tem duas camadas:
 1. **Motor contra o CLI real** — `e2e_live_test.go` (build tag `e2e_live`). Exercita o
    motor vivo de verdade contra o `claude` instalado, sem Postgres/Redis (a persistência
    é nil-guarded). Cobre os cenários da Task 9 no nível do motor.
-2. **HTTP + auth + DB + WS ponta-a-ponta** — **PENDENTE**. Requer subir o serviço com
-   Postgres + Redis + OAuth do Claude + usuário admin (role=3). Não rodável neste ambiente
-   (sem Docker/Postgres/Redis). A rodar pelo usuário num ambiente com a infra.
+2. **HTTP + auth + DB + WS ponta-a-ponta** — **FEITO** (2026-06-28, ver resultados no fim).
+   Rodado com Postgres + Redis (containers), JWT admin forjado e o `claude` real.
 
 ## Resultado — e2e contra o CLI real (3/3 PASS)
 
@@ -53,8 +52,30 @@ exercitavam (injetam `testEnv`, pulam `claudeEnv`). Em produção `db` nunca é 
 guard foi adicionado por consistência e para permitir rodar o motor sem DB (usa as
 credenciais locais `~/.claude`, como no fluxo logged_out).
 
-## Pendente (e2e HTTP completo)
-Subir `docker compose -f infra/docker-compose.yml up -d postgres redis`, criar a tabela
-`users` + um usuário role=3, rodar `go run .`, e exercitar via WS (wscat/agent-mobile):
-abrir conversa, 2 prompts seguidos (confirmar ausência de cold start no 2º), fila + botão
-parar, e ociosidade > `CLAUDE_IDLE_TTL` (hibernação + ressurreição).
+## e2e HTTP completo — resultados (2026-06-28)
+
+Ambiente: Postgres + Redis (containers standalone, portas no host), `users(id=1, role=3)`
+criado antes do boot (FK de `claude_conversations`), JWT HS256 `sub=1` forjado com o
+`JWT_SECRET`, `CLAUDE_BIN=claude` real, `CLAUDE_IDLE_TTL=20s`. Cliente WS em Node (`ws`).
+
+Todos os cenários **PASS**:
+- **Boot**: `/claude/ready` → `{postgres:ok, redis:ok}`; `migrate()` criou as tabelas
+  `claude_*` (FK `users` satisfeita).
+- **Auth + DB**: `POST /claude/conversations` com Bearer JWT admin → conversa criada
+  (`userId:1`, workdir gerado).
+- **Motor vivo via WS**: 2 prompts no MESMO socket → "UM", "DOIS" (2º turno com menos
+  eventos `init` = sem cold start). Após o WS fechar, o processo
+  `claude … --input-format stream-json --session-id …` **continua vivo**.
+- **Persistência**: `claude_messages` gravou user/system/assistant/result dos 2 turnos;
+  conversa `status=idle`, `session_started=t`.
+- **Roteamento WhatsApp**: conversa `toolsDisabled=true` respondeu via por-turno — **não**
+  criou processo vivo (contagem de `--input-format stream-json` não subiu) e o processo
+  por-turno morreu após o turno.
+- **Hibernação + ressurreição**: após `CLAUDE_IDLE_TTL`, o reaper logou
+  "hibernando sessão viva ociosa" e o `close()` **terminou o processo** (sem leak, poll
+  confirmou); o prompt seguinte ressuscitou com `--resume <session_id>` e respondeu.
+
+Reproduzir: subir Postgres+Redis (ex.: containers com portas no host), criar `users`
+(`id` BIGINT, `role` SMALLINT=3) ANTES do boot, exportar `DATABASE_URL`/`REDIS_URL`/
+`JWT_SECRET`/`ENCRYPTION_KEY`/`CLAUDE_BIN=claude`/`PORT`, rodar o binário, forjar um JWT
+`sub=<id>` e exercitar `/claude/conversations` + o WS `/conversations/{id}/ws`.
