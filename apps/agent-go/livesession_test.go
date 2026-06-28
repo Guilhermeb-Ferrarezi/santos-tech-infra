@@ -462,6 +462,65 @@ func TestFakeClaudeRespondeStreamJSON(t *testing.T) {
 	}
 }
 
+// ── Testes de roteamento DispatchPrompt/DispatchInterrupt ────────────────────
+
+// TestDispatchPromptToolsDisabledNaoCriaLiveSession garante que conversas com
+// ToolsDisabled=true (WhatsApp) usam o motor por-turno e NUNCA criam entrada em
+// m.live. A verificação é síncrona e determinística: RunTurn jamais toca m.live,
+// portanto basta checar o pool imediatamente após DispatchPrompt retornar.
+//
+// Estratégia de isolamento: turnSlots é nil nos testes (main() não é chamado),
+// então o goroutine de RunTurn bloqueia inofensivamente em exec() antes de tocar
+// qualquer estado compartilhado. saveAttachments retorna imediato sem criar dirs
+// quando atts é nil, portanto a limpeza do t.TempDir também não sofre corrida.
+func TestDispatchPromptToolsDisabledNaoCriaLiveSession(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{
+		ID: "cWA", SessionID: "sWA", Model: "sonnet",
+		Workdir: t.TempDir(), ToolsDisabled: true,
+	}
+
+	m.DispatchPrompt(context.Background(), conv, "oi whatsapp", nil)
+
+	// Verificação síncrona: DispatchPrompt retornou → go RunTurn(...) foi lançado mas
+	// RunTurn nunca escreve em m.live. Portanto m.live["cWA"] deve ser nil agora e sempre.
+	m.mu.Lock()
+	_, existe := m.live[conv.ID]
+	m.mu.Unlock()
+	if existe {
+		t.Fatalf("ToolsDisabled=true: DispatchPrompt não deve criar sessão viva no pool")
+	}
+}
+
+// TestDispatchPromptToolsEnabledCriaLiveSession garante que conversas admin
+// (ToolsDisabled=false) usam o motor de sessão viva e criam entrada em m.live,
+// além de produzir um result observável.
+func TestDispatchPromptToolsEnabledCriaLiveSession(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{
+		ID: "cAdmin", SessionID: "sAdmin", Model: "sonnet",
+		Workdir: t.TempDir(), ToolsDisabled: false,
+	}
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+
+	m.DispatchPrompt(context.Background(), conv, "oi admin", nil)
+
+	// A sessão viva deve ter sido inserida no pool.
+	m.mu.Lock()
+	_, existe := m.live[conv.ID]
+	m.mu.Unlock()
+	if !existe {
+		t.Fatalf("ToolsDisabled=false: DispatchPrompt deve criar sessão viva no pool")
+	}
+	// E deve produzir um result (smoke-test do caminho completo).
+	if got := collectResults(t, events, 1); len(got) != 1 {
+		t.Fatalf("esperava 1 result pelo caminho DispatchPrompt (sessão viva), veio %d", len(got))
+	}
+}
+
 // TestCompactRejeitaTurnoEmAndamento garante que RunTurnCollect retorna errBusy (409)
 // quando a sessão viva já tem um turno em andamento — impede enfileirar o prompt de
 // sumarização e coletar o resultado de outro turno como resumo (corrupção de memória).

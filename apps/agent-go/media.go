@@ -74,7 +74,11 @@ func mediaMarkers(atts []Attachment) string {
 
 // saveAttachments decodifica e grava os anexos em <workdir>/media; devolve os paths
 // absolutos. Nome é UUID nosso + extensão derivada do mimetype validado.
+// Se atts for vazio, retorna imediatamente sem criar o diretório de mídia.
 func saveAttachments(workdir string, atts []Attachment) ([]string, error) {
+	if len(atts) == 0 {
+		return nil, nil
+	}
 	dir := filepath.Join(workdir, "media")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err

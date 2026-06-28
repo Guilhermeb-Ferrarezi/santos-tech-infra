@@ -29,11 +29,18 @@ func lockKey(convID string) string  { return "claude:lock:" + convID }
 func stateKey(convID string) string { return "claude:state:" + convID }
 
 // acquireTurn tenta marcar a conversa como ocupada. Retorna true se conseguiu.
+// Quando rdb é nil (somente em teste), considera o lock adquirido sem I/O.
 func (s *Server) acquireTurn(ctx context.Context, convID string) (bool, error) {
+	if s.rdb == nil {
+		return true, nil
+	}
 	return s.rdb.SetNX(ctx, lockKey(convID), "1", 30*time.Minute).Result()
 }
 
 func (s *Server) releaseTurn(ctx context.Context, convID string) {
+	if s.rdb == nil {
+		return
+	}
 	s.rdb.Del(ctx, lockKey(convID))
 }
 
