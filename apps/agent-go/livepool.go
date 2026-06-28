@@ -168,12 +168,17 @@ func (m *SessionManager) removeLive(convID string, ls *liveSession) {
 
 // Evict mata e remove a sessão viva de uma conversa (usado por /clear, /compact, /model
 // — que mudam parâmetros de boot, exigindo reinício). A próxima mensagem ressuscita.
+// O tombstone ls.evicted é marcado ANTES do sinal para que o crash path do readLoop
+// não emita TURN_FAILED espúrio — a morte é intencional.
 func (m *SessionManager) Evict(convID string) {
 	m.mu.Lock()
 	ls := m.live[convID]
 	delete(m.live, convID)
 	m.mu.Unlock()
 	if ls != nil {
+		ls.mu.Lock()
+		ls.evicted = true // tombstone: morte intencional, não crash
+		ls.mu.Unlock()
 		signalProcessGroup(ls.cmd, syscall.SIGTERM)
 	}
 }

@@ -46,6 +46,9 @@ type Config struct {
 	// Tempo ocioso máximo antes de hibernar uma sessão viva sem WS conectado.
 	IdleTTL time.Duration
 
+	// Teto de duração de um único turno no motor vivo. Zero → usa a constante turnTimeout (8m).
+	TurnTimeout time.Duration
+
 	Production bool
 }
 
@@ -70,8 +73,9 @@ func LoadConfig() Config {
 
 		InternalSecret: getEnv("INTERNAL_SECRET", ""),
 
-		MaxLive: envInt("CLAUDE_MAX_LIVE", 4),
-		IdleTTL: envDuration("CLAUDE_IDLE_TTL", 15*time.Minute),
+		MaxLive:     envInt("CLAUDE_MAX_LIVE", 4),
+		IdleTTL:     envDuration("CLAUDE_IDLE_TTL", 15*time.Minute),
+		TurnTimeout: envDuration("CLAUDE_TURN_TIMEOUT", turnTimeout),
 
 		Production: getEnv("NODE_ENV", "development") == "production",
 	}

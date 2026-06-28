@@ -39,6 +39,9 @@ func TestHelperProcess(t *testing.T) {
 		delay = v
 	}
 	emitInit := os.Getenv("FAKE_EMIT_INIT") == "1"
+	// FAKE_HANG=1: emite o evento assistant mas NUNCA emite result — simula turno travado.
+	// O processo fica vivo aguardando mais stdin (sc.Scan bloqueia) até ser morto pelo watchdog.
+	hang := os.Getenv("FAKE_HANG") == "1"
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 	sc := bufio.NewScanner(os.Stdin)
@@ -64,6 +67,10 @@ func TestHelperProcess(t *testing.T) {
 		}
 		fmt.Fprintf(out, `{"type":"assistant","message":{"content":[{"type":"text","text":"resposta %d"}]}}`+"\n", turn)
 		out.Flush()
+		if hang {
+			// Turno travado: não emite result. Bloqueia no próximo sc.Scan() até ser morto.
+			continue
+		}
 		if delay > 0 {
 			time.Sleep(time.Duration(delay) * time.Millisecond)
 		}
@@ -518,6 +525,127 @@ func TestDispatchPromptToolsEnabledCriaLiveSession(t *testing.T) {
 	// E deve produzir um result (smoke-test do caminho completo).
 	if got := collectResults(t, events, 1); len(got) != 1 {
 		t.Fatalf("esperava 1 result pelo caminho DispatchPrompt (sessão viva), veio %d", len(got))
+	}
+}
+
+// TestWatchdogMataTurnoTravado verifica que o watchdog de timeout por-turno mata um
+// processo que nunca emite "result" (turno travado) e que a recuperação de crash é
+// acionada corretamente: TURN_FAILED emitido, sessão removida do pool.
+func TestWatchdogMataTurnoTravado(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	// Timeout curto para o teste ser determinístico e rápido.
+	m.s.cfg.TurnTimeout = 300 * time.Millisecond
+
+	conv := &Conversation{ID: "cWatchdog", SessionID: "sWatchdog", Model: "sonnet",
+		Workdir: t.TempDir(), ToolsDisabled: true}
+
+	// Sessão criada manualmente com FAKE_HANG=1: o fake nunca emite result.
+	ls := m.newLiveSession(conv)
+	ls.testArgs = []string{"-test.run=TestHelperProcess"}
+	ls.testEnv = fakeEnv("FAKE_HANG=1")
+
+	// Insere no pool para que removeLive funcione ao morrer.
+	m.mu.Lock()
+	m.live[conv.ID] = ls
+	m.mu.Unlock()
+
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+
+	if err := ls.start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	ls.Send("turno que nunca termina", nil)
+
+	// O watchdog deve matar o processo dentro do timeout (300ms + margem).
+	select {
+	case <-ls.done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout: watchdog não matou o processo travado a tempo")
+	}
+
+	// Turno travado é falha legítima: TURN_FAILED deve ter sido emitido.
+	sawTurnFailed := false
+	drainEnd := time.After(500 * time.Millisecond)
+drainLoop:
+	for {
+		select {
+		case ev := <-events:
+			if ev.Type == "error" && ev.Code == "TURN_FAILED" {
+				sawTurnFailed = true
+				break drainLoop
+			}
+		case <-drainEnd:
+			break drainLoop
+		}
+	}
+	if !sawTurnFailed {
+		t.Fatalf("watchdog deve emitir TURN_FAILED quando mata um turno travado")
+	}
+
+	// Crash recovery: a sessão deve ter sido removida do pool.
+	m.mu.Lock()
+	_, still := m.live[conv.ID]
+	m.mu.Unlock()
+	if still {
+		t.Fatalf("sessão deveria ter sido removida do pool após o watchdog matar o processo")
+	}
+}
+
+// TestEvictNaoEmiteTurnFailed garante que um Evict durante um turno em andamento não emite
+// TURN_FAILED espúrio. A morte foi intencional (/clear, /model, /compact); o readLoop
+// detecta o tombstone ls.evicted e silencia o evento de erro.
+func TestEvictNaoEmiteTurnFailed(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "cEvict", SessionID: "sEvict", Model: "sonnet",
+		Workdir: t.TempDir(), ToolsDisabled: true}
+
+	// Sessão criada manualmente com atraso longo (600ms) para garantir que o turno
+	// ainda está em andamento quando Evict for disparado.
+	ls := m.newLiveSession(conv)
+	ls.testArgs = []string{"-test.run=TestHelperProcess"}
+	ls.testEnv = fakeEnv("FAKE_DELAY_MS=600")
+
+	// Insere no pool para que m.Evict encontre a sessão pelo convID.
+	m.mu.Lock()
+	m.live[conv.ID] = ls
+	m.mu.Unlock()
+
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+
+	if err := ls.start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	ls.Send("turno longo", nil)
+	// Aguarda o fake ter lido a mensagem e iniciado o sleep de 600ms.
+	time.Sleep(50 * time.Millisecond)
+
+	// Evict intencional: simula /clear ou /model durante um turno em andamento.
+	m.Evict(conv.ID)
+
+	// O processo deve morrer; aguarda ls.done fechar.
+	select {
+	case <-ls.done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout esperando o processo encerrar após Evict")
+	}
+
+	// Drena eventos após a morte — nenhum TURN_FAILED deve ter sido emitido.
+	drainEnd := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case ev := <-events:
+			if ev.Type == "error" && ev.Code == "TURN_FAILED" {
+				t.Fatalf("Evict não deve emitir TURN_FAILED espúrio; veio %+v", ev)
+			}
+		case <-drainEnd:
+			return // ok: nenhum TURN_FAILED chegou
+		}
 	}
 }
 

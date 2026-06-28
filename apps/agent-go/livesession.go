@@ -34,11 +34,69 @@ type liveSession struct {
 	queue    []pendingMsg
 	lastUsed time.Time
 
+	// evicted: tombstone de morte intencional (Evict por /clear, /model, /compact).
+	// Quando true, o crash path do readLoop NÃO emite TURN_FAILED — a morte foi
+	// planejada pelo chamador, não um crash inesperado.
+	evicted bool
+
+	watchdog    *time.Timer // timer de teto por turno; armado em cada início de turno
+	watchdogGen uint64      // contador de geração: evita stale-kill de turno posterior
+
 	done chan struct{} // fechado quando o processo termina
 
 	// hooks de teste (vazios em produção)
 	testArgs []string
 	testEnv  []string
+}
+
+// turnTimeoutEfetivo devolve o teto de duração de turno configurado, ou a constante
+// padrão (8m) quando Config.TurnTimeout é zero — garante que testes que criam
+// Config{} sem preencher o campo ainda se comportem corretamente.
+func (ls *liveSession) turnTimeoutEfetivo() time.Duration {
+	if t := ls.mgr.s.cfg.TurnTimeout; t > 0 {
+		return t
+	}
+	return turnTimeout
+}
+
+// armWatchdogLocked (re)arma o watchdog de teto de turno. Deve ser chamado sob ls.mu.
+// Ao disparar, mata o grupo de processos → readLoop entra no crash path (wasRunning=true,
+// evicted=false) → TURN_FAILED emitido: turno travado é falha legítima.
+//
+// Usa um contador de geração (watchdogGen) para evitar o stale-kill race: se Stop()
+// devolver false, o callback do timer já iniciou mas ainda não adquiriu o lock. Ao
+// verificar a geração sob ls.mu, o callback detecta que foi substituído ou desarmado e
+// aborta — impedindo que um watchdog antigo mate o processo de um turno posterior.
+func (ls *liveSession) armWatchdogLocked() {
+	if ls.watchdog != nil {
+		ls.watchdog.Stop()
+	}
+	ls.watchdogGen++
+	gen := ls.watchdogGen
+	timeout := ls.turnTimeoutEfetivo()
+	ls.watchdog = time.AfterFunc(timeout, func() {
+		ls.mu.Lock()
+		stale := ls.watchdogGen != gen
+		ls.mu.Unlock()
+		if stale {
+			return
+		}
+		slog.Warn("turno excedeu o teto; matando processo da sessão viva",
+			"conv", ls.conv.ID, "timeout", timeout)
+		killProcessGroup(ls.cmd)
+	})
+}
+
+// disarmWatchdogLocked cancela e limpa o watchdog. Deve ser chamado sob ls.mu.
+// Seguro quando watchdog é nil (turno não armado ou já disparado).
+// Sempre incrementa watchdogGen — mesmo que Stop() retorne false (callback já iniciado),
+// o callback detectará a geração diferente e abortará sem matar o processo.
+func (ls *liveSession) disarmWatchdogLocked() {
+	ls.watchdogGen++
+	if ls.watchdog != nil {
+		ls.watchdog.Stop()
+		ls.watchdog = nil
+	}
 }
 
 func (m *SessionManager) newLiveSession(conv *Conversation) *liveSession {
@@ -107,6 +165,7 @@ func (ls *liveSession) Send(prompt string, atts []Attachment) {
 		return
 	}
 	ls.state = StatusRunning
+	ls.armWatchdogLocked() // arma o teto de duração para este turno
 	ls.mu.Unlock()
 	ls.persistAndWrite(prompt, atts)
 }
@@ -115,6 +174,7 @@ func (ls *liveSession) Send(prompt string, atts []Attachment) {
 // abortado antes de chegar ao processo: mídia inválida ou falha de escrita no stdin).
 func (ls *liveSession) resetToIdle() {
 	ls.mu.Lock()
+	ls.disarmWatchdogLocked() // turno abortado: cancela o teto
 	ls.state = StatusIdle
 	ls.queue = nil
 	ls.mu.Unlock()
@@ -227,14 +287,19 @@ func (ls *liveSession) readLoop(ctx context.Context, stdout io.Reader) {
 	// remove esta sessão do pool para que a PRÓXIMA mensagem a ressuscite via --resume.
 	ls.mu.Lock()
 	wasRunning := ls.state == StatusRunning
+	evicted := ls.evicted     // lê o tombstone de morte intencional
+	ls.disarmWatchdogLocked() // limpa o timer (pode ter disparado ou ainda estar ativo)
 	ls.state = StatusIdle
 	ls.queue = nil
 	ls.mu.Unlock()
 	ls.mgr.removeLive(ls.conv.ID, ls)
 
-	// Se morreu NO MEIO de um turno (wasRunning), foi crash — reporta erro. Um close()
-	// limpo de hibernação termina com o estado já idle (wasRunning=false): só remove do pool.
-	if wasRunning {
+	// Se morreu NO MEIO de um turno (wasRunning) e NÃO foi um Evict intencional,
+	// foi crash — reporta erro. Evict (ls.evicted=true) é morte planejada pelo chamador
+	// (/clear, /model, /compact): ele é responsável pelo novo estado da conversa, portanto
+	// não emitimos TURN_FAILED espúrio. Um close() limpo de hibernação termina com o
+	// estado já idle (wasRunning=false): só remove do pool.
+	if wasRunning && !evicted {
 		_ = ls.mgr.s.setConversationStatus(ctx, ls.conv.ID, StatusError)
 		ls.mgr.s.setState(ctx, ls.conv.ID, StatusError)
 		emit(turnEvent{Type: "error", Code: "TURN_FAILED", Message: "processo encerrou inesperadamente"})
@@ -259,8 +324,12 @@ func (ls *liveSession) Stop() {
 }
 
 // close encerra a sessão de forma limpa: fecha o stdin, o que faz o CLI sair e salvar
-// a sessão no disco (base da ressurreição via --resume).
+// a sessão no disco (base da ressurreição via --resume). O watchdog é desarmado para
+// que a sessão encerrada não deixe timers pendentes.
 func (ls *liveSession) close() {
+	ls.mu.Lock()
+	ls.disarmWatchdogLocked()
+	ls.mu.Unlock()
 	if ls.stdin != nil {
 		_ = ls.stdin.Close()
 	}
@@ -273,10 +342,12 @@ func (ls *liveSession) onTurnEnd() {
 		next := ls.queue[0]
 		ls.queue = ls.queue[1:]
 		ls.lastUsed = time.Now()
+		ls.armWatchdogLocked() // prazo novo para o próximo turno enfileirado
 		ls.mu.Unlock()
 		ls.persistAndWrite(next.prompt, next.atts) // continua running
 		return
 	}
+	ls.disarmWatchdogLocked() // fila vazia: sessão volta a idle, sem turno ativo
 	ls.state = StatusIdle
 	// SessionStarted e Title são lidos/escritos por persistAndWrite concorrentemente;
 	// capturamos e escrevemos sob ls.mu. O I/O (markSessionStarted) é feito APÓS soltar
