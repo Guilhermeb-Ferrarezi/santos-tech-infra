@@ -358,8 +358,13 @@ func (s *Server) oauthStatus(ctx context.Context) (string, error) {
 	return s.q.GetOAuthStatus(ctx)
 }
 
-// oauthToken retorna o token OAuth decifrado, ou "" se deslogado.
+// oauthToken retorna o token OAuth decifrado, ou "" se deslogado. Sem banco (q nil),
+// retorna "" — o claudeEnv então não injeta CLAUDE_CODE_OAUTH_TOKEN e o CLI usa as
+// credenciais locais do volume (~/.claude/.credentials.json), como no fluxo logged_out.
 func (s *Server) oauthToken(ctx context.Context) (string, error) {
+	if s.q == nil {
+		return "", nil
+	}
 	enc, err := s.q.GetOAuthToken(ctx)
 	if err != nil || len(enc) == 0 {
 		return "", err
