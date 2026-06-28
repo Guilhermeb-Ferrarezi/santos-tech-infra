@@ -90,19 +90,9 @@ func (s *Server) handleConversationWS(w http.ResponseWriter, r *http.Request) {
 				s.mgr.dispatch(conv.ID, turnEvent{Type: "error", Code: "NOT_FOUND", Message: "Conversa não encontrada"})
 				continue
 			}
-			ls, err := s.mgr.ensureLive(ctx, fresh)
-			if err != nil {
-				s.mgr.dispatch(conv.ID, turnEvent{Type: "error", Code: "SPAWN_FAILED", Message: err.Error()})
-				continue
-			}
-			ls.Send(msg.Text, msg.Attachments)
+			s.mgr.DispatchPrompt(ctx, fresh, msg.Text, msg.Attachments)
 		case "interrupt":
-			s.mgr.mu.Lock()
-			ls := s.mgr.live[id]
-			s.mgr.mu.Unlock()
-			if ls != nil {
-				ls.Stop()
-			}
+			s.mgr.DispatchInterrupt(conv)
 		}
 	}
 }

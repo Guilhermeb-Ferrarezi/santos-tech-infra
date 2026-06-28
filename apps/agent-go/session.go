@@ -216,8 +216,10 @@ func (m *SessionManager) RunTurn(conv *Conversation, prompt string, atts []Attac
 	// Seed pendente (deixado por /compact): vira contexto da nova sessão.
 	// A nota de mídia afirma ao modelo os paths dos anexos e a tool Read liberada.
 	effective := mediaPromptNote(mediaPaths) + prompt
-	if seed, _ := m.s.rdb.GetDel(ctx, "claude:seed:"+conv.ID).Result(); seed != "" {
-		effective = seed + "\n\n---\n\n" + effective
+	if m.s.rdb != nil {
+		if seed, _ := m.s.rdb.GetDel(ctx, "claude:seed:"+conv.ID).Result(); seed != "" {
+			effective = seed + "\n\n---\n\n" + effective
+		}
 	}
 	mediaGlob := ""
 	if len(mediaPaths) > 0 {
@@ -492,6 +494,44 @@ func (m *SessionManager) handleEvent(ctx context.Context, conv *Conversation, ev
 		usage, _ := ev["usage"].(map[string]any)
 		emit(turnEvent{Type: "result", Data: ev})
 		_ = m.s.insertMessage(ctx, &Message{ConversationID: conv.ID, Role: "system", Kind: "result", Content: ev, Usage: usage})
+	}
+}
+
+// ── Roteador de prompt/interrupt ─────────────────────────────────────────────
+
+// DispatchPrompt roteia um prompt pelo tipo de conversa:
+//   - ToolsDisabled=true  (WhatsApp/agentes externos): motor por-turno — spawn→roda→morre.
+//     Não cria nem ocupa vaga no pool de sessões vivas.
+//   - ToolsDisabled=false (admin interativo): sessão viva — ensureLive + Send.
+//     Despacha SPAWN_FAILED se não houver vaga disponível.
+func (m *SessionManager) DispatchPrompt(ctx context.Context, conv *Conversation, text string, atts []Attachment) {
+	if conv.ToolsDisabled {
+		// Por-turno: não toca m.live; processo morre ao final do turno.
+		go m.RunTurn(conv, text, atts)
+		return
+	}
+	// Sessão viva: mantém o processo ativo para interatividade.
+	ls, err := m.ensureLive(ctx, conv)
+	if err != nil {
+		m.dispatch(conv.ID, turnEvent{Type: "error", Code: "SPAWN_FAILED", Message: err.Error()})
+		return
+	}
+	ls.Send(text, atts)
+}
+
+// DispatchInterrupt interrompe o turno em andamento pelo tipo de conversa:
+//   - ToolsDisabled=true:  SIGTERM no grupo de processos (motor por-turno).
+//   - ToolsDisabled=false: control_request de interrupt na sessão viva.
+func (m *SessionManager) DispatchInterrupt(conv *Conversation) {
+	if conv.ToolsDisabled {
+		m.Interrupt(conv.ID)
+		return
+	}
+	m.mu.Lock()
+	ls := m.live[conv.ID]
+	m.mu.Unlock()
+	if ls != nil {
+		ls.Stop()
 	}
 }
 
