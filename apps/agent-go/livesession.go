@@ -34,6 +34,13 @@ type liveSession struct {
 	queue    []pendingMsg
 	lastUsed time.Time
 
+	// evicted: tombstone de morte intencional (Evict por /clear, /model, /compact).
+	// Quando true, o crash path do readLoop NÃO emite TURN_FAILED — a morte foi
+	// planejada pelo chamador, não um crash inesperado.
+	evicted bool
+
+	watchdog *time.Timer // timer de teto por turno; armado em cada início de turno
+
 	done chan struct{} // fechado quando o processo termina
 
 	// hooks de teste (vazios em produção)
@@ -227,14 +234,18 @@ func (ls *liveSession) readLoop(ctx context.Context, stdout io.Reader) {
 	// remove esta sessão do pool para que a PRÓXIMA mensagem a ressuscite via --resume.
 	ls.mu.Lock()
 	wasRunning := ls.state == StatusRunning
+	evicted := ls.evicted // lê o tombstone de morte intencional
 	ls.state = StatusIdle
 	ls.queue = nil
 	ls.mu.Unlock()
 	ls.mgr.removeLive(ls.conv.ID, ls)
 
-	// Se morreu NO MEIO de um turno (wasRunning), foi crash — reporta erro. Um close()
-	// limpo de hibernação termina com o estado já idle (wasRunning=false): só remove do pool.
-	if wasRunning {
+	// Se morreu NO MEIO de um turno (wasRunning) e NÃO foi um Evict intencional,
+	// foi crash — reporta erro. Evict (ls.evicted=true) é morte planejada pelo chamador
+	// (/clear, /model, /compact): ele é responsável pelo novo estado da conversa, portanto
+	// não emitimos TURN_FAILED espúrio. Um close() limpo de hibernação termina com o
+	// estado já idle (wasRunning=false): só remove do pool.
+	if wasRunning && !evicted {
 		_ = ls.mgr.s.setConversationStatus(ctx, ls.conv.ID, StatusError)
 		ls.mgr.s.setState(ctx, ls.conv.ID, StatusError)
 		emit(turnEvent{Type: "error", Code: "TURN_FAILED", Message: "processo encerrou inesperadamente"})

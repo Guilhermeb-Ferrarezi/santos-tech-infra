@@ -521,6 +521,61 @@ func TestDispatchPromptToolsEnabledCriaLiveSession(t *testing.T) {
 	}
 }
 
+// TestEvictNaoEmiteTurnFailed garante que um Evict durante um turno em andamento não emite
+// TURN_FAILED espúrio. A morte foi intencional (/clear, /model, /compact); o readLoop
+// detecta o tombstone ls.evicted e silencia o evento de erro.
+func TestEvictNaoEmiteTurnFailed(t *testing.T) {
+	m := liveTestManager(t)
+	m.s.cfg.MaxLive = 4
+	conv := &Conversation{ID: "cEvict", SessionID: "sEvict", Model: "sonnet",
+		Workdir: t.TempDir(), ToolsDisabled: true}
+
+	// Sessão criada manualmente com atraso longo (600ms) para garantir que o turno
+	// ainda está em andamento quando Evict for disparado.
+	ls := m.newLiveSession(conv)
+	ls.testArgs = []string{"-test.run=TestHelperProcess"}
+	ls.testEnv = fakeEnv("FAKE_DELAY_MS=600")
+
+	// Insere no pool para que m.Evict encontre a sessão pelo convID.
+	m.mu.Lock()
+	m.live[conv.ID] = ls
+	m.mu.Unlock()
+
+	events, unsub := m.Subscribe(conv.ID)
+	defer unsub()
+
+	if err := ls.start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	ls.Send("turno longo", nil)
+	// Aguarda o fake ter lido a mensagem e iniciado o sleep de 600ms.
+	time.Sleep(50 * time.Millisecond)
+
+	// Evict intencional: simula /clear ou /model durante um turno em andamento.
+	m.Evict(conv.ID)
+
+	// O processo deve morrer; aguarda ls.done fechar.
+	select {
+	case <-ls.done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout esperando o processo encerrar após Evict")
+	}
+
+	// Drena eventos após a morte — nenhum TURN_FAILED deve ter sido emitido.
+	drainEnd := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case ev := <-events:
+			if ev.Type == "error" && ev.Code == "TURN_FAILED" {
+				t.Fatalf("Evict não deve emitir TURN_FAILED espúrio; veio %+v", ev)
+			}
+		case <-drainEnd:
+			return // ok: nenhum TURN_FAILED chegou
+		}
+	}
+}
+
 // TestCompactRejeitaTurnoEmAndamento garante que RunTurnCollect retorna errBusy (409)
 // quando a sessão viva já tem um turno em andamento — impede enfileirar o prompt de
 // sumarização e coletar o resultado de outro turno como resumo (corrupção de memória).
