@@ -39,7 +39,8 @@ type liveSession struct {
 	// planejada pelo chamador, não um crash inesperado.
 	evicted bool
 
-	watchdog *time.Timer // timer de teto por turno; armado em cada início de turno
+	watchdog    *time.Timer // timer de teto por turno; armado em cada início de turno
+	watchdogGen uint64      // contador de geração: evita stale-kill de turno posterior
 
 	done chan struct{} // fechado quando o processo termina
 
@@ -61,12 +62,25 @@ func (ls *liveSession) turnTimeoutEfetivo() time.Duration {
 // armWatchdogLocked (re)arma o watchdog de teto de turno. Deve ser chamado sob ls.mu.
 // Ao disparar, mata o grupo de processos → readLoop entra no crash path (wasRunning=true,
 // evicted=false) → TURN_FAILED emitido: turno travado é falha legítima.
+//
+// Usa um contador de geração (watchdogGen) para evitar o stale-kill race: se Stop()
+// devolver false, o callback do timer já iniciou mas ainda não adquiriu o lock. Ao
+// verificar a geração sob ls.mu, o callback detecta que foi substituído ou desarmado e
+// aborta — impedindo que um watchdog antigo mate o processo de um turno posterior.
 func (ls *liveSession) armWatchdogLocked() {
 	if ls.watchdog != nil {
 		ls.watchdog.Stop()
 	}
+	ls.watchdogGen++
+	gen := ls.watchdogGen
 	timeout := ls.turnTimeoutEfetivo()
 	ls.watchdog = time.AfterFunc(timeout, func() {
+		ls.mu.Lock()
+		stale := ls.watchdogGen != gen
+		ls.mu.Unlock()
+		if stale {
+			return
+		}
 		slog.Warn("turno excedeu o teto; matando processo da sessão viva",
 			"conv", ls.conv.ID, "timeout", timeout)
 		killProcessGroup(ls.cmd)
@@ -75,7 +89,10 @@ func (ls *liveSession) armWatchdogLocked() {
 
 // disarmWatchdogLocked cancela e limpa o watchdog. Deve ser chamado sob ls.mu.
 // Seguro quando watchdog é nil (turno não armado ou já disparado).
+// Sempre incrementa watchdogGen — mesmo que Stop() retorne false (callback já iniciado),
+// o callback detectará a geração diferente e abortará sem matar o processo.
 func (ls *liveSession) disarmWatchdogLocked() {
+	ls.watchdogGen++
 	if ls.watchdog != nil {
 		ls.watchdog.Stop()
 		ls.watchdog = nil
