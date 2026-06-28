@@ -22,18 +22,58 @@ Easypanel e Cloudflare. Exposto em `api.santos-tech.com/claude/*`.
 > (role=3) + auditoria (toda mensagem/tool call é persistida). Trate `JWT_SECRET`,
 > `ENCRYPTION_KEY` e os tokens de infra como segredos críticos.
 
-## Modelo de orquestração (por-turno)
+## Modelo de orquestração (HÍBRIDO: sessão viva + por-turno)
 
-Não há daemon do Claude. Cada turno faz spawn de um processo que **retoma a sessão do
-disco**, executa e sai (`session.go`):
+O motor é escolhido **por conversa**, no handler do WebSocket, conforme `ToolsDisabled`
+(`DispatchPrompt`/`DispatchInterrupt` em `session.go`):
+
+| Conversa | Motor | Onde |
+|----------|-------|------|
+| **Admin** (ferramentas habilitadas) | **sessão viva** | `livesession.go` / `livepool.go` |
+| **Terceiros / WhatsApp** (`tools_disabled=true`) | **por-turno** | `RunTurn` em `session.go` |
+
+> Por quê: o whats-agent abre **um WS por mensagem** em muitas conversas de baixa
+> frequência (1 por contato). No motor vivo isso seguraria um processo `claude` por
+> contato (pool `CLAUDE_MAX_LIVE`, default 4) → thrashing. O por-turno (spawn→roda→morre)
+> escala melhor pra esse perfil. O motor vivo é pro uso admin interativo.
+
+### Motor de sessão viva (admin)
+
+Um processo `claude` **de longa duração por conversa**, alimentado por stdin em streaming.
+Fica vivo entre turnos (sem cold start), mantém estado em memória e permite mandar
+mensagem / parar enquanto trabalha.
 
 ```
 claude -p --output-format stream-json --verbose --include-partial-messages \
+  --input-format stream-json --replay-user-messages \
   --dangerously-skip-permissions --model <model> --add-dir <workdir> \
   [--mcp-config <workdir>/.mcp.json --strict-mcp-config] \
   ( --session-id <session_id>  |  --resume <session_id> )
-# prompt vai pelo stdin; eventos JSONL saem pelo stdout
+# mensagens do usuário entram como JSON no stdin: {"type":"user","message":{...}}
+# eventos JSONL saem pelo stdout; control_request de interrupt = "parar" sem matar o processo
 ```
+
+- **Pool** com cap `CLAUDE_MAX_LIVE` (default 4) + evict LRU de sessões ociosas.
+- **Hibernação por idle** (`CLAUDE_IDLE_TTL`, default 15m): fecha o stdin (CLI salva a
+  sessão) e remove do pool; a próxima mensagem **ressuscita via `--resume`**.
+- **Fila**: mensagem durante um turno entra na fila; **botão parar** (`interrupt` no WS)
+  manda `control_request` e encerra o turno sem matar o processo.
+- `markSessionStarted` é persistido após o 1º turno → a ressurreição usa `--resume`.
+
+### Motor por-turno (WhatsApp / `tools_disabled`)
+
+Não há daemon: cada turno faz spawn de um processo que **retoma a sessão do disco**,
+executa e sai (`RunTurn`/`exec` em `session.go`). Sem `--input-format stream-json`,
+sem `--dangerously-skip-permissions` (gate por allow-list vazia), prompt vai como texto
+pelo stdin.
+
+```
+claude -p --output-format stream-json --verbose --include-partial-messages \
+  --model <model> [--allowed-tools ...] --add-dir? \
+  ( --session-id <session_id>  |  --resume <session_id> )
+```
+
+### Comum aos dois motores
 
 - `conversation.id` = PK estável (URLs, FK das mensagens).
 - `conversation.session_id` = `--session-id` do Claude, **rotacionável** por `/clear` e
@@ -41,10 +81,11 @@ claude -p --output-format stream-json --verbose --include-partial-messages \
 - 1º turno da sessão usa `--session-id`; os seguintes usam `--resume` (controlado por
   `session_started`).
 - Slash commands (`/model`, `/compact`, `/clear`) **não existem** em modo `-p` → são
-  operações na camada de orquestração:
+  operações na camada de orquestração (no motor vivo, `Evict()` reinicia o processo p/
+  aplicar):
   - `/model`: grava o modelo; aplica no próximo turno.
   - `/compact`: roda um turno de resumo, rotaciona a sessão e deixa o resumo como
-    *seed* (Redis) do próximo turno.
+    *seed* (Redis) do próximo turno. Rejeita com `BUSY` (409) se há turno em andamento.
   - `/clear`: rotaciona a sessão (contexto zerado).
 
 ## Stack
