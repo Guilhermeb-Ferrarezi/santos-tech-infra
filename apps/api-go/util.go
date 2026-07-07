@@ -56,6 +56,15 @@ func isValidResetToken(s string) bool {
 // base32 sem padding de 8 bytes aleatórios = exatamente 13 caracteres A-Z2-7.
 const recoveryCodeLen = 13
 
+// truncateRunes truncates s to at most max Unicode code points (runes).
+// Unlike s[:n], it never cuts through a multi-byte character.
+func truncateRunes(s string, max int) string {
+	if runes := []rune(s); len(runes) > max {
+		return string(runes[:max])
+	}
+	return s
+}
+
 func sha256Hex(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])

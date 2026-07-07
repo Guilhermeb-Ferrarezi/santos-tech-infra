@@ -115,10 +115,7 @@ func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 		dcrError(w, "invalid_redirect_uri", err.Error())
 		return
 	}
-	name := body.ClientName
-	if len(name) > dcrMaxNameLen {
-		name = name[:dcrMaxNameLen]
-	}
+	name := truncateRunes(body.ClientName, dcrMaxNameLen)
 	if name == "" {
 		name = "App registrado dinamicamente"
 	}

@@ -54,6 +54,33 @@ func TestProtectedResourceMetadata(t *testing.T) {
 	}
 }
 
+// TestTruncateRunesDCR verifica que truncateRunes (usada em handleOAuthRegister
+// para limitar client_name) trunca no limite de runes, nunca no meio de um
+// caractere multibyte — um byte-slice ingênuo corromperia emojis/CJK.
+func TestTruncateRunesDCR(t *testing.T) {
+	emoji := strings.Repeat("🔑", dcrMaxNameLen+1) // 101 emojis = 404 bytes
+	got := truncateRunes(emoji, dcrMaxNameLen)
+
+	runes := []rune(got)
+	if len(runes) != dcrMaxNameLen {
+		t.Errorf("got %d runes, esperava %d", len(runes), dcrMaxNameLen)
+	}
+	if strings.ContainsRune(got, '�') {
+		t.Error("resultado contém replacement char — truncamento corrompeu UTF-8")
+	}
+
+	// Abaixo do limite: string inalterada.
+	short := "Santos Tech"
+	if truncateRunes(short, dcrMaxNameLen) != short {
+		t.Error("string curta não deveria ser alterada")
+	}
+	// Exatamente no limite: inalterada.
+	exact := strings.Repeat("A", dcrMaxNameLen)
+	if truncateRunes(exact, dcrMaxNameLen) != exact {
+		t.Error("string com exatamente max runes não deveria ser alterada")
+	}
+}
+
 func TestDCRValidation(t *testing.T) {
 	s := testServer(Config{PublicOrigin: "https://api.example.com"})
 	cases := []struct {
