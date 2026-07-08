@@ -12,7 +12,7 @@ require (
 	github.com/santos-tech/golog v0.0.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/time v0.14.0
-	software.sslmate.com/src/go-pkcs12 v0.7.2
+	software.sslmate.com/src/go-pkcs12 v0.7.3
 )
 
 replace github.com/santos-tech/golog => ../../packages/golog
