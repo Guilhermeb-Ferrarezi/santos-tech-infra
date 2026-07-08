@@ -26,6 +26,7 @@ func (s *Server) handleListIPBans(w http.ResponseWriter, r *http.Request) {
 
 // POST /auth/admin/ip-bans
 func (s *Server) handleCreateIPBan(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
 		IP        string  `json:"ip"`
 		Reason    string  `json:"reason"`
