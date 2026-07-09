@@ -96,26 +96,42 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
 		return
 	}
-	if err := s.setMFA(r.Context(), uid, true, &secret); err != nil {
-		writeErr(w, err)
-		return
-	}
-	if err := s.rdb.Del(r.Context(), "mfa_setup:"+uidStr, attemptKey).Err(); err != nil {
-		slog.Warn("mfa_enable: falha ao remover chaves de setup do Redis", "uid", uid, "err", err)
-	}
-
 	codes := genRecoveryCodes(10)
 	hashes := make([]string, len(codes))
 	for i, c := range codes {
 		hashes[i] = sha256Hex(c)
 	}
-	if err := s.deleteRecoveryCodes(r.Context(), uid); err != nil {
+	// Agrupa as três escritas em uma transação: sem ela, se deleteRecoveryCodes
+	// for bem mas insertRecoveryCodes falhar, o usuário fica com mfa_enabled=true
+	// e zero recovery codes — estado irrecuperável sem intervenção manual.
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	if err := s.insertRecoveryCodes(r.Context(), uid, hashes); err != nil {
+	defer tx.Rollback(r.Context()) //nolint:errcheck
+	if _, err := tx.Exec(r.Context(),
+		`UPDATE users SET mfa_enabled=$1, totp_secret=$2 WHERE id=$3`, true, &secret, uid); err != nil {
 		writeErr(w, err)
 		return
+	}
+	if _, err := tx.Exec(r.Context(),
+		`DELETE FROM recovery_codes WHERE user_id=$1`, uid); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if _, err := tx.Exec(r.Context(),
+		`INSERT INTO recovery_codes (user_id, code_hash) SELECT $1, unnest($2::text[])`, uid, hashes); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.invalidateUserCache(uid)
+	if err := s.rdb.Del(r.Context(), "mfa_setup:"+uidStr, attemptKey).Err(); err != nil {
+		slog.Warn("mfa_enable: falha ao remover chaves de setup do Redis", "uid", uid, "err", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "recoveryCodes": codes})
 }

@@ -154,28 +154,50 @@ func (s *Server) handleMFAEmailEnable(w http.ResponseWriter, r *http.Request) {
 	if u.TOTPSecret == nil || !u.MFAEnabled {
 		method = "email" // primeiro (ou único) método vira o preferido
 	}
-	if _, err := s.db.Exec(r.Context(),
+	// Recovery codes só na primeira ativação do MFA (não regenera ao somar método).
+	// Gerados aqui para que fiquem dentro da transação junto com o UPDATE.
+	var codes []string
+	var hashes []string
+	if !u.MFAEnabled {
+		codes = genRecoveryCodes(10)
+		hashes = make([]string, len(codes))
+		for i, c := range codes {
+			hashes[i] = sha256Hex(c)
+		}
+	}
+	// Agrupa UPDATE + DELETE + INSERT em uma transação: sem ela, se o DELETE de
+	// recovery_codes tiver sucesso mas o INSERT falhar, o usuário fica com
+	// mfa_enabled=true e zero recovery codes — irrecuperável sem suporte.
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	defer tx.Rollback(r.Context()) //nolint:errcheck
+	if _, err := tx.Exec(r.Context(),
 		`UPDATE users SET mfa_enabled=true, mfa_method=$1 WHERE id=$2`, method, uid); err != nil {
 		writeErr(w, err)
 		return
 	}
+	if !u.MFAEnabled {
+		if _, err := tx.Exec(r.Context(),
+			`DELETE FROM recovery_codes WHERE user_id=$1`, uid); err != nil {
+			writeErr(w, err)
+			return
+		}
+		if _, err := tx.Exec(r.Context(),
+			`INSERT INTO recovery_codes (user_id, code_hash) SELECT $1, unnest($2::text[])`, uid, hashes); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeErr(w, err)
+		return
+	}
 	s.invalidateUserCache(uid)
-	// Recovery codes só na primeira ativação do MFA (não regenera ao somar método).
 	resp := map[string]any{"enabled": true, "method": method}
 	if !u.MFAEnabled {
-		codes := genRecoveryCodes(10)
-		hashes := make([]string, len(codes))
-		for i, c := range codes {
-			hashes[i] = sha256Hex(c)
-		}
-		if err := s.deleteRecoveryCodes(r.Context(), uid); err != nil {
-			writeErr(w, err)
-			return
-		}
-		if err := s.insertRecoveryCodes(r.Context(), uid, hashes); err != nil {
-			writeErr(w, err)
-			return
-		}
 		resp["recoveryCodes"] = codes
 	}
 	writeJSON(w, http.StatusOK, resp)
