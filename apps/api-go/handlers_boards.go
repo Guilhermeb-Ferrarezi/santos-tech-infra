@@ -59,6 +59,7 @@ func (s *Server) handleListBoards(w http.ResponseWriter, r *http.Request) {
 
 // POST /boards — cria um quadro vazio {title}.
 func (s *Server) handleCreateBoard(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var in struct {
 		Title string `json:"title"`
 	}
@@ -241,6 +242,7 @@ func (s *Server) handleAddBoardMember(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var in struct {
 		Email string `json:"email"`
 		Role  string `json:"role"`

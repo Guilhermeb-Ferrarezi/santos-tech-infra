@@ -82,6 +82,7 @@ func (s *Server) handleGetSocialPost(w http.ResponseWriter, r *http.Request) {
 
 // POST /social/posts
 func (s *Server) handleCreateSocialPost(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var in SocialPostInput
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
@@ -106,6 +107,7 @@ func (s *Server) handleUpdateSocialPost(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var in SocialPostInput
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
@@ -148,6 +150,7 @@ func (s *Server) handleUpdateSocialPostStatus(w http.ResponseWriter, r *http.Req
 		writeErr(w, err)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var in struct {
 		Status string `json:"status"`
 	}
@@ -248,6 +251,7 @@ func (s *Server) handleAddSocialPostNote(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var in struct {
 		Content string `json:"content"`
 	}
