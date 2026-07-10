@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"html"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -186,7 +187,9 @@ func (s *Server) handleUpdateSocialPostStatus(w http.ResponseWriter, r *http.Req
 
 	changedBy := userIDFrom(r)
 	if oldStatus != in.Status {
-		_ = s.insertSocialPostStatusHistory(r.Context(), id, changedBy, oldStatus, in.Status)
+		if err := s.insertSocialPostStatusHistory(r.Context(), id, changedBy, oldStatus, in.Status); err != nil {
+			slog.Warn("social_post_status: falha ao gravar histórico de status", "post_id", id, "old", oldStatus, "new", in.Status, "err", err)
+		}
 	}
 
 	if in.Status == "revisao" && s.cfg.SocialAlertEmail != "" {
