@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -152,7 +153,9 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// Auto-vincula a identidade Google à conta local apenas com email verificado
 	// (já garantido acima) — evita vincular por email forjado.
-	_ = s.linkOAuth(r.Context(), u.ID, "google", profile.ID)
+	if err := s.linkOAuth(r.Context(), u.ID, "google", profile.ID); err != nil {
+		slog.Warn("oauth_google_callback: falha ao vincular identidade Google", "uid", u.ID, "google_id", profile.ID, "err", err)
+	}
 
 	// MFA ativo: OAuth não pode contornar o 2º fator. Não emite sessão — cria o
 	// mesmo desafio do login por senha e manda o auth-web pro passo do código.

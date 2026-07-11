@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -77,10 +78,14 @@ func (s *Server) handleCreateIPBan(w http.ResponseWriter, r *http.Request) {
 	if ban.ExpiresAt.Valid {
 		ttl := time.Until(ban.ExpiresAt.Time)
 		if ttl > 0 {
-			_ = s.rdb.Set(r.Context(), redisKey, "1", ttl).Err()
+			if err := s.rdb.Set(r.Context(), redisKey, "1", ttl).Err(); err != nil {
+				slog.Warn("ip_ban_create: falha ao sincronizar ban no Redis; ban só ativo após restart", "ip", ban.Ip, "err", err)
+			}
 		}
 	} else {
-		_ = s.rdb.Set(r.Context(), redisKey, "1", 0).Err()
+		if err := s.rdb.Set(r.Context(), redisKey, "1", 0).Err(); err != nil {
+			slog.Warn("ip_ban_create: falha ao sincronizar ban no Redis; ban só ativo após restart", "ip", ban.Ip, "err", err)
+		}
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{"ban": ipBanJSON(&ban)})
@@ -106,7 +111,9 @@ func (s *Server) handleDeleteIPBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = s.rdb.Del(r.Context(), "global:ip-ban:"+ban.Ip).Err()
+	if err := s.rdb.Del(r.Context(), "global:ip-ban:"+ban.Ip).Err(); err != nil {
+		slog.Warn("ip_ban_delete: falha ao remover ban do Redis; IP pode permanecer bloqueado até restart", "ip", ban.Ip, "err", err)
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }

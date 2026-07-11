@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"net/http"
 	"slices"
 )
@@ -43,7 +44,9 @@ func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusNotFound, "ACCOUNT_NOT_FOUND", "Conta não encontrada neste navegador"))
 		return
 	}
-	_ = s.deleteSession(r.Context(), sid)
+	if err := s.deleteSession(r.Context(), sid); err != nil {
+		slog.Warn("account_delete: falha ao revogar sessão no banco", "sid", sid, "err", err)
+	}
 	s.removeAccount(w, r, sid)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -77,6 +80,8 @@ func (s *Server) handleAccountActivate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	_ = s.deleteSession(r.Context(), sid)
+	if err := s.deleteSession(r.Context(), sid); err != nil {
+		slog.Warn("account_activate: falha ao revogar sessão anterior no banco", "sid", sid, "err", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": s.buildProfile(r.Context(), u)})
 }
