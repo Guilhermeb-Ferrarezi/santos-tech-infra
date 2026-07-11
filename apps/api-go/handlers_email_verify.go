@@ -2,11 +2,14 @@ package main
 
 import (
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -81,7 +84,16 @@ func (s *Server) handleEmailVerifyConfirm(w http.ResponseWriter, r *http.Request
 		return
 	}
 	want, err := s.rdb.Get(r.Context(), emailVerifyKey(uid)).Result()
-	if err != nil || want == "" {
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			writeErr(w, appErr(http.StatusBadRequest, "CODE_EXPIRED", "Código expirado; envie outro"))
+			return
+		}
+		slog.Warn("email_verify_confirm: redis error; rejecting to fail closed", "uid", uid, "err", err)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro interno. Tente novamente."))
+		return
+	}
+	if want == "" {
 		writeErr(w, appErr(http.StatusBadRequest, "CODE_EXPIRED", "Código expirado; envie outro"))
 		return
 	}
