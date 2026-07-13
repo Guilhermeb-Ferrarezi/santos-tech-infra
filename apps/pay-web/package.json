@@ -18,7 +18,7 @@
     "clsx": "^2.1.1",
     "jsbarcode": "^3.12.3",
     "lucide-react": "^1.24.0",
-    "payment-token-efi": "^3.4.0",
+    "payment-token-efi": "^3.4.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.0",
