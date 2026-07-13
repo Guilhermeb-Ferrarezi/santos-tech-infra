@@ -224,6 +224,12 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, err)
 			return
 		}
+		// Revoga todas as sessões existentes para que qualquer refresh token
+		// obtido antes da mudança de senha deixe de funcionar imediatamente.
+		// Espelha o comportamento de handleResetPassword (handlers_password.go).
+		if err := s.deleteUserSessions(r.Context(), id); err != nil {
+			slog.Error("admin: falha ao revogar sessões após redefinição de senha", "uid", id, "err", err)
+		}
 	}
 	u, err := s.updateUserAdmin(r.Context(), id, body.Name, body.Role, body.QuotaBytes, body.CustomRoleID)
 	if err != nil {
