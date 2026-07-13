@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -26,30 +27,7 @@ const (
 )
 
 func cacheUserKey(id int64) string {
-	return cacheUserPrefix + itoa(id)
-}
-
-// itoa evita importar strconv só para uma conversão; ids são int64 não-negativos.
-func itoa(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
+	return cacheUserPrefix + strconv.FormatInt(id, 10)
 }
 
 // getOrSetJSON é o helper genérico de cache-aside: tenta ler `key` do Redis e
