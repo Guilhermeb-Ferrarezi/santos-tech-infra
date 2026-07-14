@@ -5,6 +5,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 // Estes testes cobrem só os caminhos de validação que retornam ANTES de tocar
@@ -175,5 +178,24 @@ func TestHandleForgotPasswordValidation(t *testing.T) {
 		if w2.Code != http.StatusOK {
 			t.Errorf("email inválido %q: code=%d (queria 200)", bad, w2.Code)
 		}
+	}
+}
+
+// TestHandleLoginRedisDown garante que o lockout de login retorna 503
+// (fail-closed) quando o Redis está indisponível — impede que brute-force
+// seja possível durante quedas do Redis.
+func TestHandleLoginRedisDown(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s := testServer(Config{})
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+
+	mr.SetError("ERR simulated Redis failure")
+
+	w := httptest.NewRecorder()
+	s.handleLogin(w, httptest.NewRequest("POST", "/auth/login",
+		strings.NewReader(`{"identifier":"user@example.com","password":"senha123"}`)))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("Redis indisponível deve retornar 503 (fail-closed), veio %d", w.Code)
 	}
 }
