@@ -51,6 +51,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "email inválido"))
 		return
 	}
+	// Executa argon2id antes de consultar o banco para que o tempo de resposta
+	// seja uniforme independentemente de o email já existir ou não — impede
+	// enumeração de usuários por timing (mesma proteção do handleLogin).
+	hash, err := hashPassword(body.Password)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	existing, err := s.userByEmail(r.Context(), body.Email)
 	if err != nil {
 		writeErr(w, err)
@@ -58,11 +66,6 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	if existing != nil {
 		writeErr(w, appErr(http.StatusConflict, "EMAIL_ALREADY_EXISTS", "Este email já está cadastrado"))
-		return
-	}
-	hash, err := hashPassword(body.Password)
-	if err != nil {
-		writeErr(w, err)
 		return
 	}
 	u, err := s.insertUser(r.Context(), body.Email, body.Name, hash)
