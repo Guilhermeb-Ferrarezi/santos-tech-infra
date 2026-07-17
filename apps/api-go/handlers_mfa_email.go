@@ -100,6 +100,7 @@ func (s *Server) consumeAcctEmailCode(ctx context.Context, uid int64, code strin
 // e o código recém-enviado (/auth/mfa/email-code). Se for o primeiro método, vira o
 // preferido; gera códigos de recuperação na primeira ativação do MFA.
 func (s *Server) handleMFAEmailEnable(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	uid := userIDFrom(r)
 	var body struct {
