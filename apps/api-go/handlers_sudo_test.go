@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -75,5 +76,19 @@ func TestTokenSudoUntilSecretErrado(t *testing.T) {
 	access, _ := generateSudoAccess("s3cr3t", 1, "a@b.com", "", time.Now().Add(10*time.Minute))
 	if !tokenSudoUntil(access, "outro-secret").IsZero() {
 		t.Fatal("sudo_exp não pode valer com secret errado")
+	}
+}
+
+func TestHandleSudoVerifyCacheControlNoStore(t *testing.T) {
+	s := testServer(Config{JWTSecret: "s3cr3t"})
+	// Corpo inválido → retorna 400 antes de tocar em DB/Redis, mas o header deve
+	// estar presente em TODOS os caminhos de código, incluindo erros.
+	w := httptest.NewRecorder()
+	s.handleSudoVerify(w, httptest.NewRequest("POST", "/auth/sudo/verify", strings.NewReader("não-é-json")))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("corpo inválido: code=%d (queria 400)", w.Code)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control=%q; queria %q", got, "no-store")
 	}
 }
