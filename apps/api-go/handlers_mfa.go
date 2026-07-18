@@ -273,6 +273,10 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido"))
 		return
 	}
+	if u.SuspendedAt != nil {
+		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta suspensa"))
+		return
+	}
 	// Teto de tentativas por challenge: sem isso, o OTP de email (6 dígitos) seria
 	// retentável até o limite por IP (burlável). Após N falhas, invalida o desafio.
 	// fail-closed: se o Redis falhar, não sabemos quantas tentativas já houve;
