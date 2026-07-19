@@ -83,6 +83,7 @@ func (s *Server) sudoGuard(next http.HandlerFunc) http.HandlerFunc {
 // sessão por sudoTTL. Com MFA ativo aceita TOTP/recovery/código por email
 // (/auth/mfa/email-code); sem MFA, aceita a senha da conta.
 func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	uid := userIDFrom(r)
 	var body struct {
