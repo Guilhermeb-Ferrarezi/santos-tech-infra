@@ -124,6 +124,13 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 	if u.MFAEnabled {
 		code := strings.TrimSpace(body.Code)
 		if code != "" {
+			// Rejeita comprimento claramente inválido antes de qualquer I/O
+			// (Redis/TOTP), espelhando handleMFAVerify e handleMFADisable: TOTP e
+			// OTP de email têm 6 dígitos, recovery codes têm recoveryCodeLen chars.
+			if len(code) != 6 && len(code) != recoveryCodeLen {
+				writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Confirmação inválida"))
+				return
+			}
 			if u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret) {
 				valid = true
 			}
