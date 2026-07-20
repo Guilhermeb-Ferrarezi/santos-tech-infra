@@ -374,6 +374,46 @@ func (s *Server) deleteUser(ctx context.Context, id int64) error {
 	return err
 }
 
+// updateAdminUserFull executa atomicamente (numa única transação) a atualização de
+// senha + revogação de sessões (quando pwdHash não está vazio) e os campos de admin
+// (nome, role, quota, customRoleID). Garante que nenhuma dessas etapas fique
+// parcialmente aplicada em caso de erro intermediário.
+func (s *Server) updateAdminUserFull(ctx context.Context, id int64, pwdHash string, name *string, role *int16, quotaBytes *int64, customRoleID *string) (*User, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if pwdHash != "" {
+		if _, err := tx.Exec(ctx, `UPDATE users SET password_hash=$1 WHERE id=$2`, pwdHash, id); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id=$1`, id); err != nil {
+			return nil, err
+		}
+	}
+	u, err := scanUser(tx.QueryRow(ctx,
+		`UPDATE users SET
+		   name           = COALESCE($2, name),
+		   role           = COALESCE($3, role),
+		   quota_bytes    = COALESCE($4, quota_bytes),
+		   custom_role_id = CASE
+		                      WHEN $3 = 4 THEN $5::uuid
+		                      WHEN $3 IS NOT NULL AND $3 != 4 THEN NULL
+		                      ELSE custom_role_id
+		                    END
+		 WHERE id = $1 RETURNING `+userCols,
+		id, name, role, quotaBytes, customRoleID))
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	s.invalidateUserCache(id)
+	return u, nil
+}
+
 func (s *Server) updatePassword(ctx context.Context, userID int64, hash string) error {
 	_, err := s.db.Exec(ctx, `UPDATE users SET password_hash=$1 WHERE id=$2`, hash, userID)
 	if err == nil {
