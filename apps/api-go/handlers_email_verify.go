@@ -119,12 +119,18 @@ func (s *Server) handleEmailVerifyConfirm(w http.ResponseWriter, r *http.Request
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código incorreto"))
 		return
 	}
+	// Invalida o código ANTES de gravar no banco (fail-closed): se Del falhar, o
+	// código continua válido no Redis mas o banco não é atualizado, permitindo nova
+	// tentativa. A ordem inversa (DB primeiro) deixaria o código reutilizável após
+	// uma verificação bem-sucedida — padrão espelhado do handleMFAVerify.
+	if err := s.rdb.Del(r.Context(), emailVerifyKey(uid), emailVerifyAttKey(uid), emailVerifyCDKey(uid)).Err(); err != nil {
+		slog.Error("email_verify_confirm: falha ao invalidar código após verificação bem-sucedida", "uid", uid, "err", err)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao confirmar a verificação. Tente novamente."))
+		return
+	}
 	if err := s.setEmailVerified(r.Context(), uid); err != nil {
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro ao confirmar a verificação"))
 		return
-	}
-	if err := s.rdb.Del(r.Context(), emailVerifyKey(uid), emailVerifyAttKey(uid), emailVerifyCDKey(uid)).Err(); err != nil {
-		slog.Warn("email_verify_confirm: falha ao limpar chaves de verificação após sucesso", "uid", uid, "err", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"verified": true})
 }

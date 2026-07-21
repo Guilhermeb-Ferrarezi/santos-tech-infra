@@ -399,7 +399,10 @@ func (s *Server) setMFA(ctx context.Context, userID int64, enabled bool, secret 
 }
 
 func (s *Server) setEmailVerified(ctx context.Context, userID int64) error {
-	_, err := s.db.Exec(ctx, `UPDATE users SET email_verified_at=now() WHERE id=$1`, userID)
+	// AND email_verified_at IS NULL torna a operação idempotente: re-verificar não
+	// sobrescreve o timestamp original (relevante se o Del tiver sucesso mas o DB
+	// falhar na primeira tentativa e o usuário repetir o fluxo via suporte).
+	_, err := s.db.Exec(ctx, `UPDATE users SET email_verified_at=now() WHERE id=$1 AND email_verified_at IS NULL`, userID)
 	if err == nil {
 		s.invalidateUserCache(userID)
 	}

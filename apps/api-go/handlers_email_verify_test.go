@@ -111,3 +111,35 @@ func TestEmailVerifyConfirmCodeValidHitsDB(t *testing.T) {
 		t.Error("código correto não deveria retornar 400 (CODE_EXPIRED)")
 	}
 }
+
+// TestEmailVerifyConfirmDelBeforeDB verifica que o Del do código no Redis ocorre
+// ANTES da escrita no banco (fail-closed): com nil DB, o handler pânica em
+// setEmailVerified, mas o código já deve ter sido removido do Redis. Se o Del
+// viesse depois do banco, ele nunca rodaria e o código ficaria reutilizável.
+func TestEmailVerifyConfirmDelBeforeDB(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s := testServer(Config{})
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+
+	ctx := context.Background()
+	if err := s.rdb.Set(ctx, emailVerifyKey(42), "654321", emailVerifyTTL).Err(); err != nil {
+		t.Fatalf("set código: %v", err)
+	}
+
+	func() {
+		defer func() { recover() }() // nil DB → pânica em setEmailVerified; ignorada aqui
+		r := reqAs(httptest.NewRequest("POST", "/auth/email-verify/confirm",
+			strings.NewReader(`{"code":"654321"}`)), 42)
+		s.handleEmailVerifyConfirm(httptest.NewRecorder(), r)
+	}()
+
+	// O Del deve ter rodado antes do pânico: chave não pode mais existir no Redis.
+	exists, err := s.rdb.Exists(ctx, emailVerifyKey(42)).Result()
+	if err != nil {
+		t.Fatalf("redis exists: %v", err)
+	}
+	if exists != 0 {
+		t.Error("Del deve rodar antes do DB: código ainda existe no Redis após pânica do DB")
+	}
+}
