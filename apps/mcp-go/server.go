@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,10 +24,18 @@ type Server struct {
 	fetch   *http.Client  // busca imagens de URLs do usuário (anti-SSRF; trocável em teste)
 	openapi []byte        // docs/openapi.yaml carregado no boot (vazio = resource indisponível)
 	rdb     *redis.Client // opcional; nil = ban check desabilitado
+	printer *bambuClient  // opcional; nil = tool bambu_status desabilitada
 }
 
 func NewServer(cfg Config, openapi []byte, rdb *redis.Client) *Server {
-	return &Server{cfg: cfg, client: newAPIClient(), fetch: newFetchClient(), openapi: openapi, rdb: rdb}
+	s := &Server{cfg: cfg, client: newAPIClient(), fetch: newFetchClient(), openapi: openapi, rdb: rdb}
+	if cfg.BambuUserID != "" && cfg.BambuAccessToken != "" && cfg.BambuDeviceID != "" {
+		s.printer = newBambuClient(cfg)
+		if token := s.printer.client.Connect(); token.WaitTimeout(10*time.Second) && token.Error() != nil {
+			slog.Warn("bambu mqtt: falha ao conectar no boot, vai tentar de novo sozinho", "err", token.Error())
+		}
+	}
+	return s
 }
 
 func clientIP(r *http.Request) string {
@@ -77,6 +86,7 @@ func (s *Server) MCP() *mcp.Server {
 	s.addUploadTools(srv)
 	s.addBotTools(srv)
 	s.addPaymentsTools(srv)
+	s.addPrinterTools(srv)
 	s.addResources(srv)
 	return srv
 }

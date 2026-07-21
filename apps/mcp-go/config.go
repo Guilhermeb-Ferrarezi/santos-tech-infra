@@ -17,6 +17,12 @@ type Config struct {
 	PublicURL      string // URL pública deste MCP (resource OAuth, ex: https://api.santos-tech.com/mcp)
 	Production     bool
 	RedisURL       string // opcional; se vazio, ban check é desabilitado
+
+	// Bambu Lab (impressora 3D via broker de nuvem us.mqtt.bambulab.com).
+	// Vazios = tool bambu_status desabilitada. Ver apps/mcp-go/tools_printer.go.
+	BambuUserID      string // uid da conta Bambu (design-user-service/my/preference)
+	BambuAccessToken string
+	BambuDeviceID    string // serial da impressora
 }
 
 func LoadConfig() Config {
@@ -32,6 +38,10 @@ func LoadConfig() Config {
 		PublicURL:      strings.TrimRight(getEnv("MCP_PUBLIC_URL", "https://api.santos-tech.com/mcp"), "/"),
 		Production:     getEnv("NODE_ENV", "development") == "production",
 		RedisURL:       getEnv("REDIS_URL", ""),
+
+		BambuUserID:      getEnv("BAMBU_USER_ID", ""),
+		BambuAccessToken: getEnv("BAMBU_ACCESS_TOKEN", ""),
+		BambuDeviceID:    getEnv("BAMBU_DEVICE_ID", ""),
 	}
 }
 
