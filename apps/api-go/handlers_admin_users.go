@@ -213,25 +213,19 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Redefinição de senha direta pelo admin: hash + grava (marca conta como ativa).
+	// Hash de senha antecipado (CPU-bound; fora da transação).
+	var pwdHash string
 	if body.Password != "" {
-		pwdHash, err := hashPassword(body.Password)
+		h, err := hashPassword(body.Password)
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
-		if err := s.updatePassword(r.Context(), id, pwdHash); err != nil {
-			writeErr(w, err)
-			return
-		}
-		// Revoga todas as sessões existentes para que qualquer refresh token
-		// obtido antes da mudança de senha deixe de funcionar imediatamente.
-		// Espelha o comportamento de handleResetPassword (handlers_password.go).
-		if err := s.deleteUserSessions(r.Context(), id); err != nil {
-			slog.Error("admin: falha ao revogar sessões após redefinição de senha", "uid", id, "err", err)
-		}
+		pwdHash = h
 	}
-	u, err := s.updateUserAdmin(r.Context(), id, body.Name, body.Role, body.QuotaBytes, body.CustomRoleID)
+	// Atualiza senha + revoga sessões + campos de admin numa única transação,
+	// garantindo que nenhuma etapa fique parcialmente aplicada em caso de erro.
+	u, err := s.updateAdminUserFull(r.Context(), id, pwdHash, body.Name, body.Role, body.QuotaBytes, body.CustomRoleID)
 	if err != nil {
 		writeErr(w, err)
 		return
