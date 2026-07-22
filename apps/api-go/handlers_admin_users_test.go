@@ -203,3 +203,28 @@ func TestSendResetAdminUserBadIDFormat(t *testing.T) {
 		t.Fatalf("code=%d, esperado 400", w.Code)
 	}
 }
+
+// admin tentando suspender a própria conta → 400 SELF_ACTION (sem banco).
+func TestUpdateAdminUserSelfSuspend(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("PATCH", "/auth/admin/users/42",
+		strings.NewReader(`{"suspended":true}`))
+	r.SetPathValue("id", "42")
+	s.handleUpdateAdminUser(w, reqAs(r, 42))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("auto-suspensão: code=%d, esperado 400", w.Code)
+	}
+}
+
+// admin tentando excluir a própria conta → 400 SELF_ACTION (sem banco).
+func TestDeleteAdminUserSelf(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("DELETE", "/auth/admin/users/42", nil)
+	r.SetPathValue("id", "42")
+	s.handleDeleteAdminUser(w, reqAs(r, 42))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("auto-exclusão: code=%d, esperado 400", w.Code)
+	}
+}
