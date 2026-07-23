@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 // Cobrem somente os caminhos de validação que retornam ANTES de tocar no
@@ -193,6 +196,29 @@ func TestHandleMFAEmailEnableTooManyAttempts(t *testing.T) {
 	s.handleMFAEmailEnable(w, r)
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("6ª tentativa: code=%d (queria 429)", w.Code)
+	}
+}
+
+// TestHandleMFAEmailEnableRedisDown garante que handleMFAEmailEnable retorna 500
+// (fail-closed) quando o Redis está indisponível, e não deixa a requisição
+// prosseguir sem confirmar o contador de tentativas. O OTP de email (6 dígitos,
+// 10⁶ combinações) seria brute-forçável durante uma queda do Redis sem esta proteção.
+// O Redis é consultado ANTES do banco neste handler, então a ausência de banco real
+// não interfere — a falha ocorre no Incr do contador de tentativas.
+func TestHandleMFAEmailEnableRedisDown(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s := testServer(Config{})
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+
+	mr.SetError("ERR simulated Redis failure")
+
+	w := httptest.NewRecorder()
+	r := reqAs(httptest.NewRequest("POST", "/auth/mfa/email-enable",
+		strings.NewReader(`{"code":"123456"}`)), 42)
+	s.handleMFAEmailEnable(w, r)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("Redis indisponível deve retornar 500 (fail-closed), veio %d", w.Code)
 	}
 }
 
