@@ -1,12 +1,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +77,16 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	// eliminando a janela TOCTOU em que dois requests simultâneos com o mesmo
 	// token poderiam ambos ter sucesso. Padrão já usado no OAuth code exchange.
 	idStr, err := s.rdb.GetDel(r.Context(), "pwd_reset:"+hash).Result()
-	if err != nil || idStr == "" {
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			writeErr(w, appErr(http.StatusBadRequest, "INVALID_TOKEN", "Link de recuperação inválido ou expirado"))
+		} else {
+			slog.Warn("reset_password: redis error; rejecting to fail closed", "err", err)
+			writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro interno. Tente novamente."))
+		}
+		return
+	}
+	if idStr == "" {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_TOKEN", "Link de recuperação inválido ou expirado"))
 		return
 	}
