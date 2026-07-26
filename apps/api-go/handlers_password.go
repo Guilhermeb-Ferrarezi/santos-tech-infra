@@ -80,10 +80,10 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			writeErr(w, appErr(http.StatusBadRequest, "INVALID_TOKEN", "Link de recuperação inválido ou expirado"))
-		} else {
-			slog.Warn("reset_password: redis error; rejecting to fail closed", "err", err)
-			writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro interno. Tente novamente."))
+			return
 		}
+		slog.Error("reset_password: falha ao consumir token no Redis", "err", err)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
 		return
 	}
 	if idStr == "" {

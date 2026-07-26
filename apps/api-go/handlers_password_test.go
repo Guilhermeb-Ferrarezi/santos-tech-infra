@@ -28,18 +28,26 @@ func TestHandleResetPasswordTokenAbsent(t *testing.T) {
 	}
 }
 
-// TestHandleResetPasswordRedisDown garante que uma falha do Redis retorna 500
-// (fail-closed), e não um enganoso 400 INVALID_TOKEN que poderia levar o usuário
-// a solicitar um novo link quando o link original ainda é válido.
+// TestHandleResetPasswordRedisDown garante que handleResetPassword retorna 500
+// (fail-closed) quando o Redis está indisponível. O handler consome o token via
+// GetDel — falha de conexão deve ser um erro de infraestrutura (500), não ser
+// silenciado como "token inválido" (400), o que dificultaria o diagnóstico e
+// poderia mascarar uma indisponibilidade do Redis em produção.
 func TestHandleResetPasswordRedisDown(t *testing.T) {
 	mr := miniredis.RunT(t)
 	s := testServer(Config{})
 	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = s.rdb.Close() })
 
+	// Pré-semeamos uma chave válida para que o handler alcance o GetDel.
+	validToken := strings.Repeat("a", 64)
+	hash := sha256Hex(validToken)
+	if err := s.rdb.Set(context.Background(), "pwd_reset:"+hash, "42", 0).Err(); err != nil {
+		t.Fatalf("set token: %v", err)
+	}
+
 	mr.SetError("ERR simulated Redis failure")
 
-	validToken := strings.Repeat("a", 64)
 	w := httptest.NewRecorder()
 	s.handleResetPassword(w, httptest.NewRequest("POST", "/auth/reset-password",
 		strings.NewReader(`{"token":"`+validToken+`","newPassword":"senha1234"}`)))
