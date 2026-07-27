@@ -222,6 +222,45 @@ func TestHandleMFAEmailEnableRedisDown(t *testing.T) {
 	}
 }
 
+// TestHandleMFAEmailChallengeRedisDown garante que handleMFAEmail retorna 500
+// (fail-closed) quando o Redis está indisponível ao verificar o challenge.
+// Sem esta proteção, a falha seria silenciada como INVALID_CHALLENGE (400),
+// mascarando uma indisponibilidade de infraestrutura.
+func TestHandleMFAEmailChallengeRedisDown(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s := testServer(Config{})
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+
+	// Desliga o Redis antes da requisição chegar ao handler.
+	mr.SetError("ERR simulated Redis failure")
+
+	w := httptest.NewRecorder()
+	s.handleMFAEmail(w, httptest.NewRequest("POST", "/auth/mfa/email",
+		strings.NewReader(`{"challenge":"`+strings.Repeat("a", 48)+`"}`)))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("Redis indisponível deve retornar 500 (fail-closed), veio %d", w.Code)
+	}
+}
+
+// TestHandleMFAVerifyChallengeRedisDown garante que handleMFAVerify retorna 500
+// (fail-closed) quando o Redis está indisponível ao verificar o challenge.
+func TestHandleMFAVerifyChallengeRedisDown(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s := testServer(Config{})
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+
+	mr.SetError("ERR simulated Redis failure")
+
+	w := httptest.NewRecorder()
+	s.handleMFAVerify(w, httptest.NewRequest("POST", "/auth/mfa/verify",
+		strings.NewReader(`{"challenge":"`+strings.Repeat("a", 48)+`","code":"123456"}`)))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("Redis indisponível deve retornar 500 (fail-closed), veio %d", w.Code)
+	}
+}
+
 func TestHandleMFAMethodBadBody(t *testing.T) {
 	s := testServer(Config{})
 	w := httptest.NewRecorder()
