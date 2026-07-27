@@ -252,7 +252,7 @@ func (s *Server) handleAddBoardMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Email = strings.ToLower(strings.TrimSpace(in.Email))
-	if in.Email == "" || !strings.Contains(in.Email, "@") {
+	if !emailRe.MatchString(in.Email) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Email inválido"))
 		return
 	}
