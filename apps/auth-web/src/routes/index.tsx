@@ -52,7 +52,10 @@ export default function LoginPage() {
     retry: false,
     enabled: !requestId && !addAccount,
     select: (data) => {
-      if (data?.user) window.location.href = getSafeRedirect(rawRedirect)
+      // Sem redirect explícito (ex: clicou "Entrar" já logado): não força o
+      // destino padrão (portal) — manda pro switch-account, que mostra as
+      // contas em vez de sequestrar o clique.
+      if (data?.user) window.location.href = rawRedirect ? getSafeRedirect(rawRedirect) : '/switch-account'
       return data
     },
   })
