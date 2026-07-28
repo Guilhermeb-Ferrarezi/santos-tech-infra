@@ -279,12 +279,7 @@ func (s *Server) handlePortalListGoalRewards(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	p := portalPaginationFrom(r)
-	items, err := s.portalListGoalRewards(r.Context(), goalID, courseID, p)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	total, err := s.portalCountGoalRewards(r.Context(), goalID, courseID)
+	items, total, err := s.portalListGoalRewards(r.Context(), goalID, courseID, p)
 	if err != nil {
 		writeErr(w, err)
 		return

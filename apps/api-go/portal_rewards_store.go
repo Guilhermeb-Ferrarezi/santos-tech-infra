@@ -279,7 +279,7 @@ func (s *Server) portalGetGoalWithRewards(ctx context.Context, id int64) (*porta
 	if err != nil {
 		return nil, nil, err
 	}
-	rewards, err := s.portalListGoalRewards(ctx, &id, nil, portalPagination{Limit: 1000, Offset: 0})
+	rewards, _, err := s.portalListGoalRewards(ctx, &id, nil, portalPagination{Limit: 1000, Offset: 0})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -386,30 +386,27 @@ const portalRewardJoins = `FROM goals_rewards gr
 	JOIN badge b ON b.id = gr.badge_id
 	JOIN course c ON c.id = gr.course_id`
 
-func (s *Server) portalListGoalRewards(ctx context.Context, goalID, courseID *int64, p portalPagination) ([]portalGoalRewardDTO, error) {
-	rows, err := s.portalDB.Query(ctx, `SELECT `+portalRewardCols+` `+portalRewardJoins+`
-		WHERE ($1::bigint IS NULL OR gr.goal_id = $1) AND ($2::bigint IS NULL OR gr.course_id = $2)
+func (s *Server) portalListGoalRewards(ctx context.Context, goalID, courseID *int64, p portalPagination) ([]portalGoalRewardDTO, int64, error) {
+	const where = `WHERE ($1::bigint IS NULL OR gr.goal_id = $1) AND ($2::bigint IS NULL OR gr.course_id = $2)`
+	var total int64
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM goals_rewards gr `+where, goalID, courseID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.portalDB.Query(ctx, `SELECT `+portalRewardCols+` `+portalRewardJoins+` `+where+`
 		ORDER BY gr.created_at DESC, gr.id DESC LIMIT $3 OFFSET $4`, goalID, courseID, p.Limit, p.Offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	items := []portalGoalRewardDTO{}
 	for rows.Next() {
 		r, err := scanReward(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		items = append(items, *r)
 	}
-	return items, rows.Err()
-}
-
-func (s *Server) portalCountGoalRewards(ctx context.Context, goalID, courseID *int64) (int64, error) {
-	var total int64
-	err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM goals_rewards gr
-		WHERE ($1::bigint IS NULL OR gr.goal_id = $1) AND ($2::bigint IS NULL OR gr.course_id = $2)`, goalID, courseID).Scan(&total)
-	return total, err
+	return items, total, rows.Err()
 }
 
 func (s *Server) portalGetReward(ctx context.Context, id int64) (*portalGoalRewardDTO, error) {
