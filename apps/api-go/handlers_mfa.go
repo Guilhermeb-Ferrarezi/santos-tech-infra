@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base32"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pquerna/otp/totp"
+	"github.com/redis/go-redis/v9"
 )
 
 // POST /auth/mfa/setup — gera um secret TOTP pendente + otpauth URL (QR).
@@ -221,7 +223,12 @@ func (s *Server) handleMFAEmail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
 		return
 	}
-	uid, ok := s.challengeUser(r.Context(), body.Challenge)
+	uid, ok, redisErr := s.challengeUser(r.Context(), body.Challenge)
+	if redisErr != nil {
+		slog.Error("mfa_email: redis error ao verificar challenge", "err", redisErr)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+		return
+	}
 	if !ok {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
 		return
@@ -259,7 +266,12 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
 		return
 	}
-	uid, ok := s.challengeUser(r.Context(), body.Challenge)
+	uid, ok, redisErr := s.challengeUser(r.Context(), body.Challenge)
+	if redisErr != nil {
+		slog.Error("mfa_verify: redis error ao verificar challenge", "err", redisErr)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+		return
+	}
 	if !ok {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
 		return
@@ -334,16 +346,25 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": s.buildProfile(r.Context(), u)})
 }
 
-func (s *Server) challengeUser(ctx context.Context, challenge string) (int64, bool) {
+func (s *Server) challengeUser(ctx context.Context, challenge string) (int64, bool, error) {
 	if challenge == "" {
-		return 0, false
+		return 0, false, nil
 	}
 	idStr, err := s.rdb.Get(ctx, "mfa_challenge:"+challenge).Result()
-	if err != nil || idStr == "" {
-		return 0, false
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	if idStr == "" {
+		return 0, false, nil
 	}
 	id, err := strconv.ParseInt(idStr, 10, 64)
-	return id, err == nil
+	if err != nil {
+		return 0, false, nil
+	}
+	return id, true, nil
 }
 
 func genRecoveryCodes(n int) []string {
