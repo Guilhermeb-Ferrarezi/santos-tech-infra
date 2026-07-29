@@ -5,14 +5,31 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
+	"strings"
 )
 
-const maxUploadSize = 5 << 20 // 5 MB
+const maxUploadSize = 20 << 20 // 20 MB
 
-// uploadExt resolve a extensão a partir do content-type detectado para o upload
-// genérico de /auth/upload: imagens (png/jpeg/webp/gif) e também PDF. imageExt
-// continua restrito a imagens (usado pelo avatar), então PDF é tratado aqui.
-func uploadExt(ct string) (string, bool) {
+// zipFamilyExt são as extensões aceitas quando o conteúdo é detectado como
+// application/zip — docx/xlsx/pptx são arquivos ZIP por dentro, então o sniff de
+// magic-bytes não os distingue de um .zip puro; usamos a extensão que o cliente
+// declarou no nome do arquivo pra decidir qual delas é, caindo pra "zip" genérico
+// se não for uma reconhecida.
+var zipFamilyExt = map[string]bool{"zip": true, "docx": true, "xlsx": true, "pptx": true}
+
+// uploadExt resolve a extensão a partir do content-type detectado (magic-bytes) e,
+// pra arquivos zip-based, do nome de arquivo declarado — para o upload genérico de
+// /auth/upload: imagens (png/jpeg/webp/gif), PDF e documentos Office/zip. imageExt
+// continua restrito a imagens (usado pelo avatar).
+func uploadExt(ct, filename string) (string, bool) {
+	if ct == "application/zip" {
+		ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filename), "."))
+		if zipFamilyExt[ext] {
+			return ext, true
+		}
+		return "zip", true
+	}
 	if ct == "application/pdf" {
 		return "pdf", true
 	}
@@ -32,10 +49,10 @@ func (s *Server) handleImageUpload(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize+4096)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
-		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido ou grande demais (máx 5MB)"))
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido ou grande demais (máx 20MB)"))
 		return
 	}
-	file, _, err := r.FormFile("file")
+	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "envie a imagem no campo 'file'"))
 		return
@@ -52,14 +69,14 @@ func (s *Server) handleImageUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(data) > maxUploadSize {
-		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo grande demais (máx 5MB)"))
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo grande demais (máx 20MB)"))
 		return
 	}
 
 	contentType := http.DetectContentType(data)
-	ext, ok := uploadExt(contentType)
+	ext, ok := uploadExt(contentType, header.Filename)
 	if !ok {
-		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "formato não suportado (use png, jpeg, webp, gif ou pdf)"))
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "formato não suportado (use png, jpeg, webp, gif, pdf, docx, xlsx, pptx ou zip)"))
 		return
 	}
 

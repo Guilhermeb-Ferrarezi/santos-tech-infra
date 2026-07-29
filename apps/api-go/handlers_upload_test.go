@@ -34,15 +34,33 @@ func TestImageExt(t *testing.T) {
 
 func TestUploadExt(t *testing.T) {
 	// PDF é aceito no upload genérico de /auth/upload.
-	if got, ok := uploadExt("application/pdf"); !ok || got != "pdf" {
+	if got, ok := uploadExt("application/pdf", "apostila.pdf"); !ok || got != "pdf" {
 		t.Errorf("uploadExt(pdf) = %q,%v; quer \"pdf\",true", got, ok)
 	}
 	// Imagens continuam aceitas (delegando a imageExt).
-	if got, ok := uploadExt("image/png"); !ok || got != "png" {
+	if got, ok := uploadExt("image/png", "foto.png"); !ok || got != "png" {
 		t.Errorf("uploadExt(png) = %q,%v; quer \"png\",true", got, ok)
 	}
-	// Tipo não suportado segue recusado.
-	if _, ok := uploadExt("application/zip"); ok {
-		t.Error("application/zip não deveria ser aceito")
+	// Tipo genuinamente não suportado segue recusado.
+	if _, ok := uploadExt("video/mp4", "aula.mp4"); ok {
+		t.Error("video/mp4 não deveria ser aceito em /auth/upload")
+	}
+}
+
+func TestUploadExtZipFamily(t *testing.T) {
+	cases := map[string]string{
+		"slides.pptx":       "pptx",
+		"planilha.xlsx":     "xlsx",
+		"documento.docx":    "docx",
+		"pacote.zip":        "zip",
+		"SEM_EXTENSAO":      "zip",
+		"arquivo.rar":       "zip",  // extensão não reconhecida da família zip → genérico
+		"Apresentacao.PPTX": "pptx", // case-insensitive
+	}
+	for filename, want := range cases {
+		got, ok := uploadExt("application/zip", filename)
+		if !ok || got != want {
+			t.Errorf("uploadExt(zip, %q) = %q,%v; quer %q,true", filename, got, ok, want)
+		}
 	}
 }

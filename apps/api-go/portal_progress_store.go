@@ -125,6 +125,9 @@ func (s *Server) portalUpdateAnswer(ctx context.Context, id int64, patch portalA
 	if tag.RowsAffected() == 0 {
 		return nil, notFoundErr("Resposta")
 	}
+	if patch.IsCorrect != nil {
+		s.grantPointsForAnswers(ctx, []int64{id})
+	}
 	return s.portalGetAnswer(ctx, id)
 }
 
@@ -137,6 +140,7 @@ func (s *Server) portalBatchUpdateAnswers(ctx context.Context, ids []int64, patc
 	}
 	defer tx.Rollback(ctx)
 	updated, notFound = []string{}, []string{}
+	updatedIDs := []int64{}
 	for _, id := range ids {
 		var got int64
 		err := tx.QueryRow(ctx, `UPDATE answer SET
@@ -153,9 +157,13 @@ func (s *Server) portalBatchUpdateAnswers(ctx context.Context, ids []int64, patc
 			return nil, nil, portalDBErr(err)
 		}
 		updated = append(updated, fmt.Sprint(got))
+		updatedIDs = append(updatedIDs, got)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, nil, err
+	}
+	if patch.IsCorrect != nil {
+		s.grantPointsForAnswers(ctx, updatedIDs)
 	}
 	return updated, notFound, nil
 }

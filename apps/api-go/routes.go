@@ -25,6 +25,10 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Upload genérico de imagem (multipart → R2 → devolve URL; ex: foto de remetente)
 	mux.HandleFunc("POST /auth/upload", s.rateLimit(10, min, s.authGuard(s.handleImageUpload)))
 
+	// URL pré-assinada pra upload direto de vídeo no R2 (cliente faz o PUT, sem
+	// passar pelo backend — arquivo grande demais pra bufferizar em memória)
+	mux.HandleFunc("POST /auth/upload/presigned", s.rateLimit(10, min, s.authGuard(s.handleVideoPresign)))
+
 	// API tokens (PAT) — gestão da própria conta (precisa de sessão).
 	// Criar token é sensível (vira credencial de longa duração): exige sudo mode.
 	mux.HandleFunc("POST /auth/api-keys", s.rateLimit(10, min, s.authGuard(s.sudoGuard(s.handleCreateAPIKey))))

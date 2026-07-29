@@ -43,6 +43,10 @@ func main() {
 		defer portalDB.Close()
 		slog.Info("portal usando banco separado do auth")
 	}
+	if err := migratePortal(ctx, portalDB); err != nil {
+		slog.Error("falha na migração do portal", "err", err)
+		os.Exit(1)
+	}
 
 	rdb, err := newRedis(cfg.RedisURL)
 	if err != nil {

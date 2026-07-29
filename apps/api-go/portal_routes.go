@@ -59,6 +59,16 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	s.registerPortalProgressRoutes(mux)
 	s.registerPortalRewardsRoutes(mux)
 	s.registerPortalNotificationRoutes(mux)
+	s.registerPortalRankingsRoutes(mux)
+}
+
+// registerPortalRankingsRoutes — leaderboards de notas (% de acerto) e pontos
+// (soma de portal_point, concedidos automaticamente ao corrigir respostas em
+// portalUpdateAnswer/portalBatchUpdateAnswers). Só leitura: pontos não são
+// escritos via API, só pela correção. → portal_rankings.
+func (s *Server) registerPortalRankingsRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /portal/rankings/notas", s.portalRead("portal_rankings", s.handlePortalRankingNotas))
+	mux.HandleFunc("GET /portal/rankings/pontos", s.portalRead("portal_rankings", s.handlePortalRankingPontos))
 }
 
 // registerPortalRewardsRoutes — Fase 4: medalhas (portal_medalhas) e metas
