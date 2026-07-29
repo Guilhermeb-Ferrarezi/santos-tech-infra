@@ -263,9 +263,10 @@ func (s *Server) portalUpdateExercise(ctx context.Context, id int64, in portalEx
 		points_redeem=COALESCE($9, points_redeem),
 		video_url=COALESCE($10, video_url),
 		term_at=COALESCE($11, term_at),
+		phase_id=COALESCE($12, phase_id),
 		updated_at=NOW()
 		WHERE id=$1`,
-		id, in.Title, in.Description, in.Type, in.Difficulty, in.IndexOrder, in.IsDailyTask, in.IsFinalExercise, in.PointsRedeem, in.VideoURL, termAt)
+		id, in.Title, in.Description, in.Type, in.Difficulty, in.IndexOrder, in.IsDailyTask, in.IsFinalExercise, in.PointsRedeem, in.VideoURL, termAt, in.PhaseID)
 	if err != nil {
 		return nil, portalDBErr(err)
 	}

@@ -99,6 +99,27 @@ func TestPortalExerciseValidation(t *testing.T) {
 	}
 }
 
+func TestPortalExercisePhaseIDValidation(t *testing.T) {
+	// realocação (phaseId no PATCH): <= 0 deveria falhar
+	zero := int64(0)
+	if err := (&portalExerciseInput{PhaseID: &zero}).validateUpdate(); err == nil {
+		t.Fatal("phaseId=0 deveria falhar")
+	}
+	neg := int64(-3)
+	if err := (&portalExerciseInput{PhaseID: &neg}).validateUpdate(); err == nil {
+		t.Fatal("phaseId negativo deveria falhar")
+	}
+	// phaseId válido não deveria falhar (patch parcial, sem os demais campos)
+	valid := int64(9)
+	if err := (&portalExerciseInput{PhaseID: &valid}).validateUpdate(); err != nil {
+		t.Fatalf("phaseId válido não deveria falhar: %v", err)
+	}
+	// omitido (nil) não deveria falhar
+	if err := (&portalExerciseInput{}).validateUpdate(); err != nil {
+		t.Fatalf("phaseId omitido não deveria falhar: %v", err)
+	}
+}
+
 func TestPortalContentRoutesAuthBeforeDB(t *testing.T) {
 	s := testServer(Config{})
 	for _, tc := range []struct {

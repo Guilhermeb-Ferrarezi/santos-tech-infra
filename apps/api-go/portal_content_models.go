@@ -51,17 +51,20 @@ type portalQuestionInput struct {
 }
 
 type portalExerciseInput struct {
-	Title           string                `json:"title"`
-	Description     string                `json:"description"`
-	Type            *int                  `json:"type"`
-	Difficulty      *int                  `json:"difficulty"`
-	IndexOrder      *int                  `json:"indexOrder"`
-	IsDailyTask     *bool                 `json:"isDailyTask"`
-	IsFinalExercise *bool                 `json:"isFinalExercise"`
-	PointsRedeem    *int                  `json:"pointsRedeem"`
-	VideoURL        *string               `json:"videoUrl"`
-	TermAt          *string               `json:"termAt"`
-	Questions       []portalQuestionInput `json:"questions"`
+	Title           string  `json:"title"`
+	Description     string  `json:"description"`
+	Type            *int    `json:"type"`
+	Difficulty      *int    `json:"difficulty"`
+	IndexOrder      *int    `json:"indexOrder"`
+	IsDailyTask     *bool   `json:"isDailyTask"`
+	IsFinalExercise *bool   `json:"isFinalExercise"`
+	PointsRedeem    *int    `json:"pointsRedeem"`
+	VideoURL        *string `json:"videoUrl"`
+	TermAt          *string `json:"termAt"`
+	// PhaseID: só em PATCH — realoca o exercício pra outra fase (não usado no
+	// create, que já recebe a fase via path /portal/phases/{phaseId}/exercises).
+	PhaseID   *int64                `json:"phaseId"`
+	Questions []portalQuestionInput `json:"questions"`
 }
 
 func (in *portalExerciseInput) validateCreate() error {
@@ -143,6 +146,9 @@ func (in *portalExerciseInput) validateUpdate() error {
 	}
 	if in.PointsRedeem != nil && *in.PointsRedeem < 0 {
 		return validationErr("pointsRedeem deve ser >= 0")
+	}
+	if in.PhaseID != nil && *in.PhaseID <= 0 {
+		return validationErr("phaseId inválido")
 	}
 	return validateQuestionShapes(in.Questions)
 }
