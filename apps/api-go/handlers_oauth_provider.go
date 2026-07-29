@@ -81,6 +81,14 @@ func (s *Server) handleOAuthConfirm(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "requestId e sessionId são obrigatórios"))
 		return
 	}
+	// Rejeita requestId de formato inválido antes de qualquer I/O (Redis) — espelha
+	// isValidChallenge (MFA) e isValidResetToken (reset de senha): IDs bem-formados
+	// têm exatamente 32 chars hex (output de randomToken(16)); qualquer outro valor
+	// nunca existirá no Redis e não precisa nem chegar lá.
+	if !isValidOAuthRequestID(body.RequestID) {
+		writeErr(w, appErr(http.StatusGone, "REQUEST_EXPIRED", "Autorização expirou — recomece a partir do app"))
+		return
+	}
 	raw, err := s.rdb.Get(r.Context(), authReqKey(body.RequestID)).Bytes()
 	if err != nil {
 		writeErr(w, appErr(http.StatusGone, "REQUEST_EXPIRED", "Autorização expirou — recomece a partir do app"))

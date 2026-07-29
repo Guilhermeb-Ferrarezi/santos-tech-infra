@@ -52,6 +52,18 @@ func isValidResetToken(s string) bool {
 	return err == nil
 }
 
+// isValidOAuthRequestID reports whether s is a well-formed OAuth authorization
+// request ID — the exact output of randomToken(16): 32 lowercase hex characters.
+// Validates input before it reaches Redis key construction (mirrors isValidChallenge
+// for MFA challenges and isValidResetToken for password-reset tokens).
+func isValidOAuthRequestID(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
 // recoveryCodeLen é o comprimento esperado de um código de recuperação MFA:
 // base32 sem padding de 8 bytes aleatórios = exatamente 13 caracteres A-Z2-7.
 const recoveryCodeLen = 13
