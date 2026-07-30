@@ -45,6 +45,48 @@ func TestOAuthConfirmMissingBody(t *testing.T) {
 	}
 }
 
+// TestOAuthConfirmInvalidRequestID garante que requestId de formato inválido é
+// rejeitado por isValidOAuthRequestID antes de qualquer chamada ao Redis —
+// espelha o padrão de isValidChallenge (MFA) e isValidResetToken (reset de senha).
+func TestOAuthConfirmInvalidRequestID(t *testing.T) {
+	s := testServer(Config{JWTSecret: "secret"})
+	for _, bad := range []string{
+		strings.Repeat("a", 31), // 1 char a menos (31 hex)
+		strings.Repeat("a", 33), // 1 char a mais (33 hex)
+		strings.Repeat("x", 32), // comprimento certo mas 'x' não é hex válido
+		"",                      // vazio já pego pelo check anterior, mas garante cobertura
+	} {
+		if bad == "" {
+			continue // vazio é rejeitado antes por "requestId e sessionId são obrigatórios"
+		}
+		body := `{"requestId":"` + bad + `","sessionId":"00000000-0000-0000-0000-000000000000"}`
+		w := httptest.NewRecorder()
+		s.handleOAuthConfirm(w, httptest.NewRequest("POST", "/oauth/authorize/confirm", strings.NewReader(body)))
+		if w.Code != http.StatusGone {
+			t.Errorf("requestId inválido %q: code=%d (queria 410 REQUEST_EXPIRED)", bad, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "REQUEST_EXPIRED") {
+			t.Errorf("requestId inválido %q: body=%s (queria REQUEST_EXPIRED)", bad, w.Body.String())
+		}
+	}
+}
+
+// TestOAuthConfirmValidRequestIDMissingInRedis garante que um requestId de
+// formato correto mas ausente no Redis devolve 410 REQUEST_EXPIRED — e não 500.
+func TestOAuthConfirmValidRequestIDMissingInRedis(t *testing.T) {
+	s := testServerWithRedis(t, Config{JWTSecret: "secret"})
+	validID := strings.Repeat("a", 32) // 32 chars hex válidos
+	body := `{"requestId":"` + validID + `","sessionId":"00000000-0000-0000-0000-000000000000"}`
+	w := httptest.NewRecorder()
+	s.handleOAuthConfirm(w, httptest.NewRequest("POST", "/oauth/authorize/confirm", strings.NewReader(body)))
+	if w.Code != http.StatusGone {
+		t.Fatalf("requestId ausente no Redis: code=%d (queria 410)", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "REQUEST_EXPIRED") {
+		t.Errorf("esperava REQUEST_EXPIRED no body, veio: %s", w.Body.String())
+	}
+}
+
 func TestGoogleStartStoresReturnTo(t *testing.T) {
 	s := testServerWithRedis(t, Config{GoogleClientID: "x"})
 	s.google = &oauth2.Config{ClientID: "x"}
