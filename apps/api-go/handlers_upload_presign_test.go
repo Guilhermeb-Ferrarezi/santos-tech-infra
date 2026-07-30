@@ -62,6 +62,22 @@ func TestHandleVideoPresignInvalidSize(t *testing.T) {
 	}
 }
 
+// TestHandleVideoPresignBodyTooLarge garante que um corpo JSON excessivamente grande
+// é rejeitado com 400 — consistente com todos os outros handlers de JSON da API.
+// Sem MaxBytesReader, um cliente autenticado poderia enviar megabytes de JSON e
+// forçar alocação de memória desnecessária.
+func TestHandleVideoPresignBodyTooLarge(t *testing.T) {
+	s := presignServer()
+	// Gera um campo JSON gigante (>> 64 KiB) que excede o limite do MaxBytesReader.
+	huge := `{"filename":"aula.mp4","contentType":"video/mp4","size":1024,"pad":"` + strings.Repeat("x", 70000) + `"}`
+	r := reqAs(httptest.NewRequest("POST", "/auth/upload/presigned", strings.NewReader(huge)), 42)
+	w := httptest.NewRecorder()
+	s.handleVideoPresign(w, r)
+	if w.Code != 400 {
+		t.Fatalf("corpo enorme: esperava 400, veio %d", w.Code)
+	}
+}
+
 func TestHandleVideoPresignSuccess(t *testing.T) {
 	w := presignReq(t, presignUploadRequest{Filename: "aula.mp4", ContentType: "video/mp4", Size: 10 << 20})
 	if w.Code != 200 {
