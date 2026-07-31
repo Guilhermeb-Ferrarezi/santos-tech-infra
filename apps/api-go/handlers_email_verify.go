@@ -83,21 +83,12 @@ func (s *Server) handleEmailVerifyConfirm(w http.ResponseWriter, r *http.Request
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "Código inválido"))
 		return
 	}
-	want, err := s.rdb.Get(r.Context(), emailVerifyKey(uid)).Result()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			writeErr(w, appErr(http.StatusBadRequest, "CODE_EXPIRED", "Código expirado; envie outro"))
-			return
-		}
-		slog.Warn("email_verify_confirm: redis error; rejecting to fail closed", "uid", uid, "err", err)
-		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro interno. Tente novamente."))
-		return
-	}
-	if want == "" {
-		writeErr(w, appErr(http.StatusBadRequest, "CODE_EXPIRED", "Código expirado; envie outro"))
-		return
-	}
-	// Teto de tentativas: o código de 6 dígitos não pode ser brute-forçável na janela.
+	// Teto de tentativas: incrementa o contador ANTES de ler o código — padrão
+	// idêntico ao handleMFAVerify, handleMFAEnable e handleSudoVerify. Assim,
+	// toda requisição (correta ou não) consome um slot do limite antes de acessar
+	// o código, fechando a janela onde requisições concorrentes conseguiam ler
+	// o código antes de qualquer INCR poder bloqueá-las (GET-after-INCR fecha
+	// esse TOCTOU de concorrência). fail-closed: Redis indisponível → 500.
 	attemptsCmd := s.rdb.Incr(r.Context(), emailVerifyAttKey(uid))
 	if attemptsCmd.Err() != nil {
 		slog.Warn("email_verify_confirm: redis error; rejecting to fail closed", "uid", uid, "err", attemptsCmd.Err())
@@ -113,6 +104,20 @@ func (s *Server) handleEmailVerifyConfirm(w http.ResponseWriter, r *http.Request
 			slog.Warn("email_verify_confirm: falha ao invalidar código após exceder tentativas", "uid", uid, "err", err)
 		}
 		writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Muitas tentativas; envie outro código"))
+		return
+	}
+	want, err := s.rdb.Get(r.Context(), emailVerifyKey(uid)).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			writeErr(w, appErr(http.StatusBadRequest, "CODE_EXPIRED", "Código expirado; envie outro"))
+			return
+		}
+		slog.Warn("email_verify_confirm: redis error ao obter código", "uid", uid, "err", err)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL", "Erro interno. Tente novamente."))
+		return
+	}
+	if want == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "CODE_EXPIRED", "Código expirado; envie outro"))
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(code), []byte(want)) != 1 {
