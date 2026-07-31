@@ -32,6 +32,7 @@ func (s *Server) handleVideoPresign(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusServiceUnavailable, "UPLOAD_DISABLED", "upload não configurado (R2)"))
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body presignUploadRequest
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
