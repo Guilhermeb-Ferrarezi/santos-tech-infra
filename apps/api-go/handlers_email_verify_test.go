@@ -112,6 +112,59 @@ func TestEmailVerifyConfirmCodeValidHitsDB(t *testing.T) {
 	}
 }
 
+// TestEmailVerifyConfirmRateLimit verifica que após emailVerifyMaxAttempts falhas
+// consecutivas o handler retorna 429 RATE_LIMITED e apaga o código do Redis —
+// impedindo que um atacante brute-force o OTP de 6 dígitos dentro da janela.
+func TestEmailVerifyConfirmRateLimit(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s := testServer(Config{})
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+
+	ctx := context.Background()
+	uid := int64(77)
+
+	// Insere um código válido no Redis fake.
+	if err := s.rdb.Set(ctx, emailVerifyKey(uid), "654321", emailVerifyTTL).Err(); err != nil {
+		t.Fatalf("set código: %v", err)
+	}
+
+	// Envia emailVerifyMaxAttempts códigos errados — cada um deve retornar 400 INVALID_CODE.
+	for i := 0; i < emailVerifyMaxAttempts; i++ {
+		w := httptest.NewRecorder()
+		r := reqAs(httptest.NewRequest("POST", "/auth/email-verify/confirm",
+			strings.NewReader(`{"code":"000000"}`)), uid)
+		s.handleEmailVerifyConfirm(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("tentativa %d: esperava 400 INVALID_CODE, veio %d", i+1, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "INVALID_CODE") {
+			t.Errorf("tentativa %d: esperava INVALID_CODE no corpo, veio: %s", i+1, w.Body.String())
+		}
+	}
+
+	// A tentativa seguinte deve ser bloqueada (429 RATE_LIMITED).
+	w := httptest.NewRecorder()
+	r := reqAs(httptest.NewRequest("POST", "/auth/email-verify/confirm",
+		strings.NewReader(`{"code":"000000"}`)), uid)
+	s.handleEmailVerifyConfirm(w, r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("após %d tentativas: esperava 429 RATE_LIMITED, veio %d", emailVerifyMaxAttempts+1, w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "RATE_LIMITED") {
+		t.Errorf("esperava RATE_LIMITED no corpo, veio: %s", w.Body.String())
+	}
+
+	// O código deve ter sido apagado do Redis ao exceder o limite.
+	exists, err := s.rdb.Exists(ctx, emailVerifyKey(uid)).Result()
+	if err != nil {
+		t.Fatalf("redis exists: %v", err)
+	}
+	if exists != 0 {
+		t.Error("código deve ser deletado do Redis ao exceder o limite de tentativas")
+	}
+}
+
 // TestEmailVerifyConfirmDelBeforeDB verifica que o Del do código no Redis ocorre
 // ANTES da escrita no banco (fail-closed): com nil DB, o handler pânica em
 // setEmailVerified, mas o código já deve ter sido removido do Redis. Se o Del
