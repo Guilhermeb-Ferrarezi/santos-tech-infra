@@ -76,6 +76,10 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome é obrigatório"))
 		return
 	}
+	if len(body.Name) > 128 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome deve ter no máximo 128 caracteres"))
+		return
+	}
 	var email string
 	switch {
 	case body.Email != "":
@@ -184,6 +188,10 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
+		return
+	}
+	if body.Name != nil && len(*body.Name) > 128 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome deve ter no máximo 128 caracteres"))
 		return
 	}
 	if body.Role != nil && (*body.Role < RoleStudent || *body.Role > RoleCustom) {
