@@ -21,7 +21,7 @@
     "payment-token-efi": "^3.4.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-router-dom": "^7.18.1",
+    "react-router-dom": "^7.18.2",
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
