@@ -10,7 +10,7 @@
     "test": "DATABASE_URL=postgres://test REDIS_URL=redis://test JWT_SECRET=test OWNER_JID=test@s.whatsapp.net OWNER_USER_ID=1 bun test"
   },
   "dependencies": {
-    "baileys": "7.0.0-rc13",
+    "baileys": "7.0.0-rc14",
     "ioredis": "^5.4.0",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.22.0",
