@@ -23,7 +23,8 @@ type User struct {
 	Role            int16
 	CustomRoleID    *string
 	MFAEnabled      bool
-	TOTPSecret      *string `json:"-"` // seed TOTP — nunca serializar
+	TOTPSecret      *string `json:"-"`             // seed TOTP — nunca serializar
+	HasTOTPSecret   bool    `json:"hasTotpSecret"` // derivado de TOTPSecret; sobrevive ao cache Redis
 	SuspendedAt     *time.Time
 	CreatedAt       time.Time
 	Preferences     json.RawMessage // JSONB de preferências de UI (free-form)
