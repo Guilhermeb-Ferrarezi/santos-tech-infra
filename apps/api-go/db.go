@@ -215,6 +215,7 @@ func scanUser(row pgx.Row) (*User, error) {
 		}
 		return nil, err
 	}
+	u.HasTOTPSecret = u.TOTPSecret != nil
 	return &u, nil
 }
 
@@ -471,7 +472,7 @@ func (s *Server) buildProfile(ctx context.Context, u *User) *UserProfile {
 		ID: u.ID, Email: u.Email, Username: u.Username, Name: u.Name, Role: u.Role,
 		CustomRoleID: u.CustomRoleID, AvatarURL: u.AvatarURL, MFAEnabled: u.MFAEnabled,
 		EmailVerified: u.EmailVerifiedAt != nil,
-		MFAMethod:     u.MFAMethod, MFATotp: u.TOTPSecret != nil, MFAEmail: u.EmailVerifiedAt != nil,
+		MFAMethod:     u.MFAMethod, MFATotp: u.HasTOTPSecret, MFAEmail: u.EmailVerifiedAt != nil,
 		CreatedAt: u.CreatedAt.UTC().Format(time.RFC3339), Preferences: prefs,
 	}
 	if u.SuspendedAt != nil {
