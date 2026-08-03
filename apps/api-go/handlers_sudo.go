@@ -134,7 +134,11 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 			if u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret) {
 				valid = true
 			}
-			if !valid {
+			// consumeAcctEmailCode usa GetDel — consome o OTP de email atomicamente mesmo
+			// quando o código não bate. Só chamamos para códigos de 6 dígitos (OTP/TOTP):
+			// recovery codes (13 chars) nunca são OTPs de email, então chamar GetDel aqui
+			// invalidaria silenciosamente qualquer OTP pendente sem o usuário ter tentado usá-lo.
+			if !valid && len(code) != recoveryCodeLen {
 				valid = s.consumeAcctEmailCode(r.Context(), uid, code)
 			}
 			if !valid && len(code) == recoveryCodeLen {

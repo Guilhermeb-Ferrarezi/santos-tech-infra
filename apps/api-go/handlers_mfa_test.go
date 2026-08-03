@@ -270,6 +270,39 @@ func TestHandleMFAMethodBadBody(t *testing.T) {
 	}
 }
 
+// TestConsumeAcctEmailCodeDeletesKeyOnMismatch documenta o comportamento de
+// consumeAcctEmailCode: ela usa GetDel e deleta a chave do Redis mesmo quando
+// o código não bate. Este é o motivo pelo qual handleMFADisable e handleSudoVerify
+// NÃO devem chamar consumeAcctEmailCode para códigos de comprimento recoveryCodeLen
+// (13 chars) — fazer isso invalidaria silenciosamente qualquer OTP de email pendente
+// sem que o usuário tivesse tentado usá-lo.
+func TestConsumeAcctEmailCodeDeletesKeyOnMismatch(t *testing.T) {
+	s := testServerWithRedis(t, Config{})
+
+	const uid = int64(42)
+	key := mfaEmailAcctKey(uid)
+	// Semeia um OTP de 6 dígitos válido para a conta
+	if err := s.rdb.Set(context.Background(), key, "123456", 0).Err(); err != nil {
+		t.Fatalf("set email OTP: %v", err)
+	}
+
+	// Código errado (comprimento de recovery code): consumeAcctEmailCode retorna
+	// false, mas o GetDel já removeu a chave atomicamente.
+	if s.consumeAcctEmailCode(context.Background(), uid, strings.Repeat("A", recoveryCodeLen)) {
+		t.Fatal("código de recovery code não deve ser aceito como OTP de email")
+	}
+
+	// A chave foi deletada mesmo sem match — é por isso que os handlers devem
+	// pular consumeAcctEmailCode quando len(code) == recoveryCodeLen.
+	exists, err := s.rdb.Exists(context.Background(), key).Result()
+	if err != nil {
+		t.Fatalf("redis exists: %v", err)
+	}
+	if exists != 0 {
+		t.Fatal("consumeAcctEmailCode usa GetDel: a chave devia ter sido deletada mesmo sem match")
+	}
+}
+
 // TestGenRecoveryCodesLen verifica que os códigos gerados têm exatamente
 // recoveryCodeLen caracteres — mesma constante usada para filtrar a consulta ao banco.
 func TestGenRecoveryCodesLen(t *testing.T) {
