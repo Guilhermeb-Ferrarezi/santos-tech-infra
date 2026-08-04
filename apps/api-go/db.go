@@ -192,6 +192,8 @@ CREATE TABLE IF NOT EXISTS ip_bans (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_ip_bans_ip ON ip_bans(ip);
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS responsavel_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_social_posts_responsavel ON social_posts(responsavel_id);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

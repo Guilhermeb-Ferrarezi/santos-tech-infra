@@ -218,7 +218,9 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 ''|capa_gancho|hero_numero|versus|antes_depois|desenvolvimento|cta_fechamento|checklist|passo_a_passo|citacao_depoimento|poster_anuncio),
 `plataformasDestino[]` (repurposing), `copyArte[]` ({slide,headline,subtitulo,corpo,cta,hookOnScreen}),
 `hashtags[]`, `conceitoVisual`, `paleta` ({fundo,destaque,corPrograma}), `promptIa`,
-`specs` ({proporcao,largura,altura,safeZone,formatoArquivo,duracaoSeg}), `masterUrl`, `mandatorios`.
+`specs` ({proporcao,largura,altura,safeZone,formatoArquivo,duracaoSeg}), `masterUrl`, `mandatorios`,
+`responsavelId` (nullable, FK users — quem executa o post; settable via POST/PUT, um por post),
+`responsavelNome` (denormalizado, só leitura, vazio se sem responsável ou usuário removido).
 
 ## Email — `mails.santos-tech.com/api`
 

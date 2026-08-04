@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS social_posts (
   specs               JSONB NOT NULL DEFAULT '{}',
   master_url          TEXT NOT NULL DEFAULT '',
   mandatorios         TEXT NOT NULL DEFAULT '',
+  responsavel_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
