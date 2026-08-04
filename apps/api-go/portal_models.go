@@ -56,6 +56,15 @@ func decodePortalJSON(body io.Reader, v any) error {
 	return dec.Decode(v)
 }
 
+// portalBodyJSON limits r.Body to 64 KiB and decodes it as strict JSON.
+// All portal write handlers must call this instead of decodePortalJSON(r.Body, …)
+// to prevent memory exhaustion from oversized payloads. The limit mirrors the
+// 64 KiB cap used by every auth handler via http.MaxBytesReader.
+func portalBodyJSON(w http.ResponseWriter, r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	return decodePortalJSON(r.Body, v)
+}
+
 // ── Envelope de página ───────────────────────────────────────────────────────
 
 type portalPage[T any] struct {

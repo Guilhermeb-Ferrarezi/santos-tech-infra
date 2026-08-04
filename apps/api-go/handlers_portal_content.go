@@ -54,7 +54,7 @@ func (s *Server) handlePortalCreateExercise(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var in portalExerciseInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -77,7 +77,7 @@ func (s *Server) handlePortalUpdateExercise(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var in portalExerciseInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -113,7 +113,7 @@ func (s *Server) handlePortalReorderExercise(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var in portalReorderInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -160,7 +160,7 @@ func (s *Server) handlePortalExerciseContainer(w http.ResponseWriter, r *http.Re
 
 func (s *Server) handlePortalCreateContainer(w http.ResponseWriter, r *http.Request) {
 	var in portalContainerInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -178,7 +178,7 @@ func (s *Server) handlePortalCreateContainer(w http.ResponseWriter, r *http.Requ
 
 func (s *Server) handlePortalAddContainerExercises(w http.ResponseWriter, r *http.Request) {
 	var in portalAddContainerInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -196,7 +196,7 @@ func (s *Server) handlePortalAddContainerExercises(w http.ResponseWriter, r *htt
 
 func (s *Server) handlePortalDeleteContainerGroup(w http.ResponseWriter, r *http.Request) {
 	var in portalContainerGroupRef
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -267,7 +267,7 @@ func (s *Server) handlePortalCreateMaterial(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var in portalMaterialInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -290,7 +290,7 @@ func (s *Server) handlePortalUpdateMaterial(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var in portalMaterialInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -347,7 +347,7 @@ func (s *Server) handlePortalGetVideo(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePortalCreateVideo(w http.ResponseWriter, r *http.Request) {
 	var in portalVideoInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -370,7 +370,7 @@ func (s *Server) handlePortalUpdateVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var in portalVideoInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
