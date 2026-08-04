@@ -19,8 +19,10 @@ RUN apt-get update \
  && mkdir -p /data/workspaces /home/agent/.claude \
  && chown -R agent:agent /data /home/agent/.claude
 COPY --from=build /agent-go /usr/local/bin/agent-go
+COPY infra/entrypoint-agent-go.sh /usr/local/bin/entrypoint-agent-go.sh
+RUN chmod +x /usr/local/bin/entrypoint-agent-go.sh
 USER agent
 ENV HOME=/home/agent \
     CLAUDE_WORKSPACE_ROOT=/data/workspaces
 EXPOSE 3334
-ENTRYPOINT ["agent-go"]
+ENTRYPOINT ["entrypoint-agent-go.sh"]
