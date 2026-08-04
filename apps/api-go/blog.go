@@ -201,11 +201,11 @@ func collectBlogPosts(rows pgx.Rows) ([]BlogPost, error) {
 // BlogListFilter é comum às listagens pública e admin. Status vazio (só usado
 // no admin) significa "qualquer status"; a listagem pública sempre força "published".
 type BlogListFilter struct {
-	Page       int
-	PageSize   int
-	Category   string // slug
-	Query      string
-	Status     string
+	Page     int
+	PageSize int
+	Category string // slug
+	Query    string
+	Status   string
 }
 
 func (s *Server) listBlogPosts(ctx context.Context, f BlogListFilter) ([]BlogPost, int, error) {
