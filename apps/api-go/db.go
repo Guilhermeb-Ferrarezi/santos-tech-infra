@@ -192,6 +192,29 @@ CREATE TABLE IF NOT EXISTS ip_bans (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_ip_bans_ip ON ip_bans(ip);
+
+CREATE TABLE IF NOT EXISTS blog_categories (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug       TEXT NOT NULL UNIQUE,
+  name       TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS blog_posts (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug            TEXT NOT NULL UNIQUE,
+  title           TEXT NOT NULL,
+  excerpt         TEXT NOT NULL DEFAULT '',
+  content_html    TEXT NOT NULL DEFAULT '',
+  cover_image_url TEXT,
+  category_id     UUID NOT NULL REFERENCES blog_categories(id),
+  author_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  status          TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
+  published_at    TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_blog_posts_status ON blog_posts(status);
+CREATE INDEX IF NOT EXISTS idx_blog_posts_category ON blog_posts(category_id);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

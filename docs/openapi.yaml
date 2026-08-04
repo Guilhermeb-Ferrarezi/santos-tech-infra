@@ -55,6 +55,12 @@ tags:
     description: Saúde do serviço
   - name: Payments
     description: Pagamentos (payments-go — prefixo /payments em produção)
+  - name: Blog
+    description: |
+      Blog institucional (santos-tech.com/blog). `/public/blog/*` é leitura 100%
+      pública (sem cookie/token, só posts com status `published`). `/blog/*` é o
+      CRUD admin — requer role Admin ou cargo personalizado com a permissão
+      `blog_posts:read`/`blog_posts:write`; exclusão é admin-only + sudo mode.
 
 paths:
   /health:
@@ -1530,6 +1536,325 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
               example: { code: db_error, message: "Falha ao consultar extrato" }
 
+  # ── Blog (público) ──────────────────────────────────────────────────────
+  /public/blog/posts:
+    get:
+      tags: [Blog]
+      summary: Lista posts publicados (público)
+      description: Sem autenticação. Só devolve posts com `status: published`.
+      security: []
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, default: 1, minimum: 1 }
+        - in: query
+          name: pageSize
+          schema: { type: integer, default: 12, maximum: 50 }
+        - in: query
+          name: category
+          schema: { type: string }
+          description: Slug da categoria pra filtrar.
+        - in: query
+          name: q
+          schema: { type: string }
+          description: Busca em título/resumo (ILIKE).
+      responses:
+        "200":
+          description: Página de posts publicados.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/BlogPostSummaryPublic" } }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+                  total: { type: integer }
+                required: [items, page, pageSize, total]
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /public/blog/posts/{slug}:
+    get:
+      tags: [Blog]
+      summary: Post publicado por slug (público)
+      description: Sem autenticação. 404 se não existir ou não estiver publicado.
+      security: []
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Post publicado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogPostPublic" }
+        "404":
+          description: Post não encontrado ou não publicado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: BLOG_POST_NOT_FOUND, message: "Post não encontrado" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /public/blog/categories:
+    get:
+      tags: [Blog]
+      summary: Lista categorias (público)
+      security: []
+      responses:
+        "200":
+          description: Todas as categorias.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BlogCategoryPublic" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── Blog (admin) ────────────────────────────────────────────────────────
+  /blog/posts:
+    get:
+      tags: [Blog]
+      summary: Lista posts (admin — qualquer status)
+      description: Requer `blog_posts:read`.
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, default: 1, minimum: 1 }
+        - in: query
+          name: pageSize
+          schema: { type: integer, default: 12, maximum: 50 }
+        - in: query
+          name: status
+          schema: { type: string, enum: [draft, published] }
+        - in: query
+          name: category
+          schema: { type: string }
+        - in: query
+          name: q
+          schema: { type: string }
+      responses:
+        "200":
+          description: Página de posts (todos os status).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/BlogPost" } }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+                  total: { type: integer }
+                required: [items, page, pageSize, total]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão blog_posts:read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
+    post:
+      tags: [Blog]
+      summary: Cria post (rascunho ou já publicado)
+      description: Requer `blog_posts:write`. `status: published` seta `publishedAt = now()`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BlogPostInput" }
+      responses:
+        "201":
+          description: Post criado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogPost" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Já existe um post com esse slug.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SLUG_TAKEN, message: "Já existe um post com esse slug" }
+
+  /blog/posts/{id}:
+    get:
+      tags: [Blog]
+      summary: Busca post por id (admin)
+      description: Requer `blog_posts:read`.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Post.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogPost" }
+        "404":
+          description: Post não encontrado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: BLOG_POST_NOT_FOUND, message: "Post não encontrado" }
+    patch:
+      tags: [Blog]
+      summary: Atualiza post (inclui publicar/despublicar via status)
+      description: Requer `blog_posts:write`.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BlogPostInput" }
+      responses:
+        "200":
+          description: Post atualizado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogPost" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          description: Post não encontrado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Já existe um post com esse slug.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [Blog]
+      summary: Apaga post (destrutivo)
+      description: Admin-only + sudo mode (não passa pelo sistema de permissão de cargo).
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Apagado.
+        "403":
+          description: Requer role Admin + sudo mode recente.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Post não encontrado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /blog/categories:
+    get:
+      tags: [Blog]
+      summary: Lista categorias (admin — com id)
+      description: Requer `blog_posts:read`. Igual `/public/blog/categories`, mas com `id` (necessário pra editar/apagar).
+      responses:
+        "200":
+          description: Todas as categorias.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BlogCategory" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Blog]
+      summary: Cria categoria
+      description: Requer `blog_posts:write`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BlogCategoryInput" }
+      responses:
+        "201":
+          description: Categoria criada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogCategory" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          description: Já existe uma categoria com esse slug.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /blog/categories/{id}:
+    patch:
+      tags: [Blog]
+      summary: Atualiza categoria
+      description: Requer `blog_posts:write`.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BlogCategoryInput" }
+      responses:
+        "200":
+          description: Categoria atualizada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogCategory" }
+        "404":
+          description: Categoria não encontrada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Slug em uso.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [Blog]
+      summary: Apaga categoria (destrutivo)
+      description: Admin-only + sudo mode. 409 se ainda houver posts na categoria (FK).
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Apagada.
+        "404":
+          description: Categoria não encontrada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Categoria em uso por um ou mais posts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: BLOG_CATEGORY_IN_USE, message: "Categoria está em uso por um ou mais posts" }
+
 components:
   securitySchemes:
     cookieAuth:
@@ -1819,6 +2144,90 @@ components:
           description: Duração do access_token em segundos.
           example: 7200
       required: [access_token, refresh_token, token_type, expires_in]
+
+    # ── Blog ────────────────────────────────────────────────────────────────
+    BlogCategoryPublic:
+      type: object
+      properties:
+        slug: { type: string }
+        name: { type: string }
+      required: [slug, name]
+
+    BlogAuthorPublic:
+      type: object
+      properties:
+        name: { type: string }
+        avatarUrl: { type: string, nullable: true }
+      required: [name]
+
+    BlogPostSummaryPublic:
+      type: object
+      properties:
+        slug: { type: string }
+        title: { type: string }
+        excerpt: { type: string }
+        coverImageUrl: { type: string, nullable: true }
+        category: { $ref: "#/components/schemas/BlogCategoryPublic" }
+        author: { $ref: "#/components/schemas/BlogAuthorPublic" }
+        publishedAt: { type: string, format: date-time }
+      required: [slug, title, excerpt, category, author, publishedAt]
+
+    BlogPostPublic:
+      allOf:
+        - $ref: "#/components/schemas/BlogPostSummaryPublic"
+        - type: object
+          properties:
+            contentHtml: { type: string }
+          required: [contentHtml]
+
+    BlogCategory:
+      type: object
+      description: Categoria — view admin (com id).
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+      required: [id, slug, name]
+
+    BlogCategoryInput:
+      type: object
+      properties:
+        slug: { type: string, description: "Minúsculo, números e hífens (ex.: novidades)." }
+        name: { type: string }
+      required: [slug, name]
+
+    BlogPost:
+      type: object
+      description: Post — view admin (todos os campos, qualquer status).
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        title: { type: string }
+        excerpt: { type: string }
+        contentHtml: { type: string }
+        coverImageUrl: { type: string, nullable: true }
+        categoryId: { type: string, format: uuid }
+        categorySlug: { type: string }
+        categoryName: { type: string }
+        authorId: { type: integer, format: int64, nullable: true }
+        authorName: { type: string }
+        status: { type: string, enum: [draft, published] }
+        publishedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, slug, title, excerpt, contentHtml, categoryId, status, createdAt, updatedAt]
+
+    BlogPostInput:
+      type: object
+      properties:
+        slug: { type: string, description: "Minúsculo, números e hífens." }
+        title: { type: string }
+        excerpt: { type: string }
+        contentHtml: { type: string, description: "HTML do corpo do post (editor rich text)." }
+        coverImageUrl: { type: string, nullable: true, description: "URL devolvida por POST /auth/upload." }
+        categoryId: { type: string, format: uuid }
+        status: { type: string, enum: [draft, published], default: draft }
+      required: [slug, title, categoryId]
 
 # Por padrão, as rotas exigem o access_token (cookie ou Bearer).
 # Rotas públicas sobrescrevem com `security: []`.

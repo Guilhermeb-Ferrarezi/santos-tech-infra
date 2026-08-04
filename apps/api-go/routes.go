@@ -123,6 +123,10 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Portal admin/professor — overview, catálogo, turmas, matrículas e salas
 	s.registerPortalRoutes(mux)
 
+	// Blog público (santos-tech.com/blog) — leitura sem auth; CRUD admin/cargo
+	// personalizado com blog_posts:read/write.
+	s.registerBlogRoutes(mux)
+
 	// OAuth Google
 	mux.HandleFunc("GET /auth/google", s.handleGoogleStart)
 	mux.HandleFunc("GET /auth/google/callback", s.handleGoogleCallback)
@@ -153,4 +157,26 @@ func (s *Server) registerSocialRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /social/posts/{id}/notes", s.permGuard("social", "read", false, s.handleListSocialPostNotes))
 	mux.HandleFunc("POST /social/posts/{id}/notes", s.rateLimit(30, min, s.permGuard("social", "execute", false, s.handleAddSocialPostNote)))
 	mux.HandleFunc("GET /social/posts/{id}/history", s.permGuard("social", "read", false, s.handleListSocialPostStatusHistory))
+}
+
+func (s *Server) registerBlogRoutes(mux *http.ServeMux) {
+	const min = time.Minute
+
+	// Público — sem guard nenhum (igual /health), só rate limit por IP.
+	mux.HandleFunc("GET /public/blog/posts", s.rateLimit(120, min, s.handleListPublicBlogPosts))
+	mux.HandleFunc("GET /public/blog/posts/{slug}", s.rateLimit(120, min, s.handleGetPublicBlogPost))
+	mux.HandleFunc("GET /public/blog/categories", s.rateLimit(120, min, s.handleListBlogCategories))
+
+	// Admin — admin ou cargo personalizado com blog_posts:read/write; DELETE
+	// (destrutivo) fica admin-only + sudo, fora do sistema de permissão de cargo.
+	mux.HandleFunc("GET /blog/posts", s.permGuard("blog_posts", "read", false, s.handleListBlogPosts))
+	mux.HandleFunc("GET /blog/posts/{id}", s.permGuard("blog_posts", "read", false, s.handleGetBlogPost))
+	mux.HandleFunc("POST /blog/posts", s.rateLimit(30, min, s.permGuard("blog_posts", "write", false, s.handleCreateBlogPost)))
+	mux.HandleFunc("PATCH /blog/posts/{id}", s.rateLimit(60, min, s.permGuard("blog_posts", "write", false, s.handleUpdateBlogPost)))
+	mux.HandleFunc("DELETE /blog/posts/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteBlogPost)))
+
+	mux.HandleFunc("GET /blog/categories", s.permGuard("blog_posts", "read", false, s.handleListBlogCategoriesAdmin))
+	mux.HandleFunc("POST /blog/categories", s.rateLimit(20, min, s.permGuard("blog_posts", "write", false, s.handleCreateBlogCategory)))
+	mux.HandleFunc("PATCH /blog/categories/{id}", s.rateLimit(20, min, s.permGuard("blog_posts", "write", false, s.handleUpdateBlogCategory)))
+	mux.HandleFunc("DELETE /blog/categories/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteBlogCategory)))
 }
