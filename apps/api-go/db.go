@@ -215,6 +215,8 @@ CREATE TABLE IF NOT EXISTS blog_posts (
 );
 CREATE INDEX IF NOT EXISTS idx_blog_posts_status ON blog_posts(status);
 CREATE INDEX IF NOT EXISTS idx_blog_posts_category ON blog_posts(category_id);
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS responsavel_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_social_posts_responsavel ON social_posts(responsavel_id);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
