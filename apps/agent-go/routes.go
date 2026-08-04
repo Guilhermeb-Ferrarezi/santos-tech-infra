@@ -18,6 +18,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Kill switch — para todos os turnos em andamento.
 	mux.HandleFunc("POST /claude/stop-all", s.authGuard(s.handleStopAll))
 
+	// Painel de gastos — custo do CLI claude (todas as origens), admin-only.
+	mux.HandleFunc("GET /claude/usage", s.authGuard(s.handleUsage))
+
 	// WebSocket de chat.
 	mux.HandleFunc("GET /claude/conversations/{id}/ws", s.handleConversationWS)
 

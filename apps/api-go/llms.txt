@@ -162,6 +162,9 @@ Auth: sessão do auth central ou PAT (`st_...`).
   `Read(<workdir>/media/**)` escopado (terceiros seguem sem outras tools)
 - `POST /claude/conversations/{id}/model|compact|clear` · `POST /claude/stop-all`
 - `POST /claude/auth/session` — sessão mobile; `POST /claude/push/register`
+- `GET /claude/usage` (**admin**) — gastos do CLI claude (todas as origens:
+  generate/generate_stream/session): `{total,today,month:{costUsd,calls},
+  daily:[{day,costUsd,calls}] (30d), source:[{source,costUsd,calls}] (30d)}`
 
 ## WhatsApp Agent — `api.santos-tech.com/whats`
 

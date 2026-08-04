@@ -59,6 +59,22 @@ type ClaudePushToken struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type ClaudeUsageEvent struct {
+	ID               int64
+	Source           string
+	Task             string
+	Model            string
+	ConversationID   pgtype.UUID
+	TotalCostUsd     float64
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	DurationMs       int64
+	IsError          bool
+	CreatedAt        pgtype.Timestamptz
+}
+
 type User struct {
 	ID   int64
 	Role int16

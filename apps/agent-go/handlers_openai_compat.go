@@ -89,7 +89,7 @@ func (s *Server) handleOAIChatCompletions(w http.ResponseWriter, r *http.Request
 	}
 	prompt.WriteString(strings.Join(dialogParts, "\n\n"))
 
-	text, _, err := s.generateOnceWithTrace(r.Context(), prompt.String(), req.Model, false)
+	text, _, err := s.generateOnceWithTrace(r.Context(), "openai_compat", prompt.String(), req.Model, false)
 	if err != nil {
 		writeErr(w, appErr(http.StatusBadGateway, "GENERATION_FAILED", err.Error()))
 		return
