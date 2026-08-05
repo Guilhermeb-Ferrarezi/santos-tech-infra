@@ -227,6 +227,31 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 `funilEtapa` (''|topo|meio|fundo — função da peça no funil de tráfego pago; vazio é o
 default das peças criadas antes do campo existir. Valor inválido → 400).
 
+## Tarefas — `api.santos-tech.com/tasks`
+
+Auth: admin (3)/professor (2) sempre; role 4 com permissão `tarefas` (read/write/delete).
+Gestão de tarefas da empresa (financeiro, compras, cliente, recepção, pedagógico,
+manutenção), separado do Calendário Editorial. **Visibilidade enforced no servidor**
+(diferente de `social`): staff comum só recebe tarefas onde é `responsavelId` OU
+`createdBy`; admin recebe todas, sem filtro.
+
+- `GET /tasks` — `{tasks:[Task]}`, já filtrado pela visibilidade do requisitante
+- `POST /tasks {TaskInput}` → 201 `{task}` · campo inválido → 400
+- `GET /tasks/{id}` — `{task}` · inexistente ou sem visibilidade → 404
+- `PUT /tasks/{id} {TaskInput}` → `{task}` · sem visibilidade → 404
+- `DELETE /tasks/{id}` → 204 · sem visibilidade → 404
+- `GET|POST /tasks/{id}/notes` — comentários internos
+- `GET /tasks/categories` — `{categories:[TaskCategory]}`
+- `POST|PUT|DELETE /tasks/categories[/{id}]` — **admin-only**, não é permissão delegável
+
+**Task**: `title`, `description`, `categoryId` (nullable, FK task_categories),
+`categoryName` (denormalizado), `status` (a_fazer|em_andamento|concluida|cancelada),
+`priority` (baixa|media|alta), `dueDate`, `responsavelId`/`responsavelNome` (1 pessoa),
+`createdBy`/`createdByNome`.
+
+**TaskCategory**: `id`, `name`. Apagar categoria em uso não trava — tarefas ficam com
+`categoryId: null` (ON DELETE SET NULL).
+
 ## Email — `mails.santos-tech.com/api`
 
 Contrato completo: `docs/openapi.yaml` no repo sg/email. Auth: sessão admin do
