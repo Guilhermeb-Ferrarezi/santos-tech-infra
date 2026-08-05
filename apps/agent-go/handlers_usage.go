@@ -29,12 +29,22 @@ type usageSourcePoint struct {
 	Calls   int64   `json:"calls"`
 }
 
+// usageTaskPoint quebra o gasto por task do /claude/generate (email, raw = bot do
+// WhatsApp, diagram...). Só existe para chamadas one-shot — sessões interativas
+// (source="session") não têm task e ficam de fora.
+type usageTaskPoint struct {
+	Task    string  `json:"task"`
+	CostUSD float64 `json:"costUsd"`
+	Calls   int64   `json:"calls"`
+}
+
 type usageResponse struct {
 	Total  usagePeriod        `json:"total"`
 	Today  usagePeriod        `json:"today"`
 	Month  usagePeriod        `json:"month"`
 	Daily  []usageDayPoint    `json:"daily"`  // últimos 30 dias
 	Source []usageSourcePoint `json:"source"` // últimos 30 dias, por origem (generate/generate_stream/session)
+	Task   []usageTaskPoint   `json:"task"`   // últimos 30 dias, por task (bot=raw)
 }
 
 // handleUsage devolve o resumo de gastos do CLI claude (agent-go) para o painel —
@@ -75,6 +85,11 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	taskRows, err := s.q.UsageByTask(ctx, tstz(last30))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 
 	res := usageResponse{
 		Total: usagePeriod{CostUSD: total.TotalCostUsd, Calls: total.Calls},
@@ -93,6 +108,14 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	for _, row := range sourceRows {
 		res.Source = append(res.Source, usageSourcePoint{
 			Source:  row.Source,
+			CostUSD: row.CostUsd,
+			Calls:   row.Calls,
+		})
+	}
+	res.Task = make([]usageTaskPoint, 0, len(taskRows))
+	for _, row := range taskRows {
+		res.Task = append(res.Task, usageTaskPoint{
+			Task:    row.Task,
 			CostUSD: row.CostUsd,
 			Calls:   row.Calls,
 		})

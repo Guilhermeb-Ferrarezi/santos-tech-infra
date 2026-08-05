@@ -91,6 +91,43 @@ func (q *Queries) UsageBySource(ctx context.Context, createdAt pgtype.Timestampt
 	return items, nil
 }
 
+const usageByTask = `-- name: UsageByTask :many
+SELECT
+  task,
+  COALESCE(SUM(total_cost_usd), 0)::float8 AS cost_usd,
+  COUNT(*)::bigint AS calls
+FROM claude_usage_events
+WHERE created_at >= $1 AND task <> ''
+GROUP BY task
+ORDER BY cost_usd DESC
+`
+
+type UsageByTaskRow struct {
+	Task    string
+	CostUsd float64
+	Calls   int64
+}
+
+func (q *Queries) UsageByTask(ctx context.Context, createdAt pgtype.Timestamptz) ([]UsageByTaskRow, error) {
+	rows, err := q.db.Query(ctx, usageByTask, createdAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UsageByTaskRow
+	for rows.Next() {
+		var i UsageByTaskRow
+		if err := rows.Scan(&i.Task, &i.CostUsd, &i.Calls); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const usageDaily = `-- name: UsageDaily :many
 SELECT
   date_trunc('day', created_at)::date AS day,

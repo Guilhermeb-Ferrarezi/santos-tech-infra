@@ -35,3 +35,16 @@ FROM claude_usage_events
 WHERE created_at >= $1
 GROUP BY source
 ORDER BY cost_usd DESC;
+
+-- name: UsageByTask :many
+-- "task" só é preenchido pelas chamadas de /claude/generate (email, raw = bot do
+-- WhatsApp, diagram, ...); sessões interativas (source='session') ficam de fora
+-- (task='') — é o que permite separar quanto o bot pesa vs. o resto no painel.
+SELECT
+  task,
+  COALESCE(SUM(total_cost_usd), 0)::float8 AS cost_usd,
+  COUNT(*)::bigint AS calls
+FROM claude_usage_events
+WHERE created_at >= $1 AND task <> ''
+GROUP BY task
+ORDER BY cost_usd DESC;
