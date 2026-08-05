@@ -221,6 +221,44 @@ ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS funil_etapa TEXT NOT NULL DEFA
 ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_funil_etapa_check;
 ALTER TABLE social_posts ADD CONSTRAINT social_posts_funil_etapa_check
   CHECK (funil_etapa IN ('','topo','meio','fundo'));
+CREATE TABLE IF NOT EXISTS task_categories (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name       TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS tasks (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title          TEXT NOT NULL,
+  description    TEXT NOT NULL DEFAULT '',
+  category_id    UUID REFERENCES task_categories(id) ON DELETE SET NULL,
+  status         TEXT NOT NULL DEFAULT 'a_fazer' CHECK (status IN ('a_fazer','em_andamento','concluida','cancelada')),
+  priority       TEXT NOT NULL DEFAULT 'media' CHECK (priority IN ('baixa','media','alta')),
+  due_date       TIMESTAMPTZ,
+  responsavel_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_responsavel ON tasks(responsavel_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_created_by ON tasks(created_by);
+CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks(category_id);
+CREATE TABLE IF NOT EXISTS task_notes (
+  id         BIGSERIAL PRIMARY KEY,
+  task_id    UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  author_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  content    TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(task_id);
+-- Seed inicial de categorias — idempotente, admin edita/apaga depois pela UI.
+INSERT INTO task_categories (name) SELECT 'Financeiro' WHERE NOT EXISTS (SELECT 1 FROM task_categories);
+INSERT INTO task_categories (name) SELECT 'Compras' WHERE NOT EXISTS (SELECT 1 FROM task_categories WHERE name='Compras');
+INSERT INTO task_categories (name) SELECT 'Cliente' WHERE NOT EXISTS (SELECT 1 FROM task_categories WHERE name='Cliente');
+INSERT INTO task_categories (name) SELECT 'Recepção' WHERE NOT EXISTS (SELECT 1 FROM task_categories WHERE name='Recepção');
+INSERT INTO task_categories (name) SELECT 'Pedagógico' WHERE NOT EXISTS (SELECT 1 FROM task_categories WHERE name='Pedagógico');
+INSERT INTO task_categories (name) SELECT 'Manutenção' WHERE NOT EXISTS (SELECT 1 FROM task_categories WHERE name='Manutenção');
+INSERT INTO task_categories (name) SELECT 'Outro' WHERE NOT EXISTS (SELECT 1 FROM task_categories WHERE name='Outro');
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
