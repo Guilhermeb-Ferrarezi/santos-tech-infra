@@ -84,7 +84,7 @@ func (s *Server) handlePortalUpdateAnswer(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var patch portalAnswerPatch
-	if err := decodePortalJSON(r.Body, &patch); err != nil {
+	if err := portalBodyJSON(w, r, &patch); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -106,7 +106,7 @@ func (s *Server) handlePortalUpdateAnswer(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handlePortalBatchUpdateAnswers(w http.ResponseWriter, r *http.Request) {
 	var in portalAnswerBatchInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}

@@ -46,7 +46,7 @@ func (s *Server) handlePortalGetCourse(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePortalCreateCourse(w http.ResponseWriter, r *http.Request) {
 	var in portalCourseInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -69,7 +69,7 @@ func (s *Server) handlePortalUpdateCourse(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var in portalCourseInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -114,7 +114,7 @@ func (s *Server) handlePortalCreateModule(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var in portalModuleInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -137,7 +137,7 @@ func (s *Server) handlePortalUpdateModule(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var in portalModuleInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -182,7 +182,7 @@ func (s *Server) handlePortalCreatePhase(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var in portalPhaseInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -205,7 +205,7 @@ func (s *Server) handlePortalUpdatePhase(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var in portalPhaseInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -237,7 +237,7 @@ func (s *Server) handlePortalReorderModule(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var in portalReorderInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -259,7 +259,7 @@ func (s *Server) handlePortalReorderPhase(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var in portalReorderInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}

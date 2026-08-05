@@ -19,7 +19,7 @@ func (s *Server) handlePortalListClasses(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handlePortalCreateClass(w http.ResponseWriter, r *http.Request) {
 	var in portalClassInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -65,7 +65,7 @@ func (s *Server) handlePortalUpdateClass(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var in portalClassInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -111,7 +111,7 @@ func (s *Server) handlePortalAddClassStudents(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var in portalAddStudentsInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -170,7 +170,7 @@ func (s *Server) handlePortalIniciarFases(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var in portalAddStudentsInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
