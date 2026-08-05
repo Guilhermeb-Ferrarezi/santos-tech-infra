@@ -44,7 +44,7 @@ type TaskInput struct {
 type TaskNote struct {
 	ID         int64     `json:"id"`
 	TaskID     string    `json:"taskId"`
-	AuthorID   *int64     `json:"authorId"`
+	AuthorID   *int64    `json:"authorId"`
 	AuthorName string    `json:"authorName"`
 	Content    string    `json:"content"`
 	CreatedAt  time.Time `json:"createdAt"`
