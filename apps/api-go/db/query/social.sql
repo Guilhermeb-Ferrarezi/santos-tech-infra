@@ -5,6 +5,7 @@ SELECT id::text, title, caption, platform, pilar, status,
   scheduled_at, media_url, reference_url,
   formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
   conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
+  responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
   created_by, created_at, updated_at
 FROM social_posts
 ORDER BY COALESCE(scheduled_at, created_at) DESC;
@@ -14,6 +15,7 @@ SELECT id::text, title, caption, platform, pilar, status,
   scheduled_at, media_url, reference_url,
   formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
   conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
+  responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
   created_by, created_at, updated_at
 FROM social_posts WHERE id = $1::uuid;
 
@@ -21,13 +23,14 @@ FROM social_posts WHERE id = $1::uuid;
 INSERT INTO social_posts (
   title, caption, platform, pilar, status, scheduled_at, media_url, reference_url,
   formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
-  conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios, created_by
+  conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios, responsavel_id, funil_etapa, created_by
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 RETURNING id::text, title, caption, platform, pilar, status,
   scheduled_at, media_url, reference_url,
   formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
   conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
+  responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
   created_by, created_at, updated_at;
 
 -- name: UpdateSocialPost :one
@@ -37,12 +40,13 @@ UPDATE social_posts SET
   formato = $10, objetivo = $11, programa = $12, receita = $13,
   plataformas_destino = $14, copy_arte = $15, hashtags = $16,
   conceito_visual = $17, paleta = $18, prompt_ia = $19, specs = $20,
-  master_url = $21, mandatorios = $22, updated_at = now()
+  master_url = $21, mandatorios = $22, responsavel_id = $23, funil_etapa = $24, updated_at = now()
 WHERE id = $1::uuid
 RETURNING id::text, title, caption, platform, pilar, status,
   scheduled_at, media_url, reference_url,
   formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
   conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
+  responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
   created_by, created_at, updated_at;
 
 -- name: UpdateSocialPostStatus :one
@@ -52,6 +56,7 @@ RETURNING id::text, title, caption, platform, pilar, status,
   scheduled_at, media_url, reference_url,
   formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
   conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
+  responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
   created_by, created_at, updated_at;
 
 -- name: DeleteSocialPost :execrows

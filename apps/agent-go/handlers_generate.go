@@ -123,7 +123,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "brief obrigatório para task raw"))
 			return
 		}
-		raw, toolCalls, err := s.generateOnceWithTrace(r.Context(), req.Brief, req.Model, req.Web)
+		raw, toolCalls, err := s.generateOnceWithTrace(r.Context(), req.Task, req.Brief, req.Model, req.Web)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -132,7 +132,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := s.generateOnce(r.Context(), buildGeneratePrompt(req, strings.TrimSpace(req.ImageBase64) != ""), req.ImageBase64, req.ImageMime, req.Model, req.Web, req.Tools)
+	raw, err := s.generateOnce(r.Context(), req.Task, buildGeneratePrompt(req, strings.TrimSpace(req.ImageBase64) != ""), req.ImageBase64, req.ImageMime, req.Model, req.Web, req.Tools)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -150,7 +150,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 // de infra no ambiente — é redação de texto, não automação. `model` vazio usa o
 // default; `web` libera SÓ WebSearch/WebFetch; `tools` libera os conectores MCP
 // da conta (diagramTools) — ambos com timeout maior.
-func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime, model string, web bool, tools []string) (string, error) {
+func (s *Server) generateOnce(ctx context.Context, task, prompt, imageB64, imageMime, model string, web bool, tools []string) (string, error) {
 	dir, err := os.MkdirTemp(s.cfg.WorkspaceRoot, "gen-*")
 	if err != nil {
 		if dir, err = os.MkdirTemp("", "gen-*"); err != nil {
@@ -232,25 +232,28 @@ func (s *Server) generateOnce(ctx context.Context, prompt, imageB64, imageMime, 
 		return "", fmt.Errorf("claude falhou: %w", err)
 	}
 
-	// --output-format json: um envelope com o texto final em .result.
-	var env2 struct {
-		Result  string `json:"result"`
-		IsError bool   `json:"is_error"`
-		Subtype string `json:"subtype"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &env2); err != nil {
+	// --output-format json: um envelope com o texto final em .result e o custo em
+	// .total_cost_usd/.usage — decodifica como mapa pra extrair os dois sem duplicar
+	// a leitura do stdout (fica registrado mesmo quando is_error=true).
+	var ev map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &ev); err != nil {
 		return "", fmt.Errorf("resposta do claude inválida: %w", err)
 	}
-	if env2.IsError || strings.TrimSpace(env2.Result) == "" {
-		return "", fmt.Errorf("claude não retornou resultado (subtype=%s)", env2.Subtype)
+	f := usageFromMap(ev)
+	s.recordUsage(ctx, "generate", task, model, "", f)
+
+	result, _ := ev["result"].(string)
+	subtype, _ := ev["subtype"].(string)
+	if f.IsError || strings.TrimSpace(result) == "" {
+		return "", fmt.Errorf("claude não retornou resultado (subtype=%s)", subtype)
 	}
-	return env2.Result, nil
+	return result, nil
 }
 
 // generateOnceWithTrace é como generateOnce mas usa stream-json para capturar
 // tool calls emitidos pelo Claude durante a geração. Retorna o texto final e
 // a lista de tool calls (pode ser nil se nenhuma ferramenta foi usada).
-func (s *Server) generateOnceWithTrace(ctx context.Context, prompt, model string, web bool) (string, []toolCallRecord, error) {
+func (s *Server) generateOnceWithTrace(ctx context.Context, task, prompt, model string, web bool) (string, []toolCallRecord, error) {
 	dir, err := os.MkdirTemp(s.cfg.WorkspaceRoot, "gen-*")
 	if err != nil {
 		if dir, err = os.MkdirTemp("", "gen-*"); err != nil {
@@ -293,6 +296,7 @@ func (s *Server) generateOnceWithTrace(ctx context.Context, prompt, model string
 
 	var finalText string
 	var toolCalls []toolCallRecord
+	var usage usageFields
 
 	sc := bufio.NewScanner(bytes.NewReader(stdout.Bytes()))
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
@@ -322,10 +326,16 @@ func (s *Server) generateOnceWithTrace(ctx context.Context, prompt, model string
 				toolCalls = append(toolCalls, toolCallRecord{Name: name, Input: inputRaw})
 			}
 		case "result":
+			usage = usageFromMap(ev)
 			if rs, _ := ev["result"].(string); rs != "" {
 				finalText = rs
 			}
 		}
+	}
+	// O evento "result" só sai se o CLI chegou ao fim do turno — se o processo
+	// morreu antes (timeout, kill), não há custo a registrar.
+	if usage != (usageFields{}) {
+		s.recordUsage(ctx, "generate", task, model, "", usage)
 	}
 
 	if finalText == "" {

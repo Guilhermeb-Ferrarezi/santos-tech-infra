@@ -494,6 +494,7 @@ func (m *SessionManager) handleEvent(ctx context.Context, conv *Conversation, ev
 		usage, _ := ev["usage"].(map[string]any)
 		emit(turnEvent{Type: "result", Data: ev})
 		_ = m.s.insertMessage(ctx, &Message{ConversationID: conv.ID, Role: "system", Kind: "result", Content: ev, Usage: usage})
+		m.s.recordUsage(ctx, "session", "", conv.Model, conv.ID, usageFromMap(ev))
 	}
 }
 

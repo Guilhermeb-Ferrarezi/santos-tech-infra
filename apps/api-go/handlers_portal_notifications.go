@@ -120,7 +120,7 @@ func (s *Server) handlePortalListTemplates(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handlePortalCreateTemplate(w http.ResponseWriter, r *http.Request) {
 	var in portalTemplateInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -154,7 +154,7 @@ func (s *Server) handlePortalUpdateTemplate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var in portalTemplateInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -268,7 +268,7 @@ func (s *Server) handlePortalDispatchTemplate(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var in portalDispatchInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}

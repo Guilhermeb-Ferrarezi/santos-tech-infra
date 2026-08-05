@@ -110,6 +110,8 @@ type SocialPost struct {
 	Specs              []byte
 	MasterUrl          string
 	Mandatorios        string
+	ResponsavelID      pgtype.Int4
+	FunilEtapa         string
 	CreatedBy          pgtype.Int4
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz

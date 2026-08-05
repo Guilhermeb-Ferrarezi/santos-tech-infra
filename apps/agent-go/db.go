@@ -113,6 +113,26 @@ CREATE TABLE IF NOT EXISTS api_keys (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+
+-- Um registro por invocação do CLI claude (qualquer motor). Fonte do painel de
+-- gastos: total_cost_usd vem direto do envelope do CLI (--output-format json /
+-- stream-json, campo "total_cost_usd" do evento "result").
+CREATE TABLE IF NOT EXISTS claude_usage_events (
+  id                 BIGSERIAL PRIMARY KEY,
+  source             TEXT NOT NULL,               -- 'generate' | 'generate_stream' | 'session'
+  task               TEXT NOT NULL DEFAULT '',     -- generateRequest.Task ("email","raw",...) quando aplicável
+  model              TEXT NOT NULL DEFAULT '',
+  conversation_id    UUID REFERENCES claude_conversations(id) ON DELETE SET NULL,
+  total_cost_usd     DOUBLE PRECISION NOT NULL DEFAULT 0,
+  input_tokens       BIGINT NOT NULL DEFAULT 0,
+  output_tokens      BIGINT NOT NULL DEFAULT 0,
+  cache_read_tokens  BIGINT NOT NULL DEFAULT 0,
+  cache_write_tokens BIGINT NOT NULL DEFAULT 0,
+  duration_ms        BIGINT NOT NULL DEFAULT 0,
+  is_error           BOOLEAN NOT NULL DEFAULT false,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_usage_created ON claude_usage_events(created_at DESC);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

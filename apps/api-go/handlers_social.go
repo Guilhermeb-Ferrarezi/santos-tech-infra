@@ -49,6 +49,9 @@ func validateSocialPostInput(in *SocialPostInput) error {
 			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Plataforma-destino inválida")
 		}
 	}
+	if !validSocialFunilEtapas[in.FunilEtapa] {
+		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Etapa de funil inválida")
+	}
 	return nil
 }
 

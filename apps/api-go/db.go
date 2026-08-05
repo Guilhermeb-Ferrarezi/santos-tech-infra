@@ -215,6 +215,12 @@ CREATE TABLE IF NOT EXISTS blog_posts (
 );
 CREATE INDEX IF NOT EXISTS idx_blog_posts_status ON blog_posts(status);
 CREATE INDEX IF NOT EXISTS idx_blog_posts_category ON blog_posts(category_id);
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS responsavel_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_social_posts_responsavel ON social_posts(responsavel_id);
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS funil_etapa TEXT NOT NULL DEFAULT '';
+ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_funil_etapa_check;
+ALTER TABLE social_posts ADD CONSTRAINT social_posts_funil_etapa_check
+  CHECK (funil_etapa IN ('','topo','meio','fundo'));
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

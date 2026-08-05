@@ -51,7 +51,7 @@ func (s *Server) handlePortalListBadges(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handlePortalCreateBadge(w http.ResponseWriter, r *http.Request) {
 	var in portalBadgeInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -75,7 +75,7 @@ func (s *Server) handlePortalUpdateBadge(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var in portalBadgeInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -123,7 +123,7 @@ func (s *Server) handlePortalListHolders(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handlePortalAssignBadge(w http.ResponseWriter, r *http.Request) {
 	var in portalBadgeAssignInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -147,7 +147,7 @@ func (s *Server) handlePortalUpdateHolder(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var in portalBadgeHolderUpdateInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -210,7 +210,7 @@ func (s *Server) handlePortalGetGoal(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePortalCreateGoal(w http.ResponseWriter, r *http.Request) {
 	var in portalGoalInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -234,7 +234,7 @@ func (s *Server) handlePortalUpdateGoal(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var in portalGoalInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -289,7 +289,7 @@ func (s *Server) handlePortalListGoalRewards(w http.ResponseWriter, r *http.Requ
 
 func (s *Server) handlePortalCreateGoalReward(w http.ResponseWriter, r *http.Request) {
 	var in portalGoalRewardInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -313,7 +313,7 @@ func (s *Server) handlePortalUpdateGoalReward(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var in portalGoalRewardInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -368,7 +368,7 @@ func (s *Server) handlePortalListGoalStudents(w http.ResponseWriter, r *http.Req
 
 func (s *Server) handlePortalCreateGoalStudent(w http.ResponseWriter, r *http.Request) {
 	var in portalGoalStudentCreateInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -392,7 +392,7 @@ func (s *Server) handlePortalUpdateGoalStudent(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var in portalGoalStudentUpdateInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}

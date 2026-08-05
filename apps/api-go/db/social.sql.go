@@ -28,6 +28,7 @@ SELECT id::text, title, caption, platform, pilar, status,
   scheduled_at, media_url, reference_url,
   formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
   conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
+  responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
   created_by, created_at, updated_at
 FROM social_posts WHERE id = $1::uuid
 `
@@ -55,6 +56,9 @@ type GetSocialPostRow struct {
 	Specs              []byte
 	MasterUrl          string
 	Mandatorios        string
+	ResponsavelID      pgtype.Int4
+	FunilEtapa         string
+	Coalesce           interface{}
 	CreatedBy          pgtype.Int4
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
@@ -86,6 +90,9 @@ func (q *Queries) GetSocialPost(ctx context.Context, dollar_1 pgtype.UUID) (GetS
 		&i.Specs,
 		&i.MasterUrl,
 		&i.Mandatorios,
+		&i.ResponsavelID,
+		&i.FunilEtapa,
+		&i.Coalesce,
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -97,13 +104,14 @@ const insertSocialPost = `-- name: InsertSocialPost :one
 INSERT INTO social_posts (
   title, caption, platform, pilar, status, scheduled_at, media_url, reference_url,
   formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
-  conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios, created_by
+  conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios, responsavel_id, funil_etapa, created_by
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 RETURNING id::text, title, caption, platform, pilar, status,
   scheduled_at, media_url, reference_url,
   formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
   conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
+  responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
   created_by, created_at, updated_at
 `
 
@@ -129,6 +137,8 @@ type InsertSocialPostParams struct {
 	Specs              []byte
 	MasterUrl          string
 	Mandatorios        string
+	ResponsavelID      pgtype.Int4
+	FunilEtapa         string
 	CreatedBy          pgtype.Int4
 }
 
@@ -155,6 +165,9 @@ type InsertSocialPostRow struct {
 	Specs              []byte
 	MasterUrl          string
 	Mandatorios        string
+	ResponsavelID      pgtype.Int4
+	FunilEtapa         string
+	Coalesce           interface{}
 	CreatedBy          pgtype.Int4
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
@@ -183,6 +196,8 @@ func (q *Queries) InsertSocialPost(ctx context.Context, arg InsertSocialPostPara
 		arg.Specs,
 		arg.MasterUrl,
 		arg.Mandatorios,
+		arg.ResponsavelID,
+		arg.FunilEtapa,
 		arg.CreatedBy,
 	)
 	var i InsertSocialPostRow
@@ -209,6 +224,9 @@ func (q *Queries) InsertSocialPost(ctx context.Context, arg InsertSocialPostPara
 		&i.Specs,
 		&i.MasterUrl,
 		&i.Mandatorios,
+		&i.ResponsavelID,
+		&i.FunilEtapa,
+		&i.Coalesce,
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -371,6 +389,7 @@ SELECT id::text, title, caption, platform, pilar, status,
   scheduled_at, media_url, reference_url,
   formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
   conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
+  responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
   created_by, created_at, updated_at
 FROM social_posts
 ORDER BY COALESCE(scheduled_at, created_at) DESC
@@ -399,6 +418,9 @@ type ListSocialPostsRow struct {
 	Specs              []byte
 	MasterUrl          string
 	Mandatorios        string
+	ResponsavelID      pgtype.Int4
+	FunilEtapa         string
+	Coalesce           interface{}
 	CreatedBy          pgtype.Int4
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
@@ -437,6 +459,9 @@ func (q *Queries) ListSocialPosts(ctx context.Context) ([]ListSocialPostsRow, er
 			&i.Specs,
 			&i.MasterUrl,
 			&i.Mandatorios,
+			&i.ResponsavelID,
+			&i.FunilEtapa,
+			&i.Coalesce,
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -458,12 +483,13 @@ UPDATE social_posts SET
   formato = $10, objetivo = $11, programa = $12, receita = $13,
   plataformas_destino = $14, copy_arte = $15, hashtags = $16,
   conceito_visual = $17, paleta = $18, prompt_ia = $19, specs = $20,
-  master_url = $21, mandatorios = $22, updated_at = now()
+  master_url = $21, mandatorios = $22, responsavel_id = $23, funil_etapa = $24, updated_at = now()
 WHERE id = $1::uuid
 RETURNING id::text, title, caption, platform, pilar, status,
   scheduled_at, media_url, reference_url,
   formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
   conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
+  responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
   created_by, created_at, updated_at
 `
 
@@ -490,6 +516,8 @@ type UpdateSocialPostParams struct {
 	Specs              []byte
 	MasterUrl          string
 	Mandatorios        string
+	ResponsavelID      pgtype.Int4
+	FunilEtapa         string
 }
 
 type UpdateSocialPostRow struct {
@@ -515,6 +543,9 @@ type UpdateSocialPostRow struct {
 	Specs              []byte
 	MasterUrl          string
 	Mandatorios        string
+	ResponsavelID      pgtype.Int4
+	FunilEtapa         string
+	Coalesce           interface{}
 	CreatedBy          pgtype.Int4
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
@@ -544,6 +575,8 @@ func (q *Queries) UpdateSocialPost(ctx context.Context, arg UpdateSocialPostPara
 		arg.Specs,
 		arg.MasterUrl,
 		arg.Mandatorios,
+		arg.ResponsavelID,
+		arg.FunilEtapa,
 	)
 	var i UpdateSocialPostRow
 	err := row.Scan(
@@ -569,6 +602,9 @@ func (q *Queries) UpdateSocialPost(ctx context.Context, arg UpdateSocialPostPara
 		&i.Specs,
 		&i.MasterUrl,
 		&i.Mandatorios,
+		&i.ResponsavelID,
+		&i.FunilEtapa,
+		&i.Coalesce,
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -583,6 +619,7 @@ RETURNING id::text, title, caption, platform, pilar, status,
   scheduled_at, media_url, reference_url,
   formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
   conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
+  responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
   created_by, created_at, updated_at
 `
 
@@ -614,6 +651,9 @@ type UpdateSocialPostStatusRow struct {
 	Specs              []byte
 	MasterUrl          string
 	Mandatorios        string
+	ResponsavelID      pgtype.Int4
+	FunilEtapa         string
+	Coalesce           interface{}
 	CreatedBy          pgtype.Int4
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
@@ -645,6 +685,9 @@ func (q *Queries) UpdateSocialPostStatus(ctx context.Context, arg UpdateSocialPo
 		&i.Specs,
 		&i.MasterUrl,
 		&i.Mandatorios,
+		&i.ResponsavelID,
+		&i.FunilEtapa,
+		&i.Coalesce,
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,

@@ -29,6 +29,18 @@ func TestPortalPagination(t *testing.T) {
 	}
 }
 
+// TestPortalBodyJSONSizeLimit garante que portalBodyJSON rejeita payloads maiores
+// que 64 KiB, espelhando o comportamento dos handlers de auth (http.MaxBytesReader).
+func TestPortalBodyJSONSizeLimit(t *testing.T) {
+	large := `{"name":"` + strings.Repeat("a", 65*1024) + `"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/portal/courses", strings.NewReader(large))
+	var in portalCourseInput
+	if err := portalBodyJSON(w, r, &in); err == nil {
+		t.Fatal("body maior que 64 KiB deve retornar erro")
+	}
+}
+
 func TestPortalCreateCourseValidation(t *testing.T) {
 	var in portalCourseInput
 	if err := decodePortalJSON(strings.NewReader(`{"name":"A"}`), &in); err != nil {

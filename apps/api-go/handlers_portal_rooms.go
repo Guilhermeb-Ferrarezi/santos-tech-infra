@@ -23,7 +23,7 @@ func (s *Server) handlePortalCreateClassRoom(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var in portalRoomInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -46,7 +46,7 @@ func (s *Server) handlePortalUpdateClassRoom(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var in portalRoomInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
@@ -65,7 +65,7 @@ func (s *Server) handlePortalUpdateClassRoomStatus(w http.ResponseWriter, r *htt
 		return
 	}
 	var in portalRoomStatusInput
-	if err := decodePortalJSON(r.Body, &in); err != nil {
+	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}

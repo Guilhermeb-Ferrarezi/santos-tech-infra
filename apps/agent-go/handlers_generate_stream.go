@@ -39,14 +39,14 @@ func (s *Server) handleGenerateStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	fl.Flush()
 
-	if err := s.generateStream(r.Context(), buildGeneratePrompt(req, false), w, fl); err != nil {
+	if err := s.generateStream(r.Context(), req.Task, buildGeneratePrompt(req, false), w, fl); err != nil {
 		sseEvent(w, fl, "error", map[string]string{"message": err.Error()})
 	}
 }
 
 // generateStream roda o claude com stream-json e repassa os deltas de texto, depois
 // emite o resultado final já parseado. Mesmo ambiente mínimo do generateOnce.
-func (s *Server) generateStream(ctx context.Context, prompt string, w http.ResponseWriter, fl http.Flusher) error {
+func (s *Server) generateStream(ctx context.Context, task, prompt string, w http.ResponseWriter, fl http.Flusher) error {
 	dir, err := os.MkdirTemp(s.cfg.WorkspaceRoot, "gen-*")
 	if err != nil {
 		if dir, err = os.MkdirTemp("", "gen-*"); err != nil {
@@ -84,6 +84,7 @@ func (s *Server) generateStream(ctx context.Context, prompt string, w http.Respo
 
 	var acc strings.Builder // texto acumulado (fallback de parse)
 	var finalText string    // texto autoritativo do evento "result"
+	var usage usageFields
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
@@ -100,6 +101,7 @@ func (s *Server) generateStream(ctx context.Context, prompt string, w http.Respo
 				sseEvent(w, fl, "delta", map[string]string{"text": t})
 			}
 		case "result":
+			usage = usageFromMap(ev)
 			if rs, _ := ev["result"].(string); rs != "" {
 				finalText = rs
 			}
@@ -107,6 +109,9 @@ func (s *Server) generateStream(ctx context.Context, prompt string, w http.Respo
 	}
 	if err := cmd.Wait(); err != nil {
 		return fmt.Errorf("claude saiu com erro: %w", err)
+	}
+	if usage != (usageFields{}) {
+		s.recordUsage(ctx, "generate_stream", task, s.cfg.DefaultModel, "", usage)
 	}
 	if finalText == "" {
 		finalText = acc.String()
