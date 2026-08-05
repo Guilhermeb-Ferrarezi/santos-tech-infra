@@ -5,37 +5,48 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	agentdb "github.com/santos-tech/agent/db"
 )
 
 func tstz(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t, Valid: true}
 }
 
-// usagePeriod resume gasto e chamadas num intervalo (hoje, mês, total...).
+// usagePeriod resume gasto, chamadas e tokens num intervalo (hoje, mês, total...).
 type usagePeriod struct {
-	CostUSD float64 `json:"costUsd"`
-	Calls   int64   `json:"calls"`
+	CostUSD          float64 `json:"costUsd"`
+	Calls            int64   `json:"calls"`
+	InputTokens      int64   `json:"inputTokens"`
+	OutputTokens     int64   `json:"outputTokens"`
+	CacheReadTokens  int64   `json:"cacheReadTokens"`
+	CacheWriteTokens int64   `json:"cacheWriteTokens"`
 }
 
 type usageDayPoint struct {
 	Day     string  `json:"day"` // YYYY-MM-DD
 	CostUSD float64 `json:"costUsd"`
 	Calls   int64   `json:"calls"`
+	Tokens  int64   `json:"tokens"` // input+output
 }
 
 type usageSourcePoint struct {
 	Source  string  `json:"source"`
 	CostUSD float64 `json:"costUsd"`
 	Calls   int64   `json:"calls"`
+	Tokens  int64   `json:"tokens"` // input+output
 }
 
 // usageTaskPoint quebra o gasto por task do /claude/generate (email, raw = bot do
 // WhatsApp, diagram...). Só existe para chamadas one-shot — sessões interativas
 // (source="session") não têm task e ficam de fora.
 type usageTaskPoint struct {
-	Task    string  `json:"task"`
-	CostUSD float64 `json:"costUsd"`
-	Calls   int64   `json:"calls"`
+	Task             string  `json:"task"`
+	CostUSD          float64 `json:"costUsd"`
+	Calls            int64   `json:"calls"`
+	InputTokens      int64   `json:"inputTokens"`
+	OutputTokens     int64   `json:"outputTokens"`
+	CacheReadTokens  int64   `json:"cacheReadTokens"`
+	CacheWriteTokens int64   `json:"cacheWriteTokens"`
 }
 
 type usageResponse struct {
@@ -48,7 +59,7 @@ type usageResponse struct {
 }
 
 // handleUsage devolve o resumo de gastos do CLI claude (agent-go) para o painel —
-// custo hoje/mês/total e uma série diária dos últimos 30 dias. Admin-only.
+// custo e tokens hoje/mês/total e uma série diária dos últimos 30 dias. Admin-only.
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	loc, err := time.LoadLocation("America/Sao_Paulo")
@@ -91,10 +102,20 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	toPeriod := func(row agentdb.UsageSummaryRow) usagePeriod {
+		return usagePeriod{
+			CostUSD:          row.TotalCostUsd,
+			Calls:            row.Calls,
+			InputTokens:      row.InputTokens,
+			OutputTokens:     row.OutputTokens,
+			CacheReadTokens:  row.CacheReadTokens,
+			CacheWriteTokens: row.CacheWriteTokens,
+		}
+	}
 	res := usageResponse{
-		Total: usagePeriod{CostUSD: total.TotalCostUsd, Calls: total.Calls},
-		Today: usagePeriod{CostUSD: today.TotalCostUsd, Calls: today.Calls},
-		Month: usagePeriod{CostUSD: month.TotalCostUsd, Calls: month.Calls},
+		Total: toPeriod(total),
+		Today: toPeriod(today),
+		Month: toPeriod(month),
 	}
 	res.Daily = make([]usageDayPoint, 0, len(dailyRows))
 	for _, row := range dailyRows {
@@ -102,6 +123,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 			Day:     row.Day.Time.Format("2006-01-02"),
 			CostUSD: row.CostUsd,
 			Calls:   row.Calls,
+			Tokens:  row.Tokens,
 		})
 	}
 	res.Source = make([]usageSourcePoint, 0, len(sourceRows))
@@ -110,14 +132,19 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 			Source:  row.Source,
 			CostUSD: row.CostUsd,
 			Calls:   row.Calls,
+			Tokens:  row.Tokens,
 		})
 	}
 	res.Task = make([]usageTaskPoint, 0, len(taskRows))
 	for _, row := range taskRows {
 		res.Task = append(res.Task, usageTaskPoint{
-			Task:    row.Task,
-			CostUSD: row.CostUsd,
-			Calls:   row.Calls,
+			Task:             row.Task,
+			CostUSD:          row.CostUsd,
+			Calls:            row.Calls,
+			InputTokens:      row.InputTokens,
+			OutputTokens:     row.OutputTokens,
+			CacheReadTokens:  row.CacheReadTokens,
+			CacheWriteTokens: row.CacheWriteTokens,
 		})
 	}
 	writeJSON(w, http.StatusOK, res)

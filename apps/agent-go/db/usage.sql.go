@@ -58,7 +58,8 @@ const usageBySource = `-- name: UsageBySource :many
 SELECT
   source,
   COALESCE(SUM(total_cost_usd), 0)::float8 AS cost_usd,
-  COUNT(*)::bigint AS calls
+  COUNT(*)::bigint AS calls,
+  COALESCE(SUM(input_tokens + output_tokens), 0)::bigint AS tokens
 FROM claude_usage_events
 WHERE created_at >= $1
 GROUP BY source
@@ -69,6 +70,7 @@ type UsageBySourceRow struct {
 	Source  string
 	CostUsd float64
 	Calls   int64
+	Tokens  int64
 }
 
 func (q *Queries) UsageBySource(ctx context.Context, createdAt pgtype.Timestamptz) ([]UsageBySourceRow, error) {
@@ -80,7 +82,7 @@ func (q *Queries) UsageBySource(ctx context.Context, createdAt pgtype.Timestampt
 	var items []UsageBySourceRow
 	for rows.Next() {
 		var i UsageBySourceRow
-		if err := rows.Scan(&i.Source, &i.CostUsd, &i.Calls); err != nil {
+		if err := rows.Scan(&i.Source, &i.CostUsd, &i.Calls, &i.Tokens); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -95,7 +97,11 @@ const usageByTask = `-- name: UsageByTask :many
 SELECT
   task,
   COALESCE(SUM(total_cost_usd), 0)::float8 AS cost_usd,
-  COUNT(*)::bigint AS calls
+  COUNT(*)::bigint AS calls,
+  COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+  COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+  COALESCE(SUM(cache_read_tokens), 0)::bigint AS cache_read_tokens,
+  COALESCE(SUM(cache_write_tokens), 0)::bigint AS cache_write_tokens
 FROM claude_usage_events
 WHERE created_at >= $1 AND task <> ''
 GROUP BY task
@@ -103,9 +109,13 @@ ORDER BY cost_usd DESC
 `
 
 type UsageByTaskRow struct {
-	Task    string
-	CostUsd float64
-	Calls   int64
+	Task             string
+	CostUsd          float64
+	Calls            int64
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
 }
 
 func (q *Queries) UsageByTask(ctx context.Context, createdAt pgtype.Timestamptz) ([]UsageByTaskRow, error) {
@@ -117,7 +127,7 @@ func (q *Queries) UsageByTask(ctx context.Context, createdAt pgtype.Timestamptz)
 	var items []UsageByTaskRow
 	for rows.Next() {
 		var i UsageByTaskRow
-		if err := rows.Scan(&i.Task, &i.CostUsd, &i.Calls); err != nil {
+		if err := rows.Scan(&i.Task, &i.CostUsd, &i.Calls, &i.InputTokens, &i.OutputTokens, &i.CacheReadTokens, &i.CacheWriteTokens); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -132,7 +142,8 @@ const usageDaily = `-- name: UsageDaily :many
 SELECT
   date_trunc('day', created_at)::date AS day,
   COALESCE(SUM(total_cost_usd), 0)::float8 AS cost_usd,
-  COUNT(*)::bigint AS calls
+  COUNT(*)::bigint AS calls,
+  COALESCE(SUM(input_tokens + output_tokens), 0)::bigint AS tokens
 FROM claude_usage_events
 WHERE created_at >= $1
 GROUP BY day
@@ -143,6 +154,7 @@ type UsageDailyRow struct {
 	Day     pgtype.Date
 	CostUsd float64
 	Calls   int64
+	Tokens  int64
 }
 
 func (q *Queries) UsageDaily(ctx context.Context, createdAt pgtype.Timestamptz) ([]UsageDailyRow, error) {
@@ -154,7 +166,7 @@ func (q *Queries) UsageDaily(ctx context.Context, createdAt pgtype.Timestamptz) 
 	var items []UsageDailyRow
 	for rows.Next() {
 		var i UsageDailyRow
-		if err := rows.Scan(&i.Day, &i.CostUsd, &i.Calls); err != nil {
+		if err := rows.Scan(&i.Day, &i.CostUsd, &i.Calls, &i.Tokens); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -168,19 +180,27 @@ func (q *Queries) UsageDaily(ctx context.Context, createdAt pgtype.Timestamptz) 
 const usageSummary = `-- name: UsageSummary :one
 SELECT
   COALESCE(SUM(total_cost_usd), 0)::float8 AS total_cost_usd,
-  COUNT(*)::bigint AS calls
+  COUNT(*)::bigint AS calls,
+  COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+  COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+  COALESCE(SUM(cache_read_tokens), 0)::bigint AS cache_read_tokens,
+  COALESCE(SUM(cache_write_tokens), 0)::bigint AS cache_write_tokens
 FROM claude_usage_events
 WHERE created_at >= $1
 `
 
 type UsageSummaryRow struct {
-	TotalCostUsd float64
-	Calls        int64
+	TotalCostUsd     float64
+	Calls            int64
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
 }
 
 func (q *Queries) UsageSummary(ctx context.Context, createdAt pgtype.Timestamptz) (UsageSummaryRow, error) {
 	row := q.db.QueryRow(ctx, usageSummary, createdAt)
 	var i UsageSummaryRow
-	err := row.Scan(&i.TotalCostUsd, &i.Calls)
+	err := row.Scan(&i.TotalCostUsd, &i.Calls, &i.InputTokens, &i.OutputTokens, &i.CacheReadTokens, &i.CacheWriteTokens)
 	return i, err
 }
