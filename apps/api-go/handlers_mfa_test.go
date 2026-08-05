@@ -316,3 +316,72 @@ func TestGenRecoveryCodesLen(t *testing.T) {
 		}
 	}
 }
+
+// TestHandleMFAEnableSetupExpired: chave mfa_setup ausente no Redis (setup expirado
+// ou não iniciado) deve retornar 400 MFA_SETUP_EXPIRED antes de qualquer Incr.
+func TestHandleMFAEnableSetupExpired(t *testing.T) {
+	s := testServerWithRedis(t, Config{})
+	w := httptest.NewRecorder()
+	r := reqAs(httptest.NewRequest("POST", "/auth/mfa/enable",
+		strings.NewReader(`{"code":"123456"}`)), 42)
+	s.handleMFAEnable(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("setup ausente: code=%d (queria 400)", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "MFA_SETUP_EXPIRED") {
+		t.Errorf("esperava MFA_SETUP_EXPIRED no corpo, veio: %s", w.Body.String())
+	}
+}
+
+// TestHandleMFAEnableTooManyAttempts: após 5 tentativas (pré-semeadas no Redis),
+// a 6ª deve retornar 429 TOO_MANY_ATTEMPTS e apagar mfa_setup + contador.
+func TestHandleMFAEnableTooManyAttempts(t *testing.T) {
+	s := testServerWithRedis(t, Config{})
+	ctx := context.Background()
+	// Setup ativo (necessário para o Get passar antes do Incr).
+	if err := s.rdb.Set(ctx, "mfa_setup:42", "JBSWY3DPEHPK3PXP", 0).Err(); err != nil {
+		t.Fatalf("set mfa_setup: %v", err)
+	}
+	// Simula 5 tentativas anteriores.
+	if err := s.rdb.Set(ctx, "api-go:mfa_enable_attempts:42", "5", 0).Err(); err != nil {
+		t.Fatalf("set attempt counter: %v", err)
+	}
+	w := httptest.NewRecorder()
+	r := reqAs(httptest.NewRequest("POST", "/auth/mfa/enable",
+		strings.NewReader(`{"code":"123456"}`)), 42)
+	s.handleMFAEnable(w, r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("6ª tentativa deve retornar 429, veio %d", w.Code)
+	}
+	// Ambas as chaves devem ser apagadas (força o usuário a reiniciar o setup).
+	if n, err := s.rdb.Exists(ctx, "mfa_setup:42").Result(); err != nil {
+		t.Fatalf("redis exists mfa_setup: %v", err)
+	} else if n != 0 {
+		t.Error("mfa_setup deve ser apagado após lockout")
+	}
+	if n, err := s.rdb.Exists(ctx, "api-go:mfa_enable_attempts:42").Result(); err != nil {
+		t.Fatalf("redis exists mfa_enable_attempts: %v", err)
+	} else if n != 0 {
+		t.Error("api-go:mfa_enable_attempts deve ser apagado após lockout")
+	}
+}
+
+// TestHandleMFAEnableRedisDown garante que handleMFAEnable não retorna 200 quando o
+// Redis está indisponível — a falha no Get do mfa_setup é tratada como setup expirado
+// (fail-safe: o usuário não consegue ativar MFA em estado desconhecido).
+func TestHandleMFAEnableRedisDown(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s := testServer(Config{})
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+
+	mr.SetError("ERR simulated Redis failure")
+
+	w := httptest.NewRecorder()
+	r := reqAs(httptest.NewRequest("POST", "/auth/mfa/enable",
+		strings.NewReader(`{"code":"123456"}`)), 42)
+	s.handleMFAEnable(w, r)
+	if w.Code == http.StatusOK {
+		t.Fatal("Redis indisponível não deve permitir ativação de MFA (esperava != 200)")
+	}
+}
