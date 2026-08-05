@@ -223,7 +223,9 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 `hashtags[]`, `conceitoVisual`, `paleta` ({fundo,destaque,corPrograma}), `promptIa`,
 `specs` ({proporcao,largura,altura,safeZone,formatoArquivo,duracaoSeg}), `masterUrl`, `mandatorios`,
 `responsavelId` (nullable, FK users — quem executa o post; settable via POST/PUT, um por post),
-`responsavelNome` (denormalizado, só leitura, vazio se sem responsável ou usuário removido).
+`responsavelNome` (denormalizado, só leitura, vazio se sem responsável ou usuário removido),
+`funilEtapa` (''|topo|meio|fundo — função da peça no funil de tráfego pago; vazio é o
+default das peças criadas antes do campo existir. Valor inválido → 400).
 
 ## Email — `mails.santos-tech.com/api`
 

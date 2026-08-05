@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS social_posts (
   master_url          TEXT NOT NULL DEFAULT '',
   mandatorios         TEXT NOT NULL DEFAULT '',
   responsavel_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  funil_etapa         TEXT NOT NULL DEFAULT '',
   created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
