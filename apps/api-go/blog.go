@@ -267,12 +267,15 @@ func (s *Server) insertBlogPost(ctx context.Context, in BlogPostInput, authorID 
 		now := time.Now()
 		publishedAt = &now
 	}
+	// Sanitiza aqui, não no handler: nunca confiamos no HTML recebido, seja
+	// ele vindo do editor do dashboard ou de qualquer outro client da API.
+	contentHTML := sanitizeBlogContentHTML(in.ContentHTML)
 	var id string
 	err := s.db.QueryRow(ctx, `
 		INSERT INTO blog_posts (slug, title, excerpt, content_html, cover_image_url, category_id, author_id, status, published_at)
 		VALUES ($1,$2,$3,$4,$5,$6::uuid,$7,$8,$9)
 		RETURNING id::text`,
-		in.Slug, in.Title, in.Excerpt, in.ContentHTML, in.CoverImageURL, in.CategoryID, authorID, in.Status, publishedAt).
+		in.Slug, in.Title, in.Excerpt, contentHTML, in.CoverImageURL, in.CategoryID, authorID, in.Status, publishedAt).
 		Scan(&id)
 	if err != nil {
 		return nil, err
@@ -284,13 +287,16 @@ func (s *Server) insertBlogPost(ctx context.Context, in BlogPostInput, authorID 
 // ainda não tinha sido publicado antes); nas demais mudanças de status preserva
 // o published_at histórico.
 func (s *Server) updateBlogPost(ctx context.Context, id string, in BlogPostInput) (*BlogPost, error) {
+	// Sanitiza aqui, não no handler: nunca confiamos no HTML recebido, seja
+	// ele vindo do editor do dashboard ou de qualquer outro client da API.
+	contentHTML := sanitizeBlogContentHTML(in.ContentHTML)
 	_, err := s.db.Exec(ctx, `
 		UPDATE blog_posts SET
 			slug=$2, title=$3, excerpt=$4, content_html=$5, cover_image_url=$6, category_id=$7::uuid, status=$8,
 			published_at = CASE WHEN $8 = 'published' AND published_at IS NULL THEN now() ELSE published_at END,
 			updated_at = now()
 		WHERE id=$1::uuid`,
-		id, in.Slug, in.Title, in.Excerpt, in.ContentHTML, in.CoverImageURL, in.CategoryID, in.Status)
+		id, in.Slug, in.Title, in.Excerpt, contentHTML, in.CoverImageURL, in.CategoryID, in.Status)
 	if err != nil {
 		return nil, err
 	}
