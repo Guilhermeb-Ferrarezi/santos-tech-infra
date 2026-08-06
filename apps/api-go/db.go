@@ -259,6 +259,22 @@ INSERT INTO task_categories (name) SELECT 'Recepção' WHERE NOT EXISTS (SELECT 
 INSERT INTO task_categories (name) SELECT 'Pedagógico' WHERE NOT EXISTS (SELECT 1 FROM task_categories WHERE name='Pedagógico');
 INSERT INTO task_categories (name) SELECT 'Manutenção' WHERE NOT EXISTS (SELECT 1 FROM task_categories WHERE name='Manutenção');
 INSERT INTO task_categories (name) SELECT 'Outro' WHERE NOT EXISTS (SELECT 1 FROM task_categories WHERE name='Outro');
+CREATE TABLE IF NOT EXISTS glossary_terms (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  term       TEXT NOT NULL,
+  definicao  TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_glossary_terms_term_lower ON glossary_terms(lower(term));
+-- Seed inicial — idempotente, admin edita/apaga depois pela UI.
+INSERT INTO glossary_terms (term, definicao) SELECT 'A-roll', 'A parte principal do vídeo — geralmente a pessoa falando direto pra câmera.' WHERE NOT EXISTS (SELECT 1 FROM glossary_terms WHERE lower(term)='a-roll');
+INSERT INTO glossary_terms (term, definicao) SELECT 'B-roll', 'As imagens extras que aparecem por cima da fala, tipo cenas de apoio, pra deixar o vídeo mais interessante.' WHERE NOT EXISTS (SELECT 1 FROM glossary_terms WHERE lower(term)='b-roll');
+INSERT INTO glossary_terms (term, definicao) SELECT 'Crop', 'Cortar as bordas de uma imagem ou vídeo, tipo recortar uma foto.' WHERE NOT EXISTS (SELECT 1 FROM glossary_terms WHERE lower(term)='crop');
+INSERT INTO glossary_terms (term, definicao) SELECT 'Take', 'Cada tentativa de gravação de uma mesma cena. "Terceiro take" = a terceira vez que gravou aquela cena.' WHERE NOT EXISTS (SELECT 1 FROM glossary_terms WHERE lower(term)='take');
+INSERT INTO glossary_terms (term, definicao) SELECT 'Blur', 'Deixar uma parte da imagem embaçada de propósito, pra esconder algo ou destacar outra coisa.' WHERE NOT EXISTS (SELECT 1 FROM glossary_terms WHERE lower(term)='blur');
+INSERT INTO glossary_terms (term, definicao) SELECT 'Build', 'O processo de transformar o código em algo que roda de verdade no site, tipo montar as peças de um quebra-cabeça.' WHERE NOT EXISTS (SELECT 1 FROM glossary_terms WHERE lower(term)='build');
+INSERT INTO glossary_terms (term, definicao) SELECT 'Lint', 'Uma checagem automática que avisa se o código tem algum erro de estilo ou descuido, antes de ir pro ar.' WHERE NOT EXISTS (SELECT 1 FROM glossary_terms WHERE lower(term)='lint');
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
