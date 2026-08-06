@@ -54,6 +54,17 @@ var linkRel = regexp.MustCompile(`^(noopener|noreferrer|nofollow|ugc)(\s+(noopen
 func newBlogContentPolicy() *bluemonday.Policy {
 	p := bluemonday.UGCPolicy()
 
+	// UGCPolicy() liga nofollow em todo link por padrão — faz sentido pra
+	// comentário de usuário anônimo, mas não é esse o caso aqui:
+	// content_html só é gravado por staff com blog_posts:write (sem caminho
+	// anônimo, ver blog.go/handlers_blog.go), então não é conteúdo
+	// não-confiável no sentido que a proteção assume. Manter nofollow
+	// penalizaria de graça tanto os links internos (blog ↔ site
+	// institucional) quanto as citações externas legítimas dos posts (SBP,
+	// legislação) — o oposto do sinal de autoridade/confiança que essas
+	// citações deveriam passar pros buscadores.
+	p.RequireNoFollowOnLinks(false)
+
 	safeStyleProps := []string{
 		"background", "background-color", "color", "border-radius",
 		"padding", "margin", "text-align", "display", "font-weight",
