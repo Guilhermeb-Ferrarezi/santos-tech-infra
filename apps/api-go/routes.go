@@ -168,6 +168,11 @@ func (s *Server) registerSocialRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /tasks/categories", s.adminGuard(s.handleCreateTaskCategory))
 	mux.HandleFunc("PUT /tasks/categories/{id}", s.adminGuard(s.handleUpdateTaskCategory))
 	mux.HandleFunc("DELETE /tasks/categories/{id}", s.adminGuard(s.handleDeleteTaskCategory))
+
+	mux.HandleFunc("GET /glossary", s.authGuard(s.handleListGlossaryTerms))
+	mux.HandleFunc("POST /glossary", s.rateLimit(30, min, s.adminGuard(s.handleCreateGlossaryTerm)))
+	mux.HandleFunc("PUT /glossary/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateGlossaryTerm)))
+	mux.HandleFunc("DELETE /glossary/{id}", s.adminGuard(s.handleDeleteGlossaryTerm))
 }
 
 func (s *Server) registerBlogRoutes(mux *http.ServeMux) {
