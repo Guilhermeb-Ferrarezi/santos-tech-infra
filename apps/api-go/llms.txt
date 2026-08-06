@@ -252,6 +252,22 @@ manutenção), separado do Calendário Editorial. **Visibilidade enforced no ser
 **TaskCategory**: `id`, `name`. Apagar categoria em uso não trava — tarefas ficam com
 `categoryId: null` (ON DELETE SET NULL).
 
+## Glossário — `api.santos-tech.com/glossary`
+
+Auth: `GET` aberto a qualquer sessão autenticada (sem checagem de papel/permissão — não é
+dado sensível). `POST`/`PUT`/`DELETE` são admin-only. Termos técnicos com definição simples,
+usados pelo componente `<Termo>` do dashboard pra explicar jargão (dev, edição de vídeo etc.)
+pra qualquer colaborador.
+
+- `GET /glossary` — `{terms:[GlossaryTerm]}`
+- `POST /glossary {GlossaryTermInput}` → 201 `{term}` · campo vazio → 400
+- `PUT /glossary/{id} {GlossaryTermInput}` → `{term}` · inexistente → 404
+- `DELETE /glossary/{id}` → 204 · inexistente → 404
+
+**GlossaryTerm**: `term` (texto livre, ex. "B-roll"), `definicao` (texto livre, explicação
+simples). Índice único por `lower(term)` — não é possível cadastrar o mesmo termo duas vezes
+com capitalização diferente.
+
 ## Email — `mails.santos-tech.com/api`
 
 Contrato completo: `docs/openapi.yaml` no repo sg/email. Auth: sessão admin do
