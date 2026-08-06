@@ -94,16 +94,12 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}
-	u, err := s.userByID(r.Context(), uid)
-	if err != nil || u == nil {
-		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
-		return
-	}
-
 	// Teto de tentativas por usuário (≤5 numa janela), espelhando o handleMFAVerify:
 	// a verificação de sudo checa TOTP/recovery/OTP de email (ou senha) sem teto
 	// próprio, o que permitiria brute-force do 2º fator limitado só pelo IP. Conta
-	// a tentativa ANTES de validar; zera ao confirmar com sucesso (mais abaixo).
+	// a tentativa ANTES de validar e ANTES do fetch do usuário — padrão consistente
+	// com handleMFAEmailEnable — para que o caminho Redis-down seja testável sem DB.
+	// Zera ao confirmar com sucesso (mais abaixo).
 	attemptKey := "api-go:sudo_attempts:" + strconv.FormatInt(uid, 10)
 	sudoAttemptsCmd := s.rdb.Incr(r.Context(), attemptKey)
 	if sudoAttemptsCmd.Err() != nil {
@@ -117,6 +113,12 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	if attempts > 5 {
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
+		return
+	}
+
+	u, err := s.userByID(r.Context(), uid)
+	if err != nil || u == nil {
+		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
 		return
 	}
 
