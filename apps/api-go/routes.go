@@ -183,6 +183,10 @@ func (s *Server) registerBlogRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /public/blog/posts/{slug}", s.rateLimit(120, min, s.handleGetPublicBlogPost))
 	mux.HandleFunc("GET /public/blog/categories", s.rateLimit(120, min, s.handleListBlogCategories))
 
+	// Beacon de analytics do blog — público, sem auth, rate limit mais folgado
+	// que leitura normal (é chamado a cada pageview + cada clique de CTA).
+	mux.HandleFunc("POST /public/blog/events", s.rateLimit(300, min, s.handleBlogEventIngest))
+
 	// Admin — admin ou cargo personalizado com blog_posts:read/write; DELETE
 	// (destrutivo) fica admin-only + sudo, fora do sistema de permissão de cargo.
 	mux.HandleFunc("GET /blog/posts", s.permGuard("blog_posts", "read", false, s.handleListBlogPosts))
@@ -195,4 +199,13 @@ func (s *Server) registerBlogRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /blog/categories", s.rateLimit(20, min, s.permGuard("blog_posts", "write", false, s.handleCreateBlogCategory)))
 	mux.HandleFunc("PATCH /blog/categories/{id}", s.rateLimit(20, min, s.permGuard("blog_posts", "write", false, s.handleUpdateBlogCategory)))
 	mux.HandleFunc("DELETE /blog/categories/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteBlogCategory)))
+
+	// Métricas do blog — admin, mesma permissão de quem já lê posts (blog_posts:read).
+	mux.HandleFunc("GET /admin/blog/metrics/overview", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsOverview))
+	mux.HandleFunc("GET /admin/blog/metrics/timeseries", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsTimeseries))
+	mux.HandleFunc("GET /admin/blog/metrics/top-posts", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsTopPosts))
+	mux.HandleFunc("GET /admin/blog/metrics/referrers", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsReferrers))
+	mux.HandleFunc("GET /admin/blog/metrics/utm-source", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsUTMSource))
+	mux.HandleFunc("GET /admin/blog/metrics/devices", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsDevices))
+	mux.HandleFunc("GET /admin/blog/metrics/countries", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsCountries))
 }
