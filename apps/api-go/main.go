@@ -109,6 +109,30 @@ func main() {
 		}
 	}()
 
+	// Retenção de eventos de analytics do blog — apaga o que passou de 180 dias
+	// (mesma janela do analytics do loja-3d, referência Marco Civil da Internet).
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic no purge de blog_events", "panic", rec, "stack", string(debug.Stack()))
+			}
+		}()
+		t := time.NewTicker(24 * time.Hour)
+		defer t.Stop()
+		for {
+			if n, err := srv.deleteOldBlogEvents(ctx); err != nil {
+				slog.Warn("purge de blog_events falhou", "err", err)
+			} else if n > 0 {
+				slog.Info("eventos de blog analytics expirados removidos", "count", n)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+
 	srv2 := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Routes(),
