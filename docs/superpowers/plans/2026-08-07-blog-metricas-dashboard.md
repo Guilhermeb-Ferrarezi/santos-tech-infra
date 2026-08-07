@@ -578,8 +578,7 @@ git commit -m "feat(web): GridBoard — grid arrastável/redimensionável com la
 ```tsx
 import { useMemo, useState } from "react"
 import { Eye, Users, HandTap, Target } from "@phosphor-icons/react"
-import { useMe } from "@/lib/api"
-import { PageHeader } from "@/components/PageHeader"
+import { useMe } from "@/lib/queries"
 import { PageShell } from "@/components/PageShell"
 import { AreaChartCard } from "@/components/charts/AreaChartCard"
 import { StatCard } from "@/components/blog-metrics/StatCard"
@@ -730,10 +729,9 @@ export default function BlogMetricas() {
 
   return (
     <PageShell scroll contentClassName="p-6">
-      <PageHeader
-        title="Métricas do blog"
-        subtitle="Pageviews, visitantes, conversão e origem de tráfego dos posts"
-      />
+      {/* Sem <PageHeader title/subtitle> aqui: o componente hoje só injeta
+          `actions` via portal (título real vem do label em nav.ts) — chamá-lo
+          sem actions não renderiza nada, então é só overhead. */}
       <div className="mb-4 flex rounded-lg border border-border bg-card/50 p-0.5 text-xs">
         {PRESETS.map((p) => (
           <button
