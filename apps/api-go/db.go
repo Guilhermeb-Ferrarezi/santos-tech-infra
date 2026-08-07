@@ -275,6 +275,24 @@ INSERT INTO glossary_terms (term, definicao) SELECT 'Take', 'Cada tentativa de g
 INSERT INTO glossary_terms (term, definicao) SELECT 'Blur', 'Deixar uma parte da imagem embaçada de propósito, pra esconder algo ou destacar outra coisa.' WHERE NOT EXISTS (SELECT 1 FROM glossary_terms WHERE lower(term)='blur');
 INSERT INTO glossary_terms (term, definicao) SELECT 'Build', 'O processo de transformar o código em algo que roda de verdade no site, tipo montar as peças de um quebra-cabeça.' WHERE NOT EXISTS (SELECT 1 FROM glossary_terms WHERE lower(term)='build');
 INSERT INTO glossary_terms (term, definicao) SELECT 'Lint', 'Uma checagem automática que avisa se o código tem algum erro de estilo ou descuido, antes de ir pro ar.' WHERE NOT EXISTS (SELECT 1 FROM glossary_terms WHERE lower(term)='lint');
+CREATE TABLE IF NOT EXISTS blog_events (
+  id          BIGSERIAL PRIMARY KEY,
+  type        TEXT NOT NULL CHECK (type IN ('pageview','cta_click')),
+  post_slug   TEXT,
+  path        TEXT NOT NULL,
+  session_id  TEXT NOT NULL,
+  visitor_id  TEXT NOT NULL,
+  referrer    TEXT,
+  utm_source  TEXT,
+  device      TEXT NOT NULL DEFAULT '',
+  browser     TEXT,
+  os          TEXT,
+  country     TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_blog_events_post_created ON blog_events(post_slug, created_at);
+CREATE INDEX IF NOT EXISTS idx_blog_events_type_created ON blog_events(type, created_at);
+CREATE INDEX IF NOT EXISTS idx_blog_events_created ON blog_events(created_at);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
