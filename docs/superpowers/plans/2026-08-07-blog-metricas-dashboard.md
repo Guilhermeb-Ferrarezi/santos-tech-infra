@@ -479,11 +479,11 @@ export type GridCardDef = {
   render: () => React.ReactNode
 }
 
-function loadLayout(storageKey: string, defs: GridCardDef[]): Layout[] {
+function loadLayout(storageKey: string, defs: GridCardDef[]): Layout {
   try {
     const raw = window.localStorage.getItem(storageKey)
     if (!raw) throw new Error("sem layout salvo")
-    const saved = JSON.parse(raw) as Layout[]
+    const saved = JSON.parse(raw) as Layout
     // Só reaproveita o salvo se cobrir exatamente os mesmos cards de hoje —
     // card novo/removido no código invalida o layout salvo e volta ao default
     // (mais simples e mais seguro que tentar fazer merge parcial).
@@ -504,10 +504,10 @@ export function GridBoard({ storageKey, cards, cols = 12, rowHeight = 32 }: {
   cols?: number
   rowHeight?: number
 }) {
-  const [layout, setLayout] = useState<Layout[]>(() => loadLayout(storageKey, cards))
+  const [layout, setLayout] = useState<Layout>(() => loadLayout(storageKey, cards))
 
   const onLayoutChange = useCallback(
-    (next: Layout[]) => {
+    (next: Layout) => {
       setLayout(next)
       window.localStorage.setItem(storageKey, JSON.stringify(next))
     },
