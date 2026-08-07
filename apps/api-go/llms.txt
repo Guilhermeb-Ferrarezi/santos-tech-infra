@@ -276,15 +276,18 @@ agregação pra dashboard admin. Beacon sem auth; agregação exige `blog_posts:
 - `POST /public/blog/events {type,path,postSlug?,sessionId,visitorId,referrer?,utmSource?}`
   → 204 · rate limit 300/min/IP · `device`/`browser`/`os`/`country` são sempre
   derivados no servidor a partir de User-Agent/CF-IPCountry, nunca aceitos do payload.
-- `GET /blog/metrics/overview?from&to&postSlug?` — `{pageviews,visitors,
-  ctaClicks,conversionRate,prev*}` (comparação vs período anterior de mesma duração)
-- `GET /blog/metrics/timeseries?from&to&postSlug?` — `[{bucket,pageviews}]`,
-  diário (ou horário se `to-from ≤ 24h`)
-- `GET /blog/metrics/top-posts?from&to` — `[{postSlug,views,ctaClicks,conversionRate}]`
-- `GET /blog/metrics/referrers?from&to&postSlug?` — `[{key,count}]` por domínio
-- `GET /blog/metrics/utm-source?from&to&postSlug?` — `[{key,count}]`
-- `GET /blog/metrics/devices?from&to&postSlug?` — `[{key,count}]` (mobile/tablet/desktop)
-- `GET /blog/metrics/countries?from&to&postSlug?` — `[{key,count}]`
+- Todos os endpoints `/blog/metrics/*` abaixo aceitam também `referrer?&utmSource?&device?&country?`
+  — filtros de drill-down (clicar num item de qualquer ranking no painel filtra os demais
+  por aquele valor); qualquer combinação com `postSlug?` é válida.
+- `GET /blog/metrics/overview?from&to&postSlug?&referrer?&utmSource?&device?&country?` —
+  `{pageviews,visitors,ctaClicks,conversionRate,prev*}` (comparação vs período anterior de mesma duração)
+- `GET /blog/metrics/timeseries?from&to&postSlug?&referrer?&utmSource?&device?&country?` —
+  `[{bucket,pageviews}]`, diário (ou horário se `to-from ≤ 24h`)
+- `GET /blog/metrics/top-posts?from&to&referrer?&utmSource?&device?&country?` — `[{postSlug,title,views,ctaClicks,conversionRate}]`
+- `GET /blog/metrics/referrers?from&to&postSlug?&utmSource?&device?&country?` — `[{key,count}]` por domínio
+- `GET /blog/metrics/utm-source?from&to&postSlug?&referrer?&device?&country?` — `[{key,count}]`
+- `GET /blog/metrics/devices?from&to&postSlug?&referrer?&utmSource?&country?` — `[{key,count}]` (mobile/tablet/desktop)
+- `GET /blog/metrics/countries?from&to&postSlug?&referrer?&utmSource?&device?` — `[{key,count}]`
 
 Retenção: eventos com mais de 180 dias são apagados automaticamente (goroutine
 diária em `main.go`).

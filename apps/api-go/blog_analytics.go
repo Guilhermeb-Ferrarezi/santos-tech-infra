@@ -37,6 +37,7 @@ type BlogMetricsTimeseriesPoint struct {
 
 type BlogMetricsTopPost struct {
 	PostSlug       string  `json:"postSlug"`
+	Title          string  `json:"title"`
 	Views          int64   `json:"views"`
 	CTAClicks      int64   `json:"ctaClicks"`
 	ConversionRate float64 `json:"conversionRate"`
@@ -48,11 +49,17 @@ type BlogMetricsCount struct {
 }
 
 // BlogMetricsFilter é comum a todos os endpoints de agregação: intervalo de
-// tempo obrigatório, post opcional (nil = todos).
+// tempo obrigatório, post opcional (nil = todos). Referrer/UTMSource/Device/
+// Country vêm do drill-down do painel (clicar num item de qualquer ranking
+// filtra os outros endpoints por aquele valor) — todos nil = sem filtro.
 type BlogMetricsFilter struct {
-	From     time.Time
-	To       time.Time
-	PostSlug *string
+	From      time.Time
+	To        time.Time
+	PostSlug  *string
+	Referrer  *string
+	UTMSource *string
+	Device    *string
+	Country   *string
 }
 
 // ── Store — ingestão ─────────────────────────────────────────────────────────
@@ -94,11 +101,15 @@ SELECT
 	count(*) FILTER (WHERE type='cta_click') AS cta_clicks
 FROM blog_events
 WHERE created_at >= $1 AND created_at < $2
-	AND ($3::text IS NULL OR post_slug = $3)`
+	AND ($3::text IS NULL OR post_slug = $3)
+	AND ($4::text IS NULL OR referrer = $4)
+	AND ($5::text IS NULL OR utm_source = $5)
+	AND ($6::text IS NULL OR device = $6)
+	AND ($7::text IS NULL OR country = $7)`
 
 func (s *Server) blogMetricsOverview(ctx context.Context, f BlogMetricsFilter) (*BlogMetricsOverview, error) {
 	var out BlogMetricsOverview
-	if err := s.db.QueryRow(ctx, blogOverviewSQL, f.From, f.To, f.PostSlug).
+	if err := s.db.QueryRow(ctx, blogOverviewSQL, f.From, f.To, f.PostSlug, f.Referrer, f.UTMSource, f.Device, f.Country).
 		Scan(&out.Pageviews, &out.Visitors, &out.CTAClicks); err != nil {
 		return nil, err
 	}
@@ -111,7 +122,7 @@ func (s *Server) blogMetricsOverview(ctx context.Context, f BlogMetricsFilter) (
 	dur := f.To.Sub(f.From)
 	prevFrom := f.From.Add(-dur)
 	prevTo := f.From
-	if err := s.db.QueryRow(ctx, blogOverviewSQL, prevFrom, prevTo, f.PostSlug).
+	if err := s.db.QueryRow(ctx, blogOverviewSQL, prevFrom, prevTo, f.PostSlug, f.Referrer, f.UTMSource, f.Device, f.Country).
 		Scan(&out.PrevPageviews, &out.PrevVisitors, &out.PrevCTAClicks); err != nil {
 		return nil, err
 	}
@@ -134,9 +145,13 @@ func (s *Server) blogMetricsTimeseries(ctx context.Context, f BlogMetricsFilter)
 			AND date_trunc($4, be.created_at) = gs.bucket
 			AND be.created_at >= $1 AND be.created_at < $2
 			AND ($3::text IS NULL OR be.post_slug = $3)
+			AND ($5::text IS NULL OR be.referrer = $5)
+			AND ($6::text IS NULL OR be.utm_source = $6)
+			AND ($7::text IS NULL OR be.device = $7)
+			AND ($8::text IS NULL OR be.country = $8)
 		GROUP BY gs.bucket
 		ORDER BY gs.bucket`
-	rows, err := s.db.Query(ctx, sql, f.From, f.To, f.PostSlug, unit)
+	rows, err := s.db.Query(ctx, sql, f.From, f.To, f.PostSlug, unit, f.Referrer, f.UTMSource, f.Device, f.Country)
 	if err != nil {
 		return nil, err
 	}
@@ -153,15 +168,22 @@ func (s *Server) blogMetricsTimeseries(ctx context.Context, f BlogMetricsFilter)
 }
 
 func (s *Server) blogMetricsTopPosts(ctx context.Context, f BlogMetricsFilter) ([]BlogMetricsTopPost, error) {
+	// LEFT JOIN: post pode ter sido apagado depois do evento — nesse caso
+	// bp.title é NULL e caímos de volta pro slug (COALESCE).
 	rows, err := s.db.Query(ctx, `
-		SELECT post_slug,
-			count(*) FILTER (WHERE type='pageview') AS views,
-			count(*) FILTER (WHERE type='cta_click') AS cta_clicks
-		FROM blog_events
-		WHERE created_at >= $1 AND created_at < $2 AND post_slug IS NOT NULL
-		GROUP BY post_slug
+		SELECT be.post_slug, COALESCE(bp.title, be.post_slug),
+			count(*) FILTER (WHERE be.type='pageview') AS views,
+			count(*) FILTER (WHERE be.type='cta_click') AS cta_clicks
+		FROM blog_events be
+		LEFT JOIN blog_posts bp ON bp.slug = be.post_slug
+		WHERE be.created_at >= $1 AND be.created_at < $2 AND be.post_slug IS NOT NULL
+			AND ($3::text IS NULL OR be.referrer = $3)
+			AND ($4::text IS NULL OR be.utm_source = $4)
+			AND ($5::text IS NULL OR be.device = $5)
+			AND ($6::text IS NULL OR be.country = $6)
+		GROUP BY be.post_slug, bp.title
 		ORDER BY views DESC
-		LIMIT 20`, f.From, f.To)
+		LIMIT 20`, f.From, f.To, f.Referrer, f.UTMSource, f.Device, f.Country)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +191,7 @@ func (s *Server) blogMetricsTopPosts(ctx context.Context, f BlogMetricsFilter) (
 	out := []BlogMetricsTopPost{}
 	for rows.Next() {
 		var p BlogMetricsTopPost
-		if err := rows.Scan(&p.PostSlug, &p.Views, &p.CTAClicks); err != nil {
+		if err := rows.Scan(&p.PostSlug, &p.Title, &p.Views, &p.CTAClicks); err != nil {
 			return nil, err
 		}
 		if p.Views > 0 {
@@ -191,10 +213,14 @@ func (s *Server) blogMetricsTopColumn(ctx context.Context, column string, f Blog
 		WHERE created_at >= $1 AND created_at < $2 AND type = 'pageview'
 			AND ` + column + ` IS NOT NULL AND ` + column + ` <> ''
 			AND ($3::text IS NULL OR post_slug = $3)
+			AND ($4::text IS NULL OR referrer = $4)
+			AND ($5::text IS NULL OR utm_source = $5)
+			AND ($6::text IS NULL OR device = $6)
+			AND ($7::text IS NULL OR country = $7)
 		GROUP BY ` + column + `
 		ORDER BY count(*) DESC
 		LIMIT 20`
-	rows, err := s.db.Query(ctx, sql, f.From, f.To, f.PostSlug)
+	rows, err := s.db.Query(ctx, sql, f.From, f.To, f.PostSlug, f.Referrer, f.UTMSource, f.Device, f.Country)
 	if err != nil {
 		return nil, err
 	}

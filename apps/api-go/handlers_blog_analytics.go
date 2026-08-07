@@ -58,9 +58,11 @@ func (s *Server) handleBlogEventIngest(w http.ResponseWriter, r *http.Request) {
 
 // ── Agregação (admin — blog_posts:read) ─────────────────────────────────────
 
-// blogMetricsParamsFrom lê from/to (YYYY-MM-DD) e postSlug opcional da
-// querystring. "to" é exclusivo e vira o FIM do dia informado (23:59:59.999...)
-// pra incluir o dia inteiro.
+// blogMetricsParamsFrom lê from/to (YYYY-MM-DD) e os filtros opcionais da
+// querystring — postSlug e o drill-down do painel (referrer/utmSource/
+// device/country: clicar num item de qualquer ranking filtra os outros
+// endpoints por aquele valor). "to" é exclusivo e vira o FIM do dia
+// informado (23:59:59.999...) pra incluir o dia inteiro.
 func blogMetricsParamsFrom(r *http.Request) (BlogMetricsFilter, error) {
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
@@ -82,6 +84,18 @@ func blogMetricsParamsFrom(r *http.Request) (BlogMetricsFilter, error) {
 	f := BlogMetricsFilter{From: from, To: to}
 	if slug := strings.TrimSpace(r.URL.Query().Get("postSlug")); slug != "" {
 		f.PostSlug = &slug
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("referrer")); v != "" {
+		f.Referrer = &v
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("utmSource")); v != "" {
+		f.UTMSource = &v
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("device")); v != "" {
+		f.Device = &v
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("country")); v != "" {
+		f.Country = &v
 	}
 	return f, nil
 }
