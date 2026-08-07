@@ -22,7 +22,7 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := strings.TrimSpace(strings.ToLower(body.Email))
-	if !emailRe.MatchString(email) {
+	if len(email) > 254 || !emailRe.MatchString(email) {
 		writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 		return
 	}
