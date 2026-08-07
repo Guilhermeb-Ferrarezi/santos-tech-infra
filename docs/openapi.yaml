@@ -1855,6 +1855,223 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
               example: { code: BLOG_CATEGORY_IN_USE, message: "Categoria está em uso por um ou mais posts" }
 
+  # ── Blog Analytics ───────────────────────────────────────────────────────
+  /public/blog/events:
+    post:
+      tags: [Blog Analytics]
+      summary: Registra um evento de analytics do blog (beacon anônimo)
+      description: Sem autenticação. device/browser/os/country são sempre derivados no servidor (User-Agent, CF-IPCountry) — nunca aceitos do payload.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, path, sessionId, visitorId]
+              properties:
+                type: { type: string, enum: [pageview, cta_click] }
+                path: { type: string }
+                postSlug: { type: string, nullable: true }
+                sessionId: { type: string }
+                visitorId: { type: string }
+                referrer: { type: string }
+                utmSource: { type: string }
+      responses:
+        "204":
+          description: Evento registrado.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/blog/metrics/overview:
+    get:
+      tags: [Blog Analytics]
+      summary: Resumo de pageviews/visitantes/cliques CTA, com comparação vs período anterior
+      description: Requer `blog_posts:read`.
+      parameters:
+        - { in: query, name: from, required: true, schema: { type: string, format: date } }
+        - { in: query, name: to, required: true, schema: { type: string, format: date } }
+        - { in: query, name: postSlug, schema: { type: string } }
+      responses:
+        "200":
+          description: Resumo do período.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogMetricsOverview" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão blog_posts:read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
+
+  /admin/blog/metrics/timeseries:
+    get:
+      tags: [Blog Analytics]
+      summary: Série temporal de pageviews (diária, ou horária se from/to ≤ 24h)
+      description: Requer `blog_posts:read`.
+      parameters:
+        - { in: query, name: from, required: true, schema: { type: string, format: date } }
+        - { in: query, name: to, required: true, schema: { type: string, format: date } }
+        - { in: query, name: postSlug, schema: { type: string } }
+      responses:
+        "200":
+          description: Pontos da série temporal.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BlogMetricsTimeseriesPoint" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão blog_posts:read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /admin/blog/metrics/top-posts:
+    get:
+      tags: [Blog Analytics]
+      summary: Ranking de posts por pageviews, com cliques de CTA e taxa de conversão
+      description: Requer `blog_posts:read`.
+      parameters:
+        - { in: query, name: from, required: true, schema: { type: string, format: date } }
+        - { in: query, name: to, required: true, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: Ranking de posts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BlogMetricsTopPost" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão blog_posts:read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /admin/blog/metrics/referrers:
+    get:
+      tags: [Blog Analytics]
+      summary: Top domínios de referrer (dedup por domínio, sem query string)
+      description: Requer `blog_posts:read`.
+      parameters:
+        - { in: query, name: from, required: true, schema: { type: string, format: date } }
+        - { in: query, name: to, required: true, schema: { type: string, format: date } }
+        - { in: query, name: postSlug, schema: { type: string } }
+      responses:
+        "200":
+          description: Contagem por domínio de referrer.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BlogMetricsCount" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão blog_posts:read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /admin/blog/metrics/utm-source:
+    get:
+      tags: [Blog Analytics]
+      summary: Top utm_source de entrada
+      description: Requer `blog_posts:read`.
+      parameters:
+        - { in: query, name: from, required: true, schema: { type: string, format: date } }
+        - { in: query, name: to, required: true, schema: { type: string, format: date } }
+        - { in: query, name: postSlug, schema: { type: string } }
+      responses:
+        "200":
+          description: Contagem por utm_source.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BlogMetricsCount" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão blog_posts:read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /admin/blog/metrics/devices:
+    get:
+      tags: [Blog Analytics]
+      summary: Breakdown de pageviews por dispositivo (mobile/tablet/desktop)
+      description: Requer `blog_posts:read`.
+      parameters:
+        - { in: query, name: from, required: true, schema: { type: string, format: date } }
+        - { in: query, name: to, required: true, schema: { type: string, format: date } }
+        - { in: query, name: postSlug, schema: { type: string } }
+      responses:
+        "200":
+          description: Contagem por dispositivo.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BlogMetricsCount" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão blog_posts:read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /admin/blog/metrics/countries:
+    get:
+      tags: [Blog Analytics]
+      summary: Breakdown de pageviews por país (via header CF-IPCountry)
+      description: Requer `blog_posts:read`.
+      parameters:
+        - { in: query, name: from, required: true, schema: { type: string, format: date } }
+        - { in: query, name: to, required: true, schema: { type: string, format: date } }
+        - { in: query, name: postSlug, schema: { type: string } }
+      responses:
+        "200":
+          description: Contagem por país.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BlogMetricsCount" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão blog_posts:read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
 components:
   securitySchemes:
     cookieAuth:
@@ -2228,6 +2445,44 @@ components:
         categoryId: { type: string, format: uuid }
         status: { type: string, enum: [draft, published], default: draft }
       required: [slug, title, categoryId]
+
+    BlogMetricsOverview:
+      type: object
+      description: Resumo do período, com comparação vs período anterior de mesma duração.
+      properties:
+        pageviews: { type: integer, format: int64 }
+        visitors: { type: integer, format: int64, description: "Visitantes únicos (dedup por visitorId)." }
+        ctaClicks: { type: integer, format: int64 }
+        conversionRate: { type: number, format: double, description: "ctaClicks / visitors." }
+        prevPageviews: { type: integer, format: int64 }
+        prevVisitors: { type: integer, format: int64 }
+        prevCtaClicks: { type: integer, format: int64 }
+        prevConversionRate: { type: number, format: double }
+      required: [pageviews, visitors, ctaClicks, conversionRate, prevPageviews, prevVisitors, prevCtaClicks, prevConversionRate]
+
+    BlogMetricsTimeseriesPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time, description: "Início do dia (ou hora, se from/to ≤ 24h)." }
+        pageviews: { type: integer, format: int64 }
+      required: [bucket, pageviews]
+
+    BlogMetricsTopPost:
+      type: object
+      properties:
+        postSlug: { type: string }
+        views: { type: integer, format: int64 }
+        ctaClicks: { type: integer, format: int64 }
+        conversionRate: { type: number, format: double, description: "ctaClicks / views." }
+      required: [postSlug, views, ctaClicks, conversionRate]
+
+    BlogMetricsCount:
+      type: object
+      description: Contagem genérica por chave categórica (referrer, utm_source, device ou country).
+      properties:
+        key: { type: string }
+        count: { type: integer, format: int64 }
+      required: [key, count]
 
 # Por padrão, as rotas exigem o access_token (cookie ou Bearer).
 # Rotas públicas sobrescrevem com `security: []`.
