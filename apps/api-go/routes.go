@@ -201,11 +201,11 @@ func (s *Server) registerBlogRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /blog/categories/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteBlogCategory)))
 
 	// Métricas do blog — admin, mesma permissão de quem já lê posts (blog_posts:read).
-	mux.HandleFunc("GET /admin/blog/metrics/overview", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsOverview))
-	mux.HandleFunc("GET /admin/blog/metrics/timeseries", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsTimeseries))
-	mux.HandleFunc("GET /admin/blog/metrics/top-posts", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsTopPosts))
-	mux.HandleFunc("GET /admin/blog/metrics/referrers", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsReferrers))
-	mux.HandleFunc("GET /admin/blog/metrics/utm-source", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsUTMSource))
-	mux.HandleFunc("GET /admin/blog/metrics/devices", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsDevices))
-	mux.HandleFunc("GET /admin/blog/metrics/countries", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsCountries))
+	mux.HandleFunc("GET /blog/metrics/overview", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsOverview))
+	mux.HandleFunc("GET /blog/metrics/timeseries", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsTimeseries))
+	mux.HandleFunc("GET /blog/metrics/top-posts", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsTopPosts))
+	mux.HandleFunc("GET /blog/metrics/referrers", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsReferrers))
+	mux.HandleFunc("GET /blog/metrics/utm-source", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsUTMSource))
+	mux.HandleFunc("GET /blog/metrics/devices", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsDevices))
+	mux.HandleFunc("GET /blog/metrics/countries", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsCountries))
 }

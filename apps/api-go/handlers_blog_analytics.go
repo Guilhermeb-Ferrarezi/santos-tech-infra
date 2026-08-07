@@ -86,7 +86,7 @@ func blogMetricsParamsFrom(r *http.Request) (BlogMetricsFilter, error) {
 	return f, nil
 }
 
-// GET /admin/blog/metrics/overview
+// GET /blog/metrics/overview
 func (s *Server) handleBlogMetricsOverview(w http.ResponseWriter, r *http.Request) {
 	f, err := blogMetricsParamsFrom(r)
 	if err != nil {
@@ -101,7 +101,7 @@ func (s *Server) handleBlogMetricsOverview(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, out)
 }
 
-// GET /admin/blog/metrics/timeseries
+// GET /blog/metrics/timeseries
 func (s *Server) handleBlogMetricsTimeseries(w http.ResponseWriter, r *http.Request) {
 	f, err := blogMetricsParamsFrom(r)
 	if err != nil {
@@ -116,7 +116,7 @@ func (s *Server) handleBlogMetricsTimeseries(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, out)
 }
 
-// GET /admin/blog/metrics/top-posts
+// GET /blog/metrics/top-posts
 func (s *Server) handleBlogMetricsTopPosts(w http.ResponseWriter, r *http.Request) {
 	f, err := blogMetricsParamsFrom(r)
 	if err != nil {
@@ -131,7 +131,7 @@ func (s *Server) handleBlogMetricsTopPosts(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, out)
 }
 
-// GET /admin/blog/metrics/referrers
+// GET /blog/metrics/referrers
 func (s *Server) handleBlogMetricsReferrers(w http.ResponseWriter, r *http.Request) {
 	f, err := blogMetricsParamsFrom(r)
 	if err != nil {
@@ -146,7 +146,7 @@ func (s *Server) handleBlogMetricsReferrers(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, out)
 }
 
-// GET /admin/blog/metrics/utm-source
+// GET /blog/metrics/utm-source
 func (s *Server) handleBlogMetricsUTMSource(w http.ResponseWriter, r *http.Request) {
 	f, err := blogMetricsParamsFrom(r)
 	if err != nil {
@@ -161,7 +161,7 @@ func (s *Server) handleBlogMetricsUTMSource(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, out)
 }
 
-// GET /admin/blog/metrics/devices
+// GET /blog/metrics/devices
 func (s *Server) handleBlogMetricsDevices(w http.ResponseWriter, r *http.Request) {
 	f, err := blogMetricsParamsFrom(r)
 	if err != nil {
@@ -176,7 +176,7 @@ func (s *Server) handleBlogMetricsDevices(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, out)
 }
 
-// GET /admin/blog/metrics/countries
+// GET /blog/metrics/countries
 func (s *Server) handleBlogMetricsCountries(w http.ResponseWriter, r *http.Request) {
 	f, err := blogMetricsParamsFrom(r)
 	if err != nil {
