@@ -38,7 +38,16 @@ gerando dado real, já em produção).
 
 - [ ] **Step 1: Instalar**
 
-Run: `cd web && bun add react-grid-layout && bun add -d @types/react-grid-layout`
+Run: `cd web && bun add react-grid-layout@^2`
+
+A v2 reestruturou a API (exports separados `.`/`core`/`react`/`legacy`) e
+**já vem com tipos TypeScript embutidos** — `@types/react-grid-layout` é só
+um stub vazio hoje (confirmado: `README.md` do pacote diz "you don't need
+@types/react-grid-layout installed"), não instale. Este plano usa
+especificamente o subpath **`react-grid-layout/legacy`**, que reexpõe a API
+plana clássica (v1) — mesmos props (`layout`, `onLayoutChange`,
+`draggableHandle`, `resizeHandle`, `autoSize`...) que o resto deste plano
+usa, com tipos reais (confirmado lendo `node_modules/react-grid-layout/dist/legacy.d.ts`).
 
 - [ ] **Step 2: Confirmar que build não quebrou**
 
@@ -460,7 +469,7 @@ aparece no hover (CSS), drag só pelo header do card (`draggableHandle`).
 
 ```tsx
 import { useCallback, useMemo, useState } from "react"
-import GridLayout, { type Layout } from "react-grid-layout"
+import GridLayout, { type Layout } from "react-grid-layout/legacy"
 import { DotsSixVertical } from "@phosphor-icons/react"
 import "./grid-board.css"
 
@@ -546,9 +555,9 @@ clicáveis normalmente (só a faixa fina do topo inicia o drag).
 - [ ] **Step 3: `bun run lint` + `bun run build`**
 
 Run: `cd web && bun run lint && bun run build`
-Expected: sem erro. Se o TypeScript reclamar de tipos de
-`react-grid-layout`/`react-resizable` CSS import, confirme que
-`@types/react-grid-layout` foi instalado na Task 1.
+Expected: sem erro (tipos vêm do próprio pacote — ver nota da Task 1; CSS
+puro via `@import` não precisa de tipos, `react-resizable` já é dependência
+transitiva do `react-grid-layout`, confirmado em `node_modules`).
 
 - [ ] **Step 4: Commit**
 
