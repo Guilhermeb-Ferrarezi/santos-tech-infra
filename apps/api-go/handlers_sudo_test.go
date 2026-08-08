@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestSudoGuardSemElevacao(t *testing.T) {
@@ -90,5 +93,22 @@ func TestHandleSudoVerifyCacheControlNoStore(t *testing.T) {
 	}
 	if got := w.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("Cache-Control=%q; queria %q", got, "no-store")
+	}
+}
+
+func TestHandleSudoVerifyRedisDown(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s := testServer(Config{JWTSecret: "s3cr3t"})
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+
+	mr.SetError("ERR simulated Redis failure")
+
+	w := httptest.NewRecorder()
+	r := reqAs(httptest.NewRequest("POST", "/auth/sudo/verify",
+		strings.NewReader(`{"password":"minha-senha"}`)), 42)
+	s.handleSudoVerify(w, r)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("Redis indisponível deve retornar 500 (fail-closed), veio %d", w.Code)
 	}
 }
