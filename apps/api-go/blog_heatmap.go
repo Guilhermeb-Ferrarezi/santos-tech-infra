@@ -18,8 +18,8 @@ import "context"
 const (
 	heatmapRefWidthDesktop   = 1024
 	heatmapRefWidthMobile    = 390
-	heatmapCols              = 40 // colunas da grade (eixo X)
-	heatmapRows              = 60 // linhas da grade (eixo Y) — mais fino pq post costuma ser bem mais alto que largo
+	heatmapCols              = 40  // colunas da grade (eixo X)
+	heatmapRows              = 200 // linhas da grade (eixo Y) — medido ao vivo: post de 7431px com 60 linhas dava célula de ~124px, maior que um avatar de ~40px (o ponto renderiza no centro da célula, "quase lá" mas não exato). Com 200, célula de ~37px num post desse tamanho — ainda maior que o ideal em posts MUITO longos, mas ordem de grandeza melhor.
 	heatmapMaxClicksPerBatch = 200
 )
 
