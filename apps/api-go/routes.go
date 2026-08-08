@@ -127,6 +127,11 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// personalizado com blog_posts:read/write.
 	s.registerBlogRoutes(mux)
 
+	// Vitrine de links (Linktree institucional) — CRUD admin/cargo
+	// personalizado com links:read/write; leitura pública em /public/links
+	// alimenta santos-tech.com/links (Santos-Tech-Home-Page).
+	s.registerLinkShowcaseRoutes(mux)
+
 	// OAuth Google
 	mux.HandleFunc("GET /auth/google", s.handleGoogleStart)
 	mux.HandleFunc("GET /auth/google/callback", s.handleGoogleCallback)
@@ -216,4 +221,15 @@ func (s *Server) registerBlogRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /blog/metrics/utm-source", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsUTMSource))
 	mux.HandleFunc("GET /blog/metrics/devices", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsDevices))
 	mux.HandleFunc("GET /blog/metrics/countries", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsCountries))
+}
+
+func (s *Server) registerLinkShowcaseRoutes(mux *http.ServeMux) {
+	const min = time.Minute
+	mux.HandleFunc("GET /links", s.permGuard("links", "read", true, s.handleListLinkShowcaseItems))
+	mux.HandleFunc("POST /links", s.rateLimit(30, min, s.permGuard("links", "write", false, s.handleCreateLinkShowcaseItem)))
+	mux.HandleFunc("PUT /links/{id}", s.rateLimit(30, min, s.permGuard("links", "write", false, s.handleUpdateLinkShowcaseItem)))
+	mux.HandleFunc("DELETE /links/{id}", s.permGuard("links", "write", false, s.handleDeleteLinkShowcaseItem))
+
+	// Público — sem guard nenhum (igual /public/blog/posts), só rate limit por IP.
+	mux.HandleFunc("GET /public/links", s.rateLimit(120, min, s.handleListPublicLinkShowcaseItems))
 }
