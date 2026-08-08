@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -78,6 +79,23 @@ func blogHeatmapParamsFrom(r *http.Request) (string, string, BlogMetricsFilter, 
 	return *f.PostSlug, viewport, f, nil
 }
 
+// gridDimFromQuery lê cols/rows da querystring — o admin calcula os dois a
+// partir do tamanho REAL do post já renderizado (altura/largura medida ÷
+// células de ~35px), então a grade acompanha a variação de altura entre
+// posts em vez de usar um número fixo que fica grosso demais em posts muito
+// compridos. Ausente/inválido cai no default; sempre saturado pelos limites.
+func gridDimFromQuery(r *http.Request, name string, fallback int) int {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return clampHeatmapGridSize(n)
+}
+
 // GET /blog/metrics/heatmap/clicks
 func (s *Server) handleBlogHeatmapClicks(w http.ResponseWriter, r *http.Request) {
 	postSlug, viewport, f, err := blogHeatmapParamsFrom(r)
@@ -85,7 +103,9 @@ func (s *Server) handleBlogHeatmapClicks(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
-	out, err := s.blogHeatmapClickGrid(r.Context(), postSlug, viewport, f)
+	cols := gridDimFromQuery(r, "cols", heatmapDefaultCols)
+	gridRows := gridDimFromQuery(r, "rows", heatmapDefaultRows)
+	out, err := s.blogHeatmapClickGrid(r.Context(), postSlug, viewport, cols, gridRows, f)
 	if err != nil {
 		writeErr(w, err)
 		return

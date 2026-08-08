@@ -16,12 +16,35 @@ import "context"
 // (blog/web/src/lib/blog-heatmap.ts, MOBILE_BREAKPOINT_PX) tem que continuar
 // igual a esse valor, senão captura e agregação saem de sincronia.
 const (
-	heatmapRefWidthDesktop   = 1024
-	heatmapRefWidthMobile    = 390
-	heatmapCols              = 40  // colunas da grade (eixo X)
-	heatmapRows              = 200 // linhas da grade (eixo Y) — medido ao vivo: post de 7431px com 60 linhas dava célula de ~124px, maior que um avatar de ~40px (o ponto renderiza no centro da célula, "quase lá" mas não exato). Com 200, célula de ~37px num post desse tamanho — ainda maior que o ideal em posts MUITO longos, mas ordem de grandeza melhor.
+	heatmapRefWidthDesktop = 1024
+	heatmapRefWidthMobile  = 390
+	// heatmapDefaultCols/Rows só valem quando o chamador não manda cols/rows
+	// na query (ex.: teste manual da API) — o admin de verdade sempre manda
+	// os dois, calculados a partir do tamanho REAL medido do post renderizado
+	// (ver dashboard/web/.../Heatmap.tsx, TARGET_CELL_PX), porque um número
+	// fixo nunca acompanha a variação real de altura entre posts (medido ao
+	// vivo: um post de 7431px com 60 linhas dava célula de ~124px, maior que
+	// um avatar de ~40px — o ponto renderiza no centro da célula, então
+	// "quase lá" mas visualmente fora do alvo).
+	heatmapDefaultCols       = 30
+	heatmapDefaultRows       = 60
+	heatmapMinGridCells      = 10  // menos que isso e a grade fica grossa demais pra ser útil
+	heatmapMaxGridCells      = 400 // mais que isso e o GROUP BY fica caro à toa (grade mais fina que 1 clique de diferença)
 	heatmapMaxClicksPerBatch = 200
 )
+
+// clampHeatmapGridSize satura n em [heatmapMinGridCells, heatmapMaxGridCells]
+// — nunca confia em cols/rows vindos da query string sem limite (não é input
+// de usuário final, mas nada impede um valor absurdo por engano/teste).
+func clampHeatmapGridSize(n int) int {
+	if n < heatmapMinGridCells {
+		return heatmapMinGridCells
+	}
+	if n > heatmapMaxGridCells {
+		return heatmapMaxGridCells
+	}
+	return n
+}
 
 var validHeatmapViewports = map[string]bool{"mobile": true, "desktop": true}
 
@@ -102,7 +125,10 @@ func (s *Server) insertHeatmapBatch(ctx context.Context, in BlogHeatmapBatch) er
 
 // ── Store — agregação ────────────────────────────────────────────────────────
 
-func (s *Server) blogHeatmapClickGrid(ctx context.Context, postSlug, viewport string, f BlogMetricsFilter) (*BlogHeatmapClickGrid, error) {
+// gridCols/gridRows já vêm resolvidos e saturados pelo handler (ver
+// gridDimFromQuery em handlers_blog_heatmap.go) — nunca 0 nem fora dos
+// limites [heatmapMinGridCells, heatmapMaxGridCells] neste ponto.
+func (s *Server) blogHeatmapClickGrid(ctx context.Context, postSlug, viewport string, gridCols, gridRows int, f BlogMetricsFilter) (*BlogHeatmapClickGrid, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT LEAST(GREATEST(floor(x_pct * $1::real)::int, 0), $1::int - 1) AS xb,
 			LEAST(GREATEST(floor(y_pct * $2::real)::int, 0), $2::int - 1) AS yb,
@@ -111,7 +137,7 @@ func (s *Server) blogHeatmapClickGrid(ctx context.Context, postSlug, viewport st
 		WHERE post_slug = $3 AND viewport = $4 AND created_at >= $5 AND created_at < $6
 		GROUP BY xb, yb
 		ORDER BY yb, xb`,
-		heatmapCols, heatmapRows, postSlug, viewport, f.From, f.To)
+		gridCols, gridRows, postSlug, viewport, f.From, f.To)
 	if err != nil {
 		return nil, err
 	}
@@ -130,8 +156,8 @@ func (s *Server) blogHeatmapClickGrid(ctx context.Context, postSlug, viewport st
 	}
 	return &BlogHeatmapClickGrid{
 		ReferenceWidth: heatmapReferenceWidth(viewport),
-		Cols:           heatmapCols,
-		Rows:           heatmapRows,
+		Cols:           gridCols,
+		Rows:           gridRows,
 		Buckets:        buckets,
 	}, nil
 }

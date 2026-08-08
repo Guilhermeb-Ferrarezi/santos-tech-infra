@@ -297,10 +297,13 @@ request por clique).
   → 204 · rate limit 120/min/IP · até 200 cliques por lote. xPct/yPct são
   SEMPRE porcentagem (0..1) relativa ao container no momento do clique —
   resolução-independente nos dois eixos, nunca pixel absoluto.
-- `GET /blog/metrics/heatmap/clicks?from&to&postSlug&viewport` —
+- `GET /blog/metrics/heatmap/clicks?from&to&postSlug&viewport&cols?&rows?` —
   `{referenceWidth,cols,rows,buckets:[{xBucket,yBucket,count}]}` — grade já
-  binada, nunca pontos crus. Bucket -> posição real: (bucket+0.5)/cols (ou
-  /rows) × largura/altura do preview renderizado.
+  binada, nunca pontos crus. cols/rows opcionais (default 30×60, satura em
+  [10,400]) — o admin manda os dois calculados a partir do tamanho REAL já
+  medido do post renderizado (célula de ~35px), pra grade acompanhar a altura
+  de cada post em vez de um tamanho fixo. Bucket -> posição real: (bucket+0.5)
+  /cols (ou /rows) × largura/altura do preview renderizado.
 - `GET /blog/metrics/heatmap/scroll?from&to&postSlug&viewport` —
   `[{decile,reached,total}]` (10 decis, 0.1..1.0) — sessões (de-dup por
   session_id, profundidade MÁXIMA de cada uma) que chegaram até pelo menos
