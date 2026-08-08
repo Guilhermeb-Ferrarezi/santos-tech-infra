@@ -125,6 +125,11 @@ func main() {
 			} else if n > 0 {
 				slog.Info("eventos de blog analytics expirados removidos", "count", n)
 			}
+			if n, err := srv.deleteOldBlogHeatmapEvents(ctx); err != nil {
+				slog.Warn("purge de blog_heatmap falhou", "err", err)
+			} else if n > 0 {
+				slog.Info("eventos de blog heatmap expirados removidos", "count", n)
+			}
 			select {
 			case <-ctx.Done():
 				return

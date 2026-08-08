@@ -187,6 +187,14 @@ func (s *Server) registerBlogRoutes(mux *http.ServeMux) {
 	// que leitura normal (é chamado a cada pageview + cada clique de CTA).
 	mux.HandleFunc("POST /public/blog/events", s.rateLimit(300, min, s.handleBlogEventIngest))
 
+	// Heatmap do blog — ingestão pública em LOTE (client acumula cliques +
+	// profundidade de scroll e manda 1 request por flush, nunca por clique;
+	// ver blog/web/src/lib/blog-heatmap.ts). Agregação admin exige
+	// postSlug+viewport: heatmap não faz sentido agregado entre posts.
+	mux.HandleFunc("POST /public/blog/heatmap/events", s.rateLimit(120, min, s.handleBlogHeatmapIngest))
+	mux.HandleFunc("GET /blog/metrics/heatmap/clicks", s.permGuard("blog_posts", "read", false, s.handleBlogHeatmapClicks))
+	mux.HandleFunc("GET /blog/metrics/heatmap/scroll", s.permGuard("blog_posts", "read", false, s.handleBlogHeatmapScroll))
+
 	// Admin — admin ou cargo personalizado com blog_posts:read/write; DELETE
 	// (destrutivo) fica admin-only + sudo, fora do sistema de permissão de cargo.
 	mux.HandleFunc("GET /blog/posts", s.permGuard("blog_posts", "read", false, s.handleListBlogPosts))

@@ -1885,6 +1885,45 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /public/blog/heatmap/events:
+    post:
+      tags: [Blog Analytics]
+      summary: Registra um lote de heatmap (cliques + profundidade de scroll)
+      description: |
+        Sem autenticação. Sempre um LOTE por flush do client (ver
+        blog/web/src/lib/blog-heatmap.ts) — nunca 1 request por clique. Até
+        200 cliques por lote; maxScrollDepthPct é opcional (1 valor por
+        pageview, a profundidade máxima já alcançada até aquele flush).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [postSlug, viewport, sessionId]
+              properties:
+                postSlug: { type: string }
+                viewport: { type: string, enum: [mobile, desktop] }
+                sessionId: { type: string }
+                clicks:
+                  type: array
+                  maxItems: 200
+                  items:
+                    type: object
+                    required: [xPct, yPx]
+                    properties:
+                      xPct: { type: number, format: double, minimum: 0, maximum: 1, description: "Relativo à largura do conteúdo (0..1)." }
+                      yPx: { type: integer, description: "Absoluto desde o topo do <article>, na largura de referência do bucket de viewport." }
+                maxScrollDepthPct: { type: number, format: double, minimum: 0, maximum: 1, nullable: true }
+      responses:
+        "204":
+          description: Lote registrado.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /blog/metrics/overview:
     get:
       tags: [Blog Analytics]
@@ -2086,6 +2125,67 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/BlogMetricsCount" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão blog_posts:read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /blog/metrics/heatmap/clicks:
+    get:
+      tags: [Blog Analytics]
+      summary: Grade de cliques binada (heatmap), para 1 post e 1 bucket de viewport
+      description: |
+        Requer `blog_posts:read`. Nunca devolve pontos crus — só a grade já
+        agregada (`referenceWidth`/`binPx` + buckets), pro admin reconstruir o
+        heatmap com heatmap.js. postSlug e viewport são obrigatórios (heatmap
+        não faz sentido agregado entre posts nem entre mobile/desktop).
+      parameters:
+        - { in: query, name: from, required: true, schema: { type: string, format: date } }
+        - { in: query, name: to, required: true, schema: { type: string, format: date } }
+        - { in: query, name: postSlug, required: true, schema: { type: string } }
+        - { in: query, name: viewport, required: true, schema: { type: string, enum: [mobile, desktop] } }
+      responses:
+        "200":
+          description: Grade de cliques do post/viewport no período.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogHeatmapClickGrid" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão blog_posts:read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /blog/metrics/heatmap/scroll:
+    get:
+      tags: [Blog Analytics]
+      summary: Funil de profundidade de rolagem (10 decis), para 1 post e 1 bucket de viewport
+      description: |
+        Requer `blog_posts:read`. Cada decil traz quantas sessões (de-dup por
+        session_id, pegando a profundidade MÁXIMA de cada uma) chegaram até
+        pelo menos aquele ponto do post.
+      parameters:
+        - { in: query, name: from, required: true, schema: { type: string, format: date } }
+        - { in: query, name: to, required: true, schema: { type: string, format: date } }
+        - { in: query, name: postSlug, required: true, schema: { type: string } }
+        - { in: query, name: viewport, required: true, schema: { type: string, enum: [mobile, desktop] } }
+      responses:
+        "200":
+          description: Funil de profundidade do post/viewport no período.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BlogHeatmapScrollDecile" }
         "400":
           $ref: "#/components/responses/ValidationError"
         "401":
@@ -2508,6 +2608,33 @@ components:
         key: { type: string }
         count: { type: integer, format: int64 }
       required: [key, count]
+
+    BlogHeatmapClickBucket:
+      type: object
+      properties:
+        xBucket: { type: integer }
+        yBucket: { type: integer }
+        count: { type: integer, format: int64 }
+      required: [xBucket, yBucket, count]
+
+    BlogHeatmapClickGrid:
+      type: object
+      description: Grade de cliques já binada — nunca pontos crus.
+      properties:
+        referenceWidth: { type: integer, description: "Largura de referência do bucket de viewport (1024 desktop — o limiar do breakpoint lg:, 390 mobile)." }
+        binPx: { type: integer, description: "Lado da célula da grade, em px, nos dois eixos." }
+        buckets:
+          type: array
+          items: { $ref: "#/components/schemas/BlogHeatmapClickBucket" }
+      required: [referenceWidth, binPx, buckets]
+
+    BlogHeatmapScrollDecile:
+      type: object
+      properties:
+        decile: { type: number, format: double, description: "0.1 a 1.0 — profundidade do post." }
+        reached: { type: integer, format: int64, description: "Sessões que chegaram até pelo menos esse decil." }
+        total: { type: integer, format: int64, description: "Total de sessões no período." }
+      required: [decile, reached, total]
 
 # Por padrão, as rotas exigem o access_token (cookie ou Bearer).
 # Rotas públicas sobrescrevem com `security: []`.

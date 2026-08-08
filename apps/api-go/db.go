@@ -293,6 +293,25 @@ CREATE TABLE IF NOT EXISTS blog_events (
 CREATE INDEX IF NOT EXISTS idx_blog_events_post_created ON blog_events(post_slug, created_at);
 CREATE INDEX IF NOT EXISTS idx_blog_events_type_created ON blog_events(type, created_at);
 CREATE INDEX IF NOT EXISTS idx_blog_events_created ON blog_events(created_at);
+CREATE TABLE IF NOT EXISTS blog_heatmap_clicks (
+  id          BIGSERIAL PRIMARY KEY,
+  post_slug   TEXT NOT NULL,
+  viewport    TEXT NOT NULL CHECK (viewport IN ('mobile','desktop')),
+  x_pct       REAL NOT NULL CHECK (x_pct >= 0 AND x_pct <= 1),
+  y_px        INT NOT NULL CHECK (y_px >= 0),
+  session_id  TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_blog_heatmap_clicks_post_vp_created ON blog_heatmap_clicks(post_slug, viewport, created_at);
+CREATE TABLE IF NOT EXISTS blog_heatmap_scroll (
+  id             BIGSERIAL PRIMARY KEY,
+  post_slug      TEXT NOT NULL,
+  viewport       TEXT NOT NULL CHECK (viewport IN ('mobile','desktop')),
+  max_depth_pct  REAL NOT NULL CHECK (max_depth_pct >= 0 AND max_depth_pct <= 1),
+  session_id     TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_blog_heatmap_scroll_post_vp_created ON blog_heatmap_scroll(post_slug, viewport, created_at);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
