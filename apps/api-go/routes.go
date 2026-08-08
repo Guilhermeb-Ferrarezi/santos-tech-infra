@@ -201,11 +201,13 @@ func (s *Server) registerBlogRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /blog/categories/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteBlogCategory)))
 
 	// Métricas do blog — admin, mesma permissão de quem já lê posts (blog_posts:read).
-	mux.HandleFunc("GET /blog/metrics/overview", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsOverview))
-	mux.HandleFunc("GET /blog/metrics/timeseries", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsTimeseries))
-	mux.HandleFunc("GET /blog/metrics/top-posts", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsTopPosts))
-	mux.HandleFunc("GET /blog/metrics/referrers", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsReferrers))
-	mux.HandleFunc("GET /blog/metrics/utm-source", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsUTMSource))
-	mux.HandleFunc("GET /blog/metrics/devices", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsDevices))
-	mux.HandleFunc("GET /blog/metrics/countries", s.permGuard("blog_posts", "read", false, s.handleBlogMetricsCountries))
+	// Rate limit: queries de analytics fazem table-scan em blog_events; 30/min por IP
+	// é mais que suficiente para o painel e impede uso abusivo (mesmo por admins).
+	mux.HandleFunc("GET /blog/metrics/overview", s.rateLimit(30, min, s.permGuard("blog_posts", "read", false, s.handleBlogMetricsOverview)))
+	mux.HandleFunc("GET /blog/metrics/timeseries", s.rateLimit(30, min, s.permGuard("blog_posts", "read", false, s.handleBlogMetricsTimeseries)))
+	mux.HandleFunc("GET /blog/metrics/top-posts", s.rateLimit(30, min, s.permGuard("blog_posts", "read", false, s.handleBlogMetricsTopPosts)))
+	mux.HandleFunc("GET /blog/metrics/referrers", s.rateLimit(30, min, s.permGuard("blog_posts", "read", false, s.handleBlogMetricsReferrers)))
+	mux.HandleFunc("GET /blog/metrics/utm-source", s.rateLimit(30, min, s.permGuard("blog_posts", "read", false, s.handleBlogMetricsUTMSource)))
+	mux.HandleFunc("GET /blog/metrics/devices", s.rateLimit(30, min, s.permGuard("blog_posts", "read", false, s.handleBlogMetricsDevices)))
+	mux.HandleFunc("GET /blog/metrics/countries", s.rateLimit(30, min, s.permGuard("blog_posts", "read", false, s.handleBlogMetricsCountries)))
 }
