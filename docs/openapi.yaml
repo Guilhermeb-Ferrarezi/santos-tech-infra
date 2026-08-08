@@ -1911,10 +1911,10 @@ paths:
                   maxItems: 200
                   items:
                     type: object
-                    required: [xPct, yPx]
+                    required: [xPct, yPct]
                     properties:
                       xPct: { type: number, format: double, minimum: 0, maximum: 1, description: "Relativo à largura do conteúdo (0..1)." }
-                      yPx: { type: integer, description: "Absoluto desde o topo do <article>, na largura de referência do bucket de viewport." }
+                      yPct: { type: number, format: double, minimum: 0, maximum: 1, description: "Relativo à altura do conteúdo (0..1) — mesma normalização de xPct, resolução-independente." }
                 maxScrollDepthPct: { type: number, format: double, minimum: 0, maximum: 1, nullable: true }
       responses:
         "204":
@@ -2141,9 +2141,9 @@ paths:
       summary: Grade de cliques binada (heatmap), para 1 post e 1 bucket de viewport
       description: |
         Requer `blog_posts:read`. Nunca devolve pontos crus — só a grade já
-        agregada (`referenceWidth`/`binPx` + buckets), pro admin reconstruir o
-        heatmap com heatmap.js. postSlug e viewport são obrigatórios (heatmap
-        não faz sentido agregado entre posts nem entre mobile/desktop).
+        agregada (`cols`/`rows` + buckets), pro admin reconstruir o heatmap
+        com heatmap.js. postSlug e viewport são obrigatórios (heatmap não faz
+        sentido agregado entre posts nem entre mobile/desktop).
       parameters:
         - { in: query, name: from, required: true, schema: { type: string, format: date } }
         - { in: query, name: to, required: true, schema: { type: string, format: date } }
@@ -2619,14 +2619,20 @@ components:
 
     BlogHeatmapClickGrid:
       type: object
-      description: Grade de cliques já binada — nunca pontos crus.
+      description: |
+        Grade de cliques já binada — nunca pontos crus. xBucket/yBucket são
+        índices de grade; o admin converte pra posição real com
+        (bucket+0.5)/cols (ou /rows) × largura/altura REAL do preview
+        renderizado — nunca multiplicando por referenceWidth diretamente
+        (que é só informativo).
       properties:
-        referenceWidth: { type: integer, description: "Largura de referência do bucket de viewport (1024 desktop — o limiar do breakpoint lg:, 390 mobile)." }
-        binPx: { type: integer, description: "Lado da célula da grade, em px, nos dois eixos." }
+        referenceWidth: { type: integer, description: "Largura de referência do preview no admin (1024 desktop — o limiar do breakpoint lg:, 390 mobile). Informativo." }
+        cols: { type: integer, description: "Número de colunas da grade (eixo X)." }
+        rows: { type: integer, description: "Número de linhas da grade (eixo Y)." }
         buckets:
           type: array
           items: { $ref: "#/components/schemas/BlogHeatmapClickBucket" }
-      required: [referenceWidth, binPx, buckets]
+      required: [referenceWidth, cols, rows, buckets]
 
     BlogHeatmapScrollDecile:
       type: object

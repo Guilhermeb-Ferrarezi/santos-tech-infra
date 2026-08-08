@@ -293,11 +293,14 @@ Heatmap de clique/rolagem — por post, sempre com `viewport` (`mobile`|`desktop
 bucket = breakpoint `lg:` do blog, 1024px). Beacon sempre em LOTE (nunca 1
 request por clique).
 
-- `POST /public/blog/heatmap/events {postSlug,viewport,sessionId,clicks?:[{xPct,yPx}],maxScrollDepthPct?}`
-  → 204 · rate limit 120/min/IP · até 200 cliques por lote.
+- `POST /public/blog/heatmap/events {postSlug,viewport,sessionId,clicks?:[{xPct,yPct}],maxScrollDepthPct?}`
+  → 204 · rate limit 120/min/IP · até 200 cliques por lote. xPct/yPct são
+  SEMPRE porcentagem (0..1) relativa ao container no momento do clique —
+  resolução-independente nos dois eixos, nunca pixel absoluto.
 - `GET /blog/metrics/heatmap/clicks?from&to&postSlug&viewport` —
-  `{referenceWidth,binPx,buckets:[{xBucket,yBucket,count}]}` — grade já binada,
-  nunca pontos crus.
+  `{referenceWidth,cols,rows,buckets:[{xBucket,yBucket,count}]}` — grade já
+  binada, nunca pontos crus. Bucket -> posição real: (bucket+0.5)/cols (ou
+  /rows) × largura/altura do preview renderizado.
 - `GET /blog/metrics/heatmap/scroll?from&to&postSlug&viewport` —
   `[{decile,reached,total}]` (10 decis, 0.1..1.0) — sessões (de-dup por
   session_id, profundidade MÁXIMA de cada uma) que chegaram até pelo menos

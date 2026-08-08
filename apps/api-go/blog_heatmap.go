@@ -4,21 +4,22 @@ import "context"
 
 // ── Models ───────────────────────────────────────────────────────────────────
 
-// heatmapRefWidthDesktop/Mobile são as larguras de referência usadas na
-// AGREGAÇÃO (grid de buckets — cols = refWidth/heatmapBinPx), não afetam a
-// captura (que grava xPct 0..1, sempre relativo à largura real do container
-// no momento do clique). O corte mobile/desktop no client (blog/web/src/lib/
-// blog-heatmap.ts, MOBILE_BREAKPOINT_PX) é o `lg:` do Tailwind = 1024px —
-// onde o post muda de estrutura (coluna única -> grid com sidebar de índice).
-// heatmapRefWidthDesktop usa esse mesmo valor (1024) como largura canônica de
-// renderização no admin: não existe "a" largura de desktop real (varia muito
-// acima de 1024px), então rendereizamos sempre no próprio limiar do
-// breakpoint em vez de tentar aproximar uma média. Mudar aqui sem mudar lá
-// quebra a correlação entre captura e agregação.
+// heatmapRefWidthDesktop/Mobile são as larguras de referência do PREVIEW no
+// admin (iframe same-origin do post real, ver dashboard/web/src/pages/admin/
+// blog/Heatmap.tsx). Não afetam a captura nem a agregação: x_pct e y_pct são
+// SEMPRE porcentagem (0..1) relativa ao container real no momento do clique,
+// nos dois eixos — resolução-independente por design. Isso importa porque
+// acima do breakpoint `lg:` (1024px, onde o post ganha a sidebar de índice em
+// grid) a largura do conteúdo continua variando (não trava num valor fixo);
+// se Y fosse pixel absoluto, cliques capturados numa tela de 1920px não
+// bateriam com o preview renderizado a 1024px. Corte mobile/desktop no client
+// (blog/web/src/lib/blog-heatmap.ts, MOBILE_BREAKPOINT_PX) tem que continuar
+// igual a esse valor, senão captura e agregação saem de sincronia.
 const (
 	heatmapRefWidthDesktop   = 1024
 	heatmapRefWidthMobile    = 390
-	heatmapBinPx             = 20 // lado da célula da grade (px), nos dois eixos
+	heatmapCols              = 40 // colunas da grade (eixo X)
+	heatmapRows              = 60 // linhas da grade (eixo Y) — mais fino pq post costuma ser bem mais alto que largo
 	heatmapMaxClicksPerBatch = 200
 )
 
@@ -33,7 +34,7 @@ func heatmapReferenceWidth(viewport string) int {
 
 type HeatmapClickInput struct {
 	XPct float64 `json:"xPct"`
-	YPx  int     `json:"yPx"`
+	YPct float64 `json:"yPct"`
 }
 
 // BlogHeatmapBatch é o corpo do beacon — sempre um lote (cliques acumulados +
@@ -52,12 +53,14 @@ type BlogHeatmapClickBucket struct {
 	Count   int64 `json:"count"`
 }
 
-// BlogHeatmapClickGrid nunca expõe pontos crus — só a grade já binada, com o
-// referenceWidth/binPx que o admin precisa pra converter bucket -> pixel do
-// heatmap.js.
+// BlogHeatmapClickGrid nunca expõe pontos crus — só a grade já binada. Cols/
+// Rows dizem ao admin como converter bucket -> fração (bucket+0.5)/cols (ou
+// /rows), que ele multiplica pela largura/altura REAL do preview renderizado
+// — nunca por ReferenceWidth diretamente, isso é só informativo.
 type BlogHeatmapClickGrid struct {
 	ReferenceWidth int                      `json:"referenceWidth"`
-	BinPx          int                      `json:"binPx"`
+	Cols           int                      `json:"cols"`
+	Rows           int                      `json:"rows"`
 	Buckets        []BlogHeatmapClickBucket `json:"buckets"`
 }
 
@@ -80,9 +83,9 @@ func (s *Server) insertHeatmapBatch(ctx context.Context, in BlogHeatmapBatch) er
 
 	for _, c := range in.Clicks {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO blog_heatmap_clicks (post_slug, viewport, x_pct, y_px, session_id)
+			INSERT INTO blog_heatmap_clicks (post_slug, viewport, x_pct, y_pct, session_id)
 			VALUES ($1,$2,$3,$4,$5)`,
-			in.PostSlug, in.Viewport, c.XPct, c.YPx, in.SessionID); err != nil {
+			in.PostSlug, in.Viewport, c.XPct, c.YPct, in.SessionID); err != nil {
 			return err
 		}
 	}
@@ -100,18 +103,15 @@ func (s *Server) insertHeatmapBatch(ctx context.Context, in BlogHeatmapBatch) er
 // ── Store — agregação ────────────────────────────────────────────────────────
 
 func (s *Server) blogHeatmapClickGrid(ctx context.Context, postSlug, viewport string, f BlogMetricsFilter) (*BlogHeatmapClickGrid, error) {
-	refWidth := heatmapReferenceWidth(viewport)
-	cols := refWidth / heatmapBinPx
-
 	rows, err := s.db.Query(ctx, `
 		SELECT LEAST(GREATEST(floor(x_pct * $1::real)::int, 0), $1::int - 1) AS xb,
-			floor(y_px::real / $2::real)::int AS yb,
+			LEAST(GREATEST(floor(y_pct * $2::real)::int, 0), $2::int - 1) AS yb,
 			count(*) AS cnt
 		FROM blog_heatmap_clicks
 		WHERE post_slug = $3 AND viewport = $4 AND created_at >= $5 AND created_at < $6
 		GROUP BY xb, yb
 		ORDER BY yb, xb`,
-		cols, heatmapBinPx, postSlug, viewport, f.From, f.To)
+		heatmapCols, heatmapRows, postSlug, viewport, f.From, f.To)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,12 @@ func (s *Server) blogHeatmapClickGrid(ctx context.Context, postSlug, viewport st
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return &BlogHeatmapClickGrid{ReferenceWidth: refWidth, BinPx: heatmapBinPx, Buckets: buckets}, nil
+	return &BlogHeatmapClickGrid{
+		ReferenceWidth: heatmapReferenceWidth(viewport),
+		Cols:           heatmapCols,
+		Rows:           heatmapRows,
+		Buckets:        buckets,
+	}, nil
 }
 
 // blogHeatmapScrollFunnel devolve 10 decis (0.1..1.0): quantas sessões (de-dup

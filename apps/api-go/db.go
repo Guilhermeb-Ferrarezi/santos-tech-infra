@@ -293,12 +293,22 @@ CREATE TABLE IF NOT EXISTS blog_events (
 CREATE INDEX IF NOT EXISTS idx_blog_events_post_created ON blog_events(post_slug, created_at);
 CREATE INDEX IF NOT EXISTS idx_blog_events_type_created ON blog_events(type, created_at);
 CREATE INDEX IF NOT EXISTS idx_blog_events_created ON blog_events(created_at);
+-- Transição y_px (pixel absoluto) -> y_pct (0..1, mesma normalização do
+-- x_pct) — feature lançada há poucas horas, sem dado real acumulado ainda,
+-- então dropar é seguro. Idempotente: só roda se a coluna antiga existir; em
+-- boots seguintes (schema já migrado) é um no-op.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='blog_heatmap_clicks' AND column_name='y_px') THEN
+    DROP TABLE blog_heatmap_clicks;
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS blog_heatmap_clicks (
   id          BIGSERIAL PRIMARY KEY,
   post_slug   TEXT NOT NULL,
   viewport    TEXT NOT NULL CHECK (viewport IN ('mobile','desktop')),
   x_pct       REAL NOT NULL CHECK (x_pct >= 0 AND x_pct <= 1),
-  y_px        INT NOT NULL CHECK (y_px >= 0),
+  y_pct       REAL NOT NULL CHECK (y_pct >= 0 AND y_pct <= 1),
   session_id  TEXT NOT NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );

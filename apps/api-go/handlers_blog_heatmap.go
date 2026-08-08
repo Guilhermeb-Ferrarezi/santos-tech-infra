@@ -25,7 +25,7 @@ func validateHeatmapBatch(in *BlogHeatmapBatch) error {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "lote de cliques grande demais")
 	}
 	for _, c := range in.Clicks {
-		if c.XPct < 0 || c.XPct > 1 || c.YPx < 0 || c.YPx > 200000 {
+		if c.XPct < 0 || c.XPct > 1 || c.YPct < 0 || c.YPct > 1 {
 			return appErr(http.StatusBadRequest, "BAD_REQUEST", "clique fora do intervalo esperado")
 		}
 	}

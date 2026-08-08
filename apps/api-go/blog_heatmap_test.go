@@ -29,7 +29,7 @@ func TestValidateHeatmapBatch(t *testing.T) {
 			name: "válido com clique",
 			in: BlogHeatmapBatch{
 				PostSlug: "post-x", Viewport: "desktop", SessionID: "s1",
-				Clicks: []HeatmapClickInput{{XPct: 0.5, YPx: 100}},
+				Clicks: []HeatmapClickInput{{XPct: 0.5, YPct: 0.3}},
 			},
 		},
 		{
@@ -46,32 +46,32 @@ func TestValidateHeatmapBatch(t *testing.T) {
 		},
 		{
 			name:    "postSlug vazio",
-			in:      BlogHeatmapBatch{Viewport: "desktop", SessionID: "s1", Clicks: []HeatmapClickInput{{XPct: 0.1, YPx: 1}}},
+			in:      BlogHeatmapBatch{Viewport: "desktop", SessionID: "s1", Clicks: []HeatmapClickInput{{XPct: 0.1, YPct: 0.1}}},
 			wantErr: true,
 		},
 		{
 			name:    "viewport inválido",
-			in:      BlogHeatmapBatch{PostSlug: "post-x", Viewport: "tablet", SessionID: "s1", Clicks: []HeatmapClickInput{{XPct: 0.1, YPx: 1}}},
+			in:      BlogHeatmapBatch{PostSlug: "post-x", Viewport: "tablet", SessionID: "s1", Clicks: []HeatmapClickInput{{XPct: 0.1, YPct: 0.1}}},
 			wantErr: true,
 		},
 		{
 			name:    "sessionId vazio",
-			in:      BlogHeatmapBatch{PostSlug: "post-x", Viewport: "desktop", Clicks: []HeatmapClickInput{{XPct: 0.1, YPx: 1}}},
+			in:      BlogHeatmapBatch{PostSlug: "post-x", Viewport: "desktop", Clicks: []HeatmapClickInput{{XPct: 0.1, YPct: 0.1}}},
 			wantErr: true,
 		},
 		{
 			name: "xPct fora do intervalo",
 			in: BlogHeatmapBatch{
 				PostSlug: "post-x", Viewport: "desktop", SessionID: "s1",
-				Clicks: []HeatmapClickInput{{XPct: 1.2, YPx: 1}},
+				Clicks: []HeatmapClickInput{{XPct: 1.2, YPct: 0.1}},
 			},
 			wantErr: true,
 		},
 		{
-			name: "yPx negativo",
+			name: "yPct fora do intervalo",
 			in: BlogHeatmapBatch{
 				PostSlug: "post-x", Viewport: "desktop", SessionID: "s1",
-				Clicks: []HeatmapClickInput{{XPct: 0.1, YPx: -1}},
+				Clicks: []HeatmapClickInput{{XPct: 0.1, YPct: -0.1}},
 			},
 			wantErr: true,
 		},
@@ -98,7 +98,7 @@ func TestValidateHeatmapBatch(t *testing.T) {
 func TestValidateHeatmapBatchClicksTooLarge(t *testing.T) {
 	clicks := make([]HeatmapClickInput, heatmapMaxClicksPerBatch+1)
 	for i := range clicks {
-		clicks[i] = HeatmapClickInput{XPct: 0.1, YPx: 1}
+		clicks[i] = HeatmapClickInput{XPct: 0.1, YPct: 0.1}
 	}
 	in := BlogHeatmapBatch{PostSlug: "post-x", Viewport: "desktop", SessionID: "s1", Clicks: clicks}
 	if err := validateHeatmapBatch(&in); err == nil {
