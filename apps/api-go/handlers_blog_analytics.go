@@ -81,6 +81,13 @@ func blogMetricsParamsFrom(r *http.Request) (BlogMetricsFilter, error) {
 	if !to.After(from) {
 		return BlogMetricsFilter{}, appErr(http.StatusBadRequest, "BAD_REQUEST", "to deve ser depois de from")
 	}
+	// Limita o intervalo para evitar scans completos da tabela blog_events
+	// (que cresce sem limite). blogMetricsOverview executa 2 queries por request;
+	// intervalos de anos causariam timeout de DB ou lentidão visível no painel.
+	const maxRange = 366 * 24 * time.Hour
+	if to.Sub(from) > maxRange {
+		return BlogMetricsFilter{}, appErr(http.StatusBadRequest, "BAD_REQUEST", "intervalo máximo permitido é de 366 dias")
+	}
 	f := BlogMetricsFilter{From: from, To: to}
 	if slug := strings.TrimSpace(r.URL.Query().Get("postSlug")); slug != "" {
 		f.PostSlug = &slug

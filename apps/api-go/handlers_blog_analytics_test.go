@@ -76,3 +76,21 @@ func TestBlogMetricsParamsOK(t *testing.T) {
 		t.Fatalf("to deveria ser depois de from")
 	}
 }
+
+func TestBlogMetricsParamsMaxRange(t *testing.T) {
+	// Intervalo de 2 anos: deve ser rejeitado (limite é 366 dias).
+	r := httptest.NewRequest("GET", "/blog/metrics/overview?from=2024-01-01&to=2026-01-01", nil)
+	_, err := blogMetricsParamsFrom(r)
+	if err == nil {
+		t.Fatal("esperava erro para intervalo maior que 366 dias")
+	}
+}
+
+func TestBlogMetricsParamsMaxRangeExact(t *testing.T) {
+	// 365 dias de intervalo: deve ser aceito.
+	r := httptest.NewRequest("GET", "/blog/metrics/overview?from=2025-08-08&to=2026-08-08", nil)
+	_, err := blogMetricsParamsFrom(r)
+	if err != nil {
+		t.Fatalf("365 dias deve ser aceito: %v", err)
+	}
+}
