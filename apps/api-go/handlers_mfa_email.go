@@ -207,6 +207,7 @@ func (s *Server) handleMFAEmailEnable(w http.ResponseWriter, r *http.Request) {
 // POST /auth/mfa/method {method} — define o método preferido do 2º passo ('totp' ou
 // 'email'). Só aceita método de fato disponível na conta.
 func (s *Server) handleMFAMethod(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	uid := userIDFrom(r)
 	var body struct {

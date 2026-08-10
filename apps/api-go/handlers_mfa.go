@@ -153,6 +153,7 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 
 // POST /auth/mfa/disable {code} — desativa (aceita TOTP, recovery ou código por email).
 func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	uid := userIDFrom(r)
 	var body struct {
