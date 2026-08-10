@@ -2242,6 +2242,41 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /sentry/issues/{id}:
+    get:
+      tags: [Observabilidade]
+      summary: Detalhe de uma issue — exceção/stacktrace do evento mais recente + tags
+      description: |
+        Admin-only. Combina GET /issues/{id}/ e GET /issues/{id}/events/latest/
+        do Sentry num DTO já normalizado (frames do crash primeiro). Deixa
+        investigar o erro sem sair do dashboard; ações (resolver/ignorar)
+        continuam no sentry.io (link em `permalink`).
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Detalhe da issue.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SentryIssueDetail" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Admin-only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: Erro ao consultar o Sentry (issue inexistente, timeout, etc.).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: SENTRY_API_TOKEN não configurado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /sentry/projects:
     get:
       tags: [Observabilidade]
@@ -2351,6 +2386,39 @@ components:
             id: { type: string }
             name: { type: string }
             slug: { type: string }
+
+    SentryIssueDetail:
+      description: SentryIssue + exceção/stacktrace do evento mais recente e tags, devolvida por /sentry/issues/{id}.
+      allOf:
+        - $ref: "#/components/schemas/SentryIssue"
+        - type: object
+          properties:
+            exceptions:
+              type: array
+              items:
+                type: object
+                properties:
+                  type: { type: string, description: "Ex.: TypeError" }
+                  value: { type: string, description: "Mensagem da exceção" }
+                  frames:
+                    type: array
+                    description: "Do ponto do crash pro chamador raiz (mais recente primeiro)."
+                    items:
+                      type: object
+                      properties:
+                        filename: { type: string }
+                        function: { type: string }
+                        lineNo: { type: integer }
+                        colNo: { type: integer }
+                        contextLine: { type: string, description: "Linha de código no ponto do frame" }
+                        inApp: { type: boolean, description: "Código do próprio serviço (não de dependência)" }
+            tags:
+              type: array
+              items:
+                type: object
+                properties:
+                  key: { type: string }
+                  value: { type: string }
 
     # ── payments-go schemas ────────────────────────────────────────────────
     Movement:

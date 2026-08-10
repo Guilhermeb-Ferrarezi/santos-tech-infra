@@ -99,6 +99,7 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 
 	// Erros do ecossistema (Sentry) — admin-only. Responde 503 se SENTRY_API_TOKEN não configurado.
 	mux.HandleFunc("GET /sentry/issues", s.rateLimit(30, min, s.adminGuard(s.handleSentryIssues)))
+	mux.HandleFunc("GET /sentry/issues/{id}", s.rateLimit(60, min, s.adminGuard(s.handleSentryIssueDetail)))
 	mux.HandleFunc("GET /sentry/projects", s.rateLimit(30, min, s.adminGuard(s.handleSentryProjects)))
 
 	// Saúde agregada do ecossistema — autenticada (sessão ou PAT)

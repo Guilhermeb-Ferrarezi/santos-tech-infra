@@ -159,3 +159,128 @@ func sentryProjectSlugs() []string {
 	}
 	return slugs
 }
+
+// ── detalhe de uma issue (stacktrace + tags) ────────────────────────────────
+
+type sentryFrame struct {
+	Filename    string `json:"filename"`
+	Function    string `json:"function"`
+	LineNo      int    `json:"lineNo"`
+	ColNo       int    `json:"colNo,omitempty"`
+	ContextLine string `json:"contextLine,omitempty"`
+	InApp       bool   `json:"inApp"`
+}
+
+type sentryException struct {
+	Type   string        `json:"type"`
+	Value  string        `json:"value"`
+	Frames []sentryFrame `json:"frames"`
+}
+
+type sentryTag struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type sentryIssueDetail struct {
+	sentryIssue
+	Exceptions []sentryException `json:"exceptions,omitempty"`
+	Tags       []sentryTag       `json:"tags,omitempty"`
+}
+
+// rawSentryEvent é o shape (parcial) do evento devolvido por
+// /issues/{id}/events/latest/ — só os campos que a tela de detalhe usa.
+type rawSentryEvent struct {
+	Tags []struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	} `json:"tags"`
+	Entries []struct {
+		Type string `json:"type"`
+		Data struct {
+			Values []struct {
+				Type       string `json:"type"`
+				Value      string `json:"value"`
+				Stacktrace *struct {
+					Frames []struct {
+						Filename    string `json:"filename"`
+						AbsPath     string `json:"absPath"`
+						Function    string `json:"function"`
+						LineNo      int    `json:"lineNo"`
+						ColNo       int    `json:"colNo"`
+						ContextLine string `json:"context_line"`
+						InApp       bool   `json:"inApp"`
+					} `json:"frames"`
+				} `json:"stacktrace"`
+			} `json:"values"`
+		} `json:"data"`
+	} `json:"entries"`
+}
+
+// getIssueDetail busca o issue (metadados) + o evento mais recente (exceção
+// com stacktrace, tags) e devolve um DTO já normalizado — o shape bruto do
+// Sentry (entries/data aninhado, genérico pra qualquer tipo de evento) é
+// verboso demais pra repassar direto ao front.
+func (c *sentryClient) getIssueDetail(ctx context.Context, issueID string) (*sentryIssueDetail, error) {
+	id := url.PathEscape(strings.TrimSpace(issueID))
+	if id == "" {
+		return nil, fmt.Errorf("issueID vazio")
+	}
+
+	var issue sentryIssue
+	if err := c.getJSON(ctx, "https://sentry.io/api/0/organizations/"+c.org+"/issues/"+id+"/", &issue); err != nil {
+		return nil, err
+	}
+
+	var ev rawSentryEvent
+	if err := c.getJSON(ctx, "https://sentry.io/api/0/organizations/"+c.org+"/issues/"+id+"/events/latest/", &ev); err != nil {
+		return nil, err
+	}
+
+	detail := &sentryIssueDetail{sentryIssue: issue}
+	for _, t := range ev.Tags {
+		detail.Tags = append(detail.Tags, sentryTag{Key: t.Key, Value: t.Value})
+	}
+	for _, entry := range ev.Entries {
+		if entry.Type != "exception" {
+			continue
+		}
+		for _, v := range entry.Data.Values {
+			exc := sentryException{Type: v.Type, Value: v.Value}
+			if v.Stacktrace != nil {
+				// Sentry devolve os frames do mais antigo pro mais recente;
+				// invertemos pra mostrar o ponto do crash primeiro (mais útil).
+				for i := len(v.Stacktrace.Frames) - 1; i >= 0; i-- {
+					f := v.Stacktrace.Frames[i]
+					filename := f.Filename
+					if filename == "" {
+						filename = f.AbsPath
+					}
+					exc.Frames = append(exc.Frames, sentryFrame{
+						Filename: filename, Function: f.Function, LineNo: f.LineNo,
+						ColNo: f.ColNo, ContextLine: f.ContextLine, InApp: f.InApp,
+					})
+				}
+			}
+			detail.Exceptions = append(detail.Exceptions, exc)
+		}
+	}
+	return detail, nil
+}
+
+func (c *sentryClient) getJSON(ctx context.Context, url string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("sentry respondeu %d em %s", resp.StatusCode, url)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}

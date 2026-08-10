@@ -38,3 +38,20 @@ func (s *Server) handleSentryProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": sentryProjectSlugs()})
 }
+
+// handleSentryIssueDetail devolve o detalhe de uma issue — metadados +
+// exceção/stacktrace do evento mais recente + tags — pra exibir sem sair do
+// dashboard. Admin-only.
+func (s *Server) handleSentryIssueDetail(w http.ResponseWriter, r *http.Request) {
+	if s.sentry == nil || !s.sentry.enabled() {
+		writeErr(w, appErr(http.StatusServiceUnavailable, "SENTRY_UNAVAILABLE", "Erros indisponível: SENTRY_API_TOKEN não configurado"))
+		return
+	}
+	id := r.PathValue("id")
+	detail, err := s.sentry.getIssueDetail(r.Context(), id)
+	if err != nil {
+		writeErr(w, appErr(http.StatusBadGateway, "SENTRY_ERROR", "Erro ao consultar o Sentry"))
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
