@@ -96,5 +96,42 @@ func (s *Server) handleListPublicLinkShowcaseItems(w http.ResponseWriter, r *htt
 	for i, item := range items {
 		views[i] = toPublicLinkShowcaseView(item)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"links": views})
+	// Imagem de fundo é decorativa — se a leitura das settings falhar, a
+	// página pública ainda funciona (só sem o fundo), não pode derrubar
+	// a rota que recebe tráfego direto de bio.
+	var backgroundImageURL *string
+	if settings, err := s.getLinkShowcaseSettings(r.Context()); err == nil {
+		backgroundImageURL = settings.BackgroundImageURL
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"links": views, "backgroundImageUrl": backgroundImageURL})
+}
+
+// GET /links/settings (admin)
+func (s *Server) handleGetLinkShowcaseSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.getLinkShowcaseSettings(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+// PUT /links/settings (admin)
+func (s *Server) handleUpdateLinkShowcaseSettings(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var in LinkShowcaseSettingsInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	if err := validateLinkShowcaseSettingsInput(&in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	settings, err := s.updateLinkShowcaseSettings(r.Context(), in)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
 }

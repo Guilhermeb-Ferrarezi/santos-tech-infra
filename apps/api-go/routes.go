@@ -237,6 +237,12 @@ func (s *Server) registerLinkShowcaseRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /links/{id}", s.rateLimit(30, min, s.permGuard("links", "write", false, s.handleUpdateLinkShowcaseItem)))
 	mux.HandleFunc("DELETE /links/{id}", s.permGuard("links", "write", false, s.handleDeleteLinkShowcaseItem))
 
+	// Config da página inteira (hoje só imagem de fundo) — "settings" é
+	// literal e o net/http mux (Go 1.22+) prefere segmento literal sobre
+	// {id}, então não colide com PUT /links/{id} acima.
+	mux.HandleFunc("GET /links/settings", s.permGuard("links", "read", true, s.handleGetLinkShowcaseSettings))
+	mux.HandleFunc("PUT /links/settings", s.rateLimit(30, min, s.permGuard("links", "write", false, s.handleUpdateLinkShowcaseSettings)))
+
 	// Público — sem guard nenhum (igual /public/blog/posts), só rate limit por IP.
 	mux.HandleFunc("GET /public/links", s.rateLimit(120, min, s.handleListPublicLinkShowcaseItems))
 }

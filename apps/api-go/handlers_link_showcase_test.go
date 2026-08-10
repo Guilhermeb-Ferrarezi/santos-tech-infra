@@ -68,6 +68,57 @@ func TestValidateLinkShowcaseInputAcceptsValid(t *testing.T) {
 	}
 }
 
+func TestPermGuardLinkShowcaseSettingsNoToken(t *testing.T) {
+	s := testServer(Config{})
+	for _, method := range []string{"GET", "PUT"} {
+		w := httptest.NewRecorder()
+		s.permGuard("links", "read", true, func(http.ResponseWriter, *http.Request) {
+			t.Fatal("não deveria passar sem token")
+		})(w, httptest.NewRequest(method, "/links/settings", nil))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: code=%d", method, w.Code)
+		}
+	}
+}
+
+func TestHandleUpdateLinkShowcaseSettingsValidation(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	s.handleUpdateLinkShowcaseSettings(w, reqAs(
+		httptest.NewRequest("PUT", "/links/settings", strings.NewReader(`{"backgroundImageUrl":"nao-e-url"}`)), 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestValidateLinkShowcaseSettingsInput(t *testing.T) {
+	valid := "https://cdn.santos-tech.com/bg.jpg"
+	in := LinkShowcaseSettingsInput{BackgroundImageURL: &valid}
+	if err := validateLinkShowcaseSettingsInput(&in); err != nil {
+		t.Fatalf("url válida rejeitada: %v", err)
+	}
+
+	invalid := "nao-e-url"
+	in = LinkShowcaseSettingsInput{BackgroundImageURL: &invalid}
+	if err := validateLinkShowcaseSettingsInput(&in); err == nil {
+		t.Fatal("url inválida deveria ser rejeitada")
+	}
+
+	empty := "   "
+	in = LinkShowcaseSettingsInput{BackgroundImageURL: &empty}
+	if err := validateLinkShowcaseSettingsInput(&in); err != nil {
+		t.Fatalf("string vazia não deveria dar erro: %v", err)
+	}
+	if in.BackgroundImageURL != nil {
+		t.Fatal("string vazia deveria virar nil (limpar a imagem)")
+	}
+
+	in = LinkShowcaseSettingsInput{BackgroundImageURL: nil}
+	if err := validateLinkShowcaseSettingsInput(&in); err != nil {
+		t.Fatalf("nil não deveria dar erro: %v", err)
+	}
+}
+
 func TestToPublicLinkShowcaseViewOmitsInternalFields(t *testing.T) {
 	createdBy := int64(4)
 	full := LinkShowcaseItem{

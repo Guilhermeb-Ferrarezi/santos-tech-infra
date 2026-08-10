@@ -158,3 +158,60 @@ func (s *Server) deleteLinkShowcaseItem(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+// LinkShowcaseSettings guarda config de exibição da página inteira (não de um
+// card) — hoje só a imagem de fundo. Linha única (id=1) em link_showcase_settings.
+type LinkShowcaseSettings struct {
+	BackgroundImageURL *string   `json:"backgroundImageUrl"`
+	UpdatedAt          time.Time `json:"updatedAt"`
+}
+
+type LinkShowcaseSettingsInput struct {
+	BackgroundImageURL *string `json:"backgroundImageUrl"`
+}
+
+func validateLinkShowcaseSettingsInput(in *LinkShowcaseSettingsInput) error {
+	if in.BackgroundImageURL == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*in.BackgroundImageURL)
+	if trimmed == "" {
+		in.BackgroundImageURL = nil
+		return nil
+	}
+	parsed, err := url.ParseRequestURI(trimmed)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return validationErr("URL da imagem de fundo inválida (use http:// ou https://)")
+	}
+	in.BackgroundImageURL = &trimmed
+	return nil
+}
+
+// getLinkShowcaseSettings: settings ainda não configuradas (linha nunca criada)
+// devolve valores zero em vez de erro — a página pública trata como "sem fundo".
+func (s *Server) getLinkShowcaseSettings(ctx context.Context) (*LinkShowcaseSettings, error) {
+	var st LinkShowcaseSettings
+	err := s.db.QueryRow(ctx, `SELECT background_image_url, updated_at FROM link_showcase_settings WHERE id = 1`).
+		Scan(&st.BackgroundImageURL, &st.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return &LinkShowcaseSettings{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
+
+func (s *Server) updateLinkShowcaseSettings(ctx context.Context, in LinkShowcaseSettingsInput) (*LinkShowcaseSettings, error) {
+	var st LinkShowcaseSettings
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO link_showcase_settings (id, background_image_url, updated_at)
+		VALUES (1, $1, now())
+		ON CONFLICT (id) DO UPDATE SET background_image_url = EXCLUDED.background_image_url, updated_at = now()
+		RETURNING background_image_url, updated_at`,
+		in.BackgroundImageURL).Scan(&st.BackgroundImageURL, &st.UpdatedAt)
+	if err != nil {
+		return nil, portalDBErr(err)
+	}
+	return &st, nil
+}
