@@ -22,7 +22,7 @@
     "@types/bun": "^1.2.0",
     "@types/ws": "^8.5.13",
     "@types/jsonwebtoken": "^9.0.7",
-    "@types/pg": "^8.11.0",
+    "@types/pg": "^8.20.4",
     "@types/qrcode": "^1.5.5",
     "typescript": "^7.0.2"
   }
