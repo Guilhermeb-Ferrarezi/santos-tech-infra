@@ -172,6 +172,9 @@ func main() {
 		close(workerDone)
 	}()
 
+	// 14b. Poller do Sentry (avisa por WhatsApp issue nova) — no-op sem SENTRY_API_TOKEN.
+	go server.startSentryPoller(ctx)
+
 	// 15. Configura servidor HTTP
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,

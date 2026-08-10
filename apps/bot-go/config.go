@@ -82,6 +82,13 @@ type Config struct {
 	CoolifyAPIURL   string
 	CoolifyAPIToken string
 
+	// Sentry — polling periódico de issues novas do ecossistema, notificadas por
+	// WhatsApp (mesmo destinatário/liga-desliga do notif_* do Coolify em
+	// tenant_config). Vazio = poller desabilitado.
+	SentryOrgSlug      string
+	SentryAPIToken     string
+	SentryPollInterval time.Duration
+
 	// Voz (STT/TTS via OpenAI). VOICE_ENABLED liga a feature.
 	VoiceEnabled   bool
 	OpenAIKey      string
@@ -147,6 +154,10 @@ func LoadConfig() Config {
 		CoolifyWebhookSecret: getEnv("COOLIFY_WEBHOOK_SECRET", ""),
 		CoolifyAPIURL:        strings.TrimRight(getEnv("COOLIFY_API_URL", ""), "/"),
 		CoolifyAPIToken:      getEnv("COOLIFY_API_TOKEN", ""),
+
+		SentryOrgSlug:      getEnv("SENTRY_ORG_SLUG", ""),
+		SentryAPIToken:     getEnv("SENTRY_API_TOKEN", ""),
+		SentryPollInterval: time.Duration(envInt("SENTRY_POLL_INTERVAL_SEC", 300)) * time.Second,
 
 		VoiceEnabled:   getEnv("VOICE_ENABLED", "false") == "true",
 		OpenAIKey:      getEnv("OPENAI_API_KEY", ""),
