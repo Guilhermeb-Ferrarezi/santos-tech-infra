@@ -134,7 +134,15 @@ func (s *Server) handleSudoVerify(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret) {
-				valid = true
+				alreadyUsed, rdErr := s.checkAndMarkTOTPUsed(r.Context(), uid, code)
+				if rdErr != nil {
+					slog.Warn("sudo_verify: redis error ao verificar replay TOTP; rejeitando (fail-closed)", "uid", uid, "err", rdErr)
+					writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+					return
+				}
+				if !alreadyUsed {
+					valid = true
+				}
 			}
 			// consumeAcctEmailCode usa GetDel — consome o OTP de email atomicamente mesmo
 			// quando o código não bate. Só chamamos para códigos de 6 dígitos (OTP/TOTP):

@@ -303,6 +303,55 @@ func TestConsumeAcctEmailCodeDeletesKeyOnMismatch(t *testing.T) {
 	}
 }
 
+// TestCheckAndMarkTOTPUsed verifica o comportamento de replay protection:
+// primeiro uso aceita, segundo uso com mesmo (uid, code) rejeita, Redis-down falha.
+func TestCheckAndMarkTOTPUsed(t *testing.T) {
+	s := testServerWithRedis(t, Config{})
+	ctx := context.Background()
+
+	// Primeira chamada: não foi usado antes → alreadyUsed = false
+	alreadyUsed, err := s.checkAndMarkTOTPUsed(ctx, 99, "123456")
+	if err != nil {
+		t.Fatalf("primeira chamada: err inesperado: %v", err)
+	}
+	if alreadyUsed {
+		t.Fatal("primeira chamada: devia retornar alreadyUsed=false")
+	}
+
+	// Segunda chamada com mesmos (uid, code): código já consumido → alreadyUsed = true
+	alreadyUsed, err = s.checkAndMarkTOTPUsed(ctx, 99, "123456")
+	if err != nil {
+		t.Fatalf("segunda chamada: err inesperado: %v", err)
+	}
+	if !alreadyUsed {
+		t.Fatal("segunda chamada: devia retornar alreadyUsed=true (replay bloqueado)")
+	}
+
+	// uid diferente com mesmo código: não é replay → alreadyUsed = false
+	alreadyUsed, err = s.checkAndMarkTOTPUsed(ctx, 100, "123456")
+	if err != nil {
+		t.Fatalf("uid diferente: err inesperado: %v", err)
+	}
+	if alreadyUsed {
+		t.Fatal("uid diferente com mesmo código não deveria ser bloqueado")
+	}
+}
+
+// TestCheckAndMarkTOTPUsedRedisDown garante fail-closed: Redis indisponível → erro.
+func TestCheckAndMarkTOTPUsedRedisDown(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s := testServer(Config{})
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+
+	mr.SetError("ERR simulated Redis failure")
+
+	_, err := s.checkAndMarkTOTPUsed(context.Background(), 42, "654321")
+	if err == nil {
+		t.Fatal("Redis indisponível deve retornar erro (fail-closed)")
+	}
+}
+
 // TestGenRecoveryCodesLen verifica que os códigos gerados têm exatamente
 // recoveryCodeLen caracteres — mesma constante usada para filtrar a consulta ao banco.
 func TestGenRecoveryCodesLen(t *testing.T) {

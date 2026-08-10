@@ -18,6 +18,19 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// checkAndMarkTOTPUsed atomically marks a TOTP code as used for uid and reports
+// whether it was already used. SetNX succeeds only once per (uid, code) within
+// the 90 s TTL, which covers pquerna/otp default Skew=1, Period=30s (3 windows).
+// Fail-closed: callers must reject the request when err != nil.
+func (s *Server) checkAndMarkTOTPUsed(ctx context.Context, uid int64, code string) (alreadyUsed bool, err error) {
+	key := fmt.Sprintf("api-go:totp_used:%d:%s", uid, code)
+	acquired, err := s.rdb.SetNX(ctx, key, "1", 90*time.Second).Result()
+	if err != nil {
+		return false, err
+	}
+	return !acquired, nil
+}
+
 // POST /auth/mfa/setup — gera um secret TOTP pendente + otpauth URL (QR).
 func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -184,7 +197,16 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 	}
 	// Aceita qualquer fator válido da conta: TOTP, código de recuperação ou o código
 	// enviado pro email (/auth/mfa/email-code) — necessário p/ contas só com email-2FA.
-	valid := u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret)
+	var valid bool
+	if u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret) {
+		alreadyUsed, rdErr := s.checkAndMarkTOTPUsed(r.Context(), uid, code)
+		if rdErr != nil {
+			slog.Warn("mfa_disable: redis error ao verificar replay TOTP; rejeitando (fail-closed)", "uid", uid, "err", rdErr)
+			writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+			return
+		}
+		valid = !alreadyUsed
+	}
 	if !valid && len(code) == recoveryCodeLen {
 		valid = s.consumeRecoveryCode(r.Context(), uid, sha256Hex(strings.ToUpper(code)))
 	}
@@ -316,7 +338,15 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	valid := false
 	if u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret) {
-		valid = true
+		alreadyUsed, rdErr := s.checkAndMarkTOTPUsed(r.Context(), uid, code)
+		if rdErr != nil {
+			slog.Warn("mfa_verify: redis error ao verificar replay TOTP; rejeitando (fail-closed)", "challenge", body.Challenge, "err", rdErr)
+			writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+			return
+		}
+		if !alreadyUsed {
+			valid = true
+		}
 	}
 	if !valid {
 		// GetDel é atômico: evita que duas requisições concorrentes com o mesmo
