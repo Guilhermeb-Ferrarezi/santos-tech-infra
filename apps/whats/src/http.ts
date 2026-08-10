@@ -1,4 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse } from "http"
+import * as Sentry from "@sentry/bun"
 import { readFile } from "fs/promises"
 import path from "path"
 import jwt from "jsonwebtoken"
@@ -196,6 +197,7 @@ export function startHTTP() {
       return send(res, 404, { code: "NOT_FOUND", message: "rota inexistente" })
     } catch (e) {
       console.error("erro na requisição", req.method, req.url, e)
+      Sentry.captureException(e)
       return send(res, 500, { code: "INTERNAL", message: "erro interno" })
     }
   })

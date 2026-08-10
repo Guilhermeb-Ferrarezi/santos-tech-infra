@@ -18,6 +18,8 @@ import (
 
 func main() {
 	golog.InitLogging()
+	golog.InitSentry("payments-go")
+	defer golog.FlushSentry()
 	cfg := LoadConfig()
 	ctx := context.Background()
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/santos-tech/golog"
 )
 
 func main() {
@@ -25,6 +26,9 @@ func main() {
 	}
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
+
+	golog.InitSentry("bot-go")
+	defer golog.FlushSentry()
 
 	// 3. Context cancelável via sinal do SO
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

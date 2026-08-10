@@ -218,6 +218,7 @@ func RequestLogger(next http.Handler) http.Handler {
 					"panic", rec,
 					"stack", string(debug.Stack()),
 				)
+				sentryRecover(rec)
 			}
 
 			durMs := time.Since(start).Milliseconds()

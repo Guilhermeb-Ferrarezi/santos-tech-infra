@@ -16,6 +16,8 @@ import (
 
 func main() {
 	golog.InitLogging()
+	golog.InitSentry("cron-go")
+	defer golog.FlushSentry()
 	cfg := LoadConfig()
 	ctx := context.Background()
 

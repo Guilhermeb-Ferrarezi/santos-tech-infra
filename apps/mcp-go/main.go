@@ -16,6 +16,8 @@ import (
 
 func main() {
 	golog.InitLogging()
+	golog.InitSentry("mcp-go")
+	defer golog.FlushSentry()
 	cfg := LoadConfig()
 
 	openapi, err := os.ReadFile(cfg.OpenAPIPath)

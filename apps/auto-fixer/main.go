@@ -17,6 +17,8 @@ import (
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	golog.InitSentry("auto-fixer")
+	defer golog.FlushSentry()
 
 	cfg, err := loadConfig()
 	if err != nil {

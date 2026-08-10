@@ -16,6 +16,8 @@ import (
 
 func main() {
 	golog.InitLogging()
+	golog.InitSentry("api-go")
+	defer golog.FlushSentry()
 	cfg := LoadConfig()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

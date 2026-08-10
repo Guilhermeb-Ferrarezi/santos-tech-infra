@@ -15,6 +15,8 @@ import (
 
 func main() {
 	golog.InitLogging()
+	golog.InitSentry("agent-go")
+	defer golog.FlushSentry()
 	cfg := LoadConfig()
 	ctx := context.Background()
 

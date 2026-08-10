@@ -14,7 +14,10 @@ import ResetPasswordPage from '@/routes/reset-password'
 import ConfirmAccessPage from '@/routes/confirm'
 import OAuthChoosePage from '@/routes/oauth-choose'
 import SwitchAccountPage from '@/routes/switch-account'
+import { initSentry } from '@/lib/sentry'
 import '@/styles.css'
+
+initSentry()
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 
