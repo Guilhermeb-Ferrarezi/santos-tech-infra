@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams } from "react-router";
 import { ArrowRight, Loader2, RotateCcw } from "lucide-react";
 import { api, type Product } from "../lib/api";
 import { Button } from "../components/ui/button";

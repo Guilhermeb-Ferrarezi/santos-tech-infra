@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router";
 import { ArrowRight, Loader2, XCircle } from "lucide-react";
 import { api, type LinkData } from "../lib/api";
 import { Button } from "../components/ui/button";

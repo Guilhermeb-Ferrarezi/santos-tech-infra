@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { api, type CartLine } from "../lib/api";
 import { Button } from "../components/ui/button";

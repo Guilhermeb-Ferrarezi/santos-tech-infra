@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router";
 import { api, type Product } from "../lib/api";
 import { formatBRL, formatRecurringBRL } from "../lib/format";
 import { Button } from "../components/ui/button";

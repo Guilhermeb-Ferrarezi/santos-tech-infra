@@ -21,7 +21,7 @@
     "payment-token-efi": "^3.4.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-router-dom": "^7.18.2",
+    "react-router": "8.3.0",
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
@@ -33,11 +33,11 @@
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
     "eslint": "^10.8.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.9.0",
     "tailwindcss": "^4.3.1",
-    "typescript": "~7.0.2",
+    "typescript": "6.0.3",
     "typescript-eslint": "^8.65.0",
     "vite": "^8.2.1"
   }

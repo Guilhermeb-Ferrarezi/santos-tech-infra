@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams } from "react-router";
 import { Loader2, XCircle } from "lucide-react";
 import { api } from "../lib/api";
 import { Button } from "../components/ui/button";
