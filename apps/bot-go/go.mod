@@ -7,7 +7,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/prometheus/client_golang v1.24.1
-	github.com/redis/go-redis/v9 v9.21.0
+	github.com/redis/go-redis/v9 v9.22.0
 	github.com/santos-tech/golog v0.0.0
 	github.com/sqlc-dev/pqtype v0.3.0
 )
