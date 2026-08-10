@@ -39,6 +39,11 @@ type Config struct {
 	// Em produção, alcançável pela rede docker da Coolify (ex: http://obs-loki:3100).
 	LokiURL string
 
+	// Sentry (tela de Erros, admin-only). Vazio = endpoints respondem 503.
+	// Token de API da org (Settings → Auth Tokens, escopo project:read/org:read).
+	SentryOrgSlug string
+	SentryToken   string
+
 	// Cloudflare R2 (S3-compatível) para uploads (ex: avatares). Vazio = desabilitado.
 	R2AccountID string
 	R2AccessKey string
@@ -72,6 +77,9 @@ func LoadConfig() Config {
 		NotificationsSharedSecret: getEnv("NOTIFICATIONS_SHARED_SECRET", ""),
 
 		LokiURL: strings.TrimRight(getEnv("LOKI_URL", ""), "/"),
+
+		SentryOrgSlug: getEnv("SENTRY_ORG_SLUG", ""),
+		SentryToken:   getEnv("SENTRY_API_TOKEN", ""),
 
 		R2AccountID: getEnv("CF_ACCOUNT_ID", ""),
 		R2AccessKey: getEnv("CF_R2_ACCESS_KEY", ""),

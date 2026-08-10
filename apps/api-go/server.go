@@ -37,11 +37,12 @@ type Server struct {
 	google   *oauth2.Config
 	r2       *R2           // uploads (Cloudflare R2); nil = desabilitado
 	loki     *lokiClient   // consulta de logs (Loki); nil = desabilitado
+	sentry   *sentryClient // consulta de issues (Sentry); nil = desabilitado
 	queue    *asynq.Client // fila durável de emails; nil = sem fila (fallback fire-and-forget)
 }
 
 func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), loki: newLokiClient(cfg.LokiURL)}
+	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken)}
 	if s.portalDB == nil {
 		s.portalDB = authDB
 	}

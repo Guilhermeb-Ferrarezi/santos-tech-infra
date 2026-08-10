@@ -53,6 +53,8 @@ tags:
     description: Gestão administrativa (requer role Admin)
   - name: System
     description: Saúde do serviço
+  - name: Observabilidade
+    description: Logs (Loki) e erros (Sentry) do ecossistema — admin-only
   - name: Payments
     description: Pagamentos (payments-go — prefixo /payments em produção)
   - name: Blog
@@ -2202,6 +2204,66 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /sentry/issues:
+    get:
+      tags: [Observabilidade]
+      summary: Lista issues (erros) do Sentry de todos os projetos do ecossistema
+      description: |
+        Admin-only. Responde 503 se `SENTRY_API_TOKEN`/`SENTRY_ORG_SLUG` não
+        configurados. Só leitura — resolver/ignorar uma issue continua no
+        próprio sentry.io (link em `permalink`).
+      parameters:
+        - { in: query, name: project, description: "Slug de um serviço específico (ver /sentry/projects). Omitido = todos.", schema: { type: string } }
+        - { in: query, name: status, description: "unresolved (default) | resolved | ignored | all", schema: { type: string } }
+        - { in: query, name: q, description: "Texto livre, vira parte do `query` de busca do Sentry.", schema: { type: string } }
+        - { in: query, name: stats_period, description: "24h | 14d (default) | 90d", schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, default: 25, maximum: 100 } }
+      responses:
+        "200":
+          description: Issues encontradas, mais recentes primeiro.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  issues:
+                    type: array
+                    items: { $ref: "#/components/schemas/SentryIssue" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Admin-only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: SENTRY_API_TOKEN não configurado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /sentry/projects:
+    get:
+      tags: [Observabilidade]
+      summary: Lista os slugs dos projetos do Sentry (popula o filtro da tela de Erros)
+      description: Admin-only. Responde 503 se SENTRY_API_TOKEN não configurado.
+      responses:
+        "200":
+          description: Slugs conhecidos.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  projects: { type: array, items: { type: string } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Admin-only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
 components:
   securitySchemes:
     cookieAuth:
@@ -2267,6 +2329,28 @@ components:
         code: { type: string, description: "Código estável legível por máquina" }
         message: { type: string, description: "Mensagem em português para humanos" }
       required: [code, message]
+
+    SentryIssue:
+      type: object
+      description: Issue (grupo de eventos de erro) do Sentry, como devolvida por /sentry/issues.
+      properties:
+        id: { type: string }
+        shortId: { type: string, description: "Ex.: API-GO-12" }
+        title: { type: string }
+        culprit: { type: string, description: "Função/rota onde o erro ocorreu" }
+        level: { type: string, enum: [debug, info, warning, error, fatal] }
+        status: { type: string, enum: [unresolved, resolved, ignored] }
+        count: { type: string, description: "Total de eventos (string — o Sentry devolve como texto)" }
+        userCount: { type: integer }
+        firstSeen: { type: string, format: date-time }
+        lastSeen: { type: string, format: date-time }
+        permalink: { type: string, description: "Link direto pra issue no sentry.io" }
+        project:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+            slug: { type: string }
 
     # ── payments-go schemas ────────────────────────────────────────────────
     Movement:

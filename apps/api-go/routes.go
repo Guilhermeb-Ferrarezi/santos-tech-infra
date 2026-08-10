@@ -97,11 +97,18 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /logs/labels", s.rateLimit(30, min, s.adminGuard(s.handleLogLabels)))
 	mux.HandleFunc("GET /logs/top-ips", s.rateLimit(20, min, s.adminGuard(s.handleTopIPs)))
 
+	// Erros do ecossistema (Sentry) — admin-only. Responde 503 se SENTRY_API_TOKEN não configurado.
+	mux.HandleFunc("GET /sentry/issues", s.rateLimit(30, min, s.adminGuard(s.handleSentryIssues)))
+	mux.HandleFunc("GET /sentry/projects", s.rateLimit(30, min, s.adminGuard(s.handleSentryProjects)))
+
 	// Saúde agregada do ecossistema — autenticada (sessão ou PAT)
 	mux.HandleFunc("GET /status", s.rateLimit(30, min, s.authGuard(s.handleStatus)))
 
 	// Documentação das APIs pra agentes/devs — autenticada (sessão ou PAT)
 	mux.HandleFunc("GET /llms.txt", s.rateLimit(30, min, s.authGuard(s.handleLLMsTxt)))
+
+	// robots.txt público com a isca do antibot em Disallow (ver antibot.go).
+	mux.HandleFunc("GET /robots.txt", s.handleRobotsTxt)
 
 	// Quadros (Excalidraw) — admin/professor OU cargo personalizado (role 4) com
 	// a permissão "quadros"; quadros são colaborativos, então professor cria/edita/
