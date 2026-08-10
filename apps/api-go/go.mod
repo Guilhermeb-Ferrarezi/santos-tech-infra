@@ -11,7 +11,7 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/pquerna/otp v1.5.0
 	github.com/prometheus/client_golang v1.24.1
-	github.com/redis/go-redis/v9 v9.21.0
+	github.com/redis/go-redis/v9 v9.22.0
 	github.com/santos-tech/golog v0.0.0
 	golang.org/x/oauth2 v0.36.0
 )
