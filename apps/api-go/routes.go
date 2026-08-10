@@ -107,9 +107,6 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Documentação das APIs pra agentes/devs — autenticada (sessão ou PAT)
 	mux.HandleFunc("GET /llms.txt", s.rateLimit(30, min, s.authGuard(s.handleLLMsTxt)))
 
-	// robots.txt público com a isca do antibot em Disallow (ver antibot.go).
-	mux.HandleFunc("GET /robots.txt", s.handleRobotsTxt)
-
 	// Quadros (Excalidraw) — admin/professor OU cargo personalizado (role 4) com
 	// a permissão "quadros"; quadros são colaborativos, então professor cria/edita/
 	// apaga (allowTeacher=true em write/delete). Cena salva com autosave (debounce
