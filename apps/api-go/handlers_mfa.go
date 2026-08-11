@@ -374,11 +374,17 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao finalizar autenticação. Tente novamente."))
 		return
 	}
-	if err := s.issueSession(r.Context(), w, r, u); err != nil {
+	access, refresh, err := s.issueSession(r.Context(), w, r, u)
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": s.buildProfile(r.Context(), u)})
+	resp := map[string]any{"user": s.buildProfile(r.Context(), u)}
+	if isNativeClient(r) {
+		resp["accessToken"] = access
+		resp["refreshToken"] = refresh
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) challengeUser(ctx context.Context, challenge string) (int64, bool, error) {

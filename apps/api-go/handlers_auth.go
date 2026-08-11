@@ -15,19 +15,31 @@ import (
 
 // issueSession gera tokens, grava a sessão (refresh hash), seta os cookies e
 // anexa a sessão ao cookie multi-conta "accounts". replaceSIDs: sessões antigas
-// a tirar da lista (ex.: rotação de refresh).
-func (s *Server) issueSession(ctx context.Context, w http.ResponseWriter, r *http.Request, u *User, replaceSIDs ...string) error {
-	access, refresh, err := generateTokens(s.cfg.JWTSecret, s.cfg.JWTRefreshSecret, u.ID, u.Email, u.Name)
+// a tirar da lista (ex.: rotação de refresh). Devolve os tokens gerados para que
+// o caller decida se os expõe no corpo da resposta (ver isNativeClient).
+func (s *Server) issueSession(ctx context.Context, w http.ResponseWriter, r *http.Request, u *User, replaceSIDs ...string) (access, refresh string, err error) {
+	access, refresh, err = generateTokens(s.cfg.JWTSecret, s.cfg.JWTRefreshSecret, u.ID, u.Email, u.Name)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	sid, err := s.createSession(ctx, u.ID, hashRefreshToken(refresh), time.Now().Add(refreshTTL))
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	s.setAuthCookies(w, access, refresh)
 	s.appendAccount(w, r, sid, replaceSIDs...)
-	return nil
+	return access, refresh, nil
+}
+
+// isNativeClient reconhece requisições sem o header Origin como vindas de um
+// cliente não-browser (ex.: o app React Native, que não tem cookie jar). Navegadores
+// SEMPRE mandam Origin em requests POST — mesmo same-origin, desde a spec de 2011 —
+// e uma página com XSS não consegue forjar nem omitir esse header via fetch/XHR (é
+// o próprio browser quem o define). Por isso é seguro devolver os tokens no corpo
+// só quando Origin vem vazio: não abre uma via nova de vazamento pro fluxo web
+// normal (que continua só-cookie), apenas atende quem já não tinha cookie nenhum.
+func isNativeClient(r *http.Request) bool {
+	return r.Header.Get("Origin") == ""
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -210,11 +222,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.issueSession(r.Context(), w, r, u); err != nil {
+	access, refresh, err := s.issueSession(r.Context(), w, r, u)
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": s.buildProfile(r.Context(), u)})
+	resp := map[string]any{"user": s.buildProfile(r.Context(), u)}
+	if isNativeClient(r) {
+		resp["accessToken"] = access
+		resp["refreshToken"] = refresh
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // endSession apaga a sessão (pelo refresh cookie), limpa os cookies ativos e
@@ -308,17 +326,31 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	c, err := r.Cookie("refresh_token")
-	if err != nil || c.Value == "" {
+	// viaCookie distingue o fluxo web (cookie httpOnly) do cliente nativo (sem
+	// cookie jar, manda o refresh token via Authorization: Bearer). Não há risco de
+	// um XSS forçar o caminho Bearer: a página não tem como LER o valor do cookie
+	// httpOnly pra colocá-lo no header — só quem já guarda o token fora de cookie
+	// (o app) consegue usar esse caminho.
+	raw := ""
+	viaCookie := false
+	if c, err := r.Cookie("refresh_token"); err == nil && c.Value != "" {
+		raw, viaCookie = c.Value, true
+	}
+	if raw == "" {
+		if after, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && after != "" {
+			raw = after
+		}
+	}
+	if raw == "" {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Refresh token ausente"))
 		return
 	}
-	uid, _, err := verifyToken(c.Value, s.cfg.JWTRefreshSecret)
+	uid, _, err := verifyToken(raw, s.cfg.JWTRefreshSecret)
 	if err != nil {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Refresh token inválido"))
 		return
 	}
-	sid, _, expires, err := s.sessionByHash(r.Context(), hashRefreshToken(c.Value))
+	sid, _, expires, err := s.sessionByHash(r.Context(), hashRefreshToken(raw))
 	if err != nil || expires.Before(time.Now()) {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Sessão expirada"))
 		return
@@ -338,9 +370,14 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao renovar sessão"))
 		return
 	}
-	if err := s.issueSession(r.Context(), w, r, u, sid); err != nil {
+	access, refresh, err := s.issueSession(r.Context(), w, r, u, sid)
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	if viaCookie {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"accessToken": access, "refreshToken": refresh})
 }

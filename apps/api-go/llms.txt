@@ -21,6 +21,14 @@
 - **Sessão**: JWT HS256 (secret compartilhado) no cookie `access_token`
   (httpOnly, domínio `.santos-tech.com`) ou `Authorization: Bearer <jwt>`.
   Access dura 2h; renove com `POST /auth/refresh` (cookie `refresh_token`, 7d).
+- **Cliente nativo (sem cookie jar, ex. app mobile)**: requests sem o header
+  `Origin` (nunca omitido por navegadores em POST — inclusive same-origin) são
+  tratadas como cliente não-browser. Nesse caso, `POST /auth/login` e
+  `POST /auth/mfa/verify` também devolvem `accessToken`/`refreshToken` no corpo
+  (além de setar os cookies, que o cliente nativo ignora); e `POST /auth/refresh`
+  aceita o refresh token via `Authorization: Bearer <refresh_token>` quando não
+  há cookie, respondendo `200 {accessToken, refreshToken}` (em vez do `204` do
+  fluxo cookie). Fluxo web (`auth-web`) inalterado — sempre manda `Origin`.
 - **PAT**: tokens `st_...` (criados em `POST /auth/api-keys`) valem como Bearer
   em qualquer rota com sessão do auth e no Claude Agent.
 - **Erros**: auth/claude devolvem `{ "code", "message" }`; a API de email
@@ -44,12 +52,15 @@
 
 ### Sessão
 - `POST /auth/register {email,password,name}` — cria conta
-- `POST /auth/login {identifier,password}` — `{user}` OU, com MFA,
+- `POST /auth/login {identifier,password}` — `{user}` (+ `accessToken`/
+  `refreshToken` se cliente nativo, ver Convenções) OU, com MFA,
   `{mfaRequired:true, challenge, method, methods}` (sem sessão; se method=email
   o código já foi enviado)
-- `POST /auth/mfa/verify {challenge, code}` — 2º passo; emite a sessão
+- `POST /auth/mfa/verify {challenge, code}` — 2º passo; emite a sessão (mesmo
+  formato de resposta do login)
 - `POST /auth/mfa/email {challenge}` — (re)envia código do 2º passo por email
-- `POST /auth/refresh` — rotaciona a sessão (204)
+- `POST /auth/refresh` — rotaciona a sessão (204 via cookie, ou 200
+  `{accessToken, refreshToken}` via `Authorization: Bearer` sem cookie)
 - `POST|GET /auth/logout?redirect=` — encerra e limpa cookies
 - `GET /auth/me` — `{user}`: id, email, username, name, role, customRoleId,
   permissions, avatarUrl, mfaEnabled, mfaMethod, mfaTotp, mfaEmail,

@@ -16,8 +16,15 @@ info:
     - **Cookie** `access_token` (preferencial; setado pelo próprio servidor no login).
     - Header **`Authorization: Bearer <access_token>`** (para clientes não-browser).
 
-    O `refresh_token` (cookie `httpOnly`) é usado apenas em `POST /auth/refresh` e na
-    rotação de sessão; nunca é lido de header.
+    O `refresh_token` (cookie `httpOnly`) é usado em `POST /auth/refresh` e na
+    rotação de sessão; para clientes sem cookie jar (ex. app mobile) também pode
+    ser enviado via `Authorization: Bearer` nesse endpoint especificamente.
+
+    Requests **sem** o header `Origin` (navegadores sempre o mandam em POST,
+    inclusive same-origin) são tratadas como cliente não-browser: `POST /auth/login`,
+    `POST /auth/mfa/verify` e `POST /auth/refresh` (via Bearer) devolvem
+    `accessToken`/`refreshToken` no corpo da resposta, já que esse cliente não tem
+    como usar o `Set-Cookie`.
 
     ## Formato de erro
     Todas as respostas de erro seguem `{ "code": "STRING", "message": "texto" }`
@@ -131,10 +138,13 @@ paths:
         Autentica por `identifier` (email **ou** username) e senha.
 
         - Sem MFA: emite a sessão (cookies `access_token` + `refresh_token`) e
-          devolve o perfil do usuário.
+          devolve o perfil do usuário. Sem header `Origin` (cliente não-browser,
+          ex. app mobile), a resposta também inclui `accessToken`/`refreshToken`
+          no corpo — ver `SessionResponse`.
         - Com MFA ativo: **não** emite tokens. Retorna `{ mfaRequired: true, challenge }`.
           O cliente deve seguir para `POST /auth/mfa/verify` (ou pedir um código por
           email com `POST /auth/mfa/email`). O `challenge` expira em 10 minutos.
+          `POST /auth/mfa/verify` segue a mesma regra de `Origin` do login.
 
         Rate limit: **10 req/min por IP**.
       security: []
@@ -259,16 +269,33 @@ paths:
       tags: [Auth]
       summary: Renovar a sessão
       description: |
-        Lê o cookie `refresh_token`, valida a sessão no banco, **rotaciona**
+        Lê o refresh token do cookie `refresh_token` **ou**, na ausência dele, do
+        header `Authorization: Bearer <refresh_token>` (cliente não-browser, ex. app
+        mobile, que não tem cookie jar). Valida a sessão no banco, **rotaciona**
         (apaga a sessão antiga e cria nova) e seta novos cookies `access_token` +
         `refresh_token`.
+
+        - Via cookie: responde `204`, só cookies novos (comportamento de sempre).
+        - Via `Authorization: Bearer`: responde `200` com `accessToken`/`refreshToken`
+          no corpo (o cliente não tem como ler o `Set-Cookie` de qualquer forma).
 
         Rate limit: **20 req/min por IP**.
       security:
         - refreshCookie: []
+        - refreshBearer: []
       responses:
+        "200":
+          description: Tokens renovados, devolvidos no corpo (fluxo via Bearer, sem cookie)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken: { type: string }
+                  refreshToken: { type: string }
+                required: [accessToken, refreshToken]
         "204":
-          description: Tokens renovados (novos cookies setados)
+          description: Tokens renovados (novos cookies setados, fluxo via cookie)
           headers:
             Set-Cookie:
               $ref: "#/components/headers/AuthCookies"
@@ -2434,6 +2461,14 @@ components:
       in: cookie
       name: refresh_token
       description: JWT de refresh (httpOnly), usado apenas em `/auth/refresh`.
+    refreshBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Refresh token via `Authorization: Bearer <refresh_token>`, usado apenas em
+        `/auth/refresh` por clientes sem cookie jar (ex. app mobile), como alternativa
+        ao `refreshCookie`.
 
   headers:
     AuthCookies:
@@ -2641,6 +2676,15 @@ components:
       type: object
       properties:
         user: { $ref: "#/components/schemas/UserProfile" }
+        accessToken:
+          type: string
+          description: |
+            Presente apenas quando o request não tem header `Origin` (cliente não-browser,
+            ex. app mobile — navegadores sempre mandam `Origin` em POST). Fluxo web normal
+            nunca recebe isto, só o cookie httpOnly.
+        refreshToken:
+          type: string
+          description: Mesma condição de `accessToken`.
       required: [user]
 
     MfaChallengeResponse:

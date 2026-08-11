@@ -76,7 +76,7 @@ func (s *Server) handleAccountActivate(w http.ResponseWriter, r *http.Request) {
 	}
 	// Rotaciona: emite a nova sessão primeiro (se falhar, a antiga segue válida)
 	// e só então revoga a antiga no banco. replaceSIDs já tira o sid do cookie.
-	if err := s.issueSession(r.Context(), w, r, u, sid); err != nil {
+	if _, _, err := s.issueSession(r.Context(), w, r, u, sid); err != nil {
 		writeErr(w, err)
 		return
 	}
