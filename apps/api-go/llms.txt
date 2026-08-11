@@ -141,6 +141,14 @@ tokens retornam no **corpo** (sem cookies).
 - `PATCH /auth/admin/oauth-clients/{id} {name?,redirectUris?,isActive?}` → 200 |
   400 | 404 (rate 20/min)
 - `DELETE /auth/admin/oauth-clients/{id}` → 204 | 404 (**exige sudo**)
+- `GET /auth/admin/models3d` → `{files:[{id,filename,ext,contentType,sizeBytes,url,uploadedBy?,createdAt}]}`
+  — biblioteca admin-only de modelos 3D
+- `POST /auth/admin/models3d` (multipart, campo `file`, máx 50MB) — aceita
+  `.glb/.gltf/.stl/.obj/.fbx/.blend`; conteúdo validado por magic bytes contra a
+  extensão declarada (não só Content-Type) → 201 `{file:{...}}` | 400
+  `VALIDATION_ERROR` (formato não bate) | 503 `UPLOAD_DISABLED` (rate 10/min)
+- `DELETE /auth/admin/models3d/{id}` — apaga o objeto no R2 e a linha no Postgres
+  → 204 | 404
 
 ## Claude Agent — `api.santos-tech.com/claude`
 

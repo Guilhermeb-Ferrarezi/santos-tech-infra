@@ -1019,6 +1019,79 @@ paths:
 
   # ── Admin: gestão de usuários ────────────────────────────────────────────────
 
+  /auth/admin/models3d:
+    get:
+      tags: [Admin]
+      summary: Listar modelos 3D
+      description: Biblioteca admin-only de modelos 3D salvos no R2. Requer role Admin.
+      responses:
+        "200":
+          description: Lista de modelos, mais recente primeiro
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items: { $ref: "#/components/schemas/Model3DFile" }
+                required: [files]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Admin]
+      summary: Enviar modelo 3D
+      description: |
+        Upload multipart (campo `file`), máx 50MB. Formatos aceitos: `.glb`, `.gltf`,
+        `.stl`, `.obj`, `.fbx`, `.blend` — o conteúdo é validado (magic bytes) contra
+        a extensão declarada no nome do arquivo, não só o Content-Type. Passa pelo
+        backend (não é presigned) justamente para permitir essa validação. Sobe pro
+        R2 e grava os metadados no Postgres. Requer role Admin. Rate limit: 10 req/min por IP.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required: [file]
+      responses:
+        "201":
+          description: Modelo salvo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file: { $ref: "#/components/schemas/Model3DFile" }
+                required: [file]
+        "400":
+          description: Arquivo ausente, vazio, grande demais, ou conteúdo não bate com a extensão declarada
+        "503":
+          description: Upload não configurado (R2 sem credenciais)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /auth/admin/models3d/{id}:
+    delete:
+      tags: [Admin]
+      summary: Apagar modelo 3D
+      description: Remove o objeto no R2 e a linha no Postgres. Requer role Admin.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "204":
+          description: Apagado
+        "404":
+          description: Modelo não encontrado
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /auth/admin/users:
     get:
       tags: [Admin]
@@ -2557,6 +2630,35 @@ components:
           description: Verdadeiro se esta sessão corresponde ao `refresh_token` atual.
       required: [sessionId, name, email, avatarUrl, active]
 
+    Model3DFile:
+      type: object
+      description: Modelo 3D salvo na biblioteca admin (R2 + Postgres).
+      properties:
+        id:
+          type: integer
+          format: int64
+        filename:
+          type: string
+          description: Nome original do arquivo enviado.
+        ext:
+          type: string
+          enum: [glb, gltf, stl, obj, fbx, blend]
+        contentType:
+          type: string
+        sizeBytes:
+          type: integer
+          format: int64
+        url:
+          type: string
+          format: uri
+          description: URL pública do objeto no R2.
+        uploadedBy:
+          type: integer
+          description: ID do admin que enviou (ausente se a conta foi removida).
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, filename, ext, contentType, sizeBytes, url, createdAt]
     AdminUser:
       type: object
       description: Usuário retornado nas rotas de gestão admin.

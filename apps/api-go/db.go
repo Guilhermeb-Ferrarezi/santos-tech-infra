@@ -322,6 +322,18 @@ CREATE TABLE IF NOT EXISTS blog_heatmap_scroll (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_blog_heatmap_scroll_post_vp_created ON blog_heatmap_scroll(post_slug, viewport, created_at);
+
+CREATE TABLE IF NOT EXISTS model3d_file (
+  id           BIGSERIAL PRIMARY KEY,
+  filename     TEXT NOT NULL,
+  object_key   TEXT NOT NULL,
+  ext          TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  size_bytes   BIGINT NOT NULL,
+  uploaded_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_model3d_file_created ON model3d_file(created_at DESC);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

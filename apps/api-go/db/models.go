@@ -54,6 +54,17 @@ type IpBan struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type Model3dFile struct {
+	ID          int64
+	Filename    string
+	ObjectKey   string
+	Ext         string
+	ContentType string
+	SizeBytes   int64
+	UploadedBy  pgtype.Int4
+	CreatedAt   pgtype.Timestamptz
+}
+
 type OauthAccount struct {
 	ID         int32
 	UserID     int32

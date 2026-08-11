@@ -120,6 +120,61 @@ func (r *R2) PublicURL(key string) string {
 	return strings.TrimRight(r.publicURL, "/") + "/" + key
 }
 
+// Delete remove o objeto em key. Mesma assinatura SigV4 do Upload, método DELETE
+// e sem corpo (payload hash do vazio).
+func (r *R2) Delete(ctx context.Context, key string) error {
+	host := r.accountID + ".r2.cloudflarestorage.com"
+	canonURI := "/" + r.bucket + "/" + key
+
+	now := time.Now().UTC()
+	amzDate := now.Format("20060102T150405Z")
+	dateStamp := now.Format("20060102")
+	payloadHash := r2SHA256(nil)
+
+	canonicalHeaders := "host:" + host + "\n" +
+		"x-amz-content-sha256:" + payloadHash + "\n" +
+		"x-amz-date:" + amzDate + "\n"
+	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
+
+	canonicalRequest := strings.Join([]string{
+		http.MethodDelete, canonURI, "", canonicalHeaders, signedHeaders, payloadHash,
+	}, "\n")
+
+	scope := dateStamp + "/" + r2Region + "/" + r2Service + "/aws4_request"
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256", amzDate, scope, r2SHA256([]byte(canonicalRequest)),
+	}, "\n")
+
+	kDate := r2HMAC([]byte("AWS4"+r.secretKey), dateStamp)
+	kRegion := r2HMAC(kDate, r2Region)
+	kService := r2HMAC(kRegion, r2Service)
+	kSigning := r2HMAC(kService, "aws4_request")
+	signature := hex.EncodeToString(r2HMAC(kSigning, stringToSign))
+
+	auth := fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+		r.accessKey, scope, signedHeaders, signature)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, "https://"+host+canonURI, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", auth)
+	req.Header.Set("X-Amz-Content-Sha256", payloadHash)
+	req.Header.Set("X-Amz-Date", amzDate)
+
+	resp, err := r.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	// R2/S3 devolve 204 no delete bem-sucedido; 404 também é aceitável aqui (idempotente).
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("r2 delete %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
 // PresignPut gera uma URL PUT pré-assinada (SigV4 via query string) pra key,
 // válida por `expiry`: o cliente sobe o arquivo direto pro R2 com um PUT nessa URL,
 // sem os bytes passarem pelo backend — usado pra arquivos grandes demais pra
