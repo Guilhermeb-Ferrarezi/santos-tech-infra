@@ -32,12 +32,27 @@ func extractBlendThumbnailPNG(raw []byte) (pngBytes []byte, ok bool) {
 	if !ok {
 		return nil, false
 	}
-	img := &image.RGBA{Pix: pix, Stride: w * 4, Rect: image.Rect(0, 0, w, h)}
+	// o buffer que o Blender grava no bloco TEST é bottom-up (convenção de
+	// framebuffer OpenGL do viewport) — inverte pra virar top-down, que é o
+	// que PNG (e a maioria dos formatos de imagem) espera.
+	img := &image.RGBA{Pix: flipVertical(pix, w, h), Stride: w * 4, Rect: image.Rect(0, 0, w, h)}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
 		return nil, false
 	}
 	return buf.Bytes(), true
+}
+
+// flipVertical inverte as linhas de um buffer RGBA8 (row-major, sem padding).
+func flipVertical(pix []byte, w, h int) []byte {
+	stride := w * 4
+	out := make([]byte, len(pix))
+	for y := 0; y < h; y++ {
+		srcOff := y * stride
+		dstOff := (h - 1 - y) * stride
+		copy(out[dstOff:dstOff+stride], pix[srcOff:srcOff+stride])
+	}
+	return out
 }
 
 // decompressBlendPrefix devolve os primeiros bytes (já descomprimidos, se

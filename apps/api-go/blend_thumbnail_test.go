@@ -133,6 +133,9 @@ func TestExtractBlendThumbnailPNG(t *testing.T) {
 	})
 }
 
+// assertDecodesTo confere o PNG contra wantPix (o buffer bruto do bloco TEST,
+// bottom-up) — extractBlendThumbnailPNG inverte as linhas, então a linha y da
+// saída deve bater com a linha (h-1-y) do buffer original.
 func assertDecodesTo(t *testing.T, pngBytes []byte, wantW, wantH int, wantPix []byte) {
 	t.Helper()
 	img, err := png.Decode(bytes.NewReader(pngBytes))
@@ -146,7 +149,7 @@ func assertDecodesTo(t *testing.T, pngBytes []byte, wantW, wantH int, wantPix []
 	for y := 0; y < wantH; y++ {
 		for x := 0; x < wantW; x++ {
 			r, g, bl, a := img.At(x, y).RGBA()
-			i := (y*wantW + x) * 4
+			i := ((wantH-1-y)*wantW + x) * 4
 			got := [4]byte{byte(r >> 8), byte(g >> 8), byte(bl >> 8), byte(a >> 8)}
 			want := [4]byte{wantPix[i], wantPix[i+1], wantPix[i+2], wantPix[i+3]}
 			if got != want {
