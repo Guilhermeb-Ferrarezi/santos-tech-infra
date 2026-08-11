@@ -126,7 +126,10 @@ func isBlend(data []byte) bool {
 	if bytes.HasPrefix(data, []byte("BLENDER")) {
 		return true
 	}
-	return len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b
+	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+		return true // gzip (compressão padrão até o Blender 2.9x)
+	}
+	return len(data) >= 4 && data[0] == 0x28 && data[1] == 0xb5 && data[2] == 0x2f && data[3] == 0xfd // zstd (padrão desde o Blender 3.0)
 }
 
 // isLikelyText reporta se data não contém byte nulo nos primeiros 512 bytes —

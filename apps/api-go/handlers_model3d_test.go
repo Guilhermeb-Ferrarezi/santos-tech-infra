@@ -64,6 +64,7 @@ func TestValidateModel3DContent(t *testing.T) {
 		{"fbx lixo", []byte("não é fbx"), "fbx", false},
 		{"blend válido", append([]byte("BLENDER"), []byte("-v300")...), "blend", true},
 		{"blend gzip válido", []byte{0x1f, 0x8b, 0x08, 0x00}, "blend", true},
+		{"blend zstd válido", []byte{0x28, 0xb5, 0x2f, 0xfd, 0xa0, 0x41, 0x06, 0x01}, "blend", true},
 		{"blend lixo", []byte("não é blend"), "blend", false},
 		{"extensão desconhecida", []byte("qualquer coisa"), "exe", false},
 		{"extensão certa, conteúdo de outro formato (glb declarado, stl de verdade)", validBinarySTL(1), "glb", false},
