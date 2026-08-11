@@ -2753,6 +2753,14 @@ components:
         pinned:
           type: boolean
           description: Favoritado — aparece no topo da lista.
+        thumbnailUrl:
+          type: string
+          format: uri
+          description: |
+            Só presente para `.blend` salvo com "Save Preview Images" no Blender —
+            miniatura estática (PNG) extraída do bloco TEST embutido no arquivo no
+            momento do upload. Ausente para os demais formatos (que têm preview 3D
+            real via `Model3DViewer`) e para `.blend` sem miniatura salva.
       required: [id, filename, ext, contentType, sizeBytes, url, createdAt, folder, pinned]
     AdminUser:
       type: object

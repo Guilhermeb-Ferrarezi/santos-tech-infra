@@ -13,19 +13,20 @@ import (
 
 const createModel3DFile = `-- name: CreateModel3DFile :one
 
-INSERT INTO model3d_file (filename, object_key, ext, content_type, size_bytes, uploaded_by, folder)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, filename, object_key, ext, content_type, size_bytes, uploaded_by, created_at, folder, pinned
+INSERT INTO model3d_file (filename, object_key, ext, content_type, size_bytes, uploaded_by, folder, thumbnail_key)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, filename, object_key, ext, content_type, size_bytes, uploaded_by, created_at, folder, pinned, thumbnail_key
 `
 
 type CreateModel3DFileParams struct {
-	Filename    string
-	ObjectKey   string
-	Ext         string
-	ContentType string
-	SizeBytes   int64
-	UploadedBy  pgtype.Int4
-	Folder      string
+	Filename     string
+	ObjectKey    string
+	Ext          string
+	ContentType  string
+	SizeBytes    int64
+	UploadedBy   pgtype.Int4
+	Folder       string
+	ThumbnailKey pgtype.Text
 }
 
 // Queries de modelos 3D (biblioteca admin-only no dashboard)
@@ -38,6 +39,7 @@ func (q *Queries) CreateModel3DFile(ctx context.Context, arg CreateModel3DFilePa
 		arg.SizeBytes,
 		arg.UploadedBy,
 		arg.Folder,
+		arg.ThumbnailKey,
 	)
 	var i Model3dFile
 	err := row.Scan(
@@ -51,6 +53,7 @@ func (q *Queries) CreateModel3DFile(ctx context.Context, arg CreateModel3DFilePa
 		&i.CreatedAt,
 		&i.Folder,
 		&i.Pinned,
+		&i.ThumbnailKey,
 	)
 	return i, err
 }
@@ -68,7 +71,7 @@ func (q *Queries) DeleteModel3DFile(ctx context.Context, id int64) (int64, error
 }
 
 const getModel3DFile = `-- name: GetModel3DFile :one
-SELECT id, filename, object_key, ext, content_type, size_bytes, uploaded_by, created_at, folder, pinned
+SELECT id, filename, object_key, ext, content_type, size_bytes, uploaded_by, created_at, folder, pinned, thumbnail_key
 FROM model3d_file WHERE id = $1
 `
 
@@ -86,12 +89,13 @@ func (q *Queries) GetModel3DFile(ctx context.Context, id int64) (Model3dFile, er
 		&i.CreatedAt,
 		&i.Folder,
 		&i.Pinned,
+		&i.ThumbnailKey,
 	)
 	return i, err
 }
 
 const listModel3DFiles = `-- name: ListModel3DFiles :many
-SELECT id, filename, object_key, ext, content_type, size_bytes, uploaded_by, created_at, folder, pinned
+SELECT id, filename, object_key, ext, content_type, size_bytes, uploaded_by, created_at, folder, pinned, thumbnail_key
 FROM model3d_file
 ORDER BY pinned DESC, created_at DESC
 `
@@ -116,6 +120,7 @@ func (q *Queries) ListModel3DFiles(ctx context.Context) ([]Model3dFile, error) {
 			&i.CreatedAt,
 			&i.Folder,
 			&i.Pinned,
+			&i.ThumbnailKey,
 		); err != nil {
 			return nil, err
 		}
@@ -131,7 +136,7 @@ const updateModel3DFile = `-- name: UpdateModel3DFile :one
 UPDATE model3d_file
 SET filename = $2, folder = $3, pinned = $4
 WHERE id = $1
-RETURNING id, filename, object_key, ext, content_type, size_bytes, uploaded_by, created_at, folder, pinned
+RETURNING id, filename, object_key, ext, content_type, size_bytes, uploaded_by, created_at, folder, pinned, thumbnail_key
 `
 
 type UpdateModel3DFileParams struct {
@@ -160,6 +165,7 @@ func (q *Queries) UpdateModel3DFile(ctx context.Context, arg UpdateModel3DFilePa
 		&i.CreatedAt,
 		&i.Folder,
 		&i.Pinned,
+		&i.ThumbnailKey,
 	)
 	return i, err
 }

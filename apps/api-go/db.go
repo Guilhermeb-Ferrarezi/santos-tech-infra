@@ -338,6 +338,7 @@ CREATE INDEX IF NOT EXISTS idx_model3d_file_created ON model3d_file(created_at D
 ALTER TABLE model3d_file ADD COLUMN IF NOT EXISTS folder TEXT NOT NULL DEFAULT '';
 ALTER TABLE model3d_file ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_model3d_file_folder ON model3d_file(folder);
+ALTER TABLE model3d_file ADD COLUMN IF NOT EXISTS thumbnail_key TEXT;
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

@@ -189,21 +189,38 @@ func (s *Server) handleUploadModel3D(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := fmt.Sprintf("models3d/%d/%s.%s", uid, randomToken(8), ext)
+	token := randomToken(8)
+	key := fmt.Sprintf("models3d/%d/%s.%s", uid, token, ext)
 	if _, err := s.r2.Upload(r.Context(), key, contentType, data); err != nil {
 		slog.Error("falha no upload R2 (model3d)", "err", err)
 		writeErr(w, appErr(http.StatusBadGateway, "UPLOAD_FAILED", "falha ao enviar o arquivo"))
 		return
 	}
 
+	thumbnailKey := pgtype.Text{}
+	if ext == "blend" {
+		// best-effort: .blend só tem miniatura se foi salvo com "Save Preview
+		// Images" no Blender; sem isso (ou qualquer falha no parsing) segue sem
+		// miniatura — nunca bloqueia o upload do modelo em si.
+		if thumbPNG, ok := extractBlendThumbnailPNG(data); ok {
+			thumbKey := fmt.Sprintf("models3d/%d/%s.thumb.png", uid, token)
+			if _, err := s.r2.Upload(r.Context(), thumbKey, "image/png", thumbPNG); err != nil {
+				slog.Error("falha no upload da miniatura .blend (model3d)", "err", err)
+			} else {
+				thumbnailKey = pgtype.Text{String: thumbKey, Valid: true}
+			}
+		}
+	}
+
 	rec, err := s.q.CreateModel3DFile(r.Context(), db.CreateModel3DFileParams{
-		Filename:    header.Filename,
-		ObjectKey:   key,
-		Ext:         ext,
-		ContentType: contentType,
-		SizeBytes:   int64(len(data)),
-		UploadedBy:  pgtype.Int4{Int32: int32(uid), Valid: true},
-		Folder:      folder,
+		Filename:     header.Filename,
+		ObjectKey:    key,
+		Ext:          ext,
+		ContentType:  contentType,
+		SizeBytes:    int64(len(data)),
+		UploadedBy:   pgtype.Int4{Int32: int32(uid), Valid: true},
+		Folder:       folder,
+		ThumbnailKey: thumbnailKey,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -314,6 +331,13 @@ func (s *Server) handleDeleteModel3D(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadGateway, "DELETE_FAILED", "arquivo removido do banco, mas falhou ao apagar no R2"))
 		return
 	}
+	if rec.ThumbnailKey.Valid {
+		// best-effort: um objeto de miniatura órfão no R2 não é grave o
+		// suficiente pra falhar um delete que já removeu o arquivo principal.
+		if err := s.r2.Delete(r.Context(), rec.ThumbnailKey.String); err != nil {
+			slog.Error("falha ao apagar miniatura no R2 (model3d)", "key", rec.ThumbnailKey.String, "err", err)
+		}
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -332,6 +356,9 @@ func (s *Server) model3DFileJSON(f *db.Model3dFile) map[string]any {
 	}
 	if f.UploadedBy.Valid {
 		m["uploadedBy"] = f.UploadedBy.Int32
+	}
+	if f.ThumbnailKey.Valid {
+		m["thumbnailUrl"] = s.r2.PublicURL(f.ThumbnailKey.String)
 	}
 	return m
 }

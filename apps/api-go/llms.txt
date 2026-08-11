@@ -152,8 +152,10 @@ tokens retornam no **corpo** (sem cookies).
 - `PATCH /auth/admin/oauth-clients/{id} {name?,redirectUris?,isActive?}` → 200 |
   400 | 404 (rate 20/min)
 - `DELETE /auth/admin/oauth-clients/{id}` → 204 | 404 (**exige sudo**)
-- `GET /auth/admin/models3d` → `{files:[{id,filename,ext,contentType,sizeBytes,url,uploadedBy?,createdAt,folder,pinned}]}`
-  — biblioteca admin-only de modelos 3D, ordenada pinned primeiro, depois mais recente
+- `GET /auth/admin/models3d` → `{files:[{id,filename,ext,contentType,sizeBytes,url,uploadedBy?,createdAt,folder,pinned,thumbnailUrl?}]}`
+  — biblioteca admin-only de modelos 3D, ordenada pinned primeiro, depois mais recente.
+  `thumbnailUrl` só existe pra `.blend` salvo com "Save Preview Images" (miniatura
+  PNG extraída do bloco TEST embutido no arquivo, no upload)
 - `POST /auth/admin/models3d` (multipart, campos `file` + `folder?`, máx 50MB) —
   aceita `.glb/.gltf/.stl/.obj/.fbx/.blend`; conteúdo validado por magic bytes contra a
   extensão declarada (não só Content-Type) → 201 `{file:{...}}` | 400

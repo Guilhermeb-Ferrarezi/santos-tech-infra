@@ -55,16 +55,17 @@ type IpBan struct {
 }
 
 type Model3dFile struct {
-	ID          int64
-	Filename    string
-	ObjectKey   string
-	Ext         string
-	ContentType string
-	SizeBytes   int64
-	UploadedBy  pgtype.Int4
-	CreatedAt   pgtype.Timestamptz
-	Folder      string
-	Pinned      bool
+	ID           int64
+	Filename     string
+	ObjectKey    string
+	Ext          string
+	ContentType  string
+	SizeBytes    int64
+	UploadedBy   pgtype.Int4
+	CreatedAt    pgtype.Timestamptz
+	Folder       string
+	Pinned       bool
+	ThumbnailKey pgtype.Text
 }
 
 type OauthAccount struct {
