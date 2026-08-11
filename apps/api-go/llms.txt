@@ -141,12 +141,15 @@ tokens retornam no **corpo** (sem cookies).
 - `PATCH /auth/admin/oauth-clients/{id} {name?,redirectUris?,isActive?}` → 200 |
   400 | 404 (rate 20/min)
 - `DELETE /auth/admin/oauth-clients/{id}` → 204 | 404 (**exige sudo**)
-- `GET /auth/admin/models3d` → `{files:[{id,filename,ext,contentType,sizeBytes,url,uploadedBy?,createdAt}]}`
-  — biblioteca admin-only de modelos 3D
-- `POST /auth/admin/models3d` (multipart, campo `file`, máx 50MB) — aceita
-  `.glb/.gltf/.stl/.obj/.fbx/.blend`; conteúdo validado por magic bytes contra a
+- `GET /auth/admin/models3d` → `{files:[{id,filename,ext,contentType,sizeBytes,url,uploadedBy?,createdAt,folder,pinned}]}`
+  — biblioteca admin-only de modelos 3D, ordenada pinned primeiro, depois mais recente
+- `POST /auth/admin/models3d` (multipart, campos `file` + `folder?`, máx 50MB) —
+  aceita `.glb/.gltf/.stl/.obj/.fbx/.blend`; conteúdo validado por magic bytes contra a
   extensão declarada (não só Content-Type) → 201 `{file:{...}}` | 400
   `VALIDATION_ERROR` (formato não bate) | 503 `UPLOAD_DISABLED` (rate 10/min)
+- `PATCH /auth/admin/models3d/{id} {filename?,folder?,pinned?}` — atualização
+  parcial (renomear / mover de pasta / favoritar) → 200 `{file:{...}}` | 400
+  `VALIDATION_ERROR` | 404 (rate 30/min)
 - `DELETE /auth/admin/models3d/{id}` — apaga o objeto no R2 e a linha no Postgres
   → 204 | 404
 

@@ -138,6 +138,55 @@ func TestHandleUploadModel3DInvalidContent(t *testing.T) {
 	}
 }
 
+func TestHandlePatchModel3DInvalidID(t *testing.T) {
+	s := testServer(Config{})
+	req := httptest.NewRequest("PATCH", "/auth/admin/models3d/abc", strings.NewReader("{}"))
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	s.handlePatchModel3D(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d (queria 400 INVALID_ID)", w.Code)
+	}
+}
+
+func TestHandlePatchModel3DInvalidBody(t *testing.T) {
+	s := testServer(Config{})
+	req := httptest.NewRequest("PATCH", "/auth/admin/models3d/1", strings.NewReader("não é json"))
+	req.SetPathValue("id", "1")
+	w := httptest.NewRecorder()
+	s.handlePatchModel3D(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d (queria 400 VALIDATION_ERROR)", w.Code)
+	}
+}
+
+func TestHandlePatchModel3DEmptyFilename(t *testing.T) {
+	s := testServer(Config{})
+	req := httptest.NewRequest("PATCH", "/auth/admin/models3d/1", strings.NewReader(`{"filename":"   "}`))
+	req.SetPathValue("id", "1")
+	w := httptest.NewRecorder()
+	s.handlePatchModel3D(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d (queria 400 VALIDATION_ERROR)", w.Code)
+	}
+}
+
+func TestHandlePatchModel3DFolderTooLong(t *testing.T) {
+	s := testServer(Config{})
+	longFolder := strings.Repeat("a", 61)
+	req := httptest.NewRequest("PATCH", "/auth/admin/models3d/1", strings.NewReader(`{"folder":"`+longFolder+`"}`))
+	req.SetPathValue("id", "1")
+	w := httptest.NewRecorder()
+	s.handlePatchModel3D(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d (queria 400 VALIDATION_ERROR)", w.Code)
+	}
+}
+
 func TestHandleDeleteModel3DInvalidID(t *testing.T) {
 	s := &Server{r2: &R2{}}
 	req := httptest.NewRequest("DELETE", "/auth/admin/models3d/abc", strings.NewReader(""))

@@ -55,9 +55,10 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/admin/ip-bans", s.rateLimit(20, min, s.adminGuard(s.handleCreateIPBan)))
 	mux.HandleFunc("DELETE /auth/admin/ip-bans/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteIPBan)))
 
-	// Biblioteca admin de modelos 3D (upload/listagem/exclusão via R2 + Postgres)
+	// Biblioteca admin de modelos 3D (upload/listagem/edição/exclusão via R2 + Postgres)
 	mux.HandleFunc("GET /auth/admin/models3d", s.adminGuard(s.handleListModel3D))
 	mux.HandleFunc("POST /auth/admin/models3d", s.rateLimit(10, min, s.adminGuard(s.handleUploadModel3D)))
+	mux.HandleFunc("PATCH /auth/admin/models3d/{id}", s.rateLimit(30, min, s.adminGuard(s.handlePatchModel3D)))
 	mux.HandleFunc("DELETE /auth/admin/models3d/{id}", s.adminGuard(s.handleDeleteModel3D))
 
 	// Gestão admin de cargos personalizados

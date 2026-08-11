@@ -63,6 +63,8 @@ type Model3dFile struct {
 	SizeBytes   int64
 	UploadedBy  pgtype.Int4
 	CreatedAt   pgtype.Timestamptz
+	Folder      string
+	Pinned      bool
 }
 
 type OauthAccount struct {

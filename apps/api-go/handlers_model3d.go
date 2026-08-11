@@ -183,6 +183,12 @@ func (s *Server) handleUploadModel3D(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	folder := strings.TrimSpace(r.FormValue("folder"))
+	if len(folder) > 60 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome da pasta deve ter no máximo 60 caracteres"))
+		return
+	}
+
 	key := fmt.Sprintf("models3d/%d/%s.%s", uid, randomToken(8), ext)
 	if _, err := s.r2.Upload(r.Context(), key, contentType, data); err != nil {
 		slog.Error("falha no upload R2 (model3d)", "err", err)
@@ -197,6 +203,7 @@ func (s *Server) handleUploadModel3D(w http.ResponseWriter, r *http.Request) {
 		ContentType: contentType,
 		SizeBytes:   int64(len(data)),
 		UploadedBy:  pgtype.Int4{Int32: int32(uid), Valid: true},
+		Folder:      folder,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -217,6 +224,66 @@ func (s *Server) handleListModel3D(w http.ResponseWriter, r *http.Request) {
 		out = append(out, s.model3DFileJSON(&f))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"files": out})
+}
+
+// PATCH /auth/admin/models3d/{id}
+func (s *Server) handlePatchModel3D(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_ID", "id inválido"))
+		return
+	}
+
+	var body struct {
+		Filename *string `json:"filename"`
+		Folder   *string `json:"folder"`
+		Pinned   *bool   `json:"pinned"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
+		return
+	}
+	if body.Filename != nil && strings.TrimSpace(*body.Filename) == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome não pode ficar vazio"))
+		return
+	}
+	if body.Filename != nil && len(*body.Filename) > 255 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome deve ter no máximo 255 caracteres"))
+		return
+	}
+	if body.Folder != nil && len(*body.Folder) > 60 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome da pasta deve ter no máximo 60 caracteres"))
+		return
+	}
+
+	current, err := s.q.GetModel3DFile(r.Context(), id)
+	if err != nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "modelo não encontrado"))
+		return
+	}
+
+	params := db.UpdateModel3DFileParams{
+		ID:       id,
+		Filename: current.Filename,
+		Folder:   current.Folder,
+		Pinned:   current.Pinned,
+	}
+	if body.Filename != nil {
+		params.Filename = strings.TrimSpace(*body.Filename)
+	}
+	if body.Folder != nil {
+		params.Folder = strings.TrimSpace(*body.Folder)
+	}
+	if body.Pinned != nil {
+		params.Pinned = *body.Pinned
+	}
+
+	rec, err := s.q.UpdateModel3DFile(r.Context(), params)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"file": s.model3DFileJSON(&rec)})
 }
 
 // DELETE /auth/admin/models3d/{id}
@@ -260,6 +327,8 @@ func (s *Server) model3DFileJSON(f *db.Model3dFile) map[string]any {
 		"sizeBytes":   f.SizeBytes,
 		"url":         s.r2.PublicURL(f.ObjectKey),
 		"createdAt":   f.CreatedAt.Time,
+		"folder":      f.Folder,
+		"pinned":      f.Pinned,
 	}
 	if f.UploadedBy.Valid {
 		m["uploadedBy"] = f.UploadedBy.Int32

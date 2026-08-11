@@ -1057,6 +1057,9 @@ paths:
                 file:
                   type: string
                   format: binary
+                folder:
+                  type: string
+                  description: Pasta simples (1 nível, opcional) para organizar o modelo já no envio.
               required: [file]
       responses:
         "201":
@@ -1075,6 +1078,48 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
   /auth/admin/models3d/{id}:
+    patch:
+      tags: [Admin]
+      summary: Editar modelo 3D (renomear, mover de pasta, favoritar)
+      description: |
+        Atualização parcial — envie só os campos que quer mudar. Requer role Admin.
+        Rate limit: 30 req/min por IP.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filename:
+                  type: string
+                  description: Novo nome de exibição (não pode ficar vazio).
+                folder:
+                  type: string
+                  description: Nova pasta (string vazia move para "sem pasta").
+                pinned:
+                  type: boolean
+      responses:
+        "200":
+          description: Modelo atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file: { $ref: "#/components/schemas/Model3DFile" }
+                required: [file]
+        "400":
+          description: Corpo inválido, nome vazio, nome/pasta grande demais
+        "404":
+          description: Modelo não encontrado
+        "401":
+          $ref: "#/components/responses/Unauthorized"
     delete:
       tags: [Admin]
       summary: Apagar modelo 3D
@@ -2658,7 +2703,13 @@ components:
         createdAt:
           type: string
           format: date-time
-      required: [id, filename, ext, contentType, sizeBytes, url, createdAt]
+        folder:
+          type: string
+          description: Pasta simples (1 nível) para organização — string livre, vazia se não estiver em nenhuma.
+        pinned:
+          type: boolean
+          description: Favoritado — aparece no topo da lista.
+      required: [id, filename, ext, contentType, sizeBytes, url, createdAt, folder, pinned]
     AdminUser:
       type: object
       description: Usuário retornado nas rotas de gestão admin.

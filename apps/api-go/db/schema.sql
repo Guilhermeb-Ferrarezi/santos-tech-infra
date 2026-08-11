@@ -162,5 +162,7 @@ CREATE TABLE IF NOT EXISTS model3d_file (
   content_type TEXT NOT NULL,
   size_bytes   BIGINT NOT NULL,
   uploaded_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  folder       TEXT NOT NULL DEFAULT '',
+  pinned       BOOLEAN NOT NULL DEFAULT false
 );
