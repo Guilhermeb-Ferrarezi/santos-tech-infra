@@ -1,10 +1,13 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var errBlogPostNotFound = appErr(http.StatusNotFound, "BLOG_POST_NOT_FOUND", "Post não encontrado")
@@ -88,7 +91,8 @@ func validateBlogCategoryInput(in *BlogCategoryInput) error {
 // isUniqueViolation reporta se err é uma violação de UNIQUE constraint do Postgres
 // (código 23505) — usado pra devolver 409 CONFLICT em vez de 500 em slugs duplicados.
 func isUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "23505")
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23505"
 }
 
 // ── Público (sem auth) ───────────────────────────────────────────────────────
@@ -344,5 +348,6 @@ func (s *Server) handleDeleteBlogCategory(w http.ResponseWriter, r *http.Request
 // isForeignKeyViolation reporta se err é uma violação de FK do Postgres (código
 // 23503) — usado pra devolver 409 CONFLICT ao apagar categoria ainda em uso.
 func isForeignKeyViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "23503")
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23503"
 }
