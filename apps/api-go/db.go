@@ -351,6 +351,9 @@ CREATE TABLE IF NOT EXISTS instagram_comment_links (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Palavra-chave opcional: só responde se o texto do comentário contiver ela
+-- (case-insensitive). Vazio = responde a qualquer comentário na publicação.
+ALTER TABLE instagram_comment_links ADD COLUMN IF NOT EXISTS keyword TEXT NOT NULL DEFAULT '';
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

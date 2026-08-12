@@ -69,3 +69,62 @@ func (c *instagramClient) sendPrivateReply(ctx context.Context, commentID, text 
 	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
 	return nil
 }
+
+// InstagramMedia é a view simplificada de uma publicação, usada pelo seletor
+// visual da tela de mapeamento (admin escolhe o post em vez de colar o ID).
+type InstagramMedia struct {
+	ID           string `json:"id"`
+	Caption      string `json:"caption"`
+	MediaType    string `json:"mediaType"`
+	MediaURL     string `json:"mediaUrl"`
+	ThumbnailURL string `json:"thumbnailUrl"`
+	Permalink    string `json:"permalink"`
+	Timestamp    string `json:"timestamp"`
+}
+
+// listRecentMedia busca as publicações mais recentes da conta conectada, pra
+// popular o seletor visual (em vez do admin precisar saber o media_id de cor).
+func (c *instagramClient) listRecentMedia(ctx context.Context) ([]InstagramMedia, error) {
+	if !c.enabled() {
+		return nil, fmt.Errorf("instagram client não configurado (INSTAGRAM_USER_ID/INSTAGRAM_ACCESS_TOKEN ausentes)")
+	}
+	endpoint := fmt.Sprintf("%s/%s/media?fields=id,caption,media_type,media_url,thumbnail_url,timestamp,permalink&limit=30&access_token=%s",
+		c.baseURL, c.userID, url.QueryEscape(c.token))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("criar request de listagem de mídia: %w", err)
+	}
+	res, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("listar mídia: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 1024))
+		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
+		return nil, fmt.Errorf("graph api retornou status %d: %q", res.StatusCode, b)
+	}
+	var out struct {
+		Data []struct {
+			ID           string `json:"id"`
+			Caption      string `json:"caption"`
+			MediaType    string `json:"media_type"`
+			MediaURL     string `json:"media_url"`
+			ThumbnailURL string `json:"thumbnail_url"`
+			Permalink    string `json:"permalink"`
+			Timestamp    string `json:"timestamp"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decodificar listagem de mídia: %w", err)
+	}
+	media := make([]InstagramMedia, len(out.Data))
+	for i, m := range out.Data {
+		media[i] = InstagramMedia{
+			ID: m.ID, Caption: m.Caption, MediaType: m.MediaType,
+			MediaURL: m.MediaURL, ThumbnailURL: m.ThumbnailURL,
+			Permalink: m.Permalink, Timestamp: m.Timestamp,
+		}
+	}
+	return media, nil
+}

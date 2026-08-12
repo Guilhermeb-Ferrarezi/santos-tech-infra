@@ -14,14 +14,16 @@ type InstagramCommentLink struct {
 	MediaID   string    `json:"mediaId"`
 	URL       string    `json:"url"`
 	Note      string    `json:"note"`
+	Keyword   string    `json:"keyword"`
 	CreatedBy *int64    `json:"createdBy"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type InstagramCommentLinkInput struct {
-	URL  string `json:"url"`
-	Note string `json:"note"`
+	URL     string `json:"url"`
+	Note    string `json:"note"`
+	Keyword string `json:"keyword"`
 }
 
 func validateInstagramCommentLinkInput(mediaID string, in *InstagramCommentLinkInput) error {
@@ -36,11 +38,11 @@ func validateInstagramCommentLinkInput(mediaID string, in *InstagramCommentLinkI
 	return nil
 }
 
-const instagramCommentLinkCols = `media_id, url, note, created_by, created_at, updated_at`
+const instagramCommentLinkCols = `media_id, url, note, keyword, created_by, created_at, updated_at`
 
 func scanInstagramCommentLink(row pgx.Row) (*InstagramCommentLink, error) {
 	var l InstagramCommentLink
-	err := row.Scan(&l.MediaID, &l.URL, &l.Note, &l.CreatedBy, &l.CreatedAt, &l.UpdatedAt)
+	err := row.Scan(&l.MediaID, &l.URL, &l.Note, &l.Keyword, &l.CreatedBy, &l.CreatedAt, &l.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -76,11 +78,11 @@ func (s *Server) getInstagramCommentLinkByMediaID(ctx context.Context, mediaID s
 // UUID gerado) — repetir a mesma publicação só atualiza o link/nota.
 func (s *Server) upsertInstagramCommentLink(ctx context.Context, mediaID string, in InstagramCommentLinkInput, createdBy int64) (*InstagramCommentLink, error) {
 	link, err := scanInstagramCommentLink(s.db.QueryRow(ctx, `
-		INSERT INTO instagram_comment_links (media_id, url, note, created_by)
-		VALUES ($1,$2,$3,$4)
-		ON CONFLICT (media_id) DO UPDATE SET url = EXCLUDED.url, note = EXCLUDED.note, updated_at = now()
+		INSERT INTO instagram_comment_links (media_id, url, note, keyword, created_by)
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (media_id) DO UPDATE SET url = EXCLUDED.url, note = EXCLUDED.note, keyword = EXCLUDED.keyword, updated_at = now()
 		RETURNING `+instagramCommentLinkCols,
-		mediaID, in.URL, in.Note, createdBy))
+		mediaID, in.URL, in.Note, in.Keyword, createdBy))
 	if err != nil {
 		return nil, portalDBErr(err)
 	}

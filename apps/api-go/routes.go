@@ -267,6 +267,9 @@ func (s *Server) registerInstagramRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /webhooks/instagram", s.rateLimit(30, min, s.handleInstagramWebhookVerify))
 	mux.HandleFunc("POST /webhooks/instagram", s.rateLimit(120, min, s.handleInstagramWebhookEvent))
 
+	// Publicações recentes da conta — alimenta o seletor visual do mapeamento.
+	mux.HandleFunc("GET /instagram/media", s.rateLimit(30, min, s.adminGuard(s.handleListInstagramMedia)))
+
 	// Mapeamento publicação -> link de destino (admin-only; tabela pequena,
 	// gerida manualmente — não justifica um cargo personalizado dedicado).
 	mux.HandleFunc("GET /instagram/links", s.adminGuard(s.handleListInstagramCommentLinks))

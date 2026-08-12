@@ -114,7 +114,7 @@ func (s *Server) handleInstagramWebhookEvent(w http.ResponseWriter, r *http.Requ
 			if change.Field != "comments" || change.Value.ID == "" || change.Value.Media.ID == "" {
 				continue
 			}
-			s.handleInstagramComment(r.Context(), change.Value.ID, change.Value.Media.ID)
+			s.handleInstagramComment(r.Context(), change.Value.ID, change.Value.Media.ID, change.Value.Text)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -123,16 +123,21 @@ func (s *Server) handleInstagramWebhookEvent(w http.ResponseWriter, r *http.Requ
 const instagramReplyTTL = 7 * 24 * time.Hour // janela de private reply da Meta é bem menor; sobra folga de dedupe
 
 // handleInstagramComment resolve o link mapeado pra publicação e dispara a
-// private reply. Sem link mapeado: ignora silenciosamente (não é erro — a
-// maioria dos posts não tem automação). Falhas são só logadas: é um evento de
-// webhook, não há requisição de usuário esperando resposta de erro.
-func (s *Server) handleInstagramComment(ctx context.Context, commentID, mediaID string) {
+// private reply. Sem link mapeado, ou com palavra-chave configurada que o
+// comentário não contém: ignora silenciosamente (não é erro — a maioria dos
+// comentários não deve virar resposta automática). Falhas de envio são só
+// logadas (+ alerta por email): é um evento de webhook, não há requisição de
+// usuário esperando resposta de erro.
+func (s *Server) handleInstagramComment(ctx context.Context, commentID, mediaID, commentText string) {
 	link, err := s.getInstagramCommentLinkByMediaID(ctx, mediaID)
 	if err != nil {
 		slog.Error("instagram webhook: falha ao buscar link mapeado", "mediaID", mediaID, "err", err)
 		return
 	}
 	if link == nil {
+		return
+	}
+	if link.Keyword != "" && !strings.Contains(strings.ToLower(commentText), strings.ToLower(link.Keyword)) {
 		return
 	}
 	// SetNX atômico: garante no máximo uma private reply por comentário mesmo
@@ -173,6 +178,23 @@ func (s *Server) alertInstagramSendFailure(commentID, mediaID, targetURL string,
 <p style="margin-top:16px">Causas comuns: token de acesso expirado (validade curta, ~1h se não trocado por um de longa duração) ou limite de envio da Meta.</p>`,
 		html.EscapeString(commentID), html.EscapeString(mediaID), html.EscapeString(targetURL), html.EscapeString(sendErr.Error()))
 	s.enqueueEmail("instagramWebhook", s.cfg.SocialAlertEmail, "Falha na automação do Instagram", body)
+}
+
+// GET /instagram/media (admin) — publicações recentes da conta conectada, pra
+// alimentar o seletor visual da tela de mapeamento (em vez do admin precisar
+// saber o media_id de cor).
+func (s *Server) handleListInstagramMedia(w http.ResponseWriter, r *http.Request) {
+	if !s.instagram.enabled() {
+		writeErr(w, appErr(http.StatusServiceUnavailable, "NOT_CONFIGURED", "Automação do Instagram não configurada"))
+		return
+	}
+	media, err := s.instagram.listRecentMedia(r.Context())
+	if err != nil {
+		slog.Error("instagram: falha ao listar mídia recente", "err", err)
+		writeErr(w, appErr(http.StatusBadGateway, "INSTAGRAM_API_ERROR", "Falha ao consultar publicações no Instagram"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"media": media})
 }
 
 // ── CRUD admin do mapeamento post -> link ────────────────────────────────────
