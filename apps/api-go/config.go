@@ -50,6 +50,15 @@ type Config struct {
 	R2SecretKey string
 	R2Bucket    string
 	R2PublicURL string // base pública (CDN), ex: https://cdn.santos-tech.com
+
+	// Automação de resposta a comentário do Instagram (private reply via
+	// Graph API — substitui o ManyChat). Vazio (AppSecret ou AccessToken) =
+	// webhook desabilitado (responde 503 em vez de processar sem validar
+	// assinatura). Ver instagram.go / instagram_client.go.
+	InstagramAppSecret          string // App secret Meta — valida X-Hub-Signature-256
+	InstagramAccessToken        string // token de acesso (longa duração) da conta @escolasantostech
+	InstagramUserID             string // ID numérico da conta IG business
+	InstagramWebhookVerifyToken string // hub.verify_token do handshake de assinatura do webhook
 }
 
 func LoadConfig() Config {
@@ -86,6 +95,11 @@ func LoadConfig() Config {
 		R2SecretKey: getEnv("CF_R2_SECRET_KEY", ""),
 		R2Bucket:    getEnv("CF_R2_BUCKET_NAME", ""),
 		R2PublicURL: strings.TrimRight(getEnv("CF_R2_PUBLIC_URL", ""), "/"),
+
+		InstagramAppSecret:          getEnv("INSTAGRAM_APP_SECRET", ""),
+		InstagramAccessToken:        getEnv("INSTAGRAM_ACCESS_TOKEN", ""),
+		InstagramUserID:             getEnv("INSTAGRAM_USER_ID", ""),
+		InstagramWebhookVerifyToken: getEnv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN", ""),
 	}
 	if c.AuthWebOrigin == "" && len(c.CORSOrigins) > 0 {
 		c.AuthWebOrigin = c.CORSOrigins[0]

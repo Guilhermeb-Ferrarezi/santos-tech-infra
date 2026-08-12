@@ -143,6 +143,11 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// alimenta santos-tech.com/links (Santos-Tech-Home-Page).
 	s.registerLinkShowcaseRoutes(mux)
 
+	// Automação de resposta a comentário do Instagram (private reply,
+	// substitui o ManyChat) — webhook público autenticado por assinatura
+	// Meta (não cookie/PAT) + CRUD admin do mapeamento post -> link.
+	s.registerInstagramRoutes(mux)
+
 	// OAuth Google
 	mux.HandleFunc("GET /auth/google", s.handleGoogleStart)
 	mux.HandleFunc("GET /auth/google/callback", s.handleGoogleCallback)
@@ -251,4 +256,20 @@ func (s *Server) registerLinkShowcaseRoutes(mux *http.ServeMux) {
 
 	// Público — sem guard nenhum (igual /public/blog/posts), só rate limit por IP.
 	mux.HandleFunc("GET /public/links", s.rateLimit(120, min, s.handleListPublicLinkShowcaseItems))
+}
+
+func (s *Server) registerInstagramRoutes(mux *http.ServeMux) {
+	const min = time.Minute
+
+	// Webhook — chamado pela Meta, não por um usuário logado. Autenticado por
+	// hub.verify_token (handshake GET) / assinatura HMAC (evento POST), nunca
+	// por cookie/PAT — por isso sem authGuard/adminGuard aqui.
+	mux.HandleFunc("GET /webhooks/instagram", s.rateLimit(30, min, s.handleInstagramWebhookVerify))
+	mux.HandleFunc("POST /webhooks/instagram", s.rateLimit(120, min, s.handleInstagramWebhookEvent))
+
+	// Mapeamento publicação -> link de destino (admin-only; tabela pequena,
+	// gerida manualmente — não justifica um cargo personalizado dedicado).
+	mux.HandleFunc("GET /instagram/links", s.adminGuard(s.handleListInstagramCommentLinks))
+	mux.HandleFunc("PUT /instagram/links/{mediaId}", s.rateLimit(30, min, s.adminGuard(s.handleUpsertInstagramCommentLink)))
+	mux.HandleFunc("DELETE /instagram/links/{mediaId}", s.adminGuard(s.handleDeleteInstagramCommentLink))
 }

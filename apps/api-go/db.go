@@ -339,6 +339,18 @@ ALTER TABLE model3d_file ADD COLUMN IF NOT EXISTS folder TEXT NOT NULL DEFAULT '
 ALTER TABLE model3d_file ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_model3d_file_folder ON model3d_file(folder);
 ALTER TABLE model3d_file ADD COLUMN IF NOT EXISTS thumbnail_key TEXT;
+
+-- Mapeamento comentário do Instagram -> link de destino (automação de private
+-- reply, substitui o ManyChat). media_id é o id numérico da publicação no IG;
+-- cada publicação tem no máximo um link mapeado.
+CREATE TABLE IF NOT EXISTS instagram_comment_links (
+  media_id   TEXT PRIMARY KEY,
+  url        TEXT NOT NULL,
+  note       TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

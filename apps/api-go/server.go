@@ -36,13 +36,14 @@ type Server struct {
 	email    *emailClient
 	google   *oauth2.Config
 	r2       *R2           // uploads (Cloudflare R2); nil = desabilitado
-	loki     *lokiClient   // consulta de logs (Loki); nil = desabilitado
-	sentry   *sentryClient // consulta de issues (Sentry); nil = desabilitado
-	queue    *asynq.Client // fila durável de emails; nil = sem fila (fallback fire-and-forget)
+	loki      *lokiClient      // consulta de logs (Loki); nil = desabilitado
+	sentry    *sentryClient    // consulta de issues (Sentry); nil = desabilitado
+	queue     *asynq.Client    // fila durável de emails; nil = sem fila (fallback fire-and-forget)
+	instagram *instagramClient // private reply automática (comentário -> DM); enabled()=false = desabilitado
 }
 
 func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken)}
+	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), instagram: newInstagramClient(cfg)}
 	if s.portalDB == nil {
 		s.portalDB = authDB
 	}
