@@ -9,6 +9,7 @@ on:
       - "apps/mcp-go/**"
       - "apps/auto-fixer/**"
       - "apps/cron-go/**"
+      - "apps/secrets-go/**"
       - ".github/workflows/go.yml"
   pull_request:
     paths:
@@ -19,6 +20,7 @@ on:
       - "apps/mcp-go/**"
       - "apps/auto-fixer/**"
       - "apps/cron-go/**"
+      - "apps/secrets-go/**"
       - ".github/workflows/go.yml"
 jobs:
   build:
@@ -34,6 +36,7 @@ jobs:
           - mcp-go
           - auto-fixer
           - cron-go
+          - secrets-go
     defaults:
       run:
         working-directory: apps/${{ matrix.service }}
