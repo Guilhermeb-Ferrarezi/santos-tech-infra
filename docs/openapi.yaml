@@ -1633,6 +1633,354 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
               example: { code: NOT_FOUND, message: "Aplicação não encontrada" }
 
+  # ── Roteador de chaves de API (failover automático) ──────────────────────
+  # Admin-only. Vazio API_VAULT_SECRET → todo endpoint abaixo responde 503.
+  /auth/admin/api-router/providers:
+    get:
+      tags: [Admin]
+      summary: Listar providers do roteador de chaves de API
+      description: |
+        Cada provider agrupa N chaves cadastradas para o mesmo serviço externo.
+        `keyCounts` traz a contagem de chaves por status
+        (`active`/`unauthorized`/`no_credits`/`disabled`).
+      responses:
+        "200":
+          description: Lista de providers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items: { $ref: "#/components/schemas/APIRouterProvider" }
+                required: [providers]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/APIRouterNotConfigured"
+    post:
+      tags: [Admin]
+      summary: Cadastrar provider novo
+      description: |
+        `name` e `baseUrl` são obrigatórios. `authHeader` (default
+        `Authorization`), `unauthorizedCodes` (default `[401]`) e
+        `noCreditCodes` (default `[402, 429]`) assumem o default quando
+        omitidos/vazios. `authScheme` vazio = sem prefixo no header.
+
+        Rate limit: **10 req/min por IP**.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/APIRouterProviderInput" }
+      responses:
+        "201":
+          description: Provider criado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { provider: { $ref: "#/components/schemas/APIRouterProvider" } }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Já existe provider com esse nome
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: CONFLICT, message: "já existe um provider com esse nome" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/APIRouterNotConfigured"
+
+  /auth/admin/api-router/providers/{id}:
+    patch:
+      tags: [Admin]
+      summary: Atualizar provider
+      description: "Rate limit: **20 req/min por IP**."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/APIRouterProviderInput" }
+      responses:
+        "200":
+          description: Provider atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { provider: { $ref: "#/components/schemas/APIRouterProvider" } }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Provider não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "provider não encontrado" }
+        "503":
+          $ref: "#/components/responses/APIRouterNotConfigured"
+    delete:
+      tags: [Admin]
+      summary: Apagar provider (e suas chaves, em cascata)
+      description: |
+        Exige **sudo mode** (confirmação recente de identidade via
+        `POST /auth/sudo/verify`).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204":
+          description: Provider apagado
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sudo mode não ativo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SUDO_REQUIRED, message: "Confirme sua identidade para esta ação" }
+        "404":
+          description: Provider não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "provider não encontrado" }
+        "503":
+          $ref: "#/components/responses/APIRouterNotConfigured"
+
+  /auth/admin/api-router/providers/{id}/keys:
+    get:
+      tags: [Admin]
+      summary: Listar as chaves de um provider
+      description: Nunca inclui o segredo cru — só `secretTail` (últimos 4 caracteres).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Lista de chaves
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items: { $ref: "#/components/schemas/APIRouterKey" }
+                required: [keys]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Provider não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "provider não encontrado" }
+        "503":
+          $ref: "#/components/responses/APIRouterNotConfigured"
+    post:
+      tags: [Admin]
+      summary: Cadastrar chave nova
+      description: |
+        O valor é cifrado (AES-256-GCM) antes de persistir e nunca é
+        reexibido. Exige **sudo mode** (é a criação de uma credencial real de
+        longa duração, mesmo critério de `POST /auth/api-keys`).
+
+        Rate limit: **10 req/min por IP**.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/APIRouterKeyInput" }
+      responses:
+        "201":
+          description: Chave criada, nasce com status "active"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { key: { $ref: "#/components/schemas/APIRouterKey" } }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sudo mode não ativo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SUDO_REQUIRED, message: "Confirme sua identidade para esta ação" }
+        "404":
+          description: Provider não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "provider não encontrado" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/APIRouterNotConfigured"
+
+  /auth/admin/api-router/providers/{id}/keys/{keyId}:
+    patch:
+      tags: [Admin]
+      summary: Renomear a chave / mudar a prioridade de rotação
+      description: |
+        Não troca o segredo — para isso, apague e recadastre.
+
+        Rate limit: **20 req/min por IP**.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: keyId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string }
+                priority: { type: integer, description: "Menor valor = tentada primeiro." }
+              required: [label]
+      responses:
+        "200":
+          description: Chave atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { key: { $ref: "#/components/schemas/APIRouterKey" } }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Chave não encontrada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "chave não encontrada" }
+        "503":
+          $ref: "#/components/responses/APIRouterNotConfigured"
+    delete:
+      tags: [Admin]
+      summary: Apagar chave
+      description: |
+        Exige **sudo mode** (confirmação recente de identidade via
+        `POST /auth/sudo/verify`).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: keyId, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204":
+          description: Chave apagada
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sudo mode não ativo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SUDO_REQUIRED, message: "Confirme sua identidade para esta ação" }
+        "404":
+          description: Chave não encontrada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "chave não encontrada" }
+        "503":
+          $ref: "#/components/responses/APIRouterNotConfigured"
+
+  /auth/admin/api-router/providers/{id}/keys/{keyId}/status:
+    post:
+      tags: [Admin]
+      summary: Trocar status manualmente (ativar/desativar)
+      description: |
+        Só `active` (reativa) ou `disabled` (desliga) fazem sentido aqui —
+        `unauthorized`/`no_credits` só o roteador atribui sozinho.
+
+        Rate limit: **20 req/min por IP**.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: keyId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { status: { type: string, enum: [active, disabled] } }
+              required: [status]
+      responses:
+        "200":
+          description: Status atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { key: { $ref: "#/components/schemas/APIRouterKey" } }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Chave não encontrada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "chave não encontrada" }
+        "503":
+          $ref: "#/components/responses/APIRouterNotConfigured"
+
+  /auth/admin/api-router/providers/{id}/keys/{keyId}/test:
+    post:
+      tags: [Admin]
+      summary: Testar uma chave contra o provider de verdade
+      description: |
+        Dispara uma requisição real (`provider.testPath`/`testMethod`, ou GET
+        na `baseUrl` se ambos vazios) usando essa chave específica e grava o
+        resultado — mesmo que a chave não esteja "active" no momento (é assim
+        que se reativa uma chave marcada `unauthorized`/`no_credits`).
+
+        Rate limit: **20 req/min por IP**.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: keyId, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: |
+            Teste executado (mesmo se `outcome` for `unauthorized`/`no_credits`
+            — não é erro HTTP).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/APIRouterTestResult" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Provider ou chave não encontrados
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "chave não encontrada" }
+        "502":
+          description: Falha ao decifrar a chave ou montar a requisição
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: TEST_FAILED, message: "falha ao testar chave" }
+        "503":
+          $ref: "#/components/responses/APIRouterNotConfigured"
+
   # ── payments-go: Extrato (GET /statement) ────────────────────────────────
   # Serviço: apps/payments-go · prefixo em produção: /payments (via proxy reverso)
   # TODO: atualizar llms.txt central (api.santos-tech.com/llms.txt) com esta rota.
@@ -1688,7 +2036,7 @@ paths:
     get:
       tags: [Blog]
       summary: Lista posts publicados (público)
-      description: Sem autenticação. Só devolve posts com `status: published`.
+      description: "Sem autenticação. Só devolve posts com `status: published`."
       security: []
       parameters:
         - in: query
@@ -1809,7 +2157,7 @@ paths:
     post:
       tags: [Blog]
       summary: Cria post (rascunho ou já publicado)
-      description: Requer `blog_posts:write`. `status: published` seta `publishedAt = now()`.
+      description: "Requer `blog_posts:write`. `status: published` seta `publishedAt = now()`."
       requestBody:
         required: true
         content:
@@ -2508,6 +2856,12 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
           example: { code: RATE_LIMITED, message: "Muitas tentativas. Tente novamente em instantes." }
+    APIRouterNotConfigured:
+      description: "API_VAULT_SECRET não configurada — roteador de chaves de API desabilitado"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { code: NOT_CONFIGURED, message: "Roteador de APIs indisponível: API_VAULT_SECRET não configurada" }
 
   schemas:
     Error:
@@ -3004,6 +3358,60 @@ components:
         reached: { type: integer, format: int64, description: "Sessões que chegaram até pelo menos esse decil." }
         total: { type: integer, format: int64, description: "Total de sessões no período." }
       required: [decile, reached, total]
+
+    APIRouterProviderInput:
+      type: object
+      properties:
+        name: { type: string, description: "Único; identifica o provider." }
+        baseUrl: { type: string, example: "https://api.openai.com" }
+        authHeader: { type: string, default: Authorization }
+        authScheme: { type: string, default: Bearer, description: "Prefixo antes da chave no header; string vazia = sem prefixo." }
+        unauthorizedCodes: { type: array, items: { type: integer }, default: [401], description: "Códigos que fazem o roteador marcar a chave unauthorized e tentar a próxima." }
+        noCreditCodes: { type: array, items: { type: integer }, default: [402, 429], description: "Códigos que fazem o roteador marcar a chave no_credits e tentar a próxima." }
+        testPath: { type: string, description: "Path usado pelo botão \"testar chave\"; vazio = raiz da baseUrl." }
+        testMethod: { type: string, default: GET }
+      required: [name, baseUrl]
+    APIRouterProvider:
+      allOf:
+        - $ref: "#/components/schemas/APIRouterProviderInput"
+        - type: object
+          properties:
+            id: { type: integer }
+            keyCounts: { type: object, additionalProperties: { type: integer }, description: 'Contagem de chaves por status, ex. {"active":2,"unauthorized":1}.' }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+          required: [id, keyCounts, createdAt, updatedAt]
+    APIRouterKeyInput:
+      type: object
+      properties:
+        label: { type: string, example: "conta principal" }
+        secret: { type: string, description: "Valor real da chave — cifrado (AES-256-GCM) antes de persistir; nunca é reexibido." }
+        priority: { type: integer, default: 0, description: "Menor valor = tentada primeiro." }
+      required: [label, secret]
+    APIRouterKey:
+      type: object
+      description: "Nunca inclui o segredo — só secretTail (últimos 4 caracteres) para reconhecimento visual."
+      properties:
+        id: { type: integer }
+        providerId: { type: integer }
+        label: { type: string }
+        secretTail: { type: string, example: "7890" }
+        status: { type: string, enum: [active, unauthorized, no_credits, disabled] }
+        priority: { type: integer }
+        failureCount: { type: integer }
+        lastUsedAt: { type: string, format: date-time, nullable: true }
+        lastErrorAt: { type: string, format: date-time, nullable: true }
+        lastErrorCode: { type: integer, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, providerId, label, secretTail, status, priority, failureCount, createdAt, updatedAt]
+    APIRouterTestResult:
+      type: object
+      properties:
+        statusCode: { type: integer, description: "0 quando a requisição nem chegou a ter resposta (erro de rede/DNS)." }
+        outcome: { type: string, enum: [success, unauthorized, no_credits, transport_error] }
+        error: { type: string, description: "Mensagem de erro de transporte; vazio nos outros casos." }
+      required: [statusCode, outcome]
 
 # Por padrão, as rotas exigem o access_token (cookie ou Bearer).
 # Rotas públicas sobrescrevem com `security: []`.

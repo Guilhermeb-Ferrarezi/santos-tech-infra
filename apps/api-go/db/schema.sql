@@ -167,3 +167,33 @@ CREATE TABLE IF NOT EXISTS model3d_file (
   pinned       BOOLEAN NOT NULL DEFAULT false,
   thumbnail_key TEXT
 );
+
+CREATE TABLE IF NOT EXISTS api_router_providers (
+  id                 BIGSERIAL PRIMARY KEY,
+  name               TEXT NOT NULL UNIQUE,
+  base_url           TEXT NOT NULL,
+  auth_header        TEXT NOT NULL DEFAULT 'Authorization',
+  auth_scheme        TEXT NOT NULL DEFAULT 'Bearer',
+  unauthorized_codes INTEGER[] NOT NULL DEFAULT ARRAY[401],
+  no_credit_codes    INTEGER[] NOT NULL DEFAULT ARRAY[402, 429],
+  test_path          TEXT NOT NULL DEFAULT '',
+  test_method        TEXT NOT NULL DEFAULT 'GET',
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS api_router_keys (
+  id              BIGSERIAL PRIMARY KEY,
+  provider_id     BIGINT NOT NULL REFERENCES api_router_providers(id) ON DELETE CASCADE,
+  label           TEXT NOT NULL,
+  secret_enc      TEXT NOT NULL,
+  secret_tail     TEXT NOT NULL DEFAULT '',
+  status          TEXT NOT NULL DEFAULT 'active',
+  priority        INTEGER NOT NULL DEFAULT 0,
+  failure_count   INTEGER NOT NULL DEFAULT 0,
+  last_used_at    TIMESTAMPTZ,
+  last_error_at   TIMESTAMPTZ,
+  last_error_code INTEGER,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);

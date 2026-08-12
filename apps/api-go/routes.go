@@ -61,6 +61,21 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /auth/admin/models3d/{id}", s.rateLimit(30, min, s.adminGuard(s.handlePatchModel3D)))
 	mux.HandleFunc("DELETE /auth/admin/models3d/{id}", s.adminGuard(s.handleDeleteModel3D))
 
+	// Roteador de chaves de API: cadastro de credenciais reais de provedores
+	// externos, com failover automático em 401/sem-créditos (ver apirouter.go).
+	// Admin-only, sem cargo personalizado (mesmo critério de ip-bans/oauth-clients).
+	// Ler não é sensível; criar/apagar chave manipula credencial real -> sudo.
+	mux.HandleFunc("GET /auth/admin/api-router/providers", s.adminGuard(s.handleListAPIRouterProviders))
+	mux.HandleFunc("POST /auth/admin/api-router/providers", s.rateLimit(10, min, s.adminGuard(s.handleCreateAPIRouterProvider)))
+	mux.HandleFunc("PATCH /auth/admin/api-router/providers/{id}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateAPIRouterProvider)))
+	mux.HandleFunc("DELETE /auth/admin/api-router/providers/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteAPIRouterProvider)))
+	mux.HandleFunc("GET /auth/admin/api-router/providers/{id}/keys", s.adminGuard(s.handleListAPIRouterKeys))
+	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/keys", s.rateLimit(10, min, s.adminGuard(s.sudoGuard(s.handleCreateAPIRouterKey))))
+	mux.HandleFunc("PATCH /auth/admin/api-router/providers/{id}/keys/{keyId}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateAPIRouterKey)))
+	mux.HandleFunc("DELETE /auth/admin/api-router/providers/{id}/keys/{keyId}", s.adminGuard(s.sudoGuard(s.handleDeleteAPIRouterKey)))
+	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/keys/{keyId}/status", s.rateLimit(20, min, s.adminGuard(s.handleSetAPIRouterKeyStatus)))
+	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/keys/{keyId}/test", s.rateLimit(20, min, s.adminGuard(s.handleTestAPIRouterKey)))
+
 	// Gestão admin de cargos personalizados
 	mux.HandleFunc("GET /auth/admin/custom-roles", s.adminGuard(s.handleListCustomRoles))
 	mux.HandleFunc("POST /auth/admin/custom-roles", s.rateLimit(10, min, s.adminGuard(s.handleCreateCustomRole)))

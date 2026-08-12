@@ -166,6 +166,41 @@ tokens retornam no **corpo** (sem cookies).
 - `DELETE /auth/admin/models3d/{id}` — apaga o objeto no R2 e a linha no Postgres
   → 204 | 404
 
+### Roteador de chaves de API — `/auth/admin/api-router` (failover automático)
+Cadastro de N chaves por provider externo (ex.: OpenAI). Quando uma chave responde
+com um código de `unauthorizedCodes` (401 padrão) ou `noCreditCodes` (402/429
+padrão), o roteador marca a chave e tenta a próxima automaticamente (ver
+`apirouter.go`, usado internamente por outras features do api-go via
+`s.executeAPIRouterRequest`). Sem `API_VAULT_SECRET` configurada, todo endpoint
+abaixo responde 503 `NOT_CONFIGURED`.
+- `GET /auth/admin/api-router/providers` → `{providers:[{id,name,baseUrl,authHeader,
+  authScheme,unauthorizedCodes,noCreditCodes,testPath,testMethod,keyCounts,
+  createdAt,updatedAt}]}` — `keyCounts` = contagem por status
+- `POST /auth/admin/api-router/providers {name,baseUrl,authHeader?,authScheme?,
+  unauthorizedCodes?,noCreditCodes?,testPath?,testMethod?}` → 201 | 400 | 409 (nome
+  duplicado) (rate 10/min)
+- `PATCH /auth/admin/api-router/providers/{id}` (mesmo body do POST) → 200 | 400 |
+  404 (rate 20/min)
+- `DELETE /auth/admin/api-router/providers/{id}` → 204 | 404 (**exige sudo**;
+  apaga as chaves em cascata)
+- `GET /auth/admin/api-router/providers/{id}/keys` → `{keys:[{id,providerId,label,
+  secretTail,status,priority,failureCount,lastUsedAt?,lastErrorAt?,
+  lastErrorCode?,createdAt,updatedAt}]}` — `secretTail` = últimos 4 chars; o
+  segredo cru nunca é reexibido
+- `POST /auth/admin/api-router/providers/{id}/keys {label,secret,priority?}` →
+  201 | 400 | 404 (**exige sudo**, mesmo critério de `POST /auth/api-keys`)
+  (rate 10/min)
+- `PATCH /auth/admin/api-router/providers/{id}/keys/{keyId} {label,priority?}` —
+  não troca o segredo (apague e recadastre) → 200 | 400 | 404 (rate 20/min)
+- `DELETE /auth/admin/api-router/providers/{id}/keys/{keyId}` → 204 | 404
+  (**exige sudo**)
+- `POST /auth/admin/api-router/providers/{id}/keys/{keyId}/status {status:
+  active|disabled}` — troca manual; `unauthorized`/`no_credits` só o roteador
+  atribui sozinho → 200 | 400 | 404 (rate 20/min)
+- `POST /auth/admin/api-router/providers/{id}/keys/{keyId}/test` — dispara uma
+  requisição real com essa chave (mesmo se não estiver `active`) e grava o
+  resultado → 200 `{statusCode,outcome,error}` | 404 | 502 (rate 20/min)
+
 ## Claude Agent — `api.santos-tech.com/claude`
 
 Auth: sessão do auth central ou PAT (`st_...`).

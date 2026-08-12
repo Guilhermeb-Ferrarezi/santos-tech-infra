@@ -59,6 +59,11 @@ type Config struct {
 	InstagramAccessToken        string // token de acesso (longa duração) da conta @escolasantostech
 	InstagramUserID             string // ID numérico da conta IG business
 	InstagramWebhookVerifyToken string // hub.verify_token do handshake de assinatura do webhook
+
+	// Roteador de chaves de API (failover automático em 401/sem-créditos de
+	// provedores externos). Deriva a chave AES-256 que cifra as chaves antes de
+	// persistir. Vazio = feature desabilitada, endpoints respondem 503.
+	VaultSecret string
 }
 
 func LoadConfig() Config {
@@ -100,6 +105,8 @@ func LoadConfig() Config {
 		InstagramAccessToken:        getEnv("INSTAGRAM_ACCESS_TOKEN", ""),
 		InstagramUserID:             getEnv("INSTAGRAM_USER_ID", ""),
 		InstagramWebhookVerifyToken: getEnv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN", ""),
+
+		VaultSecret: getEnv("API_VAULT_SECRET", ""),
 	}
 	if c.AuthWebOrigin == "" && len(c.CORSOrigins) > 0 {
 		c.AuthWebOrigin = c.CORSOrigins[0]

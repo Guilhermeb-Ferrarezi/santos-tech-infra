@@ -116,7 +116,7 @@ já existem no Postgres compartilhado e **não** são criadas aqui.
 
 Opcionais (com default): `PORT` (3333), `NODE_ENV`, `COOKIE_DOMAIN` (ex: `.santos-tech.com`),
 `CORS_ORIGIN` (CSV de origens), `AUTH_WEB_ORIGIN`, `GOOGLE_CLIENT_ID`/`SECRET`/`CALLBACK_URL`,
-`EMAIL_API_URL`.
+`EMAIL_API_URL`, `API_VAULT_SECRET` (vazio = roteador de chaves de API desabilitado, 503).
 
 ## API / Endpoints
 

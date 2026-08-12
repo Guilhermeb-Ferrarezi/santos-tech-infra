@@ -19,6 +19,36 @@ type ApiKey struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+type ApiRouterKey struct {
+	ID            int64
+	ProviderID    int64
+	Label         string
+	SecretEnc     string
+	SecretTail    string
+	Status        string
+	Priority      int32
+	FailureCount  int32
+	LastUsedAt    pgtype.Timestamptz
+	LastErrorAt   pgtype.Timestamptz
+	LastErrorCode pgtype.Int4
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type ApiRouterProvider struct {
+	ID                int64
+	Name              string
+	BaseUrl           string
+	AuthHeader        string
+	AuthScheme        string
+	UnauthorizedCodes []int32
+	NoCreditCodes     []int32
+	TestPath          string
+	TestMethod        string
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
 type Board struct {
 	ID           pgtype.UUID
 	OwnerID      int32
