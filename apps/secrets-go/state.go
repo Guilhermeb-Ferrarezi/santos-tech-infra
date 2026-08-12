@@ -157,6 +157,14 @@ func persistState(d StateData) {
 	_ = os.WriteFile(stateFile, b, 0644)
 }
 
+// defaultKeywords é a lista completa (pagamentos BR/globais, IA, cloud,
+// comunicação, auth/analytics, dev tooling) — o mesmo conjunto construído
+// manualmente ao longo do uso local do dotfy-scanner, só que versionado
+// aqui como default pra não depender de reconstruir na mão a cada
+// state.json novo/vazio (ver NewStateManager: reseta pra isso se o volume
+// vier vazio ou corrompido). "// verificado" marca as que já têm
+// verificação ativa em verifiers.go — o resto fica só no fingerprint
+// passivo (sem checar contra a API do provedor).
 func defaultKeywords() []string {
 	return []string{
 		"vk_test_",
@@ -169,5 +177,92 @@ func defaultKeywords() []string {
 		"dotfy_token",
 		"x-dotfy-api-key",
 		"DOTFY_WEBHOOK_SECRET",
+
+		// Pagamentos — Brasil
+		"APP_USR",
+		"sb_secret",
+		"ABACATEPAY_API_KEY",       // verificado
+		"PAGARME_API_KEY",          // verificado
+		"MERCADOPAGO_ACCESS_TOKEN", // verificado
+		"ASAAS_API_KEY",            // verificado
+		"PAGSEGURO_TOKEN",
+		"EFI_CLIENT_SECRET",
+		"IUGU_API_TOKEN",
+		"JUNO_API_TOKEN",
+		"VINDI_API_KEY",
+		"STARK_BANK_PRIVATE_KEY",
+		"COBRE_API_KEY",
+		"CELCOIN_CLIENT_SECRET",
+		"OPENPIX_APP_ID",
+		"ZOOP_MARKETPLACE_KEY",
+		"CIELO_MERCHANT_KEY",
+		"REDE_TOKEN",
+		"GETNET_CLIENT_SECRET",
+
+		// Pagamentos — Global
+		"STRIPE_API_KEY", // verificado
+		"PAYPAL_CLIENT_SECRET",
+		"SQUARE_ACCESS_TOKEN", // verificado
+		"BRAINTREE_PRIVATE_KEY",
+		"ADYEN_API_KEY",
+		"RAZORPAY_KEY_SECRET",
+		"PLAID_SECRET",
+
+		// IA / LLM
+		"OPENAI_API_KEY",        // verificado
+		"ANTHROPIC_API_KEY",     // verificado
+		"GROQ_API_KEY",          // verificado
+		"MISTRAL_API_KEY",       // verificado
+		"COHERE_API_KEY",        // verificado
+		"REPLICATE_API_TOKEN",   // verificado
+		"HUGGINGFACE_API_TOKEN", // verificado
+		"ELEVENLABS_API_KEY",    // verificado
+		"GEMINI_API_KEY",        // verificado
+		"OPENROUTER_API_KEY",    // verificado
+
+		// Cloud / Infra
+		"CLOUDFLARE_API_TOKEN",      // verificado
+		"DIGITALOCEAN_ACCESS_TOKEN", // verificado
+		"VERCEL_TOKEN",              // verificado
+		"NETLIFY_AUTH_TOKEN",        // verificado
+		"HEROKU_API_KEY",            // verificado
+		"NPM_TOKEN",                 // verificado
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_ACCESS_KEY_ID",
+		"SUPABASE_SERVICE_ROLE_KEY",
+		"RAILWAY_TOKEN", // verificado
+		"FLY_API_TOKEN",
+		"GITLAB_TOKEN",    // verificado
+		"CIRCLECI_TOKEN",  // verificado
+		"DATADOG_API_KEY", // verificado
+
+		// Comunicação
+		"DISCORD_BOT_TOKEN", // verificado
+		"MAILGUN_API_KEY",   // verificado
+		"SENDGRID_API_KEY",  // verificado
+		"SLACK_BOT_TOKEN",   // verificado
+		"TWILIO_AUTH_TOKEN",
+		"TELEGRAM_BOT_TOKEN", // verificado
+		"RESEND_API_KEY",     // verificado
+
+		// Auth / Analytics / Observabilidade
+		"GITHUB_TOKEN", // verificado
+		"AUTH0_CLIENT_SECRET",
+		"CLERK_SECRET_KEY", // verificado
+		"FIREBASE_API_KEY", // verificado
+		"MIXPANEL_TOKEN",
+		"SEGMENT_WRITE_KEY",
+		"POSTHOG_API_KEY",
+		"SENTRY_AUTH_TOKEN", // verificado
+
+		// Produtividade / dev tooling
+		"NOTION_API_KEY", // verificado
+		"NOTION_TOKEN",   // verificado
+		"FIGMA_TOKEN",    // verificado
+		"LINEAR_API_KEY",
+		"SHOPIFY_ACCESS_TOKEN",
+		"ALGOLIA_API_KEY",
+		"GOOGLE_MAPS_API_KEY",
+		"DOCKER_HUB_TOKEN",
 	}
 }

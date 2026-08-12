@@ -77,6 +77,22 @@ var keywordFamilies = []struct {
 	{"ELEVENLABS", "ElevenLabs", "elevenlabs"},
 	{"ELEVEN_LABS", "ElevenLabs", "elevenlabs"},
 	{"COHERE", "Cohere", "cohere"},
+	{"TELEGRAM", "Telegram", "telegram"},
+	{"GEMINI", "Google Gemini", "gemini"},
+	{"SQUARE", "Square", "square"},
+	{"CLERK", "Clerk", "clerk"},
+	{"RAILWAY", "Railway", "railway"},
+	{"FIREBASE", "Firebase", "firebase"},
+	{"OPENROUTER", "OpenRouter", "openrouter"},
+	{"OPEN_ROUTER", "OpenRouter", "openrouter"},
+	{"RESEND", "Resend", "resend"},
+	{"NOTION", "Notion", "notion"},
+	{"FIGMA", "Figma", "figma"},
+	{"SENTRY", "Sentry", "sentry"},
+	{"DATADOG", "Datadog", "datadog"},
+	{"CIRCLECI", "CircleCI", "circleci"},
+	{"CIRCLE_CI", "CircleCI", "circleci"},
+	{"GITLAB", "GitLab", "gitlab"},
 }
 
 // keywordFamily busca a keyword (não o valor) contra provedores conhecidos

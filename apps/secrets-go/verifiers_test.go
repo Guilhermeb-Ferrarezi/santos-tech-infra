@@ -49,6 +49,22 @@ func TestGenericVerifier_RejectsGarbageKeys(t *testing.T) {
 		{"mercadopago", "APP_USR-1234567890123456-010101-invalidinvalidinvalidinvalidinval-123456789"},
 		{"asaas", "invalid0000000000000000000000000invalid"},
 		{"pagarme", "sk_invalid00000000000000000000invalid"},
+		// Formato plausível (dígitos:token) — Telegram valida o padrão da URL
+		// antes de checar validade de verdade.
+		{"telegram", "123456789:AAInvalid00000000000000000000000"},
+		{"gemini", "AIza" + "Invalid0000000000000000000000000"},
+		{"square", "invalid0000000000000000000000000invalid"},
+		{"clerk", "sk_test_invalid00000000000000000000000invalid"},
+		{"railway", "invalid0000000000000000000000000invalid"},
+		{"firebase", "AIzaInvalid0000000000000000000000000"},
+		{"openrouter", "sk-or-v1-" + "invalid00000000000000000000000000000000000000000000000000invalid"},
+		{"resend", "re_invalid_0000000000000000000000invalid"},
+		{"notion", "secret_invalid00000000000000000000000000000invalid"},
+		{"figma", "invalid0000000000000000000000000invalid"},
+		{"sentry", "invalid0000000000000000000000000invalid"},
+		{"datadog", "invalid0000000000000000000000000invalid"},
+		{"circleci", "invalid0000000000000000000000000invalid"},
+		{"gitlab", "glpat-invalid00000000000000000000invalid"},
 	}
 
 	v := NewGenericVerifier()

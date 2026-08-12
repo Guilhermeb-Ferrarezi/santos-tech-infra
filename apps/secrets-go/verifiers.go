@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -111,6 +112,48 @@ func (g *GenericVerifier) CheckKey(ctx context.Context, family, value string) (c
 		return c, a, false
 	case "pagarme":
 		c, a := g.pagarme(ctx, value)
+		return c, a, false
+	case "telegram":
+		c, a := g.telegram(ctx, value)
+		return c, a, false
+	case "gemini":
+		c, a := g.gemini(ctx, value)
+		return c, a, false
+	case "square":
+		c, a := g.square(ctx, value)
+		return c, a, false
+	case "clerk":
+		c, a := g.clerk(ctx, value)
+		return c, a, false
+	case "railway":
+		c, a := g.railway(ctx, value)
+		return c, a, false
+	case "firebase":
+		c, a := g.firebase(ctx, value)
+		return c, a, false
+	case "openrouter":
+		c, a := g.openRouter(ctx, value)
+		return c, a, false
+	case "resend":
+		c, a := g.resend(ctx, value)
+		return c, a, false
+	case "notion":
+		c, a := g.notion(ctx, value)
+		return c, a, false
+	case "figma":
+		c, a := g.figma(ctx, value)
+		return c, a, false
+	case "sentry":
+		c, a := g.sentry(ctx, value)
+		return c, a, false
+	case "datadog":
+		c, a := g.datadog(ctx, value)
+		return c, a, false
+	case "circleci":
+		c, a := g.circleci(ctx, value)
+		return c, a, false
+	case "gitlab":
+		c, a := g.gitlab(ctx, value)
 		return c, a, false
 	default:
 		return false, false, false
@@ -386,6 +429,219 @@ func (g *GenericVerifier) asaas(ctx context.Context, key string) (bool, bool) {
 // senha) — mesmo padrão da Stripe, que é o modelo que a API v5 deles seguiu.
 func (g *GenericVerifier) pagarme(ctx context.Context, key string) (bool, bool) {
 	return g.simpleBasicAuth(ctx, "https://api.pagar.me/core/v5/balance", key)
+}
+
+// telegram: GET /bot{token}/getMe — o token vai na URL, não em header. A API
+// do Telegram bota o resultado de verdade no corpo ({"ok": true/false}),
+// igual ao padrão do Slack, então checamos o JSON, não só o status HTTP.
+func (g *GenericVerifier) telegram(ctx context.Context, token string) (bool, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.telegram.org/bot"+token+"/getMe", nil)
+	if err != nil {
+		return false, false
+	}
+	req.Header.Set("User-Agent", "secrets-go")
+	resp, err := g.http.Do(req)
+	if err != nil {
+		return false, false
+	}
+	defer resp.Body.Close()
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, false
+	}
+	return true, out.OK
+}
+
+// gemini: GET /v1beta/models?key=... — a chave vai como query param (não
+// header), convenção da Google pras APIs "generativelanguage". 200=válida,
+// 400="API key not valid" documentado.
+func (g *GenericVerifier) gemini(ctx context.Context, key string) (bool, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://generativelanguage.googleapis.com/v1beta/models?key="+key, nil)
+	if err != nil {
+		return false, false
+	}
+	req.Header.Set("User-Agent", "secrets-go")
+	resp, err := g.http.Do(req)
+	if err != nil {
+		return false, false
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, true
+	case http.StatusBadRequest, http.StatusForbidden:
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+// square: GET /v2/locations.
+func (g *GenericVerifier) square(ctx context.Context, token string) (bool, bool) {
+	return g.simpleBearer(ctx, "https://connect.squareup.com/v2/locations", token, statusRules{ok200: true})
+}
+
+// clerk: GET /v1/users?limit=1 — endpoint de listagem, mas 1 resultado já
+// confirma a secret key sem custo.
+func (g *GenericVerifier) clerk(ctx context.Context, key string) (bool, bool) {
+	return g.simpleBearer(ctx, "https://api.clerk.com/v1/users?limit=1", key, statusRules{ok200: true})
+}
+
+// railway: POST /graphql/v2 (query GraphQL "{ me { id } }") — a API deles é
+// só GraphQL, sem REST. Erro de auth vem como 200 + {"errors":[...]} (padrão
+// GraphQL de não usar status HTTP pra erro de negócio), então checamos o
+// corpo, não só o status.
+func (g *GenericVerifier) railway(ctx context.Context, token string) (bool, bool) {
+	body := bytes.NewBufferString(`{"query":"{ me { id } }"}`)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://backboard.railway.app/graphql/v2", body)
+	if err != nil {
+		return false, false
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "secrets-go")
+	resp, err := g.http.Do(req)
+	if err != nil {
+		return false, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return true, false
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, false
+	}
+	var out struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, false
+	}
+	return true, len(out.Errors) == 0
+}
+
+// firebase: GET /identitytoolkit/v3/relyingparty/getRecaptchaParam?key=... —
+// endpoint só-leitura (não cria conta nem gasta cota), usado exatamente pra
+// validar API key. 200=válida, 400="API key not valid" documentado.
+func (g *GenericVerifier) firebase(ctx context.Context, key string) (bool, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/identitytoolkit/v3/relyingparty/getRecaptchaParam?key="+key, nil)
+	if err != nil {
+		return false, false
+	}
+	req.Header.Set("User-Agent", "secrets-go")
+	resp, err := g.http.Do(req)
+	if err != nil {
+		return false, false
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, true
+	case http.StatusBadRequest:
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+// openRouter: GET /api/v1/auth/key — endpoint oficial pra checar a própria
+// chave (devolve limite/uso quando válida).
+func (g *GenericVerifier) openRouter(ctx context.Context, key string) (bool, bool) {
+	return g.simpleBearer(ctx, "https://openrouter.ai/api/v1/auth/key", key, statusRules{ok200: true})
+}
+
+// resend: GET /domains — chave inválida dá 400 (não 401), testado
+// manualmente (corpo: {"statusCode":400,"message":"API key is invalid"}).
+func (g *GenericVerifier) resend(ctx context.Context, key string) (bool, bool) {
+	status, err := g.bearerGET(ctx, "https://api.resend.com/domains", key)
+	if err != nil {
+		return false, false
+	}
+	switch status {
+	case http.StatusOK:
+		return true, true
+	case http.StatusBadRequest:
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+// notion: GET /v1/users/me — exige o header de versão da API (obrigatório
+// em toda chamada, não só nessa).
+func (g *GenericVerifier) notion(ctx context.Context, key string) (bool, bool) {
+	status, err := g.customHeaderGET(ctx, "https://api.notion.com/v1/users/me", map[string]string{
+		"Authorization":  "Bearer " + key,
+		"Notion-Version": "2022-06-28",
+	})
+	if err != nil {
+		return false, false
+	}
+	return statusRules{ok200: true}.eval(status)
+}
+
+// figma: GET /v1/me com header próprio "X-Figma-Token" (não Authorization).
+// Chave inválida dá 403 (não 401), testado manualmente (corpo:
+// {"status":403,"err":"Invalid token"}).
+func (g *GenericVerifier) figma(ctx context.Context, token string) (bool, bool) {
+	status, err := g.customHeaderGET(ctx, "https://api.figma.com/v1/me", map[string]string{
+		"X-Figma-Token": token,
+	})
+	if err != nil {
+		return false, false
+	}
+	switch status {
+	case http.StatusOK:
+		return true, true
+	case http.StatusForbidden:
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+// sentry: GET /api/0/organizations/ — lista as orgs que o token enxerga.
+func (g *GenericVerifier) sentry(ctx context.Context, token string) (bool, bool) {
+	return g.simpleBearer(ctx, "https://sentry.io/api/0/organizations/", token, statusRules{ok200: true})
+}
+
+// datadog: GET /api/v1/validate com header próprio "DD-API-KEY". Chave
+// inválida dá 403 (não 401) — documentado.
+func (g *GenericVerifier) datadog(ctx context.Context, key string) (bool, bool) {
+	status, err := g.customHeaderGET(ctx, "https://api.datadoghq.com/api/v1/validate", map[string]string{
+		"DD-API-KEY": key,
+	})
+	if err != nil {
+		return false, false
+	}
+	switch status {
+	case http.StatusOK:
+		return true, true
+	case http.StatusForbidden:
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+// circleci: GET /api/v2/me com header próprio "Circle-Token".
+func (g *GenericVerifier) circleci(ctx context.Context, token string) (bool, bool) {
+	status, err := g.customHeaderGET(ctx, "https://circleci.com/api/v2/me", map[string]string{
+		"Circle-Token": token,
+	})
+	if err != nil {
+		return false, false
+	}
+	return statusRules{ok200: true}.eval(status)
+}
+
+// gitlab: GET /api/v4/user.
+func (g *GenericVerifier) gitlab(ctx context.Context, token string) (bool, bool) {
+	return g.simpleBearer(ctx, "https://gitlab.com/api/v4/user", token, statusRules{ok200: true})
 }
 
 // statusRules descreve quais códigos HTTP contam como "chave ativa" além do
