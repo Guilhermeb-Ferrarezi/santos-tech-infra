@@ -12,7 +12,7 @@ type Config struct {
 	DatabaseURL      string
 	JWTSecret        string
 	CORSOrigins      []string
-	GitHubToken      string
+	GitHubTokens     []string
 	ElasticsearchURL string
 	StateFile        string
 	// RedisURL é OPCIONAL — o domínio do secrets-go (scan de secrets vazados
@@ -30,11 +30,23 @@ func LoadConfig() Config {
 		DatabaseURL:      mustEnv("DATABASE_URL"),
 		JWTSecret:        mustEnv("JWT_SECRET"),
 		CORSOrigins:      splitCSV(getEnv("CORS_ORIGIN", "")),
-		GitHubToken:      mustEnv("GITHUB_TOKEN"),
+		GitHubTokens:     loadGitHubTokens(),
 		ElasticsearchURL: strings.TrimRight(mustEnv("ELASTICSEARCH_URL"), "/"),
 		StateFile:        getEnv("STATE_FILE", "/data/state.json"),
 		RedisURL:         getEnv("REDIS_URL", ""),
 	}
+}
+
+// loadGitHubTokens lê GITHUB_TOKENS (CSV, um ou mais PATs) — cada token vira
+// um bucket de rate limit independente na Search API, então mais tokens =
+// mais throughput real e fallback automático quando um deles esbarra no
+// limite (ver github.go). Mantém compat com o antigo GITHUB_TOKEN (single).
+func loadGitHubTokens() []string {
+	if tokens := splitCSV(os.Getenv("GITHUB_TOKENS")); len(tokens) > 0 {
+		return tokens
+	}
+	single := mustEnv("GITHUB_TOKEN")
+	return []string{single}
 }
 
 func getEnv(k, def string) string {

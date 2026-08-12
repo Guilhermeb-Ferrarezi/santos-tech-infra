@@ -45,14 +45,17 @@ type StateData struct {
 // não têm rate limiter próprio como o GitHubClient tem pra Search API —
 // KeywordWorkers × PageConcurrency é o teto de chamadas simultâneas que
 // podemos disparar contra APIs de terceiros de uma vez. Não deixa crescer
-// sem limite.
+// sem limite. Tetos dobrados junto com o pool de tokens do GitHub
+// (GITHUB_TOKENS) — mais tokens = mais throughput real de busca disponível
+// pros workers consumirem, mas o teto continua existindo pra não hostilizar
+// as APIs de verificação de terceiros.
 const (
 	minKeywordWorkers     = 1
-	maxKeywordWorkers     = 8
+	maxKeywordWorkers     = 16
 	defaultKeywordWorkers = 3
 
 	minPageConcurrency     = 1
-	maxPageConcurrency     = 20
+	maxPageConcurrency     = 40
 	defaultPageConcurrency = 5
 
 	// GitHub permite até 10 páginas (1000 resultados) por busca, mas pra

@@ -62,7 +62,7 @@ func main() {
 		defer rdb.Close()
 	}
 
-	gh := NewGitHubClient(cfg.GitHubToken)
+	gh := NewGitHubClient(cfg.GitHubTokens)
 	es := NewElasticClient(cfg.ElasticsearchURL)
 	if err := es.EnsurePresetsIndex(context.Background()); err != nil {
 		slog.Error("falha ao garantir índice de presets de keywords (segue sem travar o boot)", "err", err)

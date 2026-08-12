@@ -11,11 +11,11 @@ import (
 // Crawler orquestra o scan com um pool de workers: várias keywords em
 // paralelo (cada worker pega uma da fila), cada uma verificando vários
 // arquivos em paralelo por página de busca. Todos os workers dividem o
-// mesmo rate limiter do GitHubClient (searchLimiter/contentLimiter), então
-// paralelizar keywords não estoura o limite da Search API — só usa melhor
-// o tempo ocioso entre chamadas (verificação de conteúdo, checagem ativa
-// contra os provedores). Start/Stop controlam um context.CancelFunc — é o
-// "liga/desliga" que você pediu.
+// mesmo pool de tokens do GitHubClient (searchAvail/contentAvail) — com um
+// só token, paralelizar keywords não estoura o limite da Search API, só usa
+// melhor o tempo ocioso entre chamadas; com vários tokens (GITHUB_TOKENS),
+// o pool também aumenta o throughput real disponível pros workers. Start/Stop
+// controlam um context.CancelFunc — é o "liga/desliga" que você pediu.
 type Crawler struct {
 	gh        *GitHubClient
 	es        *ElasticClient
