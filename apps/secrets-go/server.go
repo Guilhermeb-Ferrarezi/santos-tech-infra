@@ -68,6 +68,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/clear", s.requireAdmin(s.handleClear))
 	mux.HandleFunc("/revalidate", s.requireAdmin(s.handleRevalidate))
 	mux.HandleFunc("/events", s.requireAdmin(s.hub.ServeSSE))
+	mux.HandleFunc("/keyword-presets", s.requireAdmin(s.handlePresets))
+	mux.HandleFunc("/keyword-presets/{id}", s.requireAdmin(s.handlePresetByID))
 
 	return golog.RequestLogger(s.cors(s.ipBanCheck(metricsMiddleware(mux))))
 }

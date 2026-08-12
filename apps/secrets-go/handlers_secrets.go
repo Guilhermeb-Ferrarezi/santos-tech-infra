@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Handlers do domínio (scan de secrets vazados) — portados de
@@ -158,15 +160,136 @@ func (s *Server) handleKeywordStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
+// tamanho de página da listagem de achados: default bem maior que o antigo
+// (200) porque com o índice crescendo continuamente e o corte fixo antigo,
+// achados relevantes (inclusive ATIVA) saíam da janela visível — ver
+// ListHits (sort liveActive desc primeiro resolve a maior parte, mas o teto
+// de 200 ainda limitava telas com muitos hits). Máximo de 2000 pra não
+// pedir um payload gigante de uma vez só.
+const (
+	defaultReposSize = 1000
+	maxReposSize     = 2000
+)
+
 func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 	kw := r.URL.Query().Get("keyword")
 	onlyCandidates := r.URL.Query().Get("all") != "true" // por padrão esconde os "candidato" (sem valor)
-	hits, err := s.es.ListHits(r.Context(), kw, onlyCandidates, 200)
+	size := defaultReposSize
+	if raw := r.URL.Query().Get("size"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			size = n
+		}
+	}
+	if size > maxReposSize {
+		size = maxReposSize
+	}
+	hits, err := s.es.ListHits(r.Context(), kw, onlyCandidates, size)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "elasticsearch_error", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, hits)
+}
+
+// ── Presets de keywords ──────────────────────────────────────────────────
+// Armazenamento à parte da lista "ativa" do scan — salvar/reaplicar
+// conjuntos nomeados sem precisar redigitar ou colar de novo toda vez.
+
+func (s *Server) handlePresets(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		presets, err := s.es.ListPresets(r.Context())
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "elasticsearch_error", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, presets)
+
+	case http.MethodPost:
+		var body struct {
+			Name     string   `json:"name"`
+			Keywords []string `json:"keywords"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_body", "body inválido")
+			return
+		}
+		name := strings.TrimSpace(body.Name)
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "invalid_body", "nome do preset é obrigatório")
+			return
+		}
+		keywords := dedupTrim(body.Keywords)
+		if len(keywords) == 0 {
+			writeError(w, http.StatusBadRequest, "invalid_body", "preset precisa de pelo menos 1 keyword")
+			return
+		}
+		now := time.Now()
+		p := KeywordPreset{ID: newPresetID(), Name: name, Keywords: keywords, CreatedAt: now, UpdatedAt: now}
+		if err := s.es.PutPreset(r.Context(), p); err != nil {
+			writeError(w, http.StatusBadGateway, "elasticsearch_error", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "método não permitido")
+	}
+}
+
+func (s *Server) handlePresetByID(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "id do preset é obrigatório")
+		return
+	}
+	switch r.Method {
+	case http.MethodPut:
+		var body struct {
+			Name     string   `json:"name"`
+			Keywords []string `json:"keywords"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_body", "body inválido")
+			return
+		}
+		name := strings.TrimSpace(body.Name)
+		keywords := dedupTrim(body.Keywords)
+		if name == "" || len(keywords) == 0 {
+			writeError(w, http.StatusBadRequest, "invalid_body", "nome e ao menos 1 keyword são obrigatórios")
+			return
+		}
+		p := KeywordPreset{ID: id, Name: name, Keywords: keywords, UpdatedAt: time.Now()}
+		if err := s.es.PutPreset(r.Context(), p); err != nil {
+			writeError(w, http.StatusBadGateway, "elasticsearch_error", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
+
+	case http.MethodDelete:
+		if err := s.es.DeletePreset(r.Context(), id); err != nil {
+			writeError(w, http.StatusBadGateway, "elasticsearch_error", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "método não permitido")
+	}
+}
+
+func dedupTrim(raw []string) []string {
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		k := strings.TrimSpace(r)
+		if k == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	return out
 }
 
 func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {

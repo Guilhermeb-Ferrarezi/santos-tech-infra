@@ -64,6 +64,9 @@ func main() {
 
 	gh := NewGitHubClient(cfg.GitHubToken)
 	es := NewElasticClient(cfg.ElasticsearchURL)
+	if err := es.EnsurePresetsIndex(context.Background()); err != nil {
+		slog.Error("falha ao garantir índice de presets de keywords (segue sem travar o boot)", "err", err)
+	}
 	state := NewStateManager()
 	hub := NewHub()
 	dotfy := NewDotfyVerifier()
