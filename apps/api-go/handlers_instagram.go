@@ -7,6 +7,8 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -149,7 +151,28 @@ func (s *Server) handleInstagramComment(ctx context.Context, commentID, mediaID 
 		if delErr := s.rdb.Del(ctx, "api-go:instagram:replied:"+commentID).Err(); delErr != nil {
 			slog.Warn("instagram webhook: falha ao liberar dedupe após erro de envio", "commentID", commentID, "err", delErr)
 		}
+		s.alertInstagramSendFailure(commentID, mediaID, link.URL, err)
 	}
+}
+
+// alertInstagramSendFailure notifica por email quando uma private reply falha —
+// diferente do log (que só aparece se alguém for procurar), isso avisa
+// proativamente. Reaproveita SOCIAL_ALERT_EMAIL (mesmo destinatário dos
+// avisos de "post em revisão"); vazio = sem alerta, só o log mesmo.
+func (s *Server) alertInstagramSendFailure(commentID, mediaID, targetURL string, sendErr error) {
+	if s.cfg.SocialAlertEmail == "" {
+		return
+	}
+	body := fmt.Sprintf(`<p>A resposta automática do Instagram (comentário → DM) <strong>falhou ao enviar</strong>.</p>
+<table style="border-collapse:collapse;font-family:sans-serif;font-size:14px">
+<tr><td style="padding:4px 12px 4px 0;color:#666">Comentário</td><td><code>%s</code></td></tr>
+<tr><td style="padding:4px 12px 4px 0;color:#666">Publicação</td><td><code>%s</code></td></tr>
+<tr><td style="padding:4px 12px 4px 0;color:#666">Link que tentou enviar</td><td>%s</td></tr>
+<tr><td style="padding:4px 12px 4px 0;color:#666">Erro</td><td>%s</td></tr>
+</table>
+<p style="margin-top:16px">Causas comuns: token de acesso expirado (validade curta, ~1h se não trocado por um de longa duração) ou limite de envio da Meta.</p>`,
+		html.EscapeString(commentID), html.EscapeString(mediaID), html.EscapeString(targetURL), html.EscapeString(sendErr.Error()))
+	s.enqueueEmail("instagramWebhook", s.cfg.SocialAlertEmail, "Falha na automação do Instagram", body)
 }
 
 // ── CRUD admin do mapeamento post -> link ────────────────────────────────────
