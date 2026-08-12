@@ -627,11 +627,10 @@ func (s *Server) buildProfile(ctx context.Context, u *User) *UserProfile {
 		p.SuspendedAt = &v
 	}
 	if u.Role == RoleCustom && u.CustomRoleID != nil {
-		var raw []byte
-		if err := s.db.QueryRow(ctx, `SELECT permissions FROM custom_roles WHERE id=$1`, *u.CustomRoleID).Scan(&raw); err == nil && len(raw) > 0 {
-			if err := json.Unmarshal(raw, &p.Permissions); err != nil {
-				slog.Error("falha ao deserializar permissões do cargo customizado", "customRoleID", *u.CustomRoleID, "err", err)
-			}
+		if cr, err := s.cachedCustomRole(ctx, *u.CustomRoleID); err != nil {
+			slog.Error("falha ao carregar permissões do cargo customizado", "customRoleID", *u.CustomRoleID, "err", err)
+		} else if cr != nil {
+			p.Permissions = cr.Permissions
 		}
 	}
 	return p
