@@ -81,6 +81,12 @@ func (s *Server) handleGetSocialPost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errSocialPostNotFound)
 		return
 	}
+	confirmations, err := s.listSocialPostPublishConfirmations(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	post.PublishConfirmations = confirmations
 	writeJSON(w, http.StatusOK, map[string]any{"post": post})
 }
 
@@ -121,6 +127,25 @@ func (s *Server) handleUpdateSocialPost(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
+
+	current, err := s.getSocialPost(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if current == nil {
+		writeErr(w, errSocialPostNotFound)
+		return
+	}
+	// Trava: só valida na TRANSIÇÃO pra "publicado" (post que já estava publicado
+	// continua editável em outros campos mesmo sem confirmação retroativa).
+	if in.Status == "publicado" && current.Status != "publicado" {
+		if err := s.checkPublishConfirmationsComplete(r.Context(), id, in.PlataformasDestino); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+
 	post, err := s.updateSocialPost(r.Context(), id, in)
 	if err != nil {
 		writeErr(w, err)
@@ -177,6 +202,16 @@ func (s *Server) handleUpdateSocialPostStatus(w http.ResponseWriter, r *http.Req
 		return
 	}
 	oldStatus := current.Status
+
+	// Trava: só valida na TRANSIÇÃO pra "publicado" — post que já estava
+	// publicado continua podendo ser reafirmado sem exigir confirmação
+	// retroativa que não existia antes desta feature.
+	if in.Status == "publicado" && oldStatus != "publicado" {
+		if err := s.checkPublishConfirmationsComplete(r.Context(), id, current.PlataformasDestino); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
 
 	post, err := s.updateSocialPostStatus(r.Context(), id, in.Status)
 	if err != nil {
@@ -276,4 +311,66 @@ func (s *Server) handleAddSocialPostNote(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"note": note})
+}
+
+// POST /social/posts/{id}/publish-confirmations/{platform}
+func (s *Server) handleConfirmSocialPostPlatform(w http.ResponseWriter, r *http.Request) {
+	id, err := socialPostIDFrom(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	platform := r.PathValue("platform")
+	if !validSocialPlatforms[platform] {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Plataforma inválida"))
+		return
+	}
+	post, err := s.getSocialPost(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if post == nil {
+		writeErr(w, errSocialPostNotFound)
+		return
+	}
+	if err := s.upsertSocialPostPublishConfirmation(r.Context(), id, platform, userIDFrom(r)); err != nil {
+		writeErr(w, err)
+		return
+	}
+	confirmations, err := s.listSocialPostPublishConfirmations(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"confirmations": confirmations})
+}
+
+// DELETE /social/posts/{id}/publish-confirmations/{platform}
+func (s *Server) handleUnconfirmSocialPostPlatform(w http.ResponseWriter, r *http.Request) {
+	id, err := socialPostIDFrom(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	platform := r.PathValue("platform")
+	post, err := s.getSocialPost(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if post == nil {
+		writeErr(w, errSocialPostNotFound)
+		return
+	}
+	if err := s.deleteSocialPostPublishConfirmation(r.Context(), id, platform); err != nil {
+		writeErr(w, err)
+		return
+	}
+	confirmations, err := s.listSocialPostPublishConfirmations(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"confirmations": confirmations})
 }

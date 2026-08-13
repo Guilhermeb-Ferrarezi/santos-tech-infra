@@ -397,6 +397,18 @@ ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS chat_model   TEXT NOT 
 -- Família de adapter das operações normalizadas (/op/{transcribe|tts|image|predict}),
 -- ver apirouter_ops.go. Vazio = provider só suporta chat/proxy.
 ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS op_adapter   TEXT NOT NULL DEFAULT '';
+-- Confirmação de publicação por plataforma (uma linha = "essa rede recebeu essa peça").
+-- UNIQUE garante upsert (reconfirmar atualiza, não duplica). confirmed_by vem sempre do
+-- usuário autenticado da sessão no handler, nunca de um valor mandado pelo cliente.
+CREATE TABLE IF NOT EXISTS social_post_platform_confirmations (
+  id           BIGSERIAL PRIMARY KEY,
+  post_id      UUID NOT NULL REFERENCES social_posts(id) ON DELETE CASCADE,
+  platform     TEXT NOT NULL,
+  confirmed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  confirmed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (post_id, platform)
+);
+CREATE INDEX IF NOT EXISTS idx_social_post_platform_confirmations_post ON social_post_platform_confirmations(post_id);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
