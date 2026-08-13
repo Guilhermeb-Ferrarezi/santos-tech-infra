@@ -133,6 +133,16 @@ func (s *Server) handleKeywords(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, st.Keywords)
 
 	case http.MethodDelete:
+		// ?all=true remove a lista inteira de uma vez (atômico — um Update só,
+		// não N chamadas soltas do cliente). Sem ?all nem ?keyword, é no-op
+		// (nenhuma keyword bate com string vazia) — mantido de propósito pra
+		// não apagar tudo por engano num DELETE sem parâmetro nenhum.
+		if r.URL.Query().Get("all") == "true" {
+			st := s.state.Update(func(st *StateData) { st.Keywords = nil })
+			s.hub.Broadcast(Event{Type: "status", Data: st})
+			writeJSON(w, http.StatusOK, st.Keywords)
+			return
+		}
 		kw := r.URL.Query().Get("keyword")
 		st := s.state.Update(func(st *StateData) {
 			out := st.Keywords[:0]
