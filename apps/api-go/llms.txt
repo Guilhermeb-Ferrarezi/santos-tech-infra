@@ -200,6 +200,15 @@ abaixo responde 503 `NOT_CONFIGURED`.
 - `POST /auth/admin/api-router/providers/{id}/keys/{keyId}/test` — dispara uma
   requisição real com essa chave (mesmo se não estiver `active`) e grava o
   resultado → 200 `{statusCode,outcome,error}` | 404 | 502 (rate 20/min)
+- `POST /auth/admin/api-router/providers/{id}/proxy {method?,path,headers?,body?}`
+  — USO REAL (não teste): repassa `method`/`path`/`body` pro `baseUrl` do
+  provider com rotação automática de chave e devolve a resposta **tal como o
+  provider respondeu** (sem envelope; formato nativo da API — ex.: JSON de
+  chat completion). Header `X-Api-Router-Key` na resposta identifica a chave
+  usada. `path` é obrigatório (ex.: `/v1/chat/completions`); `method` default
+  POST. Sem streaming (SSE) — lê a resposta inteira antes de devolver. →
+  200 (passthrough) | 400 | 404 | 502 `ALL_KEYS_EXHAUSTED`/`PROXY_FAILED` |
+  503 `NO_ACTIVE_KEYS`/`NOT_CONFIGURED` (rate 20/min)
 
 ## Claude Agent — `api.santos-tech.com/claude`
 

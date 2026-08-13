@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -397,4 +398,81 @@ func (s *Server) handleTestAPIRouterKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"statusCode": res.StatusCode, "outcome": res.Outcome, "error": res.Error})
+}
+
+type apiRouterProxyBody struct {
+	Method  string            `json:"method"`
+	Path    string            `json:"path"`
+	Headers map[string]string `json:"headers"`
+	Body    json.RawMessage   `json:"body"`
+}
+
+// apiRouterMaxProxyBodyLen é maior que o limite dos outros bodies deste
+// arquivo — prompts/anexos de IA passam fácil de alguns KB.
+const apiRouterMaxProxyBodyLen = 1 << 20 // 1MB
+
+// POST /auth/admin/api-router/providers/{id}/proxy — repassa uma requisição
+// REAL pro provider (method/path/body do chamador) usando rotação automática
+// de chave, e devolve a resposta do provider tal como veio (passthrough, sem
+// envelope) — o corpo já sai no formato nativo da API (ex.: OpenAI/Anthropic).
+// Sem suporte a streaming (SSE): a resposta é lida inteira antes de devolver.
+func (s *Server) handleAPIRouterProxy(w http.ResponseWriter, r *http.Request) {
+	if s.apiRouterNotConfigured(w) {
+		return
+	}
+	providerID, err := apiRouterPathID(r, "id")
+	if err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_ID", "id inválido"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, apiRouterMaxProxyBodyLen)
+	var body apiRouterProxyBody
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "corpo inválido"))
+		return
+	}
+	if body.Path == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "path é obrigatório (ex.: /v1/chat/completions)"))
+		return
+	}
+	method := body.Method
+	if method == "" {
+		method = http.MethodPost
+	}
+
+	provider, err := s.q.GetAPIRouterProvider(r.Context(), providerID)
+	if err != nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "provider não encontrado"))
+		return
+	}
+
+	headers := body.Headers
+	var payload []byte
+	if len(body.Body) > 0 {
+		payload = body.Body
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		if _, ok := headers["Content-Type"]; !ok {
+			headers["Content-Type"] = "application/json"
+		}
+	}
+
+	outcome, err := s.executeAPIRouterRequest(r.Context(), provider, method, body.Path, payload, headers)
+	if err != nil {
+		switch {
+		case errors.Is(err, errAPIRouterNoActiveKeys):
+			writeErr(w, appErr(http.StatusServiceUnavailable, "NO_ACTIVE_KEYS", "provider sem chaves ativas"))
+		case errors.Is(err, errAPIRouterAllKeysExhausted):
+			writeErr(w, appErr(http.StatusBadGateway, "ALL_KEYS_EXHAUSTED", "todas as chaves do provider falharam (401/sem créditos)"))
+		default:
+			writeErr(w, appErr(http.StatusBadGateway, "PROXY_FAILED", "falha ao repassar a requisição"))
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Api-Router-Key", outcome.KeyLabel)
+	w.WriteHeader(outcome.StatusCode)
+	_, _ = w.Write(outcome.Body)
 }

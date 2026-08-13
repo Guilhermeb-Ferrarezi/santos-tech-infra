@@ -1981,6 +1981,68 @@ paths:
         "503":
           $ref: "#/components/responses/APIRouterNotConfigured"
 
+  /auth/admin/api-router/providers/{id}/proxy:
+    post:
+      tags: [Admin]
+      summary: Repassar uma requisição real pro provider (uso de verdade, não teste)
+      description: |
+        Diferente do `/test` (que só verifica se a chave funciona), este
+        endpoint executa a chamada de verdade: `path`/`method`/`body` são
+        repassados ao `baseUrl` do provider com rotação automática de chave
+        (mesmo mecanismo do `/test`), e a resposta é devolvida **tal como o
+        provider respondeu** — sem envelope, no formato nativo da API (ex.:
+        o JSON de chat completion da OpenAI/Anthropic/etc.). O header
+        `X-Api-Router-Key` na resposta identifica qual chave foi usada.
+
+        **Sem suporte a streaming** (SSE) — a resposta é lida inteira antes
+        de devolver. `body`, se presente, vai como JSON no corpo da
+        requisição ao provider (Content-Type: application/json por padrão,
+        sobrescrevível via `headers`).
+
+        Rate limit: **20 req/min por IP**.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                method: { type: string, default: POST, example: POST }
+                path: { type: string, example: "/v1/chat/completions", description: "Path relativo ao baseUrl do provider." }
+                headers: { type: object, additionalProperties: { type: string }, description: "Headers extras (além do de auth, que o roteador já injeta)." }
+                body: { type: object, description: "Corpo repassado como JSON — no formato que a API do provider espera." }
+              required: [path]
+      responses:
+        "200":
+          description: "Resposta do provider, passthrough (status e corpo tal como vieram)."
+          content:
+            application/json:
+              schema: { type: object, description: "Formato nativo da API do provider — varia por provider/endpoint." }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Provider não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "provider não encontrado" }
+        "502":
+          description: Todas as chaves ativas falharam, ou falha ao montar/enviar a requisição
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: ALL_KEYS_EXHAUSTED, message: "todas as chaves do provider falharam (401/sem créditos)" }
+        "503":
+          description: "API_VAULT_SECRET não configurada, ou provider sem nenhuma chave ativa"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NO_ACTIVE_KEYS, message: "provider sem chaves ativas" }
+
   # ── payments-go: Extrato (GET /statement) ────────────────────────────────
   # Serviço: apps/payments-go · prefixo em produção: /payments (via proxy reverso)
   # TODO: atualizar llms.txt central (api.santos-tech.com/llms.txt) com esta rota.

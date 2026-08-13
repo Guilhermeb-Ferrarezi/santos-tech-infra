@@ -168,3 +168,34 @@ func TestHandleUpdateAPIRouterKeyValidation(t *testing.T) {
 		t.Fatalf("label vazio: code=%d", w.Code)
 	}
 }
+
+func TestHandleAPIRouterProxyValidation(t *testing.T) {
+	s := apiRouterTestServer()
+
+	// id inválido → 400 (nem chega a decodificar o corpo)
+	r := httptest.NewRequest("POST", "/x", strings.NewReader(`{}`))
+	r.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	s.handleAPIRouterProxy(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("id inválido: code=%d", w.Code)
+	}
+
+	// corpo inválido → 400
+	r2 := httptest.NewRequest("POST", "/x", strings.NewReader("xxx"))
+	r2.SetPathValue("id", "1")
+	w2 := httptest.NewRecorder()
+	s.handleAPIRouterProxy(w2, r2)
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("corpo inválido: code=%d", w2.Code)
+	}
+
+	// sem path → 400 (nem chega a buscar o provider)
+	r3 := httptest.NewRequest("POST", "/x", strings.NewReader(`{"method":"GET"}`))
+	r3.SetPathValue("id", "1")
+	w3 := httptest.NewRecorder()
+	s.handleAPIRouterProxy(w3, r3)
+	if w3.Code != http.StatusBadRequest {
+		t.Fatalf("sem path: code=%d body=%s", w3.Code, w3.Body.String())
+	}
+}

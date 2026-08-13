@@ -75,6 +75,10 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /auth/admin/api-router/providers/{id}/keys/{keyId}", s.adminGuard(s.sudoGuard(s.handleDeleteAPIRouterKey)))
 	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/keys/{keyId}/status", s.rateLimit(20, min, s.adminGuard(s.handleSetAPIRouterKeyStatus)))
 	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/keys/{keyId}/test", s.rateLimit(20, min, s.adminGuard(s.handleTestAPIRouterKey)))
+	// Proxy real (uso de verdade da API, não só teste de chave): repassa
+	// method/path/body pro provider com rotação automática, devolve a
+	// resposta tal como veio. Sem streaming.
+	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/proxy", s.rateLimit(20, min, s.adminGuard(s.handleAPIRouterProxy)))
 
 	// Gestão admin de cargos personalizados
 	mux.HandleFunc("GET /auth/admin/custom-roles", s.adminGuard(s.handleListCustomRoles))
