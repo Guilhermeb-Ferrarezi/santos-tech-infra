@@ -69,6 +69,11 @@ func main() {
 	}
 	state := NewStateManager()
 	hub := NewHub()
+	if counts, err := es.KeywordStats(context.Background()); err != nil {
+		slog.Error("falha ao carregar ranking de keywords do Elasticsearch (segue com ranking zerado)", "err", err)
+	} else {
+		hub.SeedKeywordCounts(counts)
+	}
 	dotfy := NewDotfyVerifier()
 	verifiers := NewGenericVerifier()
 	crawler := NewCrawler(gh, es, state, hub, dotfy, verifiers)

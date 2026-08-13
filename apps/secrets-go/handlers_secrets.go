@@ -306,11 +306,13 @@ func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {
 	s.crawler.Stop()
 	_ = s.es.ClearIndex(r.Context())
 	_ = s.es.EnsureIndex(r.Context())
+	s.hub.ResetKeywordCounts() // senão o ranking ficaria com números de hits que não existem mais
 	st := s.state.Update(func(st *StateData) {
 		st.Processed = nil
 		st.TotalHits = 0
 		st.LastError = ""
 	})
 	s.hub.Broadcast(Event{Type: "status", Data: st})
+	s.hub.Broadcast(Event{Type: "stats", Data: map[string]int{}})
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": true})
 }
