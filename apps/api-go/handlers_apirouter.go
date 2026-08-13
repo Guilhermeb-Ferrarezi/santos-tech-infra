@@ -41,9 +41,19 @@ func apiRouterProviderJSON(p *db.ApiRouterProvider, counts map[string]int64) map
 		"id": p.ID, "name": p.Name, "baseUrl": p.BaseUrl,
 		"authHeader": p.AuthHeader, "authScheme": p.AuthScheme,
 		"unauthorizedCodes": p.UnauthorizedCodes, "noCreditCodes": p.NoCreditCodes,
-		"testPath": p.TestPath, "testMethod": p.TestMethod, "chatAdapter": p.ChatAdapter, "chatPath": p.ChatPath, "chatModel": p.ChatModel, "opAdapter": p.OpAdapter, "capabilities": apiRouterOpCapabilities[p.OpAdapter], "keyCounts": counts,
+		"testPath": p.TestPath, "testMethod": p.TestMethod, "chatAdapter": p.ChatAdapter, "chatPath": p.ChatPath, "chatModel": p.ChatModel, "opAdapter": p.OpAdapter, "capabilities": opCapabilitiesJSON(p.OpAdapter), "keyCounts": counts,
 		"createdAt": p.CreatedAt.Time, "updatedAt": p.UpdatedAt.Time,
 	}
+}
+
+// opCapabilitiesJSON devolve as operações suportadas pelo adapter do provider.
+// Garante slice não-nulo (JSON `[]` em vez de `null`) para providers sem adapter
+// de operações — a UI faz `.length`/`.map` direto em capabilities.
+func opCapabilitiesJSON(opAdapter string) []string {
+	if caps := apiRouterOpCapabilities[opAdapter]; caps != nil {
+		return caps
+	}
+	return []string{}
 }
 
 // apiRouterKeyJSON monta o JSON público da chave. O segredo é decifrado aqui
