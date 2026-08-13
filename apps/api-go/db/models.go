@@ -45,6 +45,7 @@ type ApiRouterProvider struct {
 	NoCreditCodes     []int32
 	TestPath          string
 	TestMethod        string
+	ChatAdapter       string
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
 }

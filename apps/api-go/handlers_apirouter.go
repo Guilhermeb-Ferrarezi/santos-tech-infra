@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/santos-tech/auth/db"
 )
@@ -37,14 +38,22 @@ func apiRouterProviderJSON(p *db.ApiRouterProvider, counts map[string]int64) map
 		"id": p.ID, "name": p.Name, "baseUrl": p.BaseUrl,
 		"authHeader": p.AuthHeader, "authScheme": p.AuthScheme,
 		"unauthorizedCodes": p.UnauthorizedCodes, "noCreditCodes": p.NoCreditCodes,
-		"testPath": p.TestPath, "testMethod": p.TestMethod, "keyCounts": counts,
+		"testPath": p.TestPath, "testMethod": p.TestMethod, "chatAdapter": p.ChatAdapter, "keyCounts": counts,
 		"createdAt": p.CreatedAt.Time, "updatedAt": p.UpdatedAt.Time,
 	}
 }
 
-func apiRouterKeyJSON(k *db.ApiRouterKey) map[string]any {
+// apiRouterKeyJSON monta o JSON público da chave. O segredo é decifrado aqui
+// (rota admin-only): é o único ponto em que o valor cru deixa o banco. Se a
+// decifragem falhar, `secret` vem vazio.
+func (s *Server) apiRouterKeyJSON(k *db.ApiRouterKey) map[string]any {
+	secret, err := s.vault.Decrypt(k.SecretEnc)
+	if err != nil {
+		secret = ""
+	}
 	m := map[string]any{
 		"id": k.ID, "providerId": k.ProviderID, "label": k.Label, "secretTail": k.SecretTail,
+		"secret": secret,
 		"status": k.Status, "priority": k.Priority, "failureCount": k.FailureCount,
 		"createdAt": k.CreatedAt.Time, "updatedAt": k.UpdatedAt.Time,
 		"lastUsedAt": nil, "lastErrorAt": nil, "lastErrorCode": nil,
@@ -101,10 +110,11 @@ type apiRouterProviderBody struct {
 	NoCreditCodes     []int32 `json:"noCreditCodes"`
 	TestPath          string  `json:"testPath"`
 	TestMethod        string  `json:"testMethod"`
+	ChatAdapter       string  `json:"chatAdapter"`
 }
 
 // defaults aplica os valores padrão do provider quando o campo vier vazio do
-// cliente (auth_header/unauthorized_codes/no_credit_codes/test_method).
+// cliente (auth_header/unauthorized_codes/no_credit_codes/test_method/chatAdapter).
 func (b apiRouterProviderBody) defaults() apiRouterProviderBody {
 	if b.AuthHeader == "" {
 		b.AuthHeader = "Authorization"
@@ -117,6 +127,9 @@ func (b apiRouterProviderBody) defaults() apiRouterProviderBody {
 	}
 	if b.TestMethod == "" {
 		b.TestMethod = http.MethodGet
+	}
+	if b.ChatAdapter == "" {
+		b.ChatAdapter = chatAdapterOpenAICompatible
 	}
 	return b
 }
@@ -136,12 +149,16 @@ func (s *Server) handleCreateAPIRouterProvider(w http.ResponseWriter, r *http.Re
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "name e baseUrl são obrigatórios"))
 		return
 	}
+	if body.ChatAdapter != "" && !validChatAdapters[body.ChatAdapter] {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "chatAdapter inválido"))
+		return
+	}
 	body = body.defaults()
 
 	p, err := s.q.InsertAPIRouterProvider(r.Context(), db.InsertAPIRouterProviderParams{
 		Name: body.Name, BaseUrl: body.BaseURL, AuthHeader: body.AuthHeader, AuthScheme: body.AuthScheme,
 		UnauthorizedCodes: body.UnauthorizedCodes, NoCreditCodes: body.NoCreditCodes,
-		TestPath: body.TestPath, TestMethod: body.TestMethod,
+		TestPath: body.TestPath, TestMethod: body.TestMethod, ChatAdapter: body.ChatAdapter,
 	})
 	if err != nil {
 		writeErr(w, appErr(http.StatusConflict, "CONFLICT", "já existe um provider com esse nome"))
@@ -170,12 +187,16 @@ func (s *Server) handleUpdateAPIRouterProvider(w http.ResponseWriter, r *http.Re
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "name e baseUrl são obrigatórios"))
 		return
 	}
+	if body.ChatAdapter != "" && !validChatAdapters[body.ChatAdapter] {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "chatAdapter inválido"))
+		return
+	}
 	body = body.defaults()
 
 	p, err := s.q.UpdateAPIRouterProvider(r.Context(), db.UpdateAPIRouterProviderParams{
 		ID: id, Name: body.Name, BaseUrl: body.BaseURL, AuthHeader: body.AuthHeader, AuthScheme: body.AuthScheme,
 		UnauthorizedCodes: body.UnauthorizedCodes, NoCreditCodes: body.NoCreditCodes,
-		TestPath: body.TestPath, TestMethod: body.TestMethod,
+		TestPath: body.TestPath, TestMethod: body.TestMethod, ChatAdapter: body.ChatAdapter,
 	})
 	if err != nil {
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "provider não encontrado"))
@@ -228,7 +249,7 @@ func (s *Server) handleListAPIRouterKeys(w http.ResponseWriter, r *http.Request)
 	}
 	out := make([]map[string]any, 0, len(keys))
 	for _, k := range keys {
-		out = append(out, apiRouterKeyJSON(&k))
+		out = append(out, s.apiRouterKeyJSON(&k))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 }
@@ -280,7 +301,7 @@ func (s *Server) handleCreateAPIRouterKey(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"key": apiRouterKeyJSON(&k)})
+	writeJSON(w, http.StatusCreated, map[string]any{"key": s.apiRouterKeyJSON(&k)})
 }
 
 // PATCH /auth/admin/api-router/providers/{id}/keys/{keyId}
@@ -314,7 +335,7 @@ func (s *Server) handleUpdateAPIRouterKey(w http.ResponseWriter, r *http.Request
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "chave não encontrada"))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"key": apiRouterKeyJSON(&k)})
+	writeJSON(w, http.StatusOK, map[string]any{"key": s.apiRouterKeyJSON(&k)})
 }
 
 // DELETE /auth/admin/api-router/providers/{id}/keys/{keyId}
@@ -366,7 +387,7 @@ func (s *Server) handleSetAPIRouterKeyStatus(w http.ResponseWriter, r *http.Requ
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "chave não encontrada"))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"key": apiRouterKeyJSON(&k)})
+	writeJSON(w, http.StatusOK, map[string]any{"key": s.apiRouterKeyJSON(&k)})
 }
 
 // POST /auth/admin/api-router/providers/{id}/keys/{keyId}/test — dispara uma
@@ -475,4 +496,72 @@ func (s *Server) handleAPIRouterProxy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Api-Router-Key", outcome.KeyLabel)
 	w.WriteHeader(outcome.StatusCode)
 	_, _ = w.Write(outcome.Body)
+}
+
+type apiRouterChatBody struct {
+	Prompt string `json:"prompt"`
+	Model  string `json:"model"`
+}
+
+const apiRouterMaxPromptLen = 1 << 18 // 256KB de prompt é generoso o bastante
+
+// POST /auth/admin/api-router/providers/{id}/chat — versão NORMALIZADA do
+// proxy: recebe {prompt, model?}, monta a requisição no formato nativo do
+// provider via provider.chatAdapter, executa com rotação automática de
+// chave, e devolve só o texto extraído da resposta — sem o admin precisar
+// saber o formato de request/response de cada API.
+func (s *Server) handleAPIRouterChat(w http.ResponseWriter, r *http.Request) {
+	if s.apiRouterNotConfigured(w) {
+		return
+	}
+	providerID, err := apiRouterPathID(r, "id")
+	if err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_ID", "id inválido"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, apiRouterMaxPromptLen)
+	var body apiRouterChatBody
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "corpo inválido"))
+		return
+	}
+	if strings.TrimSpace(body.Prompt) == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "prompt é obrigatório"))
+		return
+	}
+
+	provider, err := s.q.GetAPIRouterProvider(r.Context(), providerID)
+	if err != nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "provider não encontrado"))
+		return
+	}
+
+	path, reqBody, headers, err := buildChatRequest(provider.ChatAdapter, body.Model, body.Prompt)
+	if err != nil {
+		writeErr(w, appErr(http.StatusInternalServerError, "ADAPTER_ERROR", "falha ao montar a requisição"))
+		return
+	}
+
+	outcome, err := s.executeAPIRouterRequest(r.Context(), provider, http.MethodPost, path, reqBody, headers)
+	if err != nil {
+		switch {
+		case errors.Is(err, errAPIRouterNoActiveKeys):
+			writeErr(w, appErr(http.StatusServiceUnavailable, "NO_ACTIVE_KEYS", "provider sem chaves ativas"))
+		case errors.Is(err, errAPIRouterAllKeysExhausted):
+			writeErr(w, appErr(http.StatusBadGateway, "ALL_KEYS_EXHAUSTED", "todas as chaves do provider falharam (401/sem créditos)"))
+		default:
+			writeErr(w, appErr(http.StatusBadGateway, "CHAT_FAILED", "falha ao chamar o provider"))
+		}
+		return
+	}
+
+	text, err := parseChatResponse(provider.ChatAdapter, outcome.Body)
+	if err != nil {
+		// A chave funcionou (rotação já achou uma ativa) mas o provider recusou
+		// a requisição em si (ex.: modelo inexistente) — 422, não 502/500.
+		writeErr(w, appErr(http.StatusUnprocessableEntity, "PROVIDER_ERROR", err.Error()))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"text": text, "keyUsed": outcome.KeyLabel})
 }

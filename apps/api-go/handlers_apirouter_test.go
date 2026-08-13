@@ -199,3 +199,44 @@ func TestHandleAPIRouterProxyValidation(t *testing.T) {
 		t.Fatalf("sem path: code=%d body=%s", w3.Code, w3.Body.String())
 	}
 }
+
+func TestHandleAPIRouterChatValidation(t *testing.T) {
+	s := apiRouterTestServer()
+
+	// id inválido → 400
+	r := httptest.NewRequest("POST", "/x", strings.NewReader(`{"prompt":"oi"}`))
+	r.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	s.handleAPIRouterChat(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("id inválido: code=%d", w.Code)
+	}
+
+	// corpo inválido → 400
+	r2 := httptest.NewRequest("POST", "/x", strings.NewReader("xxx"))
+	r2.SetPathValue("id", "1")
+	w2 := httptest.NewRecorder()
+	s.handleAPIRouterChat(w2, r2)
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("corpo inválido: code=%d", w2.Code)
+	}
+
+	// prompt vazio (só espaço) → 400, nem chega a buscar o provider
+	r3 := httptest.NewRequest("POST", "/x", strings.NewReader(`{"prompt":"   "}`))
+	r3.SetPathValue("id", "1")
+	w3 := httptest.NewRecorder()
+	s.handleAPIRouterChat(w3, r3)
+	if w3.Code != http.StatusBadRequest {
+		t.Fatalf("prompt vazio: code=%d body=%s", w3.Code, w3.Body.String())
+	}
+}
+
+func TestHandleCreateAPIRouterProviderChatAdapterInvalido(t *testing.T) {
+	s := apiRouterTestServer()
+	r := httptest.NewRequest("POST", "/x", strings.NewReader(`{"name":"X","baseUrl":"https://x.com","chatAdapter":"nao-existe"}`))
+	w := httptest.NewRecorder()
+	s.handleCreateAPIRouterProvider(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("chatAdapter inválido: code=%d body=%s", w.Code, w.Body.String())
+	}
+}

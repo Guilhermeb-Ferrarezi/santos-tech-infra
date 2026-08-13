@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS api_router_providers (
   no_credit_codes    INTEGER[] NOT NULL DEFAULT ARRAY[402, 429],
   test_path          TEXT NOT NULL DEFAULT '',
   test_method        TEXT NOT NULL DEFAULT 'GET',
+  chat_adapter       TEXT NOT NULL DEFAULT 'openai_compatible',
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );

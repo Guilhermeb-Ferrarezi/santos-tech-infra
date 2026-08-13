@@ -1761,7 +1761,7 @@ paths:
     get:
       tags: [Admin]
       summary: Listar as chaves de um provider
-      description: Nunca inclui o segredo cru — só `secretTail` (últimos 4 caracteres).
+      description: Rota admin-only. Devolve o segredo decifrado de cada chave (em `secret`).
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
@@ -2032,6 +2032,74 @@ paths:
               example: { code: NOT_FOUND, message: "provider não encontrado" }
         "502":
           description: Todas as chaves ativas falharam, ou falha ao montar/enviar a requisição
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: ALL_KEYS_EXHAUSTED, message: "todas as chaves do provider falharam (401/sem créditos)" }
+        "503":
+          description: "API_VAULT_SECRET não configurada, ou provider sem nenhuma chave ativa"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NO_ACTIVE_KEYS, message: "provider sem chaves ativas" }
+
+  /auth/admin/api-router/providers/{id}/chat:
+    post:
+      tags: [Admin]
+      summary: Chat normalizado — envia um prompt e recebe só o texto de resposta
+      description: |
+        Versão normalizada do `/proxy`: monta a requisição no formato nativo
+        do provider a partir de `provider.chatAdapter`
+        (`openai_compatible`/`anthropic`/`google`) e devolve só o texto
+        extraído da resposta — o chamador não precisa saber o formato de
+        request/response de cada API. `model` é opcional; cada adapter tem
+        um default razoável.
+
+        Rotação automática de chave (mesmo mecanismo do `/proxy`/`/test`).
+        Sem streaming.
+
+        Rate limit: **10 req/min por IP**.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt: { type: string, example: "Explique o que é rotação de chaves de API em 1 frase." }
+                model: { type: string, description: "Opcional — default depende do adapter (ex.: gpt-4o-mini, claude-sonnet-4-5, gemini-2.5-flash)." }
+              required: [prompt]
+      responses:
+        "200":
+          description: Resposta normalizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  text: { type: string, description: "Texto extraído da resposta do provider." }
+                  keyUsed: { type: string, description: "Rótulo da chave que respondeu." }
+                required: [text, keyUsed]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Provider não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "provider não encontrado" }
+        "422":
+          description: "A chave funcionou, mas o provider recusou a requisição (ex.: modelo inexistente) — ver o `message` para o motivo nativo do provider."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: PROVIDER_ERROR, message: "model: the model `gpt-99` does not exist" }
+        "502":
+          description: Todas as chaves ativas falharam
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -3432,6 +3500,7 @@ components:
         noCreditCodes: { type: array, items: { type: integer }, default: [402, 429], description: "Códigos que fazem o roteador marcar a chave no_credits e tentar a próxima." }
         testPath: { type: string, description: "Path usado pelo botão \"testar chave\"; vazio = raiz da baseUrl." }
         testMethod: { type: string, default: GET }
+        chatAdapter: { type: string, enum: [openai_compatible, anthropic, google], default: openai_compatible, description: "Formato usado por POST .../chat pra montar a requisição nativa. openai_compatible cobre OpenAI, Mistral, DeepSeek, xAI/Grok." }
       required: [name, baseUrl]
     APIRouterProvider:
       allOf:
@@ -3452,12 +3521,13 @@ components:
       required: [label, secret]
     APIRouterKey:
       type: object
-      description: "Nunca inclui o segredo — só secretTail (últimos 4 caracteres) para reconhecimento visual."
+      description: "Inclui o segredo decifrado (rota admin-only) — é o único ponto em que o valor cru sai do banco. `secret` vem vazio se a decifragem falhar."
       properties:
         id: { type: integer }
         providerId: { type: integer }
         label: { type: string }
         secretTail: { type: string, example: "7890" }
+        secret: { type: string, description: "Valor real da chave, decifrado do AES-256-GCM.", example: "sk-1234567890abcdef7890" }
         status: { type: string, enum: [active, unauthorized, no_credits, disabled] }
         priority: { type: integer }
         failureCount: { type: integer }

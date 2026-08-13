@@ -79,6 +79,10 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// method/path/body pro provider com rotação automática, devolve a
 	// resposta tal como veio. Sem streaming.
 	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/proxy", s.rateLimit(20, min, s.adminGuard(s.handleAPIRouterProxy)))
+	// Chat normalizado: mesma ideia do /proxy, mas monta a requisição nativa via
+	// provider.chatAdapter (openai_compatible/anthropic/google) e devolve só o
+	// texto — pro admin não precisar saber o formato de cada API.
+	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/chat", s.rateLimit(10, min, s.adminGuard(s.handleAPIRouterChat)))
 
 	// Gestão admin de cargos personalizados
 	mux.HandleFunc("GET /auth/admin/custom-roles", s.adminGuard(s.handleListCustomRoles))

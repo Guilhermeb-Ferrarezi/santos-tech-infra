@@ -184,9 +184,10 @@ abaixo responde 503 `NOT_CONFIGURED`.
 - `DELETE /auth/admin/api-router/providers/{id}` → 204 | 404 (**exige sudo**;
   apaga as chaves em cascata)
 - `GET /auth/admin/api-router/providers/{id}/keys` → `{keys:[{id,providerId,label,
-  secretTail,status,priority,failureCount,lastUsedAt?,lastErrorAt?,
-  lastErrorCode?,createdAt,updatedAt}]}` — `secretTail` = últimos 4 chars; o
-  segredo cru nunca é reexibido
+  secretTail,secret,status,priority,failureCount,lastUsedAt?,lastErrorAt?,
+  lastErrorCode?,createdAt,updatedAt}]}` — `secret` = segredo decifrado (rota
+  admin-only; o único ponto em que o valor cru sai do banco; vazio se a
+  decifragem falhar); `secretTail` = últimos 4 chars
 - `POST /auth/admin/api-router/providers/{id}/keys {label,secret,priority?}` →
   201 | 400 | 404 (**exige sudo**, mesmo critério de `POST /auth/api-keys`)
   (rate 10/min)
@@ -209,6 +210,15 @@ abaixo responde 503 `NOT_CONFIGURED`.
   POST. Sem streaming (SSE) — lê a resposta inteira antes de devolver. →
   200 (passthrough) | 400 | 404 | 502 `ALL_KEYS_EXHAUSTED`/`PROXY_FAILED` |
   503 `NO_ACTIVE_KEYS`/`NOT_CONFIGURED` (rate 20/min)
+- `POST /auth/admin/api-router/providers/{id}/chat {prompt,model?}` — versão
+  NORMALIZADA do `/proxy`: monta a requisição no formato nativo do provider via
+  `provider.chatAdapter` (`openai_compatible` cobre OpenAI/Mistral/DeepSeek/
+  xAI/Grok; `anthropic` e `google` têm adapter próprio) e devolve só o texto —
+  o chamador não precisa saber o formato de request/response de cada API.
+  `model` opcional (cada adapter tem default). Rotação automática de chave,
+  sem streaming. → 200 `{text,keyUsed}` | 400 | 404 | 422 `PROVIDER_ERROR`
+  (chave ok, mas o provider recusou a requisição — ex. modelo inexistente) |
+  502 `ALL_KEYS_EXHAUSTED` | 503 `NO_ACTIVE_KEYS`/`NOT_CONFIGURED` (rate 10/min)
 
 ### Sync automático com o scanner de secrets vazados (secrets-go)
 O api-go importa periodicamente (padrão `1h`, via `SECRETS_SYNC_INTERVAL`) os hits
