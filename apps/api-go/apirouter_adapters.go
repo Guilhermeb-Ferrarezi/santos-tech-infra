@@ -76,7 +76,7 @@ func buildChatRequest(adapter, model, prompt string) (path string, body []byte, 
 
 	case chatAdapterCohere:
 		if model == "" {
-			model = "command-r-plus"
+			model = "command-a-03-2025"
 		}
 		body, err = json.Marshal(map[string]any{
 			"model":    model,
@@ -180,11 +180,8 @@ func parseChatResponse(adapter string, raw []byte) (string, error) {
 
 	case chatAdapterCohere:
 		var resp struct {
-			Message *struct {
-				Role    string `json:"role"`
-				Content any    `json:"content"`
-			} `json:"message"`
-			Error *struct {
+			Message any `json:"message"`
+			Error   *struct {
 				Message string `json:"message"`
 			} `json:"error"`
 		}
@@ -194,11 +191,21 @@ func parseChatResponse(adapter string, raw []byte) (string, error) {
 		if resp.Error != nil {
 			return "", fmt.Errorf("cohere: %s", resp.Error.Message)
 		}
-		if resp.Message == nil {
+		// Cohere v2 devolve erros com "message" como string no topo
+		// (ex.: modelo removido) — repassa como erro, não tenta parsear.
+		if msg, ok := resp.Message.(string); ok {
+			return "", fmt.Errorf("cohere: %s", msg)
+		}
+		obj, ok := resp.Message.(map[string]any)
+		if !ok {
 			return "", fmt.Errorf("apirouter: resposta cohere sem message")
 		}
+		content, ok := obj["content"]
+		if !ok {
+			return "", fmt.Errorf("apirouter: resposta cohere sem content")
+		}
 		// v2 devolve content como array de partes {type, text} ou string.
-		switch c := resp.Message.Content.(type) {
+		switch c := content.(type) {
 		case string:
 			return c, nil
 		case []any:

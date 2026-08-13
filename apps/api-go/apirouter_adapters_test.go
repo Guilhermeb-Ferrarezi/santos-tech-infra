@@ -95,7 +95,7 @@ func TestBuildChatRequestCohere(t *testing.T) {
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatalf("body inválido: %v", err)
 	}
-	if decoded["model"] != "command-r-plus" {
+	if decoded["model"] != "command-a-03-2025" {
 		t.Errorf("model default = %v", decoded["model"])
 	}
 	if decoded["messages"] == nil {
@@ -175,6 +175,14 @@ func TestParseChatResponseCohereErro(t *testing.T) {
 	raw := []byte(`{"error":{"message":"invalid api key"}}`)
 	if _, err := parseChatResponse(chatAdapterCohere, raw); err == nil {
 		t.Fatal("esperava erro quando o provider devolve {error:...}")
+	}
+}
+
+func TestParseChatResponseCohereMessageString(t *testing.T) {
+	raw := []byte(`{"id":"abc","message":"model 'command-r-plus' was removed"}`)
+	_, err := parseChatResponse(chatAdapterCohere, raw)
+	if err == nil {
+		t.Fatal("esperava erro quando o provider devolve message como string")
 	}
 }
 

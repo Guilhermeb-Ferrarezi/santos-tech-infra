@@ -313,7 +313,7 @@ var syncProviderCatalog = map[string]syncProviderDefaults{
 	"anthropic":  func() syncProviderDefaults { d := customHeaderDefaults("Anthropic", "https://api.anthropic.com", "x-api-key", "", "/v1/models"); d.ChatAdapter = chatAdapterAnthropic; d.ChatPath = "/v1/messages"; d.ChatModel = "claude-sonnet-4-5"; return d }(),
 	"groq":       func() syncProviderDefaults { d := bearerDefaults("Groq", "https://api.groq.com", "/openai/v1/models"); d.ChatPath = "/openai/v1/chat/completions"; d.ChatModel = "llama-3.3-70b-versatile"; return d }(),
 	"mistral":    func() syncProviderDefaults { d := bearerDefaults("Mistral", "https://api.mistral.ai", "/v1/models"); d.ChatModel = "mistral-large-latest"; return d }(),
-	"cohere":     func() syncProviderDefaults { d := bearerDefaults("Cohere", "https://api.cohere.com", "/v1/models"); d.ChatAdapter = chatAdapterCohere; d.ChatPath = "/v2/chat"; d.ChatModel = "command-r-plus"; return d }(),
+	"cohere":     func() syncProviderDefaults { d := bearerDefaults("Cohere", "https://api.cohere.com", "/v1/models"); d.ChatAdapter = chatAdapterCohere; d.ChatPath = "/v2/chat"; d.ChatModel = "command-a-03-2025"; return d }(),
 	"deepseek":   func() syncProviderDefaults { d := bearerDefaults("DeepSeek", "https://api.deepseek.com", "/user/balance"); d.ChatModel = "deepseek-chat"; return d }(),
 	"openrouter": func() syncProviderDefaults { d := bearerDefaults("OpenRouter", "https://openrouter.ai", "/api/v1/auth/key"); d.ChatPath = "/api/v1/chat/completions"; d.ChatModel = "openai/gpt-4o-mini"; return d }(),
 	"together":   func() syncProviderDefaults { d := bearerDefaults("Together AI", "https://api.together.xyz", "/v1/models"); d.ChatModel = "meta-llama/Llama-3.3-70B-Instruct-Turbo"; return d }(),
