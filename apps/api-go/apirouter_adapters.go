@@ -4,8 +4,8 @@ package main
 // de cada família de provider a partir de um prompt normalizado, e extrair o
 // texto da resposta nativa de volta. "openai_compatible" cobre a maioria dos
 // provedores famosos (OpenAI, Mistral, DeepSeek, xAI/Grok — todos falam o
-// dialeto /v1/chat/completions da OpenAI); Anthropic e Google Gemini têm
-// formato de request/response próprio.
+// dialeto /v1/chat/completions da OpenAI); Anthropic, Google Gemini e Cohere
+// têm formato de request/response próprio.
 
 import (
 	"encoding/json"
@@ -17,6 +17,7 @@ const (
 	chatAdapterOpenAICompatible = "openai_compatible"
 	chatAdapterAnthropic        = "anthropic"
 	chatAdapterGoogle           = "google"
+	chatAdapterCohere           = "cohere"
 )
 
 // validChatAdapters é a allowlist aceita em provider.chatAdapter (create/update).
@@ -24,6 +25,7 @@ var validChatAdapters = map[string]bool{
 	chatAdapterOpenAICompatible: true,
 	chatAdapterAnthropic:        true,
 	chatAdapterGoogle:           true,
+	chatAdapterCohere:           true,
 }
 
 // buildChatRequest monta path/body/headers no formato nativo do provider a
@@ -71,6 +73,21 @@ func buildChatRequest(adapter, model, prompt string) (path string, body []byte, 
 			return "", nil, nil, fmt.Errorf("apirouter: montar corpo openai-compatible: %w", err)
 		}
 		return "/v1/chat/completions", body, nil, nil
+
+	case chatAdapterCohere:
+		if model == "" {
+			model = "command-r-plus"
+		}
+		body, err = json.Marshal(map[string]any{
+			"model":    model,
+			"messages": []map[string]string{{"role": "user", "content": prompt}},
+		})
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("apirouter: montar corpo cohere: %w", err)
+		}
+		// Cohere v2 é OpenAI-compatible (/v1/chat/completions) — a v1 usava
+		// /v1/chat com formato próprio.
+		return "/v2/chat", body, nil, nil
 
 	default:
 		return "", nil, nil, fmt.Errorf("apirouter: adapter desconhecido %q", adapter)
@@ -152,6 +169,45 @@ func parseChatResponse(adapter string, raw []byte) (string, error) {
 			return "", fmt.Errorf("apirouter: resposta sem choices")
 		}
 		return resp.Choices[0].Message.Content, nil
+
+	case chatAdapterCohere:
+		var resp struct {
+			Message *struct {
+				Role    string `json:"role"`
+				Content any    `json:"content"`
+			} `json:"message"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return "", fmt.Errorf("apirouter: parse cohere: %w", err)
+		}
+		if resp.Error != nil {
+			return "", fmt.Errorf("cohere: %s", resp.Error.Message)
+		}
+		if resp.Message == nil {
+			return "", fmt.Errorf("apirouter: resposta cohere sem message")
+		}
+		// v2 devolve content como array de partes {type, text} ou string.
+		switch c := resp.Message.Content.(type) {
+		case string:
+			return c, nil
+		case []any:
+			var sb strings.Builder
+			for _, p := range c {
+				part, ok := p.(map[string]any)
+				if !ok {
+					continue
+				}
+				if text, ok := part["text"].(string); ok {
+					sb.WriteString(text)
+				}
+			}
+			return sb.String(), nil
+		default:
+			return "", fmt.Errorf("apirouter: formato de content cohere inesperado")
+		}
 
 	default:
 		return "", fmt.Errorf("apirouter: adapter desconhecido %q", adapter)

@@ -40,6 +40,27 @@ func TestSyncProviderDefaults(t *testing.T) {
 		t.Errorf("anthropic: %+v", d2)
 	}
 
+	// todo provider de IA do catálogo tem adapter de chat mapeado; famílias
+	// não-chat não precisam, mas o openai_compatible default não pode estar vazio
+	for _, fam := range []string{"openai", "groq", "mistral", "deepseek", "openrouter", "together", "fireworks", "xai", "cohere"} {
+		d, ok := syncProviderDefaultsFor(fam)
+		if !ok {
+			t.Fatalf("syncProviderDefaultsFor(%q) deveria existir", fam)
+		}
+		if d.ChatAdapter == "" {
+			t.Errorf("%s: chatAdapter vazio", fam)
+		}
+	}
+	if d, _ := syncProviderDefaultsFor("anthropic"); d.ChatAdapter != chatAdapterAnthropic {
+		t.Errorf("anthropic chatAdapter = %q, queria %q", d.ChatAdapter, chatAdapterAnthropic)
+	}
+	if d, _ := syncProviderDefaultsFor("cohere"); d.ChatAdapter != chatAdapterCohere {
+		t.Errorf("cohere chatAdapter = %q, queria %q", d.ChatAdapter, chatAdapterCohere)
+	}
+	if d, _ := syncProviderDefaultsFor("openai"); d.ChatAdapter != chatAdapterOpenAICompatible {
+		t.Errorf("openai chatAdapter = %q, queria %q", d.ChatAdapter, chatAdapterOpenAICompatible)
+	}
+
 	// Discord usa prefixo "Bot", não "Bearer"
 	d3, _ := syncProviderDefaultsFor("discord")
 	if d3.AuthScheme != "Bot" {

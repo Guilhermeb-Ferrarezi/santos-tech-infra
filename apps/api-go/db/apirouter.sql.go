@@ -397,6 +397,37 @@ func (q *Queries) SetAPIRouterKeyStatus(ctx context.Context, arg SetAPIRouterKey
 	return i, err
 }
 
+const setAPIRouterProviderChatAdapter = `-- name: SetAPIRouterProviderChatAdapter :one
+UPDATE api_router_providers SET chat_adapter = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, created_at, updated_at
+`
+
+type SetAPIRouterProviderChatAdapterParams struct {
+	ID          int64
+	ChatAdapter string
+}
+
+func (q *Queries) SetAPIRouterProviderChatAdapter(ctx context.Context, arg SetAPIRouterProviderChatAdapterParams) (ApiRouterProvider, error) {
+	row := q.db.QueryRow(ctx, setAPIRouterProviderChatAdapter, arg.ID, arg.ChatAdapter)
+	var i ApiRouterProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.BaseUrl,
+		&i.AuthHeader,
+		&i.AuthScheme,
+		&i.UnauthorizedCodes,
+		&i.NoCreditCodes,
+		&i.TestPath,
+		&i.TestMethod,
+		&i.ChatAdapter,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateAPIRouterKeyMeta = `-- name: UpdateAPIRouterKeyMeta :one
 UPDATE api_router_keys SET label = $3, priority = $4, updated_at = now()
 WHERE id = $1 AND provider_id = $2

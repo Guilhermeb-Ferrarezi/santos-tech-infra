@@ -2050,8 +2050,8 @@ paths:
       description: |
         Versão normalizada do `/proxy`: monta a requisição no formato nativo
         do provider a partir de `provider.chatAdapter`
-        (`openai_compatible`/`anthropic`/`google`) e devolve só o texto
-        extraído da resposta — o chamador não precisa saber o formato de
+        (`openai_compatible`/`anthropic`/`google`/`cohere`) e devolve só o
+        texto extraído da resposta — o chamador não precisa saber o formato de
         request/response de cada API. `model` é opcional; cada adapter tem
         um default razoável.
 
@@ -3500,7 +3500,7 @@ components:
         noCreditCodes: { type: array, items: { type: integer }, default: [402, 429], description: "Códigos que fazem o roteador marcar a chave no_credits e tentar a próxima." }
         testPath: { type: string, description: "Path usado pelo botão \"testar chave\"; vazio = raiz da baseUrl." }
         testMethod: { type: string, default: GET }
-        chatAdapter: { type: string, enum: [openai_compatible, anthropic, google], default: openai_compatible, description: "Formato usado por POST .../chat pra montar a requisição nativa. openai_compatible cobre OpenAI, Mistral, DeepSeek, xAI/Grok." }
+        chatAdapter: { type: string, enum: [openai_compatible, anthropic, google, cohere], default: openai_compatible, description: "Formato usado por POST .../chat pra montar a requisição nativa. openai_compatible cobre OpenAI, Mistral, DeepSeek, xAI/Grok." }
       required: [name, baseUrl]
     APIRouterProvider:
       allOf:

@@ -83,6 +83,26 @@ func TestBuildChatRequestGoogle(t *testing.T) {
 	}
 }
 
+func TestBuildChatRequestCohere(t *testing.T) {
+	path, body, _, err := buildChatRequest(chatAdapterCohere, "", "olá")
+	if err != nil {
+		t.Fatalf("buildChatRequest: %v", err)
+	}
+	if path != "/v2/chat" {
+		t.Errorf("path=%q", path)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("body inválido: %v", err)
+	}
+	if decoded["model"] != "command-r-plus" {
+		t.Errorf("model default = %v", decoded["model"])
+	}
+	if decoded["messages"] == nil {
+		t.Error("body cohere sem 'messages'")
+	}
+}
+
 func TestBuildChatRequestAdapterDesconhecido(t *testing.T) {
 	if _, _, _, err := buildChatRequest("nao-existe", "", "oi"); err == nil {
 		t.Fatal("esperava erro pra adapter desconhecido")
@@ -126,6 +146,35 @@ func TestParseChatResponseGoogleConcatenaParts(t *testing.T) {
 	}
 	if text != "oi, tudo bem?" {
 		t.Errorf("text=%q", text)
+	}
+}
+
+func TestParseChatResponseCohereString(t *testing.T) {
+	raw := []byte(`{"message":{"role":"assistant","content":"oi, tudo bem?"}}`)
+	text, err := parseChatResponse(chatAdapterCohere, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "oi, tudo bem?" {
+		t.Errorf("text=%q", text)
+	}
+}
+
+func TestParseChatResponseCoherePartes(t *testing.T) {
+	raw := []byte(`{"message":{"role":"assistant","content":[{"type":"text","text":"oi, "},{"type":"text","text":"tudo bem?"}]}}`)
+	text, err := parseChatResponse(chatAdapterCohere, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "oi, tudo bem?" {
+		t.Errorf("text=%q", text)
+	}
+}
+
+func TestParseChatResponseCohereErro(t *testing.T) {
+	raw := []byte(`{"error":{"message":"invalid api key"}}`)
+	if _, err := parseChatResponse(chatAdapterCohere, raw); err == nil {
+		t.Fatal("esperava erro quando o provider devolve {error:...}")
 	}
 }
 

@@ -21,6 +21,11 @@ UPDATE api_router_providers SET
 WHERE id = $1
 RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, created_at, updated_at;
 
+-- name: SetAPIRouterProviderChatAdapter :one
+UPDATE api_router_providers SET chat_adapter = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, created_at, updated_at;
+
 -- name: DeleteAPIRouterProvider :execrows
 DELETE FROM api_router_providers WHERE id = $1;
 

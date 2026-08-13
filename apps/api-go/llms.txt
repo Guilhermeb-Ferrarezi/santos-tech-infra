@@ -212,8 +212,9 @@ abaixo responde 503 `NOT_CONFIGURED`.
   503 `NO_ACTIVE_KEYS`/`NOT_CONFIGURED` (rate 20/min)
 - `POST /auth/admin/api-router/providers/{id}/chat {prompt,model?}` — versão
   NORMALIZADA do `/proxy`: monta a requisição no formato nativo do provider via
-  `provider.chatAdapter` (`openai_compatible` cobre OpenAI/Mistral/DeepSeek/
-  xAI/Grok; `anthropic` e `google` têm adapter próprio) e devolve só o texto —
+  `provider.chatAdapter` (`openai_compatible` cobre OpenAI/Groq/Mistral/DeepSeek/
+  OpenRouter/Together/xAI/Grok; `anthropic`, `google` e `cohere` têm adapter
+  próprio) e devolve só o texto —
   o chamador não precisa saber o formato de request/response de cada API.
   `model` opcional (cada adapter tem default). Rotação automática de chave,
   sem streaming. → 200 `{text,keyUsed}` | 400 | 404 | 422 `PROVIDER_ERROR`

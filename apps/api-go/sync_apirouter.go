@@ -92,6 +92,7 @@ func (s *Server) syncAPIRouterFromSecrets(ctx context.Context) error {
 				NoCreditCodes:     def.NoCreditCodes,
 				TestPath:          def.TestPath,
 				TestMethod:        def.TestMethod,
+				ChatAdapter:       def.ChatAdapter,
 			})
 			if err != nil {
 				// Corrida entre dois syncs simultâneos (name é UNIQUE): o
@@ -103,6 +104,20 @@ func (s *Server) syncAPIRouterFromSecrets(ctx context.Context) error {
 			provider = p
 			byName[def.Name] = p
 			createdProviders++
+		} else if provider.ChatAdapter != def.ChatAdapter && def.ChatAdapter != "" {
+			// Provider já existia (criado pelo sync antes do mapeamento de
+			// adapters, ou manualmente com o default errado) — corrige o
+			// adapter pra família certa. Só mexe no chat_adapter, não nos
+			// demais campos.
+			p, err := s.q.SetAPIRouterProviderChatAdapter(ctx, db.SetAPIRouterProviderChatAdapterParams{
+				ID: provider.ID, ChatAdapter: def.ChatAdapter,
+			})
+			if err != nil {
+				slog.Warn("sync: falha ao corrigir chat_adapter", "provider", provider.Name, "err", err)
+				continue
+			}
+			provider = p
+			byName[def.Name] = p
 		}
 
 		exists, err := s.apirouterSecretExists(ctx, provider.ID, hit.MatchedValue)
@@ -218,6 +233,7 @@ type syncProviderDefaults struct {
 	NoCreditCodes     []int32
 	TestPath          string
 	TestMethod        string
+	ChatAdapter       string
 }
 
 func syncProviderDefaultsFor(family string) (syncProviderDefaults, bool) {
@@ -234,6 +250,7 @@ func bearerDefaults(name, baseURL, testPath string) syncProviderDefaults {
 		NoCreditCodes:     []int32{402, 429},
 		TestPath:          testPath,
 		TestMethod:        "GET",
+		ChatAdapter:       chatAdapterOpenAICompatible,
 	}
 }
 
@@ -246,16 +263,17 @@ func customHeaderDefaults(name, baseURL, authHeader, authScheme, testPath string
 		NoCreditCodes:     []int32{402, 429},
 		TestPath:          testPath,
 		TestMethod:        "GET",
+		ChatAdapter:       chatAdapterOpenAICompatible,
 	}
 }
 
 var syncProviderCatalog = map[string]syncProviderDefaults{
 	// IA / LLM (API no formato OpenAI, na maioria)
 	"openai":     bearerDefaults("OpenAI", "https://api.openai.com", "/v1/models"),
-	"anthropic":  customHeaderDefaults("Anthropic", "https://api.anthropic.com", "x-api-key", "", "/v1/models"),
+	"anthropic":  func() syncProviderDefaults { d := customHeaderDefaults("Anthropic", "https://api.anthropic.com", "x-api-key", "", "/v1/models"); d.ChatAdapter = chatAdapterAnthropic; return d }(),
 	"groq":       bearerDefaults("Groq", "https://api.groq.com", "/openai/v1/models"),
 	"mistral":    bearerDefaults("Mistral", "https://api.mistral.ai", "/v1/models"),
-	"cohere":     bearerDefaults("Cohere", "https://api.cohere.ai", "/v1/models"),
+	"cohere":     func() syncProviderDefaults { d := bearerDefaults("Cohere", "https://api.cohere.ai", "/v1/models"); d.ChatAdapter = chatAdapterCohere; return d }(),
 	"deepseek":   bearerDefaults("DeepSeek", "https://api.deepseek.com", "/user/balance"),
 	"openrouter": bearerDefaults("OpenRouter", "https://openrouter.ai", "/api/v1/auth/key"),
 	"together":   bearerDefaults("Together AI", "https://api.together.xyz", "/v1/models"),
