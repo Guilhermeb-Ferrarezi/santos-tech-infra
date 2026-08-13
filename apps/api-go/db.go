@@ -394,6 +394,9 @@ CREATE INDEX IF NOT EXISTS idx_api_router_keys_provider ON api_router_keys(provi
 ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS chat_adapter TEXT NOT NULL DEFAULT 'openai_compatible';
 ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS chat_path    TEXT NOT NULL DEFAULT '';
 ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS chat_model   TEXT NOT NULL DEFAULT '';
+-- Família de adapter das operações normalizadas (/op/{transcribe|tts|image|predict}),
+-- ver apirouter_ops.go. Vazio = provider só suporta chat/proxy.
+ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS op_adapter   TEXT NOT NULL DEFAULT '';
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

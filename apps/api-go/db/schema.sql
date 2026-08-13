@@ -181,6 +181,7 @@ CREATE TABLE IF NOT EXISTS api_router_providers (
   chat_adapter       TEXT NOT NULL DEFAULT 'openai_compatible',
   chat_path          TEXT NOT NULL DEFAULT '',
   chat_model         TEXT NOT NULL DEFAULT '',
+  op_adapter         TEXT NOT NULL DEFAULT '',
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );

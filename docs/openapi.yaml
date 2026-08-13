@@ -2111,7 +2111,106 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
               example: { code: NO_ACTIVE_KEYS, message: "provider sem chaves ativas" }
 
-  # ── payments-go: Extrato (GET /statement) ────────────────────────────────
+  /auth/admin/api-router/providers/{id}/op/{op}:
+    post:
+      tags: [Admin]
+      summary: Operação normalizada (transcribe/tts/image/predict/voices) via provider.opAdapter
+      description: |
+        Executa uma operação específica do provider a partir de um corpo
+        normalizado, usando `provider.opAdapter` para montar a requisição no
+        formato nativo de cada API e devolver só o resultado extraído.
+
+        `op` aceitos (dependem do adapter):
+        - **transcribe** — transcrição de áudio (AssemblyAI/Deepgram/ElevenLabs).
+          Envie `url` (áudio remoto) ou `audioB64`+`audioMime`. AssemblyAI é
+          assíncrono: faz o upload interno e acompanha o job por polling.
+        - **tts** — texto para voz (ElevenLabs). Envie `text` e opcional `voice`
+          (default Rachel) e `model`. Devolve `audioB64`+`contentType`.
+        - **image** — geração de imagem (Stability). Envie `prompt` e opcionais
+          `negativePrompt`, `aspectRatio`, `outputFormat`, `seed`. Devolve
+          `imageB64`.
+        - **predict** — execução de modelo (Replicate). Envie `input` (bruto)
+          ou `prompt`, e opcional `version`. Assíncrono: o job é acompanhado
+          por polling interno (timeout ~90s). Devolve `output`+`status`.
+        - **voices** — lista de vozes (ElevenLabs). Sem corpo.
+
+        Rotação automática de chave. Polling sempre com a MESMA chave que criou
+        o job.
+
+        Rate limit: **10 req/min por IP**.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: op, in: path, required: true, schema: { type: string, enum: [transcribe, tts, image, predict, voices] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: { type: string, description: "URL remota do áudio (transcribe)." }
+                audioB64: { type: string, description: "Áudio em base64 (transcribe)." }
+                audioMime: { type: string, example: "audio/mpeg", description: "MIME do áudio (transcribe)." }
+                text: { type: string, description: "Texto a sintetizar (tts)." }
+                voice: { type: string, description: "voice_id da ElevenLabs (tts)." }
+                model: { type: string, description: "Modelo específico (tts/transcribe), opcional." }
+                prompt: { type: string, description: "Prompt (image/predict)." }
+                negativePrompt: { type: string, description: "Prompt negativo (image)." }
+                aspectRatio: { type: string, example: "16:9", description: "Razão de aspecto (image)." }
+                outputFormat: { type: string, example: "png", description: "Formato de saída (image)." }
+                seed: { type: integer, description: "Seed determinística (image)." }
+                version: { type: string, description: "version do modelo Replicate (predict)." }
+                input: { description: "input bruto do Replicate (predict) — alternativa ao prompt." }
+      responses:
+        "200":
+          description: Resultado normalizado (campos variam por op)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  text: { type: string, description: "transcribe: transcrição." }
+                  confidence: { type: number, description: "transcribe: confiança (quando o provider devolve)." }
+                  language: { type: string, description: "transcribe (AssemblyAI): código do idioma." }
+                  audioDuration: { type: number, description: "transcribe (AssemblyAI): duração em segundos." }
+                  audioB64: { type: string, description: "tts: áudio MP3 em base64." }
+                  contentType: { type: string, description: "tts: MIME do áudio (audio/mpeg)." }
+                  imageB64: { type: string, description: "image: imagem em base64." }
+                  finishReason: { type: string, description: "image (Stability): motivo do término." }
+                  seed: { type: integer, description: "image (Stability): seed usada." }
+                  output: { description: "predict: saída do modelo." }
+                  status: { type: string, description: "predict: status final do job." }
+                  voices: { type: array, items: { type: object, properties: { id: { type: string }, name: { type: string } } }, description: "voices: lista de vozes." }
+                  keyUsed: { type: string, description: "Rótulo da chave que respondeu." }
+                required: [keyUsed]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Provider não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "provider não encontrado" }
+        "422":
+          description: "A chave funcionou, mas o provider recusou a requisição ou o job falhou — ver o `message`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: PROVIDER_ERROR, message: "deepgram: Audio did not contain speech" }
+        "502":
+          description: "Todas as chaves falharam, ou job assíncrono estourou o timeout de ~90s"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: OP_TIMEOUT, message: "tempo esgotado aguardando o job abcd1234" }
+        "503":
+          description: "API_VAULT_SECRET não configurada, ou provider sem nenhuma chave ativa"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NO_ACTIVE_KEYS, message: "provider sem chaves ativas" }
   # Serviço: apps/payments-go · prefixo em produção: /payments (via proxy reverso)
   # TODO: atualizar llms.txt central (api.santos-tech.com/llms.txt) com esta rota.
   /payments/statement:

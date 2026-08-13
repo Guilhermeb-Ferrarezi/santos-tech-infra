@@ -83,6 +83,10 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// provider.chatAdapter (openai_compatible/anthropic/google/cohere) e devolve
 	// só o texto — pro admin não precisar saber o formato de cada API.
 	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/chat", s.rateLimit(10, min, s.adminGuard(s.handleAPIRouterChat)))
+	// Operações normalizadas (transcribe/tts/image/predict/voices): monta o
+	// request nativo via provider.opAdapter e devolve o resultado extraído —
+	// AssemblyAI/Replicate rodam com polling interno do job.
+	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/op/{op}", s.rateLimit(10, min, s.adminGuard(s.handleAPIRouterOp)))
 
 	// Gestão admin de cargos personalizados
 	mux.HandleFunc("GET /auth/admin/custom-roles", s.adminGuard(s.handleListCustomRoles))

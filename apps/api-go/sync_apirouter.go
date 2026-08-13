@@ -95,6 +95,7 @@ func (s *Server) syncAPIRouterFromSecrets(ctx context.Context) error {
 				ChatAdapter:       def.ChatAdapter,
 				ChatPath:          def.ChatPath,
 				ChatModel:         def.ChatModel,
+				OpAdapter:         def.OpAdapter,
 			})
 			if err != nil {
 				// Corrida entre dois syncs simultâneos (name é UNIQUE): o
@@ -181,9 +182,33 @@ func (s *Server) syncAPIRouterFromSecrets(ctx context.Context) error {
 		chatFixed++
 	}
 
+	// Passada de correção do op_adapter: providers que já existiam (criados
+	// antes do mapeamento, ou manualmente) herdam o adapter de operações da
+	// família (transcribe/tts/image/predict). Não mexe nos demais campos.
+	var opFixed int
+	for family, def := range syncProviderCatalog {
+		if def.OpAdapter == "" {
+			continue
+		}
+		provider, ok := byName[def.Name]
+		if !ok {
+			continue
+		}
+		if provider.OpAdapter == def.OpAdapter {
+			continue
+		}
+		p, err := s.q.SetAPIRouterProviderOpAdapter(ctx, db.SetAPIRouterProviderOpAdapterParams{ID: provider.ID, OpAdapter: def.OpAdapter})
+		if err != nil {
+			slog.Warn("sync: falha ao corrigir op_adapter", "provider", provider.Name, "family", family, "err", err)
+			continue
+		}
+		byName[def.Name] = p
+		opFixed++
+	}
+
 	slog.Info("sync do roteador de APIs com secrets-go concluído",
 		"providers", createdProviders, "keys", createdKeys,
-		"dup", skippedDup, "unknownFamily", skippedUnknown, "chatFixed", chatFixed)
+		"dup", skippedDup, "unknownFamily", skippedUnknown, "chatFixed", chatFixed, "opFixed", opFixed)
 	return nil
 }
 
@@ -269,6 +294,7 @@ type syncProviderDefaults struct {
 	ChatAdapter       string
 	ChatPath          string
 	ChatModel         string
+	OpAdapter         string
 }
 
 func syncProviderDefaultsFor(family string) (syncProviderDefaults, bool) {
@@ -319,11 +345,11 @@ var syncProviderCatalog = map[string]syncProviderDefaults{
 	"together":   func() syncProviderDefaults { d := bearerDefaults("Together AI", "https://api.together.xyz", "/v1/models"); d.ChatModel = "meta-llama/Llama-3.3-70B-Instruct-Turbo"; return d }(),
 	"fireworks":  func() syncProviderDefaults { d := bearerDefaults("Fireworks AI", "https://api.fireworks.ai", "/inference/v1/models"); d.ChatPath = "/inference/v1/chat/completions"; d.ChatModel = "accounts/fireworks/models/llama-v3p3-70b-instruct"; return d }(),
 	"xai":        func() syncProviderDefaults { d := bearerDefaults("xAI (Grok)", "https://api.x.ai", "/v1/models"); d.ChatModel = "grok-3-mini"; return d }(),
-	"stability":  bearerDefaults("Stability AI", "https://api.stability.ai", "/v1/user/account"),
-	"deepgram":   customHeaderDefaults("Deepgram", "https://api.deepgram.com", "Authorization", "Token", "/v1/projects"),
-	"assemblyai": customHeaderDefaults("AssemblyAI", "https://api.assemblyai.com", "authorization", "", "/v2/transcript"),
-	"elevenlabs": customHeaderDefaults("ElevenLabs", "https://api.elevenlabs.io", "xi-api-key", "", "/v1/user"),
-	"replicate":  customHeaderDefaults("Replicate", "https://api.replicate.com", "Authorization", "Token", "/v1/account"),
+	"stability":  func() syncProviderDefaults { d := bearerDefaults("Stability AI", "https://api.stability.ai", "/v1/user/account"); d.OpAdapter = opAdapterStability; return d }(),
+	"deepgram":   func() syncProviderDefaults { d := customHeaderDefaults("Deepgram", "https://api.deepgram.com", "Authorization", "Token", "/v1/projects"); d.OpAdapter = opAdapterDeepgram; return d }(),
+	"assemblyai": func() syncProviderDefaults { d := customHeaderDefaults("AssemblyAI", "https://api.assemblyai.com", "authorization", "", "/v2/transcript"); d.OpAdapter = opAdapterAssemblyAI; return d }(),
+	"elevenlabs": func() syncProviderDefaults { d := customHeaderDefaults("ElevenLabs", "https://api.elevenlabs.io", "xi-api-key", "", "/v1/user"); d.OpAdapter = opAdapterElevenLabs; return d }(),
+	"replicate":  func() syncProviderDefaults { d := customHeaderDefaults("Replicate", "https://api.replicate.com", "Authorization", "Token", "/v1/account"); d.OpAdapter = opAdapterReplicate; return d }(),
 
 	// Cloud / Infra
 	"github":       bearerDefaults("GitHub", "https://api.github.com", "/user"),

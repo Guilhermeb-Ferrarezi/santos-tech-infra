@@ -225,6 +225,22 @@ abaixo responde 503 `NOT_CONFIGURED`.
   `PROVIDER_ERROR` (chave ok, mas o provider recusou a requisição — ex. modelo
   inexistente) | 502 `ALL_KEYS_EXHAUSTED` | 503 `NO_ACTIVE_KEYS`/`NOT_CONFIGURED`
   (rate 10/min)
+- `POST /auth/admin/api-router/providers/{id}/op/{op}` — operação NORMALIZADA
+  por provider (transcribe/tts/image/predict/voices), montada via
+  `provider.opAdapter` e com o resultado extraído de volta. `op` aceitos por
+  adapter: **transcribe** = transcrição de áudio (AssemblyAI/Deepgram/ElevenLabs;
+  envie `url` ou `audioB64`+`audioMime`; AssemblyAI faz upload interno e
+  acompanha o job por polling) → `{text, confidence?, language?, audioDuration?}`;
+  **tts** = texto→voz (ElevenLabs; `text` + `voice?` default Rachel + `model?`)
+  → `{audioB64, contentType:"audio/mpeg"}`; **image** = geração (Stability;
+  `prompt` + `negativePrompt?/aspectRatio?/outputFormat?/seed?`) →
+  `{imageB64, finishReason?, seed?}`; **predict** = modelo do Replicate
+  (`input` bruto ou `prompt` + `version?`; assíncrono com polling interno ~90s)
+  → `{output, status}`; **voices** = lista de vozes da ElevenLabs (GET, sem
+  corpo) → `{voices:[{id,name}]}`. Polling sempre com a MESMA chave que criou o
+  job. → 200 `{...resultado, keyUsed}` | 400 `OP_UNSUPPORTED`/`INVALID_BODY` |
+  404 | 422 `PROVIDER_ERROR` | 502 `ALL_KEYS_EXHAUSTED`/`OP_TIMEOUT` |
+  503 `NO_ACTIVE_KEYS`/`NOT_CONFIGURED` (rate 10/min)
 
 ### Sync automático com o scanner de secrets vazados (secrets-go)
 O api-go importa periodicamente (padrão `1h`, via `SECRETS_SYNC_INTERVAL`) os hits

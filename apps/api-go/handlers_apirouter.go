@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/santos-tech/auth/db"
 )
@@ -38,7 +41,7 @@ func apiRouterProviderJSON(p *db.ApiRouterProvider, counts map[string]int64) map
 		"id": p.ID, "name": p.Name, "baseUrl": p.BaseUrl,
 		"authHeader": p.AuthHeader, "authScheme": p.AuthScheme,
 		"unauthorizedCodes": p.UnauthorizedCodes, "noCreditCodes": p.NoCreditCodes,
-		"testPath": p.TestPath, "testMethod": p.TestMethod, "chatAdapter": p.ChatAdapter, "chatPath": p.ChatPath, "chatModel": p.ChatModel, "keyCounts": counts,
+		"testPath": p.TestPath, "testMethod": p.TestMethod, "chatAdapter": p.ChatAdapter, "chatPath": p.ChatPath, "chatModel": p.ChatModel, "opAdapter": p.OpAdapter, "capabilities": apiRouterOpCapabilities[p.OpAdapter], "keyCounts": counts,
 		"createdAt": p.CreatedAt.Time, "updatedAt": p.UpdatedAt.Time,
 	}
 }
@@ -113,6 +116,7 @@ type apiRouterProviderBody struct {
 	ChatAdapter       string  `json:"chatAdapter"`
 	ChatPath          string  `json:"chatPath"`
 	ChatModel         string  `json:"chatModel"`
+	OpAdapter         string  `json:"opAdapter"`
 }
 
 // defaults aplica os valores padrão do provider quando o campo vier vazio do
@@ -155,13 +159,17 @@ func (s *Server) handleCreateAPIRouterProvider(w http.ResponseWriter, r *http.Re
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "chatAdapter inválido"))
 		return
 	}
+	if body.OpAdapter != "" && !validOpAdapters[body.OpAdapter] {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "opAdapter inválido"))
+		return
+	}
 	body = body.defaults()
 
 	p, err := s.q.InsertAPIRouterProvider(r.Context(), db.InsertAPIRouterProviderParams{
 		Name: body.Name, BaseUrl: body.BaseURL, AuthHeader: body.AuthHeader, AuthScheme: body.AuthScheme,
 		UnauthorizedCodes: body.UnauthorizedCodes, NoCreditCodes: body.NoCreditCodes,
 		TestPath: body.TestPath, TestMethod: body.TestMethod, ChatAdapter: body.ChatAdapter,
-		ChatPath: body.ChatPath, ChatModel: body.ChatModel,
+		ChatPath: body.ChatPath, ChatModel: body.ChatModel, OpAdapter: body.OpAdapter,
 	})
 	if err != nil {
 		writeErr(w, appErr(http.StatusConflict, "CONFLICT", "já existe um provider com esse nome"))
@@ -194,13 +202,17 @@ func (s *Server) handleUpdateAPIRouterProvider(w http.ResponseWriter, r *http.Re
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "chatAdapter inválido"))
 		return
 	}
+	if body.OpAdapter != "" && !validOpAdapters[body.OpAdapter] {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "opAdapter inválido"))
+		return
+	}
 	body = body.defaults()
 
 	p, err := s.q.UpdateAPIRouterProvider(r.Context(), db.UpdateAPIRouterProviderParams{
 		ID: id, Name: body.Name, BaseUrl: body.BaseURL, AuthHeader: body.AuthHeader, AuthScheme: body.AuthScheme,
 		UnauthorizedCodes: body.UnauthorizedCodes, NoCreditCodes: body.NoCreditCodes,
 		TestPath: body.TestPath, TestMethod: body.TestMethod, ChatAdapter: body.ChatAdapter,
-		ChatPath: body.ChatPath, ChatModel: body.ChatModel,
+		ChatPath: body.ChatPath, ChatModel: body.ChatModel, OpAdapter: body.OpAdapter,
 	})
 	if err != nil {
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "provider não encontrado"))
@@ -483,7 +495,7 @@ func (s *Server) handleAPIRouterProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	outcome, err := s.executeAPIRouterRequest(r.Context(), provider, method, body.Path, payload, headers)
+	outcome, err := s.executeAPIRouterRequest(r.Context(), provider, method, body.Path, payload, "", headers)
 	if err != nil {
 		switch {
 		case errors.Is(err, errAPIRouterNoActiveKeys):
@@ -557,7 +569,7 @@ func (s *Server) handleAPIRouterChat(w http.ResponseWriter, r *http.Request) {
 		path = provider.ChatPath
 	}
 
-	outcome, err := s.executeAPIRouterRequest(r.Context(), provider, http.MethodPost, path, reqBody, headers)
+	outcome, err := s.executeAPIRouterRequest(r.Context(), provider, http.MethodPost, path, reqBody, "", headers)
 	if err != nil {
 		switch {
 		case errors.Is(err, errAPIRouterNoActiveKeys):
@@ -579,4 +591,146 @@ func (s *Server) handleAPIRouterChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"text": text, "keyUsed": outcome.KeyLabel})
+}
+
+const apiRouterMaxOpBodyLen = 25 << 20 // 25MB de áudio em base64 é generoso
+
+// POST /auth/admin/api-router/providers/{id}/op/{op} — operação NORMALIZADA
+// por provider. Recebe um apiRouterOpInput (url/audioB64/text/prompt/etc.),
+// monta a requisição nativa via provider.opAdapter e devolve o resultado
+// normalizado:
+//
+//	transcribe → { text, ... }
+//	tts        → { audioB64, contentType }
+//	image      → { imageB64, ... }
+//	predict    → { output, status }
+//	voices     → { voices }
+//
+// Operações assíncronas (AssemblyAI transcribe, Replicate predict) são
+// disparadas e o job é acompanhado por polling interno (timeout ~90s), sempre
+// com a mesma chave que criou o job.
+func (s *Server) handleAPIRouterOp(w http.ResponseWriter, r *http.Request) {
+	if s.apiRouterNotConfigured(w) {
+		return
+	}
+	providerID, err := apiRouterPathID(r, "id")
+	if err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_ID", "id inválido"))
+		return
+	}
+	op := r.PathValue("op")
+	r.Body = http.MaxBytesReader(w, r.Body, apiRouterMaxOpBodyLen)
+	var in apiRouterOpInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "corpo inválido"))
+		return
+	}
+
+	provider, err := s.q.GetAPIRouterProvider(r.Context(), providerID)
+	if err != nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "provider não encontrado"))
+		return
+	}
+	capabilities := apiRouterOpCapabilities[provider.OpAdapter]
+	if !containsString(capabilities, op) {
+		writeErr(w, appErr(http.StatusBadRequest, "OP_UNSUPPORTED", "provider não suporta a operação "+op))
+		return
+	}
+
+	// AssemblyAI precisa do upload do áudio antes de criar o job: /v2/upload
+	// devolve a URL temporária usada no /v2/transcript.
+	if provider.OpAdapter == opAdapterAssemblyAI && op == opTranscribe && in.AudioB64 != "" {
+		audio, err := decodeAudioInput(in)
+		if err != nil {
+			writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", err.Error()))
+			return
+		}
+		outcome, err := s.executeAPIRouterRequest(r.Context(), provider, http.MethodPost, "/v2/upload", audio, in.AudioMime, nil)
+		if err != nil {
+			s.apiRouterWriteExecuteErr(w, "OP_FAILED", err)
+			return
+		}
+		var up struct {
+			UploadURL string `json:"upload_url"`
+		}
+		if err := json.Unmarshal(outcome.Body, &up); err != nil || up.UploadURL == "" {
+			writeErr(w, appErr(http.StatusBadGateway, "OP_FAILED", "falha no upload do áudio (assemblyai)"))
+			return
+		}
+		in.URL = up.UploadURL
+	}
+
+	submit, err := buildOpSubmit(provider.OpAdapter, op, in)
+	if err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", err.Error()))
+		return
+	}
+
+	outcome, err := s.executeAPIRouterRequest(r.Context(), provider, submit.Method, submit.Path, submit.Body, submit.ContentType, submit.Headers)
+	if err != nil {
+		s.apiRouterWriteExecuteErr(w, "OP_FAILED", err)
+		return
+	}
+
+	raw := outcome.Body
+	keyLabel := outcome.KeyLabel
+	if opAsync(provider.OpAdapter, op) {
+		jobID, err := opJobID(provider.OpAdapter, op, outcome.Body)
+		if err != nil {
+			writeErr(w, appErr(http.StatusUnprocessableEntity, "PROVIDER_ERROR", err.Error()))
+			return
+		}
+		raw, err = s.pollAPIRouterOp(r.Context(), provider, outcome.KeyID, provider.OpAdapter, op, jobID)
+		if err != nil {
+			writeErr(w, appErr(http.StatusBadGateway, "OP_TIMEOUT", err.Error()))
+			return
+		}
+		keyLabel = outcome.KeyLabel
+	}
+
+	result, err := parseOpResult(provider.OpAdapter, op, raw)
+	if err != nil {
+		writeErr(w, appErr(http.StatusUnprocessableEntity, "PROVIDER_ERROR", err.Error()))
+		return
+	}
+	result["keyUsed"] = keyLabel
+	writeJSON(w, http.StatusOK, result)
+}
+
+// apiRouterWriteExecuteErr normaliza o erro de rotação de chaves em resposta
+// HTTP com o mesmo vocabulário do /chat.
+func (s *Server) apiRouterWriteExecuteErr(w http.ResponseWriter, code string, err error) {
+	switch {
+	case errors.Is(err, errAPIRouterNoActiveKeys):
+		writeErr(w, appErr(http.StatusServiceUnavailable, "NO_ACTIVE_KEYS", "provider sem chaves ativas"))
+	case errors.Is(err, errAPIRouterAllKeysExhausted):
+		writeErr(w, appErr(http.StatusBadGateway, "ALL_KEYS_EXHAUSTED", "todas as chaves do provider falharam (401/sem créditos)"))
+	default:
+		writeErr(w, appErr(http.StatusBadGateway, code, "falha ao chamar o provider"))
+	}
+}
+
+// pollAPIRouterOp acompanha um job assíncrono até concluir ou estourar o
+// timeout, usando sempre a mesma chave que criou o job.
+func (s *Server) pollAPIRouterOp(ctx context.Context, provider db.ApiRouterProvider, keyID int64, adapter, op, jobID string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, apiRouterOpTimeout)
+	defer cancel()
+	for {
+		req := buildOpPoll(adapter, op, jobID)
+		outcome, err := s.executeAPIRouterRequestOnce(ctx, provider, keyID, req.Method, req.Path, req.Body, req.ContentType, req.Headers)
+		if err != nil {
+			return nil, fmt.Errorf("apirouter: poll do job %s: %w", jobID, err)
+		}
+		if done, resultErr := opPollStatus(adapter, op, outcome.Body); done {
+			if resultErr != "" {
+				return nil, fmt.Errorf("provider: %s", resultErr)
+			}
+			return outcome.Body, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("tempo esgotado aguardando o job %s", jobID)
+		case <-time.After(apiRouterOpPollInterval):
+		}
+	}
 }

@@ -67,7 +67,9 @@ func authHeaderValue(scheme, secret string) string {
 
 // buildAPIRouterRequest monta a requisição HTTP para uma chave decifrada:
 // base_url do provider + path, com o header de auth configurado e headers extras.
-func buildAPIRouterRequest(ctx context.Context, provider db.ApiRouterProvider, secret, method, path string, body []byte, extraHeaders map[string]string) (*http.Request, error) {
+// contentType vazio com body != nil assume application/json (comportamento
+// padrão de chat/proxy); preencha para body binário/multipart.
+func buildAPIRouterRequest(ctx context.Context, provider db.ApiRouterProvider, secret, method, path string, body []byte, contentType string, extraHeaders map[string]string) (*http.Request, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -82,7 +84,10 @@ func buildAPIRouterRequest(ctx context.Context, provider db.ApiRouterProvider, s
 	if body != nil {
 		// Sem isso o Go envia body sem Content-Type e providers estritos
 		// (Mistral, Together, DeepSeek...) rejeitam com 400/415.
-		req.Header.Set("Content-Type", "application/json")
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		req.Header.Set("Content-Type", contentType)
 	}
 	req.Header.Set(provider.AuthHeader, authHeaderValue(provider.AuthScheme, secret))
 	return req, nil
@@ -113,7 +118,7 @@ type apiRouterOutcome struct {
 // em ordem de prioridade, até uma responder fora dos códigos de
 // unauthorized/no-credits. Erro de rede com uma chave não a penaliza (o
 // problema não é dela) — tenta a próxima.
-func (s *Server) executeAPIRouterRequest(ctx context.Context, provider db.ApiRouterProvider, method, path string, body []byte, extraHeaders map[string]string) (*apiRouterOutcome, error) {
+func (s *Server) executeAPIRouterRequest(ctx context.Context, provider db.ApiRouterProvider, method, path string, body []byte, contentType string, extraHeaders map[string]string) (*apiRouterOutcome, error) {
 	keys, err := s.q.ListActiveAPIRouterKeys(ctx, provider.ID)
 	if err != nil {
 		return nil, fmt.Errorf("apirouter: listar chaves ativas: %w", err)
@@ -129,7 +134,7 @@ func (s *Server) executeAPIRouterRequest(ctx context.Context, provider db.ApiRou
 			attempts = append(attempts, apiRouterAttempt{KeyID: key.ID, KeyLabel: key.Label, Outcome: apiRouterOutcomeTransportError})
 			continue
 		}
-		req, err := buildAPIRouterRequest(ctx, provider, secret, method, path, body, extraHeaders)
+		req, err := buildAPIRouterRequest(ctx, provider, secret, method, path, body, contentType, extraHeaders)
 		if err != nil {
 			return nil, err
 		}
@@ -163,6 +168,43 @@ func (s *Server) executeAPIRouterRequest(ctx context.Context, provider db.ApiRou
 	return nil, errAPIRouterAllKeysExhausted
 }
 
+// executeAPIRouterRequestOnce executa a requisição com UMA chave específica
+// (sem rotação) — usado pelo polling de operações assíncronas (AssemblyAI,
+// Replicate), que precisa continuar com a MESMA chave que criou o job.
+func (s *Server) executeAPIRouterRequestOnce(ctx context.Context, provider db.ApiRouterProvider, keyID int64, method, path string, body []byte, contentType string, extraHeaders map[string]string) (*apiRouterOutcome, error) {
+	key, err := s.q.GetAPIRouterKey(ctx, db.GetAPIRouterKeyParams{ID: keyID, ProviderID: provider.ID})
+	if err != nil {
+		return nil, fmt.Errorf("apirouter: buscar chave do job: %w", err)
+	}
+	secret, err := s.vault.Decrypt(key.SecretEnc)
+	if err != nil {
+		return nil, fmt.Errorf("apirouter: decifrar chave do job: %w", err)
+	}
+	req, err := buildAPIRouterRequest(ctx, provider, secret, method, path, body, contentType, extraHeaders)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := apiRouterHTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	respBody, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	outcome := classifyAPIRouterStatus(provider.UnauthorizedCodes, provider.NoCreditCodes, resp.StatusCode)
+	switch outcome {
+	case apiRouterOutcomeUnauthorized:
+		_ = s.q.RecordAPIRouterKeyFailure(ctx, db.RecordAPIRouterKeyFailureParams{ID: key.ID, Status: "unauthorized", LastErrorCode: validInt4(resp.StatusCode)})
+	case apiRouterOutcomeNoCredits:
+		_ = s.q.RecordAPIRouterKeyFailure(ctx, db.RecordAPIRouterKeyFailureParams{ID: key.ID, Status: "no_credits", LastErrorCode: validInt4(resp.StatusCode)})
+	default:
+		_ = s.q.RecordAPIRouterKeySuccess(ctx, key.ID)
+	}
+	return &apiRouterOutcome{StatusCode: resp.StatusCode, Body: respBody, KeyID: key.ID, KeyLabel: key.Label}, nil
+}
+
 // apiRouterTestResult é o desfecho de um teste manual (botão "testar" no
 // admin) contra UMA chave específica — diferente de Execute, tenta mesmo que
 // a chave não esteja "active" (é assim que o admin reativa uma chave).
@@ -185,7 +227,7 @@ func (s *Server) testAPIRouterKey(ctx context.Context, provider db.ApiRouterProv
 	if method == "" {
 		method = http.MethodGet
 	}
-	req, err := buildAPIRouterRequest(ctx, provider, secret, method, provider.TestPath, nil, nil)
+	req, err := buildAPIRouterRequest(ctx, provider, secret, method, provider.TestPath, nil, "", nil)
 	if err != nil {
 		return apiRouterTestResult{}, err
 	}
