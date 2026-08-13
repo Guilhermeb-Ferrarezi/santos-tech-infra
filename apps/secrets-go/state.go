@@ -214,6 +214,7 @@ func defaultKeywords() []string {
 		// IA / LLM
 		"OPENAI_API_KEY",        // verificado
 		"ANTHROPIC_API_KEY",     // verificado
+		"CLAUDE_API_KEY",        // verificado (mesmo verificador do Anthropic)
 		"GROQ_API_KEY",          // verificado
 		"MISTRAL_API_KEY",       // verificado
 		"COHERE_API_KEY",        // verificado
@@ -222,6 +223,20 @@ func defaultKeywords() []string {
 		"ELEVENLABS_API_KEY",    // verificado
 		"GEMINI_API_KEY",        // verificado
 		"OPENROUTER_API_KEY",    // verificado
+		"TOGETHER_API_KEY",      // verificado
+		"FIREWORKS_API_KEY",     // verificado
+		"XAI_API_KEY",           // verificado
+		"GROK_API_KEY",          // verificado (mesmo verificador do xAI)
+		"DEEPSEEK_API_KEY",      // verificado
+		"STABILITY_API_KEY",     // verificado
+		"DEEPGRAM_API_KEY",      // verificado
+		"ASSEMBLYAI_API_KEY",    // verificado
+		"PERPLEXITY_API_KEY",
+		"AZURE_OPENAI_KEY",
+		"AI21_API_KEY",
+		"VOYAGE_API_KEY",
+		"RUNWAY_API_KEY",
+		"LANGSMITH_API_KEY",
 
 		// Cloud / Infra
 		"CLOUDFLARE_API_TOKEN",      // verificado

@@ -65,6 +65,13 @@ func TestGenericVerifier_RejectsGarbageKeys(t *testing.T) {
 		{"datadog", "invalid0000000000000000000000000invalid"},
 		{"circleci", "invalid0000000000000000000000000invalid"},
 		{"gitlab", "glpat-invalid00000000000000000000invalid"},
+		{"together", "invalid0000000000000000000000000invalid"},
+		{"fireworks", "invalid0000000000000000000000000invalid"},
+		{"xai", "xai-invalid0000000000000000000000000invalid"},
+		{"deepseek", "invalid0000000000000000000000000invalid"},
+		{"stability", "sk-invalid0000000000000000000000000invalid"},
+		{"deepgram", "invalid0000000000000000000000000invalid"},
+		{"assemblyai", "invalid0000000000000000000000000invalid"},
 	}
 
 	v := NewGenericVerifier()

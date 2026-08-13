@@ -155,6 +155,27 @@ func (g *GenericVerifier) CheckKey(ctx context.Context, family, value string) (c
 	case "gitlab":
 		c, a := g.gitlab(ctx, value)
 		return c, a, false
+	case "together":
+		c, a := g.together(ctx, value)
+		return c, a, false
+	case "fireworks":
+		c, a := g.fireworks(ctx, value)
+		return c, a, false
+	case "xai":
+		c, a := g.xai(ctx, value)
+		return c, a, false
+	case "deepseek":
+		c, a := g.deepseek(ctx, value)
+		return c, a, false
+	case "stability":
+		c, a := g.stability(ctx, value)
+		return c, a, false
+	case "deepgram":
+		c, a := g.deepgram(ctx, value)
+		return c, a, false
+	case "assemblyai":
+		c, a := g.assemblyAI(ctx, value)
+		return c, a, false
 	default:
 		return false, false, false
 	}
@@ -642,6 +663,69 @@ func (g *GenericVerifier) circleci(ctx context.Context, token string) (bool, boo
 // gitlab: GET /api/v4/user.
 func (g *GenericVerifier) gitlab(ctx context.Context, token string) (bool, bool) {
 	return g.simpleBearer(ctx, "https://gitlab.com/api/v4/user", token, statusRules{ok200: true})
+}
+
+// together: GET /v1/models — API compatível com o formato da OpenAI.
+func (g *GenericVerifier) together(ctx context.Context, key string) (bool, bool) {
+	return g.simpleBearer(ctx, "https://api.together.xyz/v1/models", key, statusRules{ok200: true})
+}
+
+// fireworks: GET /inference/v1/models — API compatível com o formato da OpenAI.
+func (g *GenericVerifier) fireworks(ctx context.Context, key string) (bool, bool) {
+	return g.simpleBearer(ctx, "https://api.fireworks.ai/inference/v1/models", key, statusRules{ok200: true})
+}
+
+// xai: GET /v1/models (xAI/Grok) — API compatível com o formato da OpenAI,
+// mas chave inválida dá 400 (não 401), testado manualmente (corpo:
+// {"code":"invalid-argument","error":"Incorrect API key provided..."}).
+func (g *GenericVerifier) xai(ctx context.Context, key string) (bool, bool) {
+	status, err := g.bearerGET(ctx, "https://api.x.ai/v1/models", key)
+	if err != nil {
+		return false, false
+	}
+	switch status {
+	case http.StatusOK:
+		return true, true
+	case http.StatusBadRequest:
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+// deepseek: GET /user/balance — endpoint oficial deles pra checar
+// crédito/validade da chave (não têm um "/models" que autentique sozinho).
+func (g *GenericVerifier) deepseek(ctx context.Context, key string) (bool, bool) {
+	return g.simpleBearer(ctx, "https://api.deepseek.com/user/balance", key, statusRules{ok200: true})
+}
+
+// stability: GET /v1/user/account — endpoint oficial de identidade da conta.
+func (g *GenericVerifier) stability(ctx context.Context, key string) (bool, bool) {
+	return g.simpleBearer(ctx, "https://api.stability.ai/v1/user/account", key, statusRules{ok200: true})
+}
+
+// deepgram: GET /v1/projects — esquema de auth "Token <key>", não "Bearer"
+// (convenção própria deles).
+func (g *GenericVerifier) deepgram(ctx context.Context, key string) (bool, bool) {
+	status, err := g.customHeaderGET(ctx, "https://api.deepgram.com/v1/projects", map[string]string{
+		"Authorization": "Token " + key,
+	})
+	if err != nil {
+		return false, false
+	}
+	return statusRules{ok200: true}.eval(status)
+}
+
+// assemblyAI: GET /v2/transcript — o header é a chave crua, sem prefixo
+// "Bearer"/"Token" (convenção própria deles).
+func (g *GenericVerifier) assemblyAI(ctx context.Context, key string) (bool, bool) {
+	status, err := g.customHeaderGET(ctx, "https://api.assemblyai.com/v2/transcript", map[string]string{
+		"authorization": key,
+	})
+	if err != nil {
+		return false, false
+	}
+	return statusRules{ok200: true}.eval(status)
 }
 
 // statusRules descreve quais códigos HTTP contam como "chave ativa" além do
