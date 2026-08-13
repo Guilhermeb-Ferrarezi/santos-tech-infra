@@ -216,10 +216,15 @@ abaixo responde 503 `NOT_CONFIGURED`.
   OpenRouter/Together/xAI/Grok; `anthropic`, `google` e `cohere` têm adapter
   próprio) e devolve só o texto —
   o chamador não precisa saber o formato de request/response de cada API.
-  `model` opcional (cada adapter tem default). Rotação automática de chave,
-  sem streaming. → 200 `{text,keyUsed}` | 400 | 404 | 422 `PROVIDER_ERROR`
-  (chave ok, mas o provider recusou a requisição — ex. modelo inexistente) |
-  502 `ALL_KEYS_EXHAUSTED` | 503 `NO_ACTIVE_KEYS`/`NOT_CONFIGURED` (rate 10/min)
+  `model` opcional; quando vazio, usa `provider.chatModel` (modelo nativo da
+  família registrado pelo sync — ex.: `mistral-large-latest` na Mistral,
+  `deepseek-chat` na DeepSeek, `openai/gpt-4o-mini` na OpenRouter) e, se também
+  vazio, o default do adapter. O path chamado é `provider.chatPath` (ex.:
+  `/api/v1/chat/completions` na OpenRouter) ou o default do adapter. Rotação
+  automática de chave, sem streaming. → 200 `{text,keyUsed}` | 400 | 404 | 422
+  `PROVIDER_ERROR` (chave ok, mas o provider recusou a requisição — ex. modelo
+  inexistente) | 502 `ALL_KEYS_EXHAUSTED` | 503 `NO_ACTIVE_KEYS`/`NOT_CONFIGURED`
+  (rate 10/min)
 
 ### Sync automático com o scanner de secrets vazados (secrets-go)
 O api-go importa periodicamente (padrão `1h`, via `SECRETS_SYNC_INTERVAL`) os hits

@@ -38,7 +38,7 @@ func apiRouterProviderJSON(p *db.ApiRouterProvider, counts map[string]int64) map
 		"id": p.ID, "name": p.Name, "baseUrl": p.BaseUrl,
 		"authHeader": p.AuthHeader, "authScheme": p.AuthScheme,
 		"unauthorizedCodes": p.UnauthorizedCodes, "noCreditCodes": p.NoCreditCodes,
-		"testPath": p.TestPath, "testMethod": p.TestMethod, "chatAdapter": p.ChatAdapter, "keyCounts": counts,
+		"testPath": p.TestPath, "testMethod": p.TestMethod, "chatAdapter": p.ChatAdapter, "chatPath": p.ChatPath, "chatModel": p.ChatModel, "keyCounts": counts,
 		"createdAt": p.CreatedAt.Time, "updatedAt": p.UpdatedAt.Time,
 	}
 }
@@ -111,6 +111,8 @@ type apiRouterProviderBody struct {
 	TestPath          string  `json:"testPath"`
 	TestMethod        string  `json:"testMethod"`
 	ChatAdapter       string  `json:"chatAdapter"`
+	ChatPath          string  `json:"chatPath"`
+	ChatModel         string  `json:"chatModel"`
 }
 
 // defaults aplica os valores padrão do provider quando o campo vier vazio do
@@ -159,6 +161,7 @@ func (s *Server) handleCreateAPIRouterProvider(w http.ResponseWriter, r *http.Re
 		Name: body.Name, BaseUrl: body.BaseURL, AuthHeader: body.AuthHeader, AuthScheme: body.AuthScheme,
 		UnauthorizedCodes: body.UnauthorizedCodes, NoCreditCodes: body.NoCreditCodes,
 		TestPath: body.TestPath, TestMethod: body.TestMethod, ChatAdapter: body.ChatAdapter,
+		ChatPath: body.ChatPath, ChatModel: body.ChatModel,
 	})
 	if err != nil {
 		writeErr(w, appErr(http.StatusConflict, "CONFLICT", "já existe um provider com esse nome"))
@@ -197,6 +200,7 @@ func (s *Server) handleUpdateAPIRouterProvider(w http.ResponseWriter, r *http.Re
 		ID: id, Name: body.Name, BaseUrl: body.BaseURL, AuthHeader: body.AuthHeader, AuthScheme: body.AuthScheme,
 		UnauthorizedCodes: body.UnauthorizedCodes, NoCreditCodes: body.NoCreditCodes,
 		TestPath: body.TestPath, TestMethod: body.TestMethod, ChatAdapter: body.ChatAdapter,
+		ChatPath: body.ChatPath, ChatModel: body.ChatModel,
 	})
 	if err != nil {
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "provider não encontrado"))
@@ -536,10 +540,21 @@ func (s *Server) handleAPIRouterChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path, reqBody, headers, err := buildChatRequest(provider.ChatAdapter, body.Model, body.Prompt)
+	// chat_model/chat_path do provider vencem os defaults do adapter: cada
+	// família no catálogo registra o path nativo e um modelo que existe de
+	// verdade (ex.: Mistral não tem gpt-4o-mini). O admin pode informar um
+	// modelo próprio pelo corpo, que tem precedência.
+	model := body.Model
+	if model == "" {
+		model = provider.ChatModel
+	}
+	path, reqBody, headers, err := buildChatRequest(provider.ChatAdapter, model, body.Prompt)
 	if err != nil {
 		writeErr(w, appErr(http.StatusInternalServerError, "ADAPTER_ERROR", "falha ao montar a requisição"))
 		return
+	}
+	if provider.ChatPath != "" {
+		path = provider.ChatPath
 	}
 
 	outcome, err := s.executeAPIRouterRequest(r.Context(), provider, http.MethodPost, path, reqBody, headers)

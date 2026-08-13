@@ -79,6 +79,11 @@ func buildAPIRouterRequest(ctx context.Context, provider db.ApiRouterProvider, s
 	for k, v := range extraHeaders {
 		req.Header.Set(k, v)
 	}
+	if body != nil {
+		// Sem isso o Go envia body sem Content-Type e providers estritos
+		// (Mistral, Together, DeepSeek...) rejeitam com 400/415.
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set(provider.AuthHeader, authHeaderValue(provider.AuthScheme, secret))
 	return req, nil
 }

@@ -61,6 +61,27 @@ func TestSyncProviderDefaults(t *testing.T) {
 		t.Errorf("openai chatAdapter = %q, queria %q", d.ChatAdapter, chatAdapterOpenAICompatible)
 	}
 
+	// todo provider de IA tem path e modelo de chat que existem de verdade
+	// (ex.: Mistral não tem gpt-4o-mini, OpenRouter não é /v1/chat/completions)
+	for _, fam := range []string{"openai", "anthropic", "groq", "mistral", "cohere", "deepseek", "openrouter", "together", "fireworks", "xai"} {
+		d, ok := syncProviderDefaultsFor(fam)
+		if !ok {
+			t.Fatalf("syncProviderDefaultsFor(%q) deveria existir", fam)
+		}
+		if d.ChatPath == "" {
+			t.Errorf("%s: chatPath vazio", fam)
+		}
+		if d.ChatModel == "" {
+			t.Errorf("%s: chatModel vazio", fam)
+		}
+	}
+	if d, _ := syncProviderDefaultsFor("openrouter"); d.ChatPath != "/api/v1/chat/completions" {
+		t.Errorf("openrouter chatPath = %q, queria /api/v1/chat/completions", d.ChatPath)
+	}
+	if d, _ := syncProviderDefaultsFor("cohere"); d.BaseURL != "https://api.cohere.com" {
+		t.Errorf("cohere baseURL = %q, queria https://api.cohere.com", d.BaseURL)
+	}
+
 	// Discord usa prefixo "Bot", não "Bearer"
 	d3, _ := syncProviderDefaultsFor("discord")
 	if d3.AuthScheme != "Bot" {

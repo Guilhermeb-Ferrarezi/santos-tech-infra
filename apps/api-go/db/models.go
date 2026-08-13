@@ -46,6 +46,8 @@ type ApiRouterProvider struct {
 	TestPath          string
 	TestMethod        string
 	ChatAdapter       string
+	ChatPath          string
+	ChatModel         string
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
 }

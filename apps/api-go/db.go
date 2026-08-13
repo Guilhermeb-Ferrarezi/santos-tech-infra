@@ -392,6 +392,8 @@ CREATE INDEX IF NOT EXISTS idx_api_router_keys_provider ON api_router_keys(provi
 -- Família de adapter usada por /chat pra montar a requisição no formato nativo
 -- do provider e interpretar a resposta (ver apirouter_adapters.go).
 ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS chat_adapter TEXT NOT NULL DEFAULT 'openai_compatible';
+ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS chat_path    TEXT NOT NULL DEFAULT '';
+ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS chat_model   TEXT NOT NULL DEFAULT '';
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

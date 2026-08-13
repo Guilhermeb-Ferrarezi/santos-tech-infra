@@ -93,6 +93,8 @@ func (s *Server) syncAPIRouterFromSecrets(ctx context.Context) error {
 				TestPath:          def.TestPath,
 				TestMethod:        def.TestMethod,
 				ChatAdapter:       def.ChatAdapter,
+				ChatPath:          def.ChatPath,
+				ChatModel:         def.ChatModel,
 			})
 			if err != nil {
 				// Corrida entre dois syncs simultâneos (name é UNIQUE): o
@@ -104,13 +106,13 @@ func (s *Server) syncAPIRouterFromSecrets(ctx context.Context) error {
 			provider = p
 			byName[def.Name] = p
 			createdProviders++
-		} else if provider.ChatAdapter != def.ChatAdapter && def.ChatAdapter != "" {
+		} else if (provider.ChatAdapter != def.ChatAdapter || provider.ChatPath != def.ChatPath || provider.ChatModel != def.ChatModel) && def.ChatAdapter != "" {
 			// Provider já existia (criado pelo sync antes do mapeamento de
 			// adapters, ou manualmente com o default errado) — corrige o
-			// adapter pra família certa. Só mexe no chat_adapter, não nos
-			// demais campos.
+			// adapter e os defaults de chat (path/modelo) pra família certa.
+			// Só mexe em chat_adapter/chat_path/chat_model, não nos demais.
 			p, err := s.q.SetAPIRouterProviderChatAdapter(ctx, db.SetAPIRouterProviderChatAdapterParams{
-				ID: provider.ID, ChatAdapter: def.ChatAdapter,
+				ID: provider.ID, ChatAdapter: def.ChatAdapter, ChatPath: def.ChatPath, ChatModel: def.ChatModel,
 			})
 			if err != nil {
 				slog.Warn("sync: falha ao corrigir chat_adapter", "provider", provider.Name, "err", err)
@@ -148,9 +150,40 @@ func (s *Server) syncAPIRouterFromSecrets(ctx context.Context) error {
 		createdKeys++
 	}
 
+	// Passada de correção dos defaults de chat: percorre TODO o catálogo e
+	// ajusta chat_adapter/chat_path/chat_model dos providers que já existem
+	// (criados manualmente, ou pelo sync antes do mapeamento). Garante que um
+	// provider sem hit recente (ex.: chave adicionada à mão) também herde o
+	// path/modelo nativos da família — sem isso o /chat usa o default genérico
+	// da OpenAI e quebra (Mistral não tem gpt-4o-mini, OpenRouter não é
+	// /v1/chat/completions etc.).
+	var chatFixed int
+	for family, def := range syncProviderCatalog {
+		if def.ChatAdapter == "" {
+			continue
+		}
+		provider, ok := byName[def.Name]
+		if !ok {
+			continue
+		}
+		if provider.ChatAdapter == def.ChatAdapter && provider.ChatPath == def.ChatPath && provider.ChatModel == def.ChatModel {
+			continue
+		}
+		p, err := s.q.SetAPIRouterProviderChatAdapter(ctx, db.SetAPIRouterProviderChatAdapterParams{
+			ID: provider.ID, ChatAdapter: def.ChatAdapter, ChatPath: def.ChatPath, ChatModel: def.ChatModel,
+		})
+		if err != nil {
+			slog.Warn("sync: falha ao corrigir defaults de chat", "provider", provider.Name, "family", family, "err", err)
+			continue
+		}
+		provider = p
+		byName[def.Name] = p
+		chatFixed++
+	}
+
 	slog.Info("sync do roteador de APIs com secrets-go concluído",
 		"providers", createdProviders, "keys", createdKeys,
-		"dup", skippedDup, "unknownFamily", skippedUnknown)
+		"dup", skippedDup, "unknownFamily", skippedUnknown, "chatFixed", chatFixed)
 	return nil
 }
 
@@ -234,6 +267,8 @@ type syncProviderDefaults struct {
 	TestPath          string
 	TestMethod        string
 	ChatAdapter       string
+	ChatPath          string
+	ChatModel         string
 }
 
 func syncProviderDefaultsFor(family string) (syncProviderDefaults, bool) {
@@ -251,6 +286,7 @@ func bearerDefaults(name, baseURL, testPath string) syncProviderDefaults {
 		TestPath:          testPath,
 		TestMethod:        "GET",
 		ChatAdapter:       chatAdapterOpenAICompatible,
+		ChatPath:          "/v1/chat/completions",
 	}
 }
 
@@ -264,21 +300,25 @@ func customHeaderDefaults(name, baseURL, authHeader, authScheme, testPath string
 		TestPath:          testPath,
 		TestMethod:        "GET",
 		ChatAdapter:       chatAdapterOpenAICompatible,
+		ChatPath:          "/v1/chat/completions",
 	}
 }
 
 var syncProviderCatalog = map[string]syncProviderDefaults{
-	// IA / LLM (API no formato OpenAI, na maioria)
-	"openai":     bearerDefaults("OpenAI", "https://api.openai.com", "/v1/models"),
-	"anthropic":  func() syncProviderDefaults { d := customHeaderDefaults("Anthropic", "https://api.anthropic.com", "x-api-key", "", "/v1/models"); d.ChatAdapter = chatAdapterAnthropic; return d }(),
-	"groq":       bearerDefaults("Groq", "https://api.groq.com", "/openai/v1/models"),
-	"mistral":    bearerDefaults("Mistral", "https://api.mistral.ai", "/v1/models"),
-	"cohere":     func() syncProviderDefaults { d := bearerDefaults("Cohere", "https://api.cohere.ai", "/v1/models"); d.ChatAdapter = chatAdapterCohere; return d }(),
-	"deepseek":   bearerDefaults("DeepSeek", "https://api.deepseek.com", "/user/balance"),
-	"openrouter": bearerDefaults("OpenRouter", "https://openrouter.ai", "/api/v1/auth/key"),
-	"together":   bearerDefaults("Together AI", "https://api.together.xyz", "/v1/models"),
-	"fireworks":  bearerDefaults("Fireworks AI", "https://api.fireworks.ai", "/inference/v1/models"),
-	"xai":        bearerDefaults("xAI (Grok)", "https://api.x.ai", "/v1/models"),
+	// IA / LLM (API no formato OpenAI, na maioria). chat_path/chat_model são
+	// os defaults usados pelo /chat quando o admin não informa modelo — cada
+	// família tem o path nativo e um modelo de teste que existe de verdade
+	// (o gpt-4o-mini só existe na OpenAI, o que quebrava os demais providers).
+	"openai":     func() syncProviderDefaults { d := bearerDefaults("OpenAI", "https://api.openai.com", "/v1/models"); d.ChatModel = "gpt-4o-mini"; return d }(),
+	"anthropic":  func() syncProviderDefaults { d := customHeaderDefaults("Anthropic", "https://api.anthropic.com", "x-api-key", "", "/v1/models"); d.ChatAdapter = chatAdapterAnthropic; d.ChatPath = "/v1/messages"; d.ChatModel = "claude-sonnet-4-5"; return d }(),
+	"groq":       func() syncProviderDefaults { d := bearerDefaults("Groq", "https://api.groq.com", "/openai/v1/models"); d.ChatPath = "/openai/v1/chat/completions"; d.ChatModel = "llama-3.3-70b-versatile"; return d }(),
+	"mistral":    func() syncProviderDefaults { d := bearerDefaults("Mistral", "https://api.mistral.ai", "/v1/models"); d.ChatModel = "mistral-large-latest"; return d }(),
+	"cohere":     func() syncProviderDefaults { d := bearerDefaults("Cohere", "https://api.cohere.com", "/v1/models"); d.ChatAdapter = chatAdapterCohere; d.ChatPath = "/v2/chat"; d.ChatModel = "command-r-plus"; return d }(),
+	"deepseek":   func() syncProviderDefaults { d := bearerDefaults("DeepSeek", "https://api.deepseek.com", "/user/balance"); d.ChatModel = "deepseek-chat"; return d }(),
+	"openrouter": func() syncProviderDefaults { d := bearerDefaults("OpenRouter", "https://openrouter.ai", "/api/v1/auth/key"); d.ChatPath = "/api/v1/chat/completions"; d.ChatModel = "openai/gpt-4o-mini"; return d }(),
+	"together":   func() syncProviderDefaults { d := bearerDefaults("Together AI", "https://api.together.xyz", "/v1/models"); d.ChatModel = "meta-llama/Llama-3.3-70B-Instruct-Turbo"; return d }(),
+	"fireworks":  func() syncProviderDefaults { d := bearerDefaults("Fireworks AI", "https://api.fireworks.ai", "/inference/v1/models"); d.ChatPath = "/inference/v1/chat/completions"; d.ChatModel = "accounts/fireworks/models/llama-v3p3-70b-instruct"; return d }(),
+	"xai":        func() syncProviderDefaults { d := bearerDefaults("xAI (Grok)", "https://api.x.ai", "/v1/models"); d.ChatModel = "grok-3-mini"; return d }(),
 	"stability":  bearerDefaults("Stability AI", "https://api.stability.ai", "/v1/user/account"),
 	"deepgram":   customHeaderDefaults("Deepgram", "https://api.deepgram.com", "Authorization", "Token", "/v1/projects"),
 	"assemblyai": customHeaderDefaults("AssemblyAI", "https://api.assemblyai.com", "authorization", "", "/v2/transcript"),

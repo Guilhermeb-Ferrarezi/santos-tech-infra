@@ -160,7 +160,15 @@ func parseChatResponse(adapter string, raw []byte) (string, error) {
 			} `json:"error"`
 		}
 		if err := json.Unmarshal(raw, &resp); err != nil {
-			return "", fmt.Errorf("apirouter: parse openai-compatible: %w", err)
+			// Providers com dialeto "parecido com OpenAI" nem sempre respondem
+			// JSON em erro (ex.: DeepSeek responde "Authentication Fails" em
+			// texto puro). Em vez de expor o erro de parse, mostra o corpo cru
+			// truncado — dá o contexto real pro admin.
+			trunc := raw
+			if len(trunc) > 300 {
+				trunc = trunc[:300]
+			}
+			return "", fmt.Errorf("apirouter: resposta não-JSON do provider: %s", strings.TrimSpace(string(trunc)))
 		}
 		if resp.Error != nil {
 			return "", fmt.Errorf("provider: %s", resp.Error.Message)
