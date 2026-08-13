@@ -210,6 +210,24 @@ abaixo responde 503 `NOT_CONFIGURED`.
   200 (passthrough) | 400 | 404 | 502 `ALL_KEYS_EXHAUSTED`/`PROXY_FAILED` |
   503 `NO_ACTIVE_KEYS`/`NOT_CONFIGURED` (rate 20/min)
 
+### Sync automático com o scanner de secrets vazados (secrets-go)
+O api-go importa periodicamente (padrão `1h`, via `SECRETS_SYNC_INTERVAL`) os hits
+que o scanner confirmou **ativos** (`liveActive`) e os cadastra no roteador como
+chaves de failover — **criando o provider por provedor automaticamente** quando ele
+ainda não existe (catálogo em `sync_apirouter.go`: OpenAI, Anthropic, Groq,
+Mistral, DeepSeek, OpenRouter, Together, Fireworks, xAI, Stability, Deepgram,
+AssemblyAI, ElevenLabs, Replicate, GitHub, Hugging Face, DigitalOcean, Vercel,
+Netlify, npm, Heroku, Cloudflare, GitLab, CircleCI, Datadog, Figma, Slack,
+Discord, SendGrid, Mercado Pago, Asaas, Square, Clerk, Resend, Sentry,
+AbacatePay, Dotfy). Idempotente: chave com o mesmo valor não duplica (dedupe por
+plaintext decifrado). Providers que exigem Basic Auth (Stripe/Pagar.me/Mailgun),
+token na URL (Telegram) ou query param (Gemini/Firebase) **não** entram — o modelo
+de auth do roteador é header único, e o sync pula essas families. Habilitado só
+com `SECRETS_SYNC_TOKEN` E `API_VAULT_SECRET` setados; consome o endpoint interno
+do secrets-go `GET /internal/sync-hits` (header `x-sync-token`, tempo constante —
+mesmo valor de `INTERNAL_SYNC_TOKEN` no secrets-go), base configurável em
+`SECRETS_SYNC_URL` (ex.: `https://api.santos-tech.com/secrets`).
+
 ## Claude Agent — `api.santos-tech.com/claude`
 
 Auth: sessão do auth central ou PAT (`st_...`).
