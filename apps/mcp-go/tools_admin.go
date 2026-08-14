@@ -57,8 +57,11 @@ type sentryIssuesListInput struct {
 	Limit       int    `json:"limit,omitempty" jsonschema:"máximo de issues (padrão 25, teto 100)"`
 }
 
-type sentryIssueIDInput struct {
-	ID string `json:"id" jsonschema:"id da issue no Sentry (ver sentry_issues_list)"`
+// sentryIssueGetInput: com id detalha a issue (os filtros de listagem abaixo
+// são ignorados); sem id lista, e aí os filtros valem.
+type sentryIssueGetInput struct {
+	ID string `json:"id,omitempty" jsonschema:"id da issue no Sentry; se informado, os demais campos (filtros de lista) são ignorados"`
+	sentryIssuesListInput
 }
 
 // ── custom roles ─────────────────────────────────────────────────────────────
@@ -78,6 +81,10 @@ type customRoleUpdateInput struct {
 
 type customRoleIDInput struct {
 	ID string `json:"id" jsonschema:"id (uuid) do cargo"`
+}
+
+type customRoleGetInput struct {
+	ID string `json:"id,omitempty" jsonschema:"id (uuid) do cargo; omitido lista todos os cargos personalizados"`
 }
 
 // ── api-router (chaves de provedores de IA) ─────────────────────────────────
@@ -259,9 +266,13 @@ func (s *Server) addAdminTools(srv *mcp.Server) {
 	// ── sentry ─────────────────────────────────────────────────────────────
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "sentry_issues_list",
-		Description: "Lista issues (erros) dos projetos do Sentry do ecossistema (GET /sentry/issues).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in sentryIssuesListInput) (*mcp.CallToolResult, any, error) {
+		Name: "sentry_issue_get",
+		Description: "Sem id: lista issues (erros) dos projetos do Sentry do ecossistema (GET /sentry/issues), com filtros. " +
+			"Com id: detalha uma issue — metadados, stacktrace do evento mais recente e tags (GET /sentry/issues/{id}).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in sentryIssueGetInput) (*mcp.CallToolResult, any, error) {
+		if in.ID != "" {
+			return s.proxy(ctx, req, "GET", s.cfg.AuthBaseURL+"/sentry/issues/"+url.PathEscape(in.ID), nil)
+		}
 		qs := url.Values{}
 		setIf(qs, "project", in.Project)
 		setIf(qs, "status", in.Status)
@@ -274,13 +285,6 @@ func (s *Server) addAdminTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "sentry_issue_get",
-		Description: "Detalha uma issue do Sentry: metadados, stacktrace do evento mais recente e tags (GET /sentry/issues/{id}).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in sentryIssueIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", s.cfg.AuthBaseURL+"/sentry/issues/"+url.PathEscape(in.ID), nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "sentry_projects_list",
 		Description: "Lista os slugs de projeto conhecidos do Sentry, para popular filtros (GET /sentry/projects).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
@@ -290,10 +294,14 @@ func (s *Server) addAdminTools(srv *mcp.Server) {
 	// ── custom roles ───────────────────────────────────────────────────────
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "custom_roles_list",
-		Description: "Lista os cargos personalizados do ecossistema (GET /auth/admin/custom-roles).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", authAdmin+"/custom-roles", nil)
+		Name: "custom_role_get",
+		Description: "Sem id: lista os cargos personalizados do ecossistema (GET /auth/admin/custom-roles). " +
+			"Com id: detalha um cargo, incluindo o mapa de permissões (GET /auth/admin/custom-roles/{id}).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in customRoleGetInput) (*mcp.CallToolResult, any, error) {
+		if in.ID == "" {
+			return s.proxy(ctx, req, "GET", authAdmin+"/custom-roles", nil)
+		}
+		return s.proxy(ctx, req, "GET", authAdmin+"/custom-roles/"+url.PathEscape(in.ID), nil)
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -311,13 +319,6 @@ func (s *Server) addAdminTools(srv *mcp.Server) {
 			body["permissions"] = in.Permissions
 		}
 		return s.proxy(ctx, req, "POST", authAdmin+"/custom-roles", body)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "custom_role_get",
-		Description: "Detalha um cargo personalizado pelo id (GET /auth/admin/custom-roles/{id}).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in customRoleIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", authAdmin+"/custom-roles/"+url.PathEscape(in.ID), nil)
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{

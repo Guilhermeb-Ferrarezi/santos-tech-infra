@@ -3,6 +3,12 @@ package main
 // Tools de quadros (Excalidraw), tarefas e glossário da API central. Guards de
 // permissão (portalRead/permGuard/adminGuard) são responsabilidade da API — aqui
 // só montamos a chamada e repassamos o Authorization do request MCP.
+//
+// Uso interno (só nós usamos este MCP): get+list de mesmo recurso e os CRUDs de
+// baixo risco (task_category, glossary, board_member — nada de dinheiro/segredo/
+// dado sensível por trás) ficam consolidados numa tool só, pra reduzir o total
+// de tools que o cliente MCP carrega. board/task continuam com create/update/
+// delete separados porque a ação errada ali é mais cara (perde board/tarefa).
 
 import (
 	"context"
@@ -15,6 +21,10 @@ import (
 
 type boardIDInput struct {
 	ID string `json:"id" jsonschema:"id (UUID) do quadro"`
+}
+
+type boardGetInput struct {
+	ID string `json:"id,omitempty" jsonschema:"id (UUID) do quadro; omitido lista todos os quadros do usuário"`
 }
 
 type boardCreateInput struct {
@@ -30,19 +40,16 @@ type boardUpdateInput struct {
 	SceneVersion *int           `json:"sceneVersion,omitempty" jsonschema:"versão da cena para controle otimista; obrigatório junto com scene"`
 }
 
-type boardMembersListInput struct {
-	ID string `json:"id" jsonschema:"id (UUID) do quadro"`
-}
-
-type boardMemberAddInput struct {
-	ID    string `json:"id" jsonschema:"id (UUID) do quadro"`
-	Email string `json:"email" jsonschema:"email de um admin ou professor já cadastrado"`
-	Role  string `json:"role" jsonschema:"papel do membro: viewer ou editor"`
-}
-
-type boardMemberRemoveInput struct {
-	ID     string `json:"id" jsonschema:"id (UUID) do quadro"`
-	UserID string `json:"userId" jsonschema:"id numérico do usuário a remover"`
+// boardMemberActionInput consolida list/add/remove numa tool só — é gestão de
+// compartilhamento de baixo risco (não apaga o quadro nem dado nenhum, só quem
+// pode vê-lo), então o schema mais "solto" (campos condicionais por action) vale
+// a pena pra reduzir de 3 tools pra 1.
+type boardMemberActionInput struct {
+	Action  string  `json:"action" jsonschema:"list, add ou remove"`
+	BoardID string  `json:"boardId" jsonschema:"id (UUID) do quadro"`
+	Email   *string `json:"email,omitempty" jsonschema:"email de um admin ou professor já cadastrado — obrigatório em add"`
+	Role    *string `json:"role,omitempty" jsonschema:"papel do membro: viewer ou editor — obrigatório em add"`
+	UserID  *string `json:"userId,omitempty" jsonschema:"id numérico do usuário a remover — obrigatório em remove"`
 }
 
 // ── Tarefas ──────────────────────────────────────────────────────────────
@@ -51,10 +58,14 @@ type taskIDInput struct {
 	ID string `json:"id" jsonschema:"id (UUID) da tarefa"`
 }
 
+type taskGetInput struct {
+	ID string `json:"id,omitempty" jsonschema:"id (UUID) da tarefa; omitido lista as tarefas visíveis ao usuário"`
+}
+
 type taskCreateInput struct {
 	Title         string  `json:"title" jsonschema:"título da tarefa"`
 	Description   string  `json:"description,omitempty" jsonschema:"descrição livre"`
-	CategoryID    *string `json:"categoryId,omitempty" jsonschema:"id (UUID) da categoria (ver task_categories_list)"`
+	CategoryID    *string `json:"categoryId,omitempty" jsonschema:"id (UUID) da categoria (ver task_category action=list)"`
 	Status        string  `json:"status" jsonschema:"status: a_fazer, em_andamento, concluida ou cancelada"`
 	Priority      string  `json:"priority" jsonschema:"prioridade: baixa, media ou alta"`
 	DueDate       *string `json:"dueDate,omitempty" jsonschema:"prazo, formato RFC3339 (ex: 2026-08-20T00:00:00Z)"`
@@ -68,7 +79,7 @@ type taskUpdateInput struct {
 	ID            string  `json:"id" jsonschema:"id (UUID) da tarefa"`
 	Title         string  `json:"title" jsonschema:"título da tarefa"`
 	Description   string  `json:"description,omitempty" jsonschema:"descrição livre"`
-	CategoryID    *string `json:"categoryId,omitempty" jsonschema:"id (UUID) da categoria (ver task_categories_list)"`
+	CategoryID    *string `json:"categoryId,omitempty" jsonschema:"id (UUID) da categoria (ver task_category action=list)"`
 	Status        string  `json:"status" jsonschema:"status: a_fazer, em_andamento, concluida ou cancelada"`
 	Priority      string  `json:"priority" jsonschema:"prioridade: baixa, media ou alta"`
 	DueDate       *string `json:"dueDate,omitempty" jsonschema:"prazo, formato RFC3339 (ex: 2026-08-20T00:00:00Z)"`
@@ -84,34 +95,25 @@ type taskNoteAddInput struct {
 	Content string `json:"content" jsonschema:"texto da nota"`
 }
 
-type taskCategoryCreateInput struct {
-	Name string `json:"name" jsonschema:"nome da categoria"`
-}
-
-type taskCategoryUpdateInput struct {
-	ID   string `json:"id" jsonschema:"id (UUID) da categoria"`
-	Name string `json:"name" jsonschema:"novo nome da categoria"`
-}
-
-type taskCategoryIDInput struct {
-	ID string `json:"id" jsonschema:"id (UUID) da categoria"`
+// taskCategoryActionInput consolida list/create/update/delete — categoria é só
+// um nome, sem dado sensível por trás, então uma tool com action cobre o CRUD
+// inteiro sem perder nada em segurança.
+type taskCategoryActionInput struct {
+	Action string  `json:"action" jsonschema:"list, create, update ou delete"`
+	ID     *string `json:"id,omitempty" jsonschema:"id (UUID) da categoria — obrigatório em update/delete"`
+	Name   *string `json:"name,omitempty" jsonschema:"nome da categoria — obrigatório em create/update"`
 }
 
 // ── Glossário ────────────────────────────────────────────────────────────
 
-type glossaryTermInput struct {
-	Term      string `json:"term" jsonschema:"termo do glossário"`
-	Definicao string `json:"definicao" jsonschema:"definição do termo"`
-}
-
-type glossaryTermUpdateInput struct {
-	ID        string `json:"id" jsonschema:"id (UUID) do termo"`
-	Term      string `json:"term" jsonschema:"termo do glossário"`
-	Definicao string `json:"definicao" jsonschema:"definição do termo"`
-}
-
-type glossaryTermIDInput struct {
-	ID string `json:"id" jsonschema:"id (UUID) do termo"`
+// glossaryActionInput consolida list/create/update/delete pelo mesmo motivo de
+// taskCategoryActionInput: termo+definição não é dado sensível nem destrutivo
+// caro.
+type glossaryActionInput struct {
+	Action    string  `json:"action" jsonschema:"list, create, update ou delete"`
+	ID        *string `json:"id,omitempty" jsonschema:"id (UUID) do termo — obrigatório em update/delete"`
+	Term      *string `json:"term,omitempty" jsonschema:"termo do glossário — obrigatório em create/update"`
+	Definicao *string `json:"definicao,omitempty" jsonschema:"definição do termo — obrigatório em create/update"`
 }
 
 // Espelham validTaskStatuses/validTaskPriorities de apps/api-go — duplicadas
@@ -130,13 +132,6 @@ func (s *Server) addWorkspaceTools(srv *mcp.Server) {
 	// ── Quadros ──────────────────────────────────────────────────────────
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "boards_list",
-		Description: "Lista os quadros do usuário — próprios e compartilhados com ele, sem a cena (GET /boards).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/boards", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "board_create",
 		Description: "Cria um quadro Excalidraw vazio (POST /boards). Restrito a admins e professores.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in boardCreateInput) (*mcp.CallToolResult, any, error) {
@@ -147,9 +142,13 @@ func (s *Server) addWorkspaceTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "board_get",
-		Description: "Detalha um quadro pelo id, incluindo a cena completa (GET /boards/{id}).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in boardIDInput) (*mcp.CallToolResult, any, error) {
+		Name: "board_get",
+		Description: "Sem id: lista os quadros do usuário — próprios e compartilhados, sem a cena (GET /boards). " +
+			"Com id: detalha um quadro, incluindo a cena completa (GET /boards/{id}).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in boardGetInput) (*mcp.CallToolResult, any, error) {
+		if in.ID == "" {
+			return s.proxy(ctx, req, "GET", base+"/boards", nil)
+		}
 		return s.proxy(ctx, req, "GET", base+"/boards/"+url.PathEscape(in.ID), nil)
 	})
 
@@ -182,45 +181,42 @@ func (s *Server) addWorkspaceTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "board_members_list",
-		Description: "Lista os membros com quem um quadro foi compartilhado (GET /boards/{id}/members). Só o dono vê.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in boardMembersListInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/boards/"+url.PathEscape(in.ID)+"/members", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "board_member_add",
-		Description: "Compartilha um quadro com um admin ou professor pelo email, como viewer ou editor (POST /boards/{id}/members). Só o dono pode.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in boardMemberAddInput) (*mcp.CallToolResult, any, error) {
-		if in.Email == "" {
-			return errResult("informe email"), nil, nil
+		Name: "board_member",
+		Description: "Gerencia membros de um quadro: action=list (GET /boards/{boardId}/members), " +
+			"add (POST, email+role) ou remove (DELETE .../members/{userId}). Só o dono do quadro pode add/remove.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in boardMemberActionInput) (*mcp.CallToolResult, any, error) {
+		membersURL := base + "/boards/" + url.PathEscape(in.BoardID) + "/members"
+		switch in.Action {
+		case "list":
+			return s.proxy(ctx, req, "GET", membersURL, nil)
+		case "add":
+			if in.Email == nil || *in.Email == "" {
+				return errResult("email é obrigatório para add"), nil, nil
+			}
+			if in.Role == nil || (*in.Role != "viewer" && *in.Role != "editor") {
+				return errResult("role deve ser viewer ou editor"), nil, nil
+			}
+			return s.proxy(ctx, req, "POST", membersURL, map[string]any{"email": *in.Email, "role": *in.Role})
+		case "remove":
+			if in.UserID == nil || *in.UserID == "" {
+				return errResult("userId é obrigatório para remove"), nil, nil
+			}
+			return s.proxy(ctx, req, "DELETE", membersURL+"/"+url.PathEscape(*in.UserID), nil)
+		default:
+			return errResult("action deve ser list, add ou remove"), nil, nil
 		}
-		if in.Role != "viewer" && in.Role != "editor" {
-			return errResult("role deve ser viewer ou editor"), nil, nil
-		}
-		return s.proxy(ctx, req, "POST", base+"/boards/"+url.PathEscape(in.ID)+"/members", in)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "board_member_remove",
-		Description: "Remove o acesso de um membro a um quadro (DELETE /boards/{id}/members/{userId}). Só o dono pode.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in boardMemberRemoveInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "DELETE", base+"/boards/"+url.PathEscape(in.ID)+"/members/"+url.PathEscape(in.UserID), nil)
 	})
 
 	// ── Tarefas ──────────────────────────────────────────────────────────
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "tasks_list",
-		Description: "Lista tarefas (GET /tasks). Admin vê todas; demais usuários só as que criaram ou são responsáveis.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/tasks", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "task_get",
-		Description: "Detalha uma tarefa pelo id (GET /tasks/{id}).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskIDInput) (*mcp.CallToolResult, any, error) {
+		Name: "task_get",
+		Description: "Sem id: lista tarefas (GET /tasks) — admin vê todas, demais usuários só as que criaram ou são responsáveis. " +
+			"Com id: detalha uma tarefa (GET /tasks/{id}).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskGetInput) (*mcp.CallToolResult, any, error) {
+		if in.ID == "" {
+			return s.proxy(ctx, req, "GET", base+"/tasks", nil)
+		}
 		return s.proxy(ctx, req, "GET", base+"/tasks/"+url.PathEscape(in.ID), nil)
 	})
 
@@ -281,74 +277,68 @@ func (s *Server) addWorkspaceTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "task_categories_list",
-		Description: "Lista as categorias de tarefa disponíveis (GET /tasks/categories).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/tasks/categories", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "task_category_create",
-		Description: "Cria uma categoria de tarefa (POST /tasks/categories). Admin-only.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskCategoryCreateInput) (*mcp.CallToolResult, any, error) {
-		if in.Name == "" {
-			return errResult("informe name"), nil, nil
+		Name: "task_category",
+		Description: "Gerencia categorias de tarefa: action=list (GET /tasks/categories), create (POST), " +
+			"update (PUT /tasks/categories/{id}) ou delete (DELETE /tasks/categories/{id}). Admin-only, exceto list.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskCategoryActionInput) (*mcp.CallToolResult, any, error) {
+		switch in.Action {
+		case "list":
+			return s.proxy(ctx, req, "GET", base+"/tasks/categories", nil)
+		case "create":
+			if in.Name == nil || *in.Name == "" {
+				return errResult("name é obrigatório para create"), nil, nil
+			}
+			return s.proxy(ctx, req, "POST", base+"/tasks/categories", map[string]any{"name": *in.Name})
+		case "update":
+			if in.ID == nil || *in.ID == "" {
+				return errResult("id é obrigatório para update"), nil, nil
+			}
+			if in.Name == nil || *in.Name == "" {
+				return errResult("name é obrigatório para update"), nil, nil
+			}
+			return s.proxy(ctx, req, "PUT", base+"/tasks/categories/"+url.PathEscape(*in.ID), map[string]any{"name": *in.Name})
+		case "delete":
+			if in.ID == nil || *in.ID == "" {
+				return errResult("id é obrigatório para delete"), nil, nil
+			}
+			return s.proxy(ctx, req, "DELETE", base+"/tasks/categories/"+url.PathEscape(*in.ID), nil)
+		default:
+			return errResult("action deve ser list, create, update ou delete"), nil, nil
 		}
-		return s.proxy(ctx, req, "POST", base+"/tasks/categories", in)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "task_category_update",
-		Description: "Renomeia uma categoria de tarefa (PUT /tasks/categories/{id}). Admin-only.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskCategoryUpdateInput) (*mcp.CallToolResult, any, error) {
-		if in.Name == "" {
-			return errResult("informe name"), nil, nil
-		}
-		return s.proxy(ctx, req, "PUT", base+"/tasks/categories/"+url.PathEscape(in.ID), map[string]any{"name": in.Name})
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "task_category_delete",
-		Description: "Exclui uma categoria de tarefa (DELETE /tasks/categories/{id}). Admin-only.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskCategoryIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "DELETE", base+"/tasks/categories/"+url.PathEscape(in.ID), nil)
 	})
 
 	// ── Glossário ────────────────────────────────────────────────────────
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "glossary_list",
-		Description: "Lista os termos do glossário (GET /glossary). Qualquer usuário autenticado pode ver.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/glossary", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "glossary_create",
-		Description: "Cria um termo de glossário (POST /glossary). Admin-only.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in glossaryTermInput) (*mcp.CallToolResult, any, error) {
-		if in.Term == "" || in.Definicao == "" {
-			return errResult("informe term e definicao"), nil, nil
+		Name: "glossary",
+		Description: "Gerencia o glossário: action=list (GET /glossary, qualquer usuário autenticado), create (POST), " +
+			"update (PUT /glossary/{id}) ou delete (DELETE /glossary/{id}). create/update/delete são admin-only.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in glossaryActionInput) (*mcp.CallToolResult, any, error) {
+		switch in.Action {
+		case "list":
+			return s.proxy(ctx, req, "GET", base+"/glossary", nil)
+		case "create":
+			if in.Term == nil || *in.Term == "" || in.Definicao == nil || *in.Definicao == "" {
+				return errResult("term e definicao são obrigatórios para create"), nil, nil
+			}
+			return s.proxy(ctx, req, "POST", base+"/glossary", map[string]any{"term": *in.Term, "definicao": *in.Definicao})
+		case "update":
+			if in.ID == nil || *in.ID == "" {
+				return errResult("id é obrigatório para update"), nil, nil
+			}
+			if in.Term == nil || *in.Term == "" || in.Definicao == nil || *in.Definicao == "" {
+				return errResult("term e definicao são obrigatórios para update"), nil, nil
+			}
+			return s.proxy(ctx, req, "PUT", base+"/glossary/"+url.PathEscape(*in.ID), map[string]any{
+				"term": *in.Term, "definicao": *in.Definicao,
+			})
+		case "delete":
+			if in.ID == nil || *in.ID == "" {
+				return errResult("id é obrigatório para delete"), nil, nil
+			}
+			return s.proxy(ctx, req, "DELETE", base+"/glossary/"+url.PathEscape(*in.ID), nil)
+		default:
+			return errResult("action deve ser list, create, update ou delete"), nil, nil
 		}
-		return s.proxy(ctx, req, "POST", base+"/glossary", in)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "glossary_update",
-		Description: "Substitui termo e definição de um termo de glossário (PUT /glossary/{id}). Admin-only.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in glossaryTermUpdateInput) (*mcp.CallToolResult, any, error) {
-		if in.Term == "" || in.Definicao == "" {
-			return errResult("informe term e definicao"), nil, nil
-		}
-		return s.proxy(ctx, req, "PUT", base+"/glossary/"+url.PathEscape(in.ID), map[string]any{
-			"term": in.Term, "definicao": in.Definicao,
-		})
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "glossary_delete",
-		Description: "Exclui um termo de glossário (DELETE /glossary/{id}). Admin-only.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in glossaryTermIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "DELETE", base+"/glossary/"+url.PathEscape(in.ID), nil)
 	})
 }

@@ -26,6 +26,13 @@ type blogPostIDInput struct {
 	ID string `json:"id" jsonschema:"id (uuid) do post"`
 }
 
+// blogPostGetInput: com id detalha o post (filtros abaixo são ignorados); sem
+// id lista, e aí os filtros de blogPostsListInput valem.
+type blogPostGetInput struct {
+	ID string `json:"id,omitempty" jsonschema:"id (uuid) do post; se informado, os demais campos (filtros de lista) são ignorados"`
+	blogPostsListInput
+}
+
 type blogPostInput struct {
 	Slug          string  `json:"slug" jsonschema:"slug único em minúsculas, números e hífens (ex: como-aprender-python)"`
 	Title         string  `json:"title" jsonschema:"título do post"`
@@ -164,6 +171,10 @@ type socialPostIDInput struct {
 	ID string `json:"id" jsonschema:"id (uuid) do post"`
 }
 
+type socialPostGetInput struct {
+	ID string `json:"id,omitempty" jsonschema:"id (uuid) do post; omitido lista todos os posts do calendário editorial"`
+}
+
 // socialPostInput reflete o corpo completo exigido tanto por POST quanto por
 // PUT (não é atualização parcial — a API valida os campos obrigatórios nos
 // dois casos, ver handleCreateSocialPost/handleUpdateSocialPost). Vários
@@ -235,9 +246,13 @@ func (s *Server) addContentTools(srv *mcp.Server) {
 	// ── Blog: posts ────────────────────────────────────────────────────────
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "blog_posts_list",
-		Description: "Lista posts do blog, todos os status (admin) (GET /blog/posts). Filtre por página, categoria, busca e/ou status.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in blogPostsListInput) (*mcp.CallToolResult, any, error) {
+		Name: "blog_post_get",
+		Description: "Sem id: lista posts do blog, todos os status (admin) (GET /blog/posts) — filtre por página, categoria, busca e/ou status. " +
+			"Com id: detalha um post específico, qualquer status (GET /blog/posts/{id}).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in blogPostGetInput) (*mcp.CallToolResult, any, error) {
+		if in.ID != "" {
+			return s.proxy(ctx, req, "GET", base+"/blog/posts/"+url.PathEscape(in.ID), nil)
+		}
 		v := url.Values{}
 		if in.Page > 0 {
 			v.Set("page", strconv.Itoa(in.Page))
@@ -259,13 +274,6 @@ func (s *Server) addContentTools(srv *mcp.Server) {
 			u += "?" + v.Encode()
 		}
 		return s.proxy(ctx, req, "GET", u, nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "blog_post_get",
-		Description: "Detalha um post do blog pelo id, qualquer status (GET /blog/posts/{id}).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in blogPostIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/blog/posts/"+url.PathEscape(in.ID), nil)
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -440,16 +448,13 @@ func (s *Server) addContentTools(srv *mcp.Server) {
 	// ── Calendário editorial (social) ──────────────────────────────────────
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "social_posts_list",
-		Description: "Lista todos os posts do calendário editorial (GET /social/posts). Sem filtros — a API devolve a lista inteira.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/social/posts", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "social_post_get",
-		Description: "Detalha um post do calendário editorial pelo id (GET /social/posts/{id}).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in socialPostIDInput) (*mcp.CallToolResult, any, error) {
+		Name: "social_post_get",
+		Description: "Sem id: lista todos os posts do calendário editorial, sem filtros (GET /social/posts). " +
+			"Com id: detalha um post específico, incluindo publishConfirmations (GET /social/posts/{id}).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in socialPostGetInput) (*mcp.CallToolResult, any, error) {
+		if in.ID == "" {
+			return s.proxy(ctx, req, "GET", base+"/social/posts", nil)
+		}
 		return s.proxy(ctx, req, "GET", base+"/social/posts/"+url.PathEscape(in.ID), nil)
 	})
 
