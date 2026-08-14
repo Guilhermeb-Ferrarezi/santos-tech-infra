@@ -31,11 +31,11 @@ type Server struct {
 	// um banco separado do auth; os handlers de portal usam ESTE pool, enquanto
 	// auth/guards/users seguem no `db`. Se não houver banco separado, é o mesmo
 	// pool de `db` (ver wiring no main).
-	portalDB *pgxpool.Pool
-	rdb      *redis.Client
-	email    *emailClient
-	google   *oauth2.Config
-	r2       *R2           // uploads (Cloudflare R2); nil = desabilitado
+	portalDB  *pgxpool.Pool
+	rdb       *redis.Client
+	email     *emailClient
+	google    *oauth2.Config
+	r2        *R2              // uploads (Cloudflare R2); nil = desabilitado
 	loki      *lokiClient      // consulta de logs (Loki); nil = desabilitado
 	sentry    *sentryClient    // consulta de issues (Sentry); nil = desabilitado
 	queue     *asynq.Client    // fila durável de emails; nil = sem fila (fallback fire-and-forget)

@@ -335,21 +335,88 @@ var syncProviderCatalog = map[string]syncProviderDefaults{
 	// os defaults usados pelo /chat quando o admin não informa modelo — cada
 	// família tem o path nativo e um modelo de teste que existe de verdade
 	// (o gpt-4o-mini só existe na OpenAI, o que quebrava os demais providers).
-	"openai":     func() syncProviderDefaults { d := bearerDefaults("OpenAI", "https://api.openai.com", "/v1/models"); d.ChatModel = "gpt-4o-mini"; return d }(),
-	"anthropic":  func() syncProviderDefaults { d := customHeaderDefaults("Anthropic", "https://api.anthropic.com", "x-api-key", "", "/v1/models"); d.ChatAdapter = chatAdapterAnthropic; d.ChatPath = "/v1/messages"; d.ChatModel = "claude-sonnet-4-5"; return d }(),
-	"groq":       func() syncProviderDefaults { d := bearerDefaults("Groq", "https://api.groq.com", "/openai/v1/models"); d.ChatPath = "/openai/v1/chat/completions"; d.ChatModel = "llama-3.3-70b-versatile"; return d }(),
-	"mistral":    func() syncProviderDefaults { d := bearerDefaults("Mistral", "https://api.mistral.ai", "/v1/models"); d.ChatModel = "mistral-large-latest"; return d }(),
-	"cohere":     func() syncProviderDefaults { d := bearerDefaults("Cohere", "https://api.cohere.com", "/v1/models"); d.ChatAdapter = chatAdapterCohere; d.ChatPath = "/v2/chat"; d.ChatModel = "command-a-03-2025"; return d }(),
-	"deepseek":   func() syncProviderDefaults { d := bearerDefaults("DeepSeek", "https://api.deepseek.com", "/user/balance"); d.ChatModel = "deepseek-chat"; return d }(),
-	"openrouter": func() syncProviderDefaults { d := bearerDefaults("OpenRouter", "https://openrouter.ai", "/api/v1/auth/key"); d.ChatPath = "/api/v1/chat/completions"; d.ChatModel = "openai/gpt-4o-mini"; return d }(),
-	"together":   func() syncProviderDefaults { d := bearerDefaults("Together AI", "https://api.together.xyz", "/v1/models"); d.ChatModel = "meta-llama/Llama-3.3-70B-Instruct-Turbo"; return d }(),
-	"fireworks":  func() syncProviderDefaults { d := bearerDefaults("Fireworks AI", "https://api.fireworks.ai", "/inference/v1/models"); d.ChatPath = "/inference/v1/chat/completions"; d.ChatModel = "accounts/fireworks/models/llama-v3p3-70b-instruct"; return d }(),
-	"xai":        func() syncProviderDefaults { d := bearerDefaults("xAI (Grok)", "https://api.x.ai", "/v1/models"); d.ChatModel = "grok-3-mini"; return d }(),
-	"stability":  func() syncProviderDefaults { d := bearerDefaults("Stability AI", "https://api.stability.ai", "/v1/user/account"); d.OpAdapter = opAdapterStability; return d }(),
-	"deepgram":   func() syncProviderDefaults { d := customHeaderDefaults("Deepgram", "https://api.deepgram.com", "Authorization", "Token", "/v1/projects"); d.OpAdapter = opAdapterDeepgram; return d }(),
-	"assemblyai": func() syncProviderDefaults { d := customHeaderDefaults("AssemblyAI", "https://api.assemblyai.com", "authorization", "", "/v2/transcript"); d.OpAdapter = opAdapterAssemblyAI; return d }(),
-	"elevenlabs": func() syncProviderDefaults { d := customHeaderDefaults("ElevenLabs", "https://api.elevenlabs.io", "xi-api-key", "", "/v1/user"); d.OpAdapter = opAdapterElevenLabs; return d }(),
-	"replicate":  func() syncProviderDefaults { d := customHeaderDefaults("Replicate", "https://api.replicate.com", "Authorization", "Token", "/v1/account"); d.OpAdapter = opAdapterReplicate; return d }(),
+	"openai": func() syncProviderDefaults {
+		d := bearerDefaults("OpenAI", "https://api.openai.com", "/v1/models")
+		d.ChatModel = "gpt-4o-mini"
+		return d
+	}(),
+	"anthropic": func() syncProviderDefaults {
+		d := customHeaderDefaults("Anthropic", "https://api.anthropic.com", "x-api-key", "", "/v1/models")
+		d.ChatAdapter = chatAdapterAnthropic
+		d.ChatPath = "/v1/messages"
+		d.ChatModel = "claude-sonnet-4-5"
+		return d
+	}(),
+	"groq": func() syncProviderDefaults {
+		d := bearerDefaults("Groq", "https://api.groq.com", "/openai/v1/models")
+		d.ChatPath = "/openai/v1/chat/completions"
+		d.ChatModel = "llama-3.3-70b-versatile"
+		return d
+	}(),
+	"mistral": func() syncProviderDefaults {
+		d := bearerDefaults("Mistral", "https://api.mistral.ai", "/v1/models")
+		d.ChatModel = "mistral-large-latest"
+		return d
+	}(),
+	"cohere": func() syncProviderDefaults {
+		d := bearerDefaults("Cohere", "https://api.cohere.com", "/v1/models")
+		d.ChatAdapter = chatAdapterCohere
+		d.ChatPath = "/v2/chat"
+		d.ChatModel = "command-a-03-2025"
+		return d
+	}(),
+	"deepseek": func() syncProviderDefaults {
+		d := bearerDefaults("DeepSeek", "https://api.deepseek.com", "/user/balance")
+		d.ChatModel = "deepseek-chat"
+		return d
+	}(),
+	"openrouter": func() syncProviderDefaults {
+		d := bearerDefaults("OpenRouter", "https://openrouter.ai", "/api/v1/auth/key")
+		d.ChatPath = "/api/v1/chat/completions"
+		d.ChatModel = "openai/gpt-4o-mini"
+		return d
+	}(),
+	"together": func() syncProviderDefaults {
+		d := bearerDefaults("Together AI", "https://api.together.xyz", "/v1/models")
+		d.ChatModel = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+		return d
+	}(),
+	"fireworks": func() syncProviderDefaults {
+		d := bearerDefaults("Fireworks AI", "https://api.fireworks.ai", "/inference/v1/models")
+		d.ChatPath = "/inference/v1/chat/completions"
+		d.ChatModel = "accounts/fireworks/models/llama-v3p3-70b-instruct"
+		return d
+	}(),
+	"xai": func() syncProviderDefaults {
+		d := bearerDefaults("xAI (Grok)", "https://api.x.ai", "/v1/models")
+		d.ChatModel = "grok-3-mini"
+		return d
+	}(),
+	"stability": func() syncProviderDefaults {
+		d := bearerDefaults("Stability AI", "https://api.stability.ai", "/v1/user/account")
+		d.OpAdapter = opAdapterStability
+		return d
+	}(),
+	"deepgram": func() syncProviderDefaults {
+		d := customHeaderDefaults("Deepgram", "https://api.deepgram.com", "Authorization", "Token", "/v1/projects")
+		d.OpAdapter = opAdapterDeepgram
+		return d
+	}(),
+	"assemblyai": func() syncProviderDefaults {
+		d := customHeaderDefaults("AssemblyAI", "https://api.assemblyai.com", "authorization", "", "/v2/transcript")
+		d.OpAdapter = opAdapterAssemblyAI
+		return d
+	}(),
+	"elevenlabs": func() syncProviderDefaults {
+		d := customHeaderDefaults("ElevenLabs", "https://api.elevenlabs.io", "xi-api-key", "", "/v1/user")
+		d.OpAdapter = opAdapterElevenLabs
+		return d
+	}(),
+	"replicate": func() syncProviderDefaults {
+		d := customHeaderDefaults("Replicate", "https://api.replicate.com", "Authorization", "Token", "/v1/account")
+		d.OpAdapter = opAdapterReplicate
+		return d
+	}(),
 
 	// Cloud / Infra
 	"github":       bearerDefaults("GitHub", "https://api.github.com", "/user"),
