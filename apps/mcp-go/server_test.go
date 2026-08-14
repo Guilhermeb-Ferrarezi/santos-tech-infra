@@ -339,29 +339,29 @@ func TestTodasAsToolsRegistradas(t *testing.T) {
 	}
 	want := []string{
 		"whoami", "list_users", "create_user", "update_user", "resend_invite",
-		"ecosystem_status", "mailbox_list", "mailbox_read", "mailbox_send",
+		"ecosystem_status", "mailbox_read", "mailbox_send",
 		"email_metrics", "email_logs", "agent_generate", "agent_conversations",
 		"upload_image",
-		"bookings_list", "leads_list", "conversations_list", "conversation_messages",
-		"payments_stats", "payments_analytics", "charges_list", "charges_get",
+		"bookings_list", "leads_list", "conversations_list",
+		"payments_stats", "payments_analytics", "charges_get",
 		"subscriptions_list", "recurrences_list", "efi_balance", "efi_med",
 		"bambu_status",
 		// Workspace: quadros, tarefas, glossário (get+list e CRUDs de baixo risco consolidados).
 		"board_get", "board_create", "board_update", "board_delete", "board_member",
 		"task_get", "task_create", "task_update", "task_delete",
-		"task_notes_list", "task_note_add", "task_category",
+		"task_note", "task_category",
 		"glossary",
 		// Conteúdo: blog, vitrine de links, calendário editorial, Instagram.
 		"blog_post_get", "blog_post_create", "blog_post_update", "blog_post_delete",
-		"blog_categories_list", "blog_category_create", "blog_category_update", "blog_category_delete",
+		"blog_category",
 		"blog_heatmap_clicks", "blog_heatmap_scroll",
 		"blog_metrics_overview", "blog_metrics_timeseries", "blog_metrics_top_posts",
 		"blog_metrics_referrers", "blog_metrics_utm_source", "blog_metrics_devices", "blog_metrics_countries",
-		"links_list", "link_create", "link_update", "link_delete", "link_settings_get", "link_settings_update",
+		"link", "link_settings",
 		"social_post_get", "social_post_create", "social_post_update", "social_post_delete",
-		"social_post_status_update", "social_post_notes_list", "social_post_note_add", "social_post_history",
-		"social_post_platform_confirm", "social_post_platform_unconfirm",
-		"instagram_media_list", "instagram_links_list", "instagram_link_upsert", "instagram_link_delete",
+		"social_post_status_update", "social_post_note", "social_post_history",
+		"social_post_platform",
+		"instagram_media_list", "instagram_link",
 		// Admin: logs, Sentry, cargos personalizados, api-router, ip-bans, oauth-clients, models3d.
 		"logs_query", "logs_labels", "logs_top_ips",
 		"sentry_issue_get", "sentry_projects_list",
@@ -369,9 +369,9 @@ func TestTodasAsToolsRegistradas(t *testing.T) {
 		"api_router_providers_list", "api_router_provider_create", "api_router_provider_update", "api_router_provider_delete",
 		"api_router_keys_list", "api_router_key_create", "api_router_key_update", "api_router_key_delete",
 		"api_router_key_status_set", "api_router_key_test",
-		"ip_bans_list", "ip_ban_create", "ip_ban_delete",
+		"ip_ban",
 		"oauth_clients_list", "oauth_client_create", "oauth_client_update", "oauth_client_delete",
-		"models3d_list", "model3d_upload", "model3d_update", "model3d_delete",
+		"model3d", "model3d_upload",
 	}
 	got := map[string]bool{}
 	for _, tl := range res.Tools {

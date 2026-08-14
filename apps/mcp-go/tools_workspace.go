@@ -86,13 +86,12 @@ type taskUpdateInput struct {
 	ResponsavelID *int64  `json:"responsavelId,omitempty" jsonschema:"id do usuário responsável"`
 }
 
-type taskNotesListInput struct {
-	ID string `json:"id" jsonschema:"id (UUID) da tarefa"`
-}
-
-type taskNoteAddInput struct {
+// taskNoteActionInput consolida list/add — notas de tarefa não têm update nem
+// delete na API, então não há ação destrutiva a proteger aqui.
+type taskNoteActionInput struct {
+	Action  string `json:"action" jsonschema:"list ou add"`
 	ID      string `json:"id" jsonschema:"id (UUID) da tarefa"`
-	Content string `json:"content" jsonschema:"texto da nota"`
+	Content string `json:"content,omitempty" jsonschema:"texto da nota — obrigatório em add"`
 }
 
 // taskCategoryActionInput consolida list/create/update/delete — categoria é só
@@ -260,20 +259,21 @@ func (s *Server) addWorkspaceTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "task_notes_list",
-		Description: "Lista as notas de uma tarefa (GET /tasks/{id}/notes).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskNotesListInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/tasks/"+url.PathEscape(in.ID)+"/notes", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "task_note_add",
-		Description: "Adiciona uma nota a uma tarefa (POST /tasks/{id}/notes).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskNoteAddInput) (*mcp.CallToolResult, any, error) {
-		if in.Content == "" {
-			return errResult("informe content"), nil, nil
+		Name:        "task_note",
+		Description: "Gerencia notas de uma tarefa: action=list (GET /tasks/{id}/notes) ou add (POST, content).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskNoteActionInput) (*mcp.CallToolResult, any, error) {
+		notesURL := base + "/tasks/" + url.PathEscape(in.ID) + "/notes"
+		switch in.Action {
+		case "list":
+			return s.proxy(ctx, req, "GET", notesURL, nil)
+		case "add":
+			if in.Content == "" {
+				return errResult("content é obrigatório para add"), nil, nil
+			}
+			return s.proxy(ctx, req, "POST", notesURL, map[string]any{"content": in.Content})
+		default:
+			return errResult("action deve ser list ou add"), nil, nil
 		}
-		return s.proxy(ctx, req, "POST", base+"/tasks/"+url.PathEscape(in.ID)+"/notes", in)
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{

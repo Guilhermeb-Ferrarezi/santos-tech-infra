@@ -143,14 +143,15 @@ type apiRouterKeyStatusInput struct {
 
 // ── ip bans ──────────────────────────────────────────────────────────────────
 
-type ipBanCreateInput struct {
-	IP        string `json:"ip" jsonschema:"endereço IP a banir (IPv4 ou IPv6)"`
-	Reason    string `json:"reason,omitempty" jsonschema:"motivo do banimento"`
-	ExpiresAt string `json:"expires_at,omitempty" jsonschema:"expiração em RFC3339 (ex: 2026-09-01T00:00:00Z); vazio = ban permanente"`
-}
-
-type ipBanIDInput struct {
-	ID string `json:"id" jsonschema:"id numérico do ban (ver ip_bans_list)"`
+// ipBanActionInput consolida list/create/delete — banir/desbanir é reversível
+// (delete devolve o acesso na hora) e não é credencial nem quebra produção
+// para nós, então uma tool com action cobre o CRUD inteiro.
+type ipBanActionInput struct {
+	Action    string  `json:"action" jsonschema:"list, create ou delete"`
+	ID        *string `json:"id,omitempty" jsonschema:"id numérico do ban — obrigatório em delete"`
+	IP        *string `json:"ip,omitempty" jsonschema:"endereço IP a banir (IPv4 ou IPv6) — obrigatório em create"`
+	Reason    *string `json:"reason,omitempty" jsonschema:"motivo do banimento"`
+	ExpiresAt *string `json:"expires_at,omitempty" jsonschema:"expiração em RFC3339 (ex: 2026-09-01T00:00:00Z); vazio/ausente = ban permanente"`
 }
 
 // ── oauth clients ────────────────────────────────────────────────────────────
@@ -190,15 +191,14 @@ type model3DUploadInput struct {
 	Folder     string `json:"folder,omitempty" jsonschema:"pasta opcional para organizar a biblioteca (máx 60 caracteres)"`
 }
 
-type model3DUpdateInput struct {
-	ID       string  `json:"id" jsonschema:"id do modelo"`
-	Filename *string `json:"filename,omitempty" jsonschema:"novo nome de exibição (não altera a extensão real do arquivo armazenado)"`
-	Folder   *string `json:"folder,omitempty" jsonschema:"pasta (máx 60 caracteres); string vazia remove o modelo de qualquer pasta"`
-	Pinned   *bool   `json:"pinned,omitempty" jsonschema:"fixar (true) ou desfixar (false) o modelo na biblioteca"`
-}
-
-type model3DIDInput struct {
-	ID string `json:"id" jsonschema:"id do modelo (ver models3d_list)"`
+// model3DActionInput consolida list/update/delete — model3d_upload (multipart)
+// fica de fora por ser um fluxo totalmente diferente (arquivo binário).
+type model3DActionInput struct {
+	Action   string  `json:"action" jsonschema:"list, update ou delete"`
+	ID       *string `json:"id,omitempty" jsonschema:"id do modelo — obrigatório em update/delete"`
+	Filename *string `json:"filename,omitempty" jsonschema:"update: novo nome de exibição (não altera a extensão real do arquivo armazenado)"`
+	Folder   *string `json:"folder,omitempty" jsonschema:"update: pasta (máx 60 caracteres); string vazia remove o modelo de qualquer pasta"`
+	Pinned   *bool   `json:"pinned,omitempty" jsonschema:"update: fixar (true) ou desfixar (false) o modelo na biblioteca"`
 }
 
 func (s *Server) addAdminTools(srv *mcp.Server) {
@@ -455,34 +455,33 @@ func (s *Server) addAdminTools(srv *mcp.Server) {
 	// ── ip bans ──────────────────────────────────────────────────────────
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "ip_bans_list",
-		Description: "Lista os banimentos de IP ativos (GET /auth/admin/ip-bans).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", authAdmin+"/ip-bans", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "ip_ban_create",
-		Description: "Bane um endereço IP, opcionalmente com expiração (POST /auth/admin/ip-bans). Sincroniza no Redis imediatamente.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in ipBanCreateInput) (*mcp.CallToolResult, any, error) {
-		if in.IP == "" {
-			return errResult("ip é obrigatório"), nil, nil
+		Name: "ip_ban",
+		Description: "Gerencia banimentos de IP: action=list (GET /auth/admin/ip-bans), create (POST, ip + reason/expires_at " +
+			"opcionais — sincroniza no Redis na hora) ou delete (DELETE — o IP volta a ter acesso normal na hora).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in ipBanActionInput) (*mcp.CallToolResult, any, error) {
+		switch in.Action {
+		case "list":
+			return s.proxy(ctx, req, "GET", authAdmin+"/ip-bans", nil)
+		case "create":
+			if in.IP == nil || *in.IP == "" {
+				return errResult("ip é obrigatório para create"), nil, nil
+			}
+			body := map[string]any{"ip": *in.IP}
+			if in.Reason != nil && *in.Reason != "" {
+				body["reason"] = *in.Reason
+			}
+			if in.ExpiresAt != nil && *in.ExpiresAt != "" {
+				body["expires_at"] = *in.ExpiresAt
+			}
+			return s.proxy(ctx, req, "POST", authAdmin+"/ip-bans", body)
+		case "delete":
+			if in.ID == nil || *in.ID == "" {
+				return errResult("id é obrigatório para delete"), nil, nil
+			}
+			return s.proxy(ctx, req, "DELETE", authAdmin+"/ip-bans/"+url.PathEscape(*in.ID), nil)
+		default:
+			return errResult("action deve ser list, create ou delete"), nil, nil
 		}
-		body := map[string]any{"ip": in.IP}
-		if in.Reason != "" {
-			body["reason"] = in.Reason
-		}
-		if in.ExpiresAt != "" {
-			body["expires_at"] = in.ExpiresAt
-		}
-		return s.proxy(ctx, req, "POST", authAdmin+"/ip-bans", body)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "ip_ban_delete",
-		Description: "Remove um banimento de IP (DELETE /auth/admin/ip-bans/{id}). O IP volta a ter acesso normal imediatamente.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in ipBanIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "DELETE", authAdmin+"/ip-bans/"+url.PathEscape(in.ID), nil)
 	})
 
 	// ── oauth clients ────────────────────────────────────────────────────
@@ -533,13 +532,6 @@ func (s *Server) addAdminTools(srv *mcp.Server) {
 	})
 
 	// ── models3d ─────────────────────────────────────────────────────────
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "models3d_list",
-		Description: "Lista os modelos 3D da biblioteca (GET /auth/admin/models3d).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", authAdmin+"/models3d", nil)
-	})
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "model3d_upload",
@@ -604,31 +596,39 @@ func (s *Server) addAdminTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "model3d_update",
-		Description: "Atualiza nome, pasta e/ou fixação de um modelo 3D (PATCH /auth/admin/models3d/{id}). Só os campos enviados mudam.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in model3DUpdateInput) (*mcp.CallToolResult, any, error) {
-		body := map[string]any{}
-		if in.Filename != nil {
-			body["filename"] = *in.Filename
+		Name: "model3d",
+		Description: "Gerencia a biblioteca de modelos 3D (exceto upload, ver model3d_upload): action=list (GET /auth/admin/models3d), " +
+			"update (PATCH, só os campos enviados mudam) ou delete (DELETE — apaga também o arquivo/miniatura no R2, irreversível).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in model3DActionInput) (*mcp.CallToolResult, any, error) {
+		switch in.Action {
+		case "list":
+			return s.proxy(ctx, req, "GET", authAdmin+"/models3d", nil)
+		case "update":
+			if in.ID == nil || *in.ID == "" {
+				return errResult("id é obrigatório para update"), nil, nil
+			}
+			body := map[string]any{}
+			if in.Filename != nil {
+				body["filename"] = *in.Filename
+			}
+			if in.Folder != nil {
+				body["folder"] = *in.Folder
+			}
+			if in.Pinned != nil {
+				body["pinned"] = *in.Pinned
+			}
+			if len(body) == 0 {
+				return errResult("nenhum campo para atualizar (filename, folder, pinned)"), nil, nil
+			}
+			return s.proxy(ctx, req, "PATCH", authAdmin+"/models3d/"+url.PathEscape(*in.ID), body)
+		case "delete":
+			if in.ID == nil || *in.ID == "" {
+				return errResult("id é obrigatório para delete"), nil, nil
+			}
+			return s.proxy(ctx, req, "DELETE", authAdmin+"/models3d/"+url.PathEscape(*in.ID), nil)
+		default:
+			return errResult("action deve ser list, update ou delete"), nil, nil
 		}
-		if in.Folder != nil {
-			body["folder"] = *in.Folder
-		}
-		if in.Pinned != nil {
-			body["pinned"] = *in.Pinned
-		}
-		if len(body) == 0 {
-			return errResult("nenhum campo para atualizar (filename, folder, pinned)"), nil, nil
-		}
-		return s.proxy(ctx, req, "PATCH", authAdmin+"/models3d/"+url.PathEscape(in.ID), body)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name: "model3d_delete",
-		Description: "Remove um modelo 3D da biblioteca, apagando também o arquivo (e miniatura, se houver) no R2 " +
-			"(DELETE /auth/admin/models3d/{id}). Ação irreversível.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in model3DIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "DELETE", authAdmin+"/models3d/"+url.PathEscape(in.ID), nil)
 	})
 }
 

@@ -11,6 +11,14 @@ import (
 // Tools de conteúdo da API central: blog (posts, categorias, analytics,
 // heatmap), vitrine de links (Linktree institucional), calendário editorial
 // (social) e automação de comentário do Instagram.
+//
+// Uso interno (só nós usamos este MCP): get+list do mesmo recurso e os CRUDs
+// de baixo risco (blog_category, link, link_settings, social_post_note,
+// social_post_platform, instagram_link — nada que quebre produção sozinho ou
+// seja caro de refazer) ficam consolidados numa tool com parâmetro action.
+// blog_post e social_post continuam com create/update/delete separados: são o
+// conteúdo em si (não metadado de organização), e blog_post_delete exige sudo
+// na API por ser mais sensível.
 
 // ── Blog — posts e categorias ───────────────────────────────────────────────
 
@@ -48,18 +56,14 @@ type blogPostUpdateInput struct {
 	blogPostInput
 }
 
-type blogCategoryIDInput struct {
-	ID string `json:"id" jsonschema:"id (uuid) da categoria"`
-}
-
-type blogCategoryInput struct {
-	Slug string `json:"slug" jsonschema:"slug único em minúsculas, números e hífens"`
-	Name string `json:"name" jsonschema:"nome de exibição da categoria"`
-}
-
-type blogCategoryUpdateInput struct {
-	ID string `json:"id" jsonschema:"id (uuid) da categoria"`
-	blogCategoryInput
+// blogCategoryActionInput consolida list/create/update/delete — categoria é
+// só slug+nome, sem dado sensível; a própria API já recusa delete de
+// categoria em uso e exige admin+sudo nela.
+type blogCategoryActionInput struct {
+	Action string  `json:"action" jsonschema:"list, create, update ou delete"`
+	ID     *string `json:"id,omitempty" jsonschema:"id (uuid) da categoria — obrigatório em update/delete"`
+	Slug   *string `json:"slug,omitempty" jsonschema:"slug único em minúsculas, números e hífens — obrigatório em create/update"`
+	Name   *string `json:"name,omitempty" jsonschema:"nome de exibição da categoria — obrigatório em create/update"`
 }
 
 // ── Blog — métricas e heatmap ───────────────────────────────────────────────
@@ -143,26 +147,23 @@ type blogHeatmapClicksInput struct {
 
 // ── Vitrine de links (Linktree institucional) ───────────────────────────────
 
-type linkIDInput struct {
-	ID string `json:"id" jsonschema:"id (uuid) do card"`
-}
-
-type linkItemInput struct {
-	Title       string  `json:"title" jsonschema:"título do card"`
-	Description string  `json:"description,omitempty" jsonschema:"descrição curta do card"`
+// linkActionInput consolida list/create/update/delete — card do Linktree
+// institucional, sem dado sensível, errar a ação custa só recriar o card.
+type linkActionInput struct {
+	Action      string  `json:"action" jsonschema:"list, create, update ou delete"`
+	ID          *string `json:"id,omitempty" jsonschema:"id (uuid) do card — obrigatório em update/delete"`
+	Title       *string `json:"title,omitempty" jsonschema:"título do card — obrigatório em create/update"`
+	Description *string `json:"description,omitempty" jsonschema:"descrição curta do card"`
 	ImageURL    *string `json:"imageUrl,omitempty" jsonschema:"URL da imagem do card"`
-	URL         string  `json:"url" jsonschema:"URL de destino (http:// ou https://)"`
-	Status      string  `json:"status" jsonschema:"active ou inactive"`
-	Ordem       int     `json:"ordem" jsonschema:"posição de exibição (menor aparece primeiro)"`
+	URL         *string `json:"url,omitempty" jsonschema:"URL de destino (http:// ou https://) — obrigatório em create/update"`
+	Status      *string `json:"status,omitempty" jsonschema:"active ou inactive — obrigatório em create/update"`
+	Ordem       *int    `json:"ordem,omitempty" jsonschema:"posição de exibição (menor aparece primeiro) — obrigatório em create/update"`
 }
 
-type linkUpdateInput struct {
-	ID string `json:"id" jsonschema:"id (uuid) do card"`
-	linkItemInput
-}
-
+// linkSettingsInput: sem backgroundImageUrl lê as configurações; com o campo
+// (mesmo string vazia, que remove o fundo) atualiza.
 type linkSettingsInput struct {
-	BackgroundImageURL *string `json:"backgroundImageUrl,omitempty" jsonschema:"URL da imagem de fundo da página; omitido/vazio remove o fundo"`
+	BackgroundImageURL *string `json:"backgroundImageUrl,omitempty" jsonschema:"presente = atualiza (vazio remove o fundo); ausente = só consulta a config atual"`
 }
 
 // ── Calendário editorial (social) ───────────────────────────────────────────
@@ -217,27 +218,31 @@ type socialPostStatusInput struct {
 	Status string `json:"status" jsonschema:"ideia, planejado, em_producao, revisao, aprovado, agendado, publicado ou arquivado"`
 }
 
-type socialPostNoteAddInput struct {
+// socialPostNoteActionInput consolida list/add — notas não têm update/delete
+// na API.
+type socialPostNoteActionInput struct {
+	Action  string `json:"action" jsonschema:"list ou add"`
 	ID      string `json:"id" jsonschema:"id (uuid) do post"`
-	Content string `json:"content" jsonschema:"texto da nota"`
+	Content string `json:"content,omitempty" jsonschema:"texto da nota — obrigatório em add"`
 }
 
-type socialPostPlatformConfirmInput struct {
+// socialPostPlatformActionInput consolida confirm/unconfirm.
+type socialPostPlatformActionInput struct {
+	Action   string `json:"action" jsonschema:"confirm ou unconfirm"`
 	ID       string `json:"id" jsonschema:"id (uuid) do post"`
 	Platform string `json:"platform" jsonschema:"facebook, instagram, tiktok, youtube, threads, google_meu_negocio, blog, twitter_x ou linkedin"`
 }
 
 // ── Instagram — mídia e mapeamento de comentário ────────────────────────────
 
-type instagramMediaIDInput struct {
-	MediaID string `json:"mediaId" jsonschema:"id da publicação no Instagram"`
-}
-
-type instagramLinkUpsertInput struct {
-	MediaID string `json:"mediaId" jsonschema:"id da publicação no Instagram"`
-	URL     string `json:"url" jsonschema:"URL enviada por DM a quem comentar (http:// ou https://)"`
-	Note    string `json:"note,omitempty" jsonschema:"anotação interna sobre o mapeamento"`
-	Keyword string `json:"keyword,omitempty" jsonschema:"se definida, só responde comentários que contenham essa palavra (case-insensitive); vazio responde qualquer comentário"`
+// instagramLinkActionInput consolida list/upsert/delete do mapeamento
+// publicação→link — tabela pequena, gerida manualmente, sem dado sensível.
+type instagramLinkActionInput struct {
+	Action  string  `json:"action" jsonschema:"list, upsert ou delete"`
+	MediaID *string `json:"mediaId,omitempty" jsonschema:"id da publicação no Instagram — obrigatório em upsert/delete"`
+	URL     *string `json:"url,omitempty" jsonschema:"URL enviada por DM a quem comentar (http:// ou https://) — obrigatório em upsert"`
+	Note    *string `json:"note,omitempty" jsonschema:"anotação interna sobre o mapeamento"`
+	Keyword *string `json:"keyword,omitempty" jsonschema:"se definida, só responde comentários que contenham essa palavra (case-insensitive); vazio/ausente responde qualquer comentário"`
 }
 
 func (s *Server) addContentTools(srv *mcp.Server) {
@@ -300,31 +305,34 @@ func (s *Server) addContentTools(srv *mcp.Server) {
 	// ── Blog: categorias ───────────────────────────────────────────────────
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "blog_categories_list",
-		Description: "Lista categorias do blog com id, para editar/apagar (GET /blog/categories).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/blog/categories", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "blog_category_create",
-		Description: "Cria uma categoria do blog (POST /blog/categories).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in blogCategoryInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "POST", base+"/blog/categories", in)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "blog_category_update",
-		Description: "Substitui uma categoria do blog (PATCH /blog/categories/{id}). Corpo completo — slug e nome são obrigatórios.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in blogCategoryUpdateInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "PATCH", base+"/blog/categories/"+url.PathEscape(in.ID), in.blogCategoryInput)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "blog_category_delete",
-		Description: "Apaga uma categoria do blog (DELETE /blog/categories/{id}). A API exige admin + sudo e recusa categoria ainda em uso por posts.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in blogCategoryIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "DELETE", base+"/blog/categories/"+url.PathEscape(in.ID), nil)
+		Name: "blog_category",
+		Description: "Gerencia categorias do blog: action=list (GET /blog/categories), create (POST), update (PATCH, " +
+			"corpo completo) ou delete (DELETE — admin+sudo na API, recusa categoria ainda em uso por posts).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in blogCategoryActionInput) (*mcp.CallToolResult, any, error) {
+		switch in.Action {
+		case "list":
+			return s.proxy(ctx, req, "GET", base+"/blog/categories", nil)
+		case "create":
+			if in.Slug == nil || *in.Slug == "" || in.Name == nil || *in.Name == "" {
+				return errResult("slug e name são obrigatórios para create"), nil, nil
+			}
+			return s.proxy(ctx, req, "POST", base+"/blog/categories", map[string]any{"slug": *in.Slug, "name": *in.Name})
+		case "update":
+			if in.ID == nil || *in.ID == "" {
+				return errResult("id é obrigatório para update"), nil, nil
+			}
+			if in.Slug == nil || *in.Slug == "" || in.Name == nil || *in.Name == "" {
+				return errResult("slug e name são obrigatórios para update"), nil, nil
+			}
+			return s.proxy(ctx, req, "PATCH", base+"/blog/categories/"+url.PathEscape(*in.ID), map[string]any{"slug": *in.Slug, "name": *in.Name})
+		case "delete":
+			if in.ID == nil || *in.ID == "" {
+				return errResult("id é obrigatório para delete"), nil, nil
+			}
+			return s.proxy(ctx, req, "DELETE", base+"/blog/categories/"+url.PathEscape(*in.ID), nil)
+		default:
+			return errResult("action deve ser list, create, update ou delete"), nil, nil
+		}
 	})
 
 	// ── Blog: heatmap ──────────────────────────────────────────────────────
@@ -404,44 +412,58 @@ func (s *Server) addContentTools(srv *mcp.Server) {
 	// ── Vitrine de links (Linktree institucional) ─────────────────────────
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "links_list",
-		Description: "Lista todos os cards da vitrine de links, inclusive inativos (GET /links).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/links", nil)
+		Name: "link",
+		Description: "Gerencia cards da vitrine de links: action=list (GET /links, inclusive inativos), create (POST), " +
+			"update (PUT /links/{id}, corpo completo) ou delete (DELETE /links/{id}).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in linkActionInput) (*mcp.CallToolResult, any, error) {
+		switch in.Action {
+		case "list":
+			return s.proxy(ctx, req, "GET", base+"/links", nil)
+		case "create":
+			if in.Title == nil || *in.Title == "" || in.URL == nil || *in.URL == "" || in.Status == nil || in.Ordem == nil {
+				return errResult("title, url, status e ordem são obrigatórios para create"), nil, nil
+			}
+			body := map[string]any{"title": *in.Title, "url": *in.URL, "status": *in.Status, "ordem": *in.Ordem}
+			if in.Description != nil {
+				body["description"] = *in.Description
+			}
+			if in.ImageURL != nil {
+				body["imageUrl"] = *in.ImageURL
+			}
+			return s.proxy(ctx, req, "POST", base+"/links", body)
+		case "update":
+			if in.ID == nil || *in.ID == "" {
+				return errResult("id é obrigatório para update"), nil, nil
+			}
+			if in.Title == nil || *in.Title == "" || in.URL == nil || *in.URL == "" || in.Status == nil || in.Ordem == nil {
+				return errResult("title, url, status e ordem são obrigatórios para update"), nil, nil
+			}
+			body := map[string]any{"title": *in.Title, "url": *in.URL, "status": *in.Status, "ordem": *in.Ordem}
+			if in.Description != nil {
+				body["description"] = *in.Description
+			}
+			if in.ImageURL != nil {
+				body["imageUrl"] = *in.ImageURL
+			}
+			return s.proxy(ctx, req, "PUT", base+"/links/"+url.PathEscape(*in.ID), body)
+		case "delete":
+			if in.ID == nil || *in.ID == "" {
+				return errResult("id é obrigatório para delete"), nil, nil
+			}
+			return s.proxy(ctx, req, "DELETE", base+"/links/"+url.PathEscape(*in.ID), nil)
+		default:
+			return errResult("action deve ser list, create, update ou delete"), nil, nil
+		}
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "link_create",
-		Description: "Cria um card na vitrine de links (POST /links).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in linkItemInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "POST", base+"/links", in)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "link_update",
-		Description: "Substitui um card da vitrine de links (PUT /links/{id}). Corpo completo — title/url/status/ordem são obrigatórios.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in linkUpdateInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "PUT", base+"/links/"+url.PathEscape(in.ID), in.linkItemInput)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "link_delete",
-		Description: "Apaga um card da vitrine de links (DELETE /links/{id}).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in linkIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "DELETE", base+"/links/"+url.PathEscape(in.ID), nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "link_settings_get",
-		Description: "Mostra as configurações da página da vitrine de links, hoje só a imagem de fundo (GET /links/settings).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/links/settings", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "link_settings_update",
-		Description: "Atualiza as configurações da página da vitrine de links (PUT /links/settings). Omitir/enviar vazio em backgroundImageUrl remove o fundo.",
+		Name: "link_settings",
+		Description: "Sem backgroundImageUrl: mostra as configurações da página da vitrine de links (GET /links/settings). " +
+			"Com backgroundImageUrl (mesmo vazio): atualiza (PUT) — vazio remove o fundo.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in linkSettingsInput) (*mcp.CallToolResult, any, error) {
+		if in.BackgroundImageURL == nil {
+			return s.proxy(ctx, req, "GET", base+"/links/settings", nil)
+		}
 		return s.proxy(ctx, req, "PUT", base+"/links/settings", in)
 	})
 
@@ -490,20 +512,21 @@ func (s *Server) addContentTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "social_post_notes_list",
-		Description: "Lista as notas internas de um post do calendário editorial (GET /social/posts/{id}/notes).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in socialPostIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/social/posts/"+url.PathEscape(in.ID)+"/notes", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "social_post_note_add",
-		Description: "Adiciona uma nota interna a um post do calendário editorial (POST /social/posts/{id}/notes).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in socialPostNoteAddInput) (*mcp.CallToolResult, any, error) {
-		if in.Content == "" {
-			return errResult("informe content"), nil, nil
+		Name:        "social_post_note",
+		Description: "Gerencia notas internas de um post do calendário editorial: action=list (GET .../notes) ou add (POST, content).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in socialPostNoteActionInput) (*mcp.CallToolResult, any, error) {
+		notesURL := base + "/social/posts/" + url.PathEscape(in.ID) + "/notes"
+		switch in.Action {
+		case "list":
+			return s.proxy(ctx, req, "GET", notesURL, nil)
+		case "add":
+			if in.Content == "" {
+				return errResult("content é obrigatório para add"), nil, nil
+			}
+			return s.proxy(ctx, req, "POST", notesURL, map[string]any{"content": in.Content})
+		default:
+			return errResult("action deve ser list ou add"), nil, nil
 		}
-		return s.proxy(ctx, req, "POST", base+"/social/posts/"+url.PathEscape(in.ID)+"/notes", map[string]any{"content": in.Content})
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -514,21 +537,20 @@ func (s *Server) addContentTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "social_post_platform_confirm",
-		Description: "Marca uma plataforma como confirmada (peça entregue) num post do calendário editorial " +
-			"(POST /social/posts/{id}/publish-confirmations/{platform}). Mudar o status para publicado exige " +
-			"confirmação de todas as plataformas em plataformasDestino.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in socialPostPlatformConfirmInput) (*mcp.CallToolResult, any, error) {
+		Name: "social_post_platform",
+		Description: "Confirma ou desfaz a confirmação de entrega de uma plataforma num post do calendário editorial: " +
+			"action=confirm (POST) ou unconfirm (DELETE) em /social/posts/{id}/publish-confirmations/{platform}. " +
+			"Mudar o status para publicado exige confirmação de todas as plataformas em plataformasDestino.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in socialPostPlatformActionInput) (*mcp.CallToolResult, any, error) {
 		u := base + "/social/posts/" + url.PathEscape(in.ID) + "/publish-confirmations/" + url.PathEscape(in.Platform)
-		return s.proxy(ctx, req, "POST", u, nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "social_post_platform_unconfirm",
-		Description: "Desfaz a confirmação de uma plataforma num post do calendário editorial (DELETE /social/posts/{id}/publish-confirmations/{platform}).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in socialPostPlatformConfirmInput) (*mcp.CallToolResult, any, error) {
-		u := base + "/social/posts/" + url.PathEscape(in.ID) + "/publish-confirmations/" + url.PathEscape(in.Platform)
-		return s.proxy(ctx, req, "DELETE", u, nil)
+		switch in.Action {
+		case "confirm":
+			return s.proxy(ctx, req, "POST", u, nil)
+		case "unconfirm":
+			return s.proxy(ctx, req, "DELETE", u, nil)
+		default:
+			return errResult("action deve ser confirm ou unconfirm"), nil, nil
+		}
 	})
 
 	// ── Instagram — mídia e mapeamento de comentário ───────────────────────
@@ -541,24 +563,35 @@ func (s *Server) addContentTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "instagram_links_list",
-		Description: "Lista os mapeamentos publicação→link (resposta automática de comentário) já cadastrados (GET /instagram/links).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", base+"/instagram/links", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "instagram_link_upsert",
-		Description: "Cria ou atualiza o mapeamento publicação→link do Instagram (PUT /instagram/links/{mediaId}, idempotente por media_id). keyword vazia responde a qualquer comentário na publicação.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in instagramLinkUpsertInput) (*mcp.CallToolResult, any, error) {
-		body := map[string]any{"url": in.URL, "note": in.Note, "keyword": in.Keyword}
-		return s.proxy(ctx, req, "PUT", base+"/instagram/links/"+url.PathEscape(in.MediaID), body)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "instagram_link_delete",
-		Description: "Remove o mapeamento publicação→link do Instagram (DELETE /instagram/links/{mediaId}).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in instagramMediaIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "DELETE", base+"/instagram/links/"+url.PathEscape(in.MediaID), nil)
+		Name: "instagram_link",
+		Description: "Gerencia o mapeamento publicação→link do Instagram (resposta automática de comentário): action=list (GET /instagram/links), " +
+			"upsert (PUT /instagram/links/{mediaId}, idempotente — url obrigatória) ou delete (DELETE).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in instagramLinkActionInput) (*mcp.CallToolResult, any, error) {
+		switch in.Action {
+		case "list":
+			return s.proxy(ctx, req, "GET", base+"/instagram/links", nil)
+		case "upsert":
+			if in.MediaID == nil || *in.MediaID == "" {
+				return errResult("mediaId é obrigatório para upsert"), nil, nil
+			}
+			if in.URL == nil || *in.URL == "" {
+				return errResult("url é obrigatória para upsert"), nil, nil
+			}
+			body := map[string]any{"url": *in.URL}
+			if in.Note != nil {
+				body["note"] = *in.Note
+			}
+			if in.Keyword != nil {
+				body["keyword"] = *in.Keyword
+			}
+			return s.proxy(ctx, req, "PUT", base+"/instagram/links/"+url.PathEscape(*in.MediaID), body)
+		case "delete":
+			if in.MediaID == nil || *in.MediaID == "" {
+				return errResult("mediaId é obrigatório para delete"), nil, nil
+			}
+			return s.proxy(ctx, req, "DELETE", base+"/instagram/links/"+url.PathEscape(*in.MediaID), nil)
+		default:
+			return errResult("action deve ser list, upsert ou delete"), nil, nil
+		}
 	})
 }
