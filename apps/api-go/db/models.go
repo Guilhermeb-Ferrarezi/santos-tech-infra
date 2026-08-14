@@ -102,6 +102,16 @@ type Model3dFile struct {
 	ThumbnailKey pgtype.Text
 }
 
+type Notification struct {
+	ID        int64
+	UserID    int32
+	Title     string
+	Body      string
+	Url       string
+	ReadAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type OauthAccount struct {
 	ID         int32
 	UserID     int32

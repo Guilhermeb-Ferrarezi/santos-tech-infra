@@ -198,6 +198,18 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
 
+CREATE TABLE IF NOT EXISTS notifications (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title      TEXT NOT NULL,
+  body       TEXT NOT NULL DEFAULT '',
+  url        TEXT NOT NULL DEFAULT '',
+  read_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS api_router_keys (
   id              BIGSERIAL PRIMARY KEY,
   provider_id     BIGINT NOT NULL REFERENCES api_router_providers(id) ON DELETE CASCADE,

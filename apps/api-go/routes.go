@@ -26,6 +26,12 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/push/subscribe", s.rateLimit(20, min, s.authGuard(s.handlePushSubscribe)))
 	mux.HandleFunc("DELETE /auth/push/subscribe", s.rateLimit(20, min, s.authGuard(s.handlePushUnsubscribe)))
 
+	// Central de notificações (sino no header) — histórico + marcar como lida.
+	// Rate limit folgado no GET: o sino faz polling periódico do front.
+	mux.HandleFunc("GET /auth/notifications", s.rateLimit(60, min, s.authGuard(s.handleListNotifications)))
+	mux.HandleFunc("POST /auth/notifications/{id}/read", s.rateLimit(60, min, s.authGuard(s.handleMarkNotificationRead)))
+	mux.HandleFunc("POST /auth/notifications/read-all", s.rateLimit(20, min, s.authGuard(s.handleMarkAllNotificationsRead)))
+
 	// Upload de avatar (multipart → R2 → users.avatar_url; precisa de sessão)
 	mux.HandleFunc("POST /auth/avatar", s.rateLimit(10, min, s.authGuard(s.handleAvatarUpload)))
 

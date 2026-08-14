@@ -101,7 +101,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// Avisa o responsável por push — exceto quando ele mesmo criou a tarefa
 	// (não faz sentido se auto-notificar).
 	if task.ResponsavelID != nil && *task.ResponsavelID != userIDFrom(r) {
-		s.enqueuePush(r.Context(), int32(*task.ResponsavelID), "Nova tarefa", task.Title, "/dashboard/tarefas")
+		s.notifyUser(r.Context(), int32(*task.ResponsavelID), "Nova tarefa", task.Title, "/dashboard/tarefas")
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"task": task})
 }

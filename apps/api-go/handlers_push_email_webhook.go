@@ -68,7 +68,7 @@ func (s *Server) handleEmailWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user != nil {
-		s.enqueuePush(r.Context(), int32(user.ID), "Novo email", "Chegou um email novo na sua caixa", "/dashboard/email")
+		s.notifyUser(r.Context(), int32(user.ID), "Novo email", "Chegou um email novo na sua caixa", "/dashboard/email")
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
