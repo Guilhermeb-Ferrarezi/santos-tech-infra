@@ -5,12 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
-
-	"github.com/jackc/pgx/v5"
 )
 
 // verifyHMACSignature confere a assinatura HMAC-SHA256 do header
@@ -65,13 +62,13 @@ func (s *Server) handleEmailWebhook(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "JSON inválido"))
 		return
 	}
-	user, err := s.q.GetUserByEmail(r.Context(), strings.TrimSpace(payload.To))
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	user, err := s.userByEmail(r.Context(), strings.TrimSpace(payload.To))
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	if err == nil {
-		s.enqueuePush(r.Context(), user.ID, "Novo email", "Chegou um email novo na sua caixa", "/dashboard/email")
+	if user != nil {
+		s.enqueuePush(r.Context(), int32(user.ID), "Novo email", "Chegou um email novo na sua caixa", "/dashboard/email")
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
