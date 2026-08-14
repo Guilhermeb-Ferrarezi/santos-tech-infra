@@ -10,13 +10,12 @@ import (
 
 // Tools da API de pagamentos (payments-go). Todas exigem role Admin (a API valida).
 
-type chargeListInput struct {
-	Status    string `json:"status,omitempty" jsonschema:"filtro de status: pending, paid, canceled, expired"`
-	StudentID int64  `json:"studentId,omitempty" jsonschema:"filtrar por id do aluno"`
-}
-
-type chargeIDInput struct {
-	ID int64 `json:"id" jsonschema:"id da cobrança"`
+// chargeGetInput: com id detalha a cobrança (status/query são ignorados); sem
+// id lista, e aí os filtros valem.
+type chargeGetInput struct {
+	ID        int64  `json:"id,omitempty" jsonschema:"id da cobrança; se informado, os demais campos (filtros de lista) são ignorados"`
+	Status    string `json:"status,omitempty" jsonschema:"lista: filtro de status: pending, paid, canceled, expired"`
+	StudentID int64  `json:"studentId,omitempty" jsonschema:"lista: filtrar por id do aluno"`
 }
 
 type analyticsRangeInput struct {
@@ -49,9 +48,13 @@ func (s *Server) addPaymentsTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "charges_list",
-		Description: "Lista cobranças PIX (admin). Filtre por status (pending/paid/canceled/expired) e/ou id do aluno.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in chargeListInput) (*mcp.CallToolResult, any, error) {
+		Name: "charges_get",
+		Description: "Sem id: lista cobranças PIX (admin) — filtre por status (pending/paid/canceled/expired) e/ou id do aluno. " +
+			"Com id: detalha uma cobrança — status, QR code, aluno, data de vencimento.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in chargeGetInput) (*mcp.CallToolResult, any, error) {
+		if in.ID != 0 {
+			return s.proxy(ctx, req, "GET", fmt.Sprintf("%s/charges/%d", base, in.ID), nil)
+		}
 		u := base + "/charges"
 		sep := "?"
 		if in.Status != "" {
@@ -62,13 +65,6 @@ func (s *Server) addPaymentsTools(srv *mcp.Server) {
 			u += sep + fmt.Sprintf("student_id=%d", in.StudentID)
 		}
 		return s.proxy(ctx, req, "GET", u, nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "charges_get",
-		Description: "Detalha uma cobrança PIX pelo id (admin): status, QR code, aluno, data de vencimento.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in chargeIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", fmt.Sprintf("%s/charges/%d", base, in.ID), nil)
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{

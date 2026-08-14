@@ -328,6 +328,14 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 - `PATCH /social/posts/{id}/status {status}` — registra histórico; `revisao` alerta o CEO
 - `GET /social/posts/{id}/history` — `{history:[{oldStatus,newStatus,changedBy,changedAt}]}`
 - `GET|POST /social/posts/{id}/notes` — comentários internos
+- `POST /social/posts/{id}/publish-confirmations/{platform}` — confirma publicação
+  naquela plataforma (upsert; reconfirmar atualiza, não duplica). `confirmedBy` vem
+  sempre da sessão autenticada, nunca do corpo da requisição. → `{confirmations:[...]}`
+- `DELETE /social/posts/{id}/publish-confirmations/{platform}` — desconfirma. → `{confirmations:[...]}`
+- **Trava de publicação**: `PUT`/`PATCH .../status` recusam a *transição* pra
+  `status: publicado` (400 `PUBLISH_NOT_CONFIRMED`) se sobrar alguma plataforma de
+  `plataformasDestino` sem confirmação. Só vale na transição — post já `publicado`
+  continua editável mesmo sem confirmação retroativa (feature é de 13/08/2026).
 
 **SocialPost** (campos do briefing): `title` (interno), `caption` (legenda),
 `platform`, `pilar` (educacional|institucional|captacao|prova_social|bastidores|tech_mundo_real),
@@ -343,7 +351,9 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 `responsavelId` (nullable, FK users — quem executa o post; settable via POST/PUT, um por post),
 `responsavelNome` (denormalizado, só leitura, vazio se sem responsável ou usuário removido),
 `funilEtapa` (''|topo|meio|fundo — função da peça no funil de tráfego pago; vazio é o
-default das peças criadas antes do campo existir. Valor inválido → 400).
+default das peças criadas antes do campo existir. Valor inválido → 400),
+`publishConfirmations[]` ({platform,confirmedById,confirmedByName,confirmedAt} — só
+populado em `GET /social/posts/{id}` (post único), vazio em `GET /social/posts` (lista)).
 
 ## Tarefas — `api.santos-tech.com/tasks`
 

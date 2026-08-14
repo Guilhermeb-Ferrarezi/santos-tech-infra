@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -40,6 +41,22 @@ type SocialPost struct {
 	CreatedBy       *int64    `json:"createdBy"`
 	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
+
+	// Só populado por handleGetSocialPost (post único) — listSocialPosts não
+	// busca isso pra não pagar N+1 numa tela com dezenas de posts; o checklist
+	// só é usado dentro do diálogo de edição de 1 post por vez.
+	PublishConfirmations []SocialPostPublishConfirmation `json:"publishConfirmations"`
+}
+
+// SocialPostPublishConfirmation: 1 linha = "essa plataforma recebeu essa peça",
+// confirmado por alguém. ConfirmedByID vem sempre da sessão autenticada no
+// handler — nunca de um valor mandado pelo cliente, pra não dar pra fraudar
+// "quem confirmou".
+type SocialPostPublishConfirmation struct {
+	Platform      string    `json:"platform"`
+	ConfirmedByID *int64    `json:"confirmedById"`
+	ConfirmedBy   string    `json:"confirmedByName"`
+	ConfirmedAt   time.Time `json:"confirmedAt"`
 }
 
 type SocialPostNote struct {
@@ -301,3 +318,68 @@ func (s *Server) insertSocialPostNote(ctx context.Context, postID string, author
 	}
 	return &n, nil
 }
+
+func (s *Server) listSocialPostPublishConfirmations(ctx context.Context, postID string) ([]SocialPostPublishConfirmation, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT c.platform, c.confirmed_by, COALESCE(u.name,''), c.confirmed_at
+		FROM social_post_platform_confirmations c
+		LEFT JOIN users u ON u.id = c.confirmed_by
+		WHERE c.post_id = $1::uuid ORDER BY c.confirmed_at`, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SocialPostPublishConfirmation{}
+	for rows.Next() {
+		var c SocialPostPublishConfirmation
+		if err := rows.Scan(&c.Platform, &c.ConfirmedByID, &c.ConfirmedBy, &c.ConfirmedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// upsertSocialPostPublishConfirmation grava/atualiza a confirmação. confirmedBy
+// é sempre o usuário autenticado (chamador nunca aceita esse valor do cliente).
+func (s *Server) upsertSocialPostPublishConfirmation(ctx context.Context, postID, platform string, confirmedBy int64) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO social_post_platform_confirmations (post_id, platform, confirmed_by, confirmed_at)
+		VALUES ($1::uuid, $2, $3, now())
+		ON CONFLICT (post_id, platform) DO UPDATE SET confirmed_by = $3, confirmed_at = now()`,
+		postID, platform, confirmedBy)
+	return err
+}
+
+func (s *Server) deleteSocialPostPublishConfirmation(ctx context.Context, postID, platform string) error {
+	_, err := s.db.Exec(ctx, `
+		DELETE FROM social_post_platform_confirmations WHERE post_id=$1::uuid AND platform=$2`,
+		postID, platform)
+	return err
+}
+
+// checkPublishConfirmationsComplete impõe a trava: só permite a transição pra
+// "publicado" se toda plataforma de plataformasDestino já tiver confirmação
+// registrada. Sem plataformas de destino definidas, não há o que checar.
+func (s *Server) checkPublishConfirmationsComplete(ctx context.Context, postID string, plataformasDestino []string) error {
+	if len(plataformasDestino) == 0 {
+		return nil
+	}
+	confirmed, err := s.listSocialPostPublishConfirmations(ctx, postID)
+	if err != nil {
+		return err
+	}
+	confirmedSet := make(map[string]bool, len(confirmed))
+	for _, c := range confirmed {
+		confirmedSet[c.Platform] = true
+	}
+	for _, p := range plataformasDestino {
+		if !confirmedSet[p] {
+			return errPublishNotConfirmed
+		}
+	}
+	return nil
+}
+
+var errPublishNotConfirmed = appErr(http.StatusBadRequest, "PUBLISH_NOT_CONFIRMED",
+	"Não é possível concluir — publique o conteúdo em todas as redes definidas e confirme cada uma antes de marcar como concluído.")

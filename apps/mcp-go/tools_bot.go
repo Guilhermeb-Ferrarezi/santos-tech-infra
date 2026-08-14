@@ -11,8 +11,8 @@ import (
 // demais, estas autenticam no destino com a DASH key de serviço (X-Dash-Key) via
 // proxyBot — o dashboard do bot não usa o token do usuário. São todas read-only.
 
-type conversationIDInput struct {
-	ID string `json:"id" jsonschema:"id (uuid) da conversa, obtido em conversations_list"`
+type conversationsListInput struct {
+	ID string `json:"id,omitempty" jsonschema:"id (uuid) da conversa; se informado, devolve o histórico de mensagens dela em vez da lista"`
 }
 
 func (s *Server) addBotTools(srv *mcp.Server) {
@@ -33,16 +33,13 @@ func (s *Server) addBotTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "conversations_list",
-		Description: "Lista as conversas de WhatsApp do atendimento (contato, último contato, estado do bot).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
+		Name: "conversations_list",
+		Description: "Sem id: lista as conversas de WhatsApp do atendimento (contato, último contato, estado do bot). " +
+			"Com id: histórico de mensagens dessa conversa.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in conversationsListInput) (*mcp.CallToolResult, any, error) {
+		if in.ID != "" {
+			return s.proxyBot(ctx, "GET", base+"/api/conversations/"+url.PathEscape(in.ID)+"/messages", nil)
+		}
 		return s.proxyBot(ctx, "GET", base+"/api/conversations", nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "conversation_messages",
-		Description: "Lê o histórico de mensagens de uma conversa de WhatsApp pelo id (use conversations_list para obter o id).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in conversationIDInput) (*mcp.CallToolResult, any, error) {
-		return s.proxyBot(ctx, "GET", base+"/api/conversations/"+url.PathEscape(in.ID)+"/messages", nil)
 	})
 }
