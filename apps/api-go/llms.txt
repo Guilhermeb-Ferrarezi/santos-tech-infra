@@ -465,6 +465,33 @@ auth central (cookie/Bearer); `POST /send` usa `X-Api-Key` (chave própria).
   `insights|command|image` · `GET /ai/logs`
 - Público: `GET /unsubscribe` (HTML; token HMAC) · `GET /t/open` · `GET /t/click`
 
+## Notificações Push (Web Push) — `api.santos-tech.com/push`
+
+Notificações do navegador para staff/admin do dashboard (nova tarefa, novo
+email) — **diferente** do sistema de notificações do portal do aluno (seção
+"Portal — notificações" mais abaixo, in-app, proxy pro gateway .NET do portal).
+Sem VAPID configurado (`VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`), os endpoints
+respondem 503.
+
+- `POST /auth/push/subscribe {endpoint, keys:{p256dh,auth}, userAgent?}` —
+  registra/atualiza (upsert por endpoint) a subscription do navegador atual
+  para o usuário logado. Auth: sessão (`authGuard`). → 201 `{id}`
+- `DELETE /auth/push/subscribe {endpoint}` — remove a subscription do próprio
+  usuário. → 204
+- `POST /webhooks/email/new {to}` — chamado pelo docker-mailserver (Contabo,
+  repo `email/`, hook Sieve na entrega LMTP) a cada email recebido. Auth:
+  assinatura HMAC-SHA256 do corpo (`X-ST-Signature: sha256=<hex>` contra
+  `EMAIL_WEBHOOK_SECRET`), **não** cookie/PAT. `to` sem usuário correspondente
+  (alias, caixa compartilhada) → 200 silencioso, não é erro. Sempre 200 exceto
+  assinatura inválida (401) ou corpo malformado (400).
+
+**Disparo automático** (sem endpoint dedicado — acontece como efeito colateral):
+`POST /tasks` envia push ao `responsavelId` quando != quem criou a tarefa;
+`POST /webhooks/email/new` envia push ao dono do endereço `to` (via
+`GetUserByEmail`). Envio é assíncrono (fila `asynq` sobre o mesmo Redis dos
+emails) — subscriptions que o navegador revogou (404/410 do push service) são
+apagadas automaticamente na tentativa seguinte.
+
 ## MCP — `api.santos-tech.com/mcp`
 
 Servidor MCP (Streamable HTTP, stateless) que expõe o ecossistema a qualquer

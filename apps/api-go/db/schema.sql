@@ -186,6 +186,18 @@ CREATE TABLE IF NOT EXISTS api_router_providers (
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint   TEXT NOT NULL UNIQUE,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
+
 CREATE TABLE IF NOT EXISTS api_router_keys (
   id              BIGSERIAL PRIMARY KEY,
   provider_id     BIGINT NOT NULL REFERENCES api_router_providers(id) ON DELETE CASCADE,

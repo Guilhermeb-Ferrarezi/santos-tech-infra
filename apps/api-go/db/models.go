@@ -119,6 +119,16 @@ type OauthClient struct {
 	CreatedAt    pgtype.Timestamptz
 }
 
+type PushSubscription struct {
+	ID        int64
+	UserID    int32
+	Endpoint  string
+	P256dh    string
+	Auth      string
+	UserAgent *string
+	CreatedAt pgtype.Timestamptz
+}
+
 type RecoveryCode struct {
 	ID        int64
 	UserID    int32
