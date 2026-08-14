@@ -11,7 +11,7 @@ import (
 // suficiente pro popover, sem paginação (não é uma tela de histórico completo).
 const notificationLimit = 30
 
-func notificationJSON(n *db.Notification) map[string]any {
+func notificationJSON(n *db.DashboardNotification) map[string]any {
 	m := map[string]any{
 		"id":        n.ID,
 		"title":     n.Title,

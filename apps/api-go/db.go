@@ -427,7 +427,7 @@ CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(use
 -- Histórico de notificações (sino no header do dashboard) — registrado junto
 -- com todo disparo de Web Push, pra existir uma central com histórico mesmo
 -- pra quem não ativou push ou estava com a aba fechada quando chegou.
-CREATE TABLE IF NOT EXISTS notifications (
+CREATE TABLE IF NOT EXISTS dashboard_notifications (
   id         BIGSERIAL PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title      TEXT NOT NULL,
@@ -436,7 +436,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   read_at    TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dashboard_notifications_user_created ON dashboard_notifications(user_id, created_at DESC);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

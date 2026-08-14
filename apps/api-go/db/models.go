@@ -79,6 +79,16 @@ type CustomRole struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
+type DashboardNotification struct {
+	ID        int64
+	UserID    int32
+	Title     string
+	Body      string
+	Url       string
+	ReadAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type IpBan struct {
 	ID        int64
 	Ip        string
@@ -100,16 +110,6 @@ type Model3dFile struct {
 	Folder       string
 	Pinned       bool
 	ThumbnailKey pgtype.Text
-}
-
-type Notification struct {
-	ID        int64
-	UserID    int32
-	Title     string
-	Body      string
-	Url       string
-	ReadAt    pgtype.Timestamptz
-	CreatedAt pgtype.Timestamptz
 }
 
 type OauthAccount struct {
