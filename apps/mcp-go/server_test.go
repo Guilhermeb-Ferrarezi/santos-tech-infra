@@ -362,6 +362,7 @@ func TestTodasAsToolsRegistradas(t *testing.T) {
 		"links_list", "link_create", "link_update", "link_delete", "link_settings_get", "link_settings_update",
 		"social_posts_list", "social_post_get", "social_post_create", "social_post_update", "social_post_delete",
 		"social_post_status_update", "social_post_notes_list", "social_post_note_add", "social_post_history",
+		"social_post_platform_confirm", "social_post_platform_unconfirm",
 		"instagram_media_list", "instagram_links_list", "instagram_link_upsert", "instagram_link_delete",
 		// Admin: logs, Sentry, cargos personalizados, api-router, ip-bans, oauth-clients, models3d.
 		"logs_query", "logs_labels", "logs_top_ips",

@@ -211,6 +211,11 @@ type socialPostNoteAddInput struct {
 	Content string `json:"content" jsonschema:"texto da nota"`
 }
 
+type socialPostPlatformConfirmInput struct {
+	ID       string `json:"id" jsonschema:"id (uuid) do post"`
+	Platform string `json:"platform" jsonschema:"facebook, instagram, tiktok, youtube, threads, google_meu_negocio, blog, twitter_x ou linkedin"`
+}
+
 // ── Instagram — mídia e mapeamento de comentário ────────────────────────────
 
 type instagramMediaIDInput struct {
@@ -501,6 +506,24 @@ func (s *Server) addContentTools(srv *mcp.Server) {
 		Description: "Histórico de mudanças de status de um post do calendário editorial, mais recente primeiro (GET /social/posts/{id}/history).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in socialPostIDInput) (*mcp.CallToolResult, any, error) {
 		return s.proxy(ctx, req, "GET", base+"/social/posts/"+url.PathEscape(in.ID)+"/history", nil)
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "social_post_platform_confirm",
+		Description: "Marca uma plataforma como confirmada (peça entregue) num post do calendário editorial " +
+			"(POST /social/posts/{id}/publish-confirmations/{platform}). Mudar o status para publicado exige " +
+			"confirmação de todas as plataformas em plataformasDestino.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in socialPostPlatformConfirmInput) (*mcp.CallToolResult, any, error) {
+		u := base + "/social/posts/" + url.PathEscape(in.ID) + "/publish-confirmations/" + url.PathEscape(in.Platform)
+		return s.proxy(ctx, req, "POST", u, nil)
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "social_post_platform_unconfirm",
+		Description: "Desfaz a confirmação de uma plataforma num post do calendário editorial (DELETE /social/posts/{id}/publish-confirmations/{platform}).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in socialPostPlatformConfirmInput) (*mcp.CallToolResult, any, error) {
+		u := base + "/social/posts/" + url.PathEscape(in.ID) + "/publish-confirmations/" + url.PathEscape(in.Platform)
+		return s.proxy(ctx, req, "DELETE", u, nil)
 	})
 
 	// ── Instagram — mídia e mapeamento de comentário ───────────────────────
