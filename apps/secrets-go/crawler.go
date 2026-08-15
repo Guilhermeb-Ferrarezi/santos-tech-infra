@@ -283,4 +283,7 @@ func (c *Crawler) processItem(ctx context.Context, kw string, item CodeSearchIte
 		return
 	}
 	c.hub.Broadcast(Event{Type: "hit", Data: hit})
+	// Empurra o ranking atualizado no mesmo canal SSE — o front escreve direto
+	// no cache, sem precisar (re)buscar via REST a cada hit (ver hub.go).
+	c.hub.Broadcast(Event{Type: "stats", Data: c.hub.IncKeywordCount(hit.Keyword)})
 }

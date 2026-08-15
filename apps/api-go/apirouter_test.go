@@ -58,7 +58,7 @@ func TestBuildAPIRouterRequest(t *testing.T) {
 	provider := db.ApiRouterProvider{
 		BaseUrl: "https://api.example.com", AuthHeader: "Authorization", AuthScheme: "Bearer",
 	}
-	req, err := buildAPIRouterRequest(context.Background(), provider, "sk-abc", http.MethodGet, "/v1/models", nil, map[string]string{"X-Extra": "1"})
+	req, err := buildAPIRouterRequest(context.Background(), provider, "sk-abc", http.MethodGet, "/v1/models", nil, "", map[string]string{"X-Extra": "1"})
 	if err != nil {
 		t.Fatalf("buildAPIRouterRequest: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestTestAPIRouterKeyMontaRequestCorretamente(t *testing.T) {
 		TestPath: "/v1/models", TestMethod: http.MethodGet,
 	}
 	secret := "sk-test-999"
-	req, err := buildAPIRouterRequest(context.Background(), provider, secret, provider.TestMethod, provider.TestPath, nil, nil)
+	req, err := buildAPIRouterRequest(context.Background(), provider, secret, provider.TestMethod, provider.TestPath, nil, "", nil)
 	if err != nil {
 		t.Fatalf("buildAPIRouterRequest: %v", err)
 	}

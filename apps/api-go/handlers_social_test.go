@@ -29,12 +29,38 @@ func TestHandleSocialPostBadUUID(t *testing.T) {
 	for _, h := range []http.HandlerFunc{
 		s.handleGetSocialPost, s.handleUpdateSocialPost, s.handleDeleteSocialPost,
 		s.handleUpdateSocialPostStatus, s.handleListSocialPostNotes, s.handleAddSocialPostNote,
+		s.handleConfirmSocialPostPlatform, s.handleUnconfirmSocialPostPlatform,
 	} {
 		w := httptest.NewRecorder()
 		h(w, socialReq("GET", "nao-e-uuid", "{}", 1))
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("uuid inválido: code=%d", w.Code)
 		}
+	}
+}
+
+func socialPlatformReq(method, id, platform string, userID int64) *http.Request {
+	r := httptest.NewRequest(method, "/social/posts/"+id+"/publish-confirmations/"+platform, nil)
+	r.SetPathValue("id", id)
+	r.SetPathValue("platform", platform)
+	return reqAs(r, userID)
+}
+
+func TestHandleConfirmSocialPostPlatformValidation(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	s.handleConfirmSocialPostPlatform(w, socialPlatformReq("POST", validUUID, "myspace", 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("plataforma inválida: code=%d", w.Code)
+	}
+}
+
+func TestCheckPublishConfirmationsCompleteNoTargets(t *testing.T) {
+	s := testServer(Config{})
+	// Sem plataformasDestino não há o que checar — não deve tentar ir ao banco
+	// (que é nil em testServer; se tentasse, este teste travaria/panicaria).
+	if err := s.checkPublishConfirmationsComplete(t.Context(), validUUID, nil); err != nil {
+		t.Fatalf("esperava nil (nada pra checar), veio: %v", err)
 	}
 }
 

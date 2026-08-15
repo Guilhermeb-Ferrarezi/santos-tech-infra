@@ -45,6 +45,10 @@ type ApiRouterProvider struct {
 	NoCreditCodes     []int32
 	TestPath          string
 	TestMethod        string
+	ChatAdapter       string
+	ChatPath          string
+	ChatModel         string
+	OpAdapter         string
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
 }
@@ -73,6 +77,16 @@ type CustomRole struct {
 	Permissions []byte
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
+}
+
+type DashboardNotification struct {
+	ID        int64
+	UserID    int32
+	Title     string
+	Body      string
+	Url       string
+	ReadAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
 }
 
 type IpBan struct {
@@ -113,6 +127,16 @@ type OauthClient struct {
 	RedirectUris []string
 	IsActive     bool
 	CreatedAt    pgtype.Timestamptz
+}
+
+type PushSubscription struct {
+	ID        int64
+	UserID    int32
+	Endpoint  string
+	P256dh    string
+	Auth      string
+	UserAgent *string
+	CreatedAt pgtype.Timestamptz
 }
 
 type RecoveryCode struct {

@@ -251,6 +251,7 @@ func (s *Server) handlePatchModel3D(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	var body struct {
 		Filename *string `json:"filename"`
 		Folder   *string `json:"folder"`

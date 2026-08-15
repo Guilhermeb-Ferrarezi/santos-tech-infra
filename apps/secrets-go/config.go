@@ -22,18 +22,25 @@ type Config struct {
 	// Ausente = ipBanCheck fica fail-open (sem bloqueio), igual ao
 	// comportamento de payments-go quando s.rdb é nil.
 	RedisURL string
+	// InternalSyncToken é o segredo compartilhado com o Roteador de APIs
+	// (api-go) para o endpoint service-to-service /internal/sync-hits, que
+	// exporta os hits confirmados ativos pro sync automático de chaves. Vazio
+	// = endpoint desabilitado (503). Nunca é um JWT de usuário — quem chama é
+	// outro backend, não um admin no navegador.
+	InternalSyncToken string
 }
 
 func LoadConfig() Config {
 	return Config{
-		Port:             getEnv("PORT", "3338"),
-		DatabaseURL:      mustEnv("DATABASE_URL"),
-		JWTSecret:        mustEnv("JWT_SECRET"),
-		CORSOrigins:      splitCSV(getEnv("CORS_ORIGIN", "")),
-		GitHubTokens:     loadGitHubTokens(),
-		ElasticsearchURL: strings.TrimRight(mustEnv("ELASTICSEARCH_URL"), "/"),
-		StateFile:        getEnv("STATE_FILE", "/data/state.json"),
-		RedisURL:         getEnv("REDIS_URL", ""),
+		Port:              getEnv("PORT", "3338"),
+		DatabaseURL:       mustEnv("DATABASE_URL"),
+		JWTSecret:         mustEnv("JWT_SECRET"),
+		CORSOrigins:       splitCSV(getEnv("CORS_ORIGIN", "")),
+		GitHubTokens:      loadGitHubTokens(),
+		ElasticsearchURL:  strings.TrimRight(mustEnv("ELASTICSEARCH_URL"), "/"),
+		StateFile:         getEnv("STATE_FILE", "/data/state.json"),
+		RedisURL:          getEnv("REDIS_URL", ""),
+		InternalSyncToken: getEnv("INTERNAL_SYNC_TOKEN", ""),
 	}
 }
 

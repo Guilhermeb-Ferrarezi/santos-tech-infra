@@ -102,7 +102,7 @@ func (q *Queries) GetAPIRouterKey(ctx context.Context, arg GetAPIRouterKeyParams
 }
 
 const getAPIRouterProvider = `-- name: GetAPIRouterProvider :one
-SELECT id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, created_at, updated_at
+SELECT id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter, created_at, updated_at
 FROM api_router_providers WHERE id = $1
 `
 
@@ -119,6 +119,10 @@ func (q *Queries) GetAPIRouterProvider(ctx context.Context, id int64) (ApiRouter
 		&i.NoCreditCodes,
 		&i.TestPath,
 		&i.TestMethod,
+		&i.ChatAdapter,
+		&i.ChatPath,
+		&i.ChatModel,
+		&i.OpAdapter,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -167,9 +171,9 @@ func (q *Queries) InsertAPIRouterKey(ctx context.Context, arg InsertAPIRouterKey
 }
 
 const insertAPIRouterProvider = `-- name: InsertAPIRouterProvider :one
-INSERT INTO api_router_providers (name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, created_at, updated_at
+INSERT INTO api_router_providers (name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter, created_at, updated_at
 `
 
 type InsertAPIRouterProviderParams struct {
@@ -181,6 +185,10 @@ type InsertAPIRouterProviderParams struct {
 	NoCreditCodes     []int32
 	TestPath          string
 	TestMethod        string
+	ChatAdapter       string
+	ChatPath          string
+	ChatModel         string
+	OpAdapter         string
 }
 
 func (q *Queries) InsertAPIRouterProvider(ctx context.Context, arg InsertAPIRouterProviderParams) (ApiRouterProvider, error) {
@@ -193,6 +201,10 @@ func (q *Queries) InsertAPIRouterProvider(ctx context.Context, arg InsertAPIRout
 		arg.NoCreditCodes,
 		arg.TestPath,
 		arg.TestMethod,
+		arg.ChatAdapter,
+		arg.ChatPath,
+		arg.ChatModel,
+		arg.OpAdapter,
 	)
 	var i ApiRouterProvider
 	err := row.Scan(
@@ -205,6 +217,10 @@ func (q *Queries) InsertAPIRouterProvider(ctx context.Context, arg InsertAPIRout
 		&i.NoCreditCodes,
 		&i.TestPath,
 		&i.TestMethod,
+		&i.ChatAdapter,
+		&i.ChatPath,
+		&i.ChatModel,
+		&i.OpAdapter,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -252,7 +268,7 @@ func (q *Queries) ListAPIRouterKeys(ctx context.Context, providerID int64) ([]Ap
 
 const listAPIRouterProviders = `-- name: ListAPIRouterProviders :many
 
-SELECT id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, created_at, updated_at
+SELECT id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter, created_at, updated_at
 FROM api_router_providers ORDER BY name ASC
 `
 
@@ -276,6 +292,10 @@ func (q *Queries) ListAPIRouterProviders(ctx context.Context) ([]ApiRouterProvid
 			&i.NoCreditCodes,
 			&i.TestPath,
 			&i.TestMethod,
+			&i.ChatAdapter,
+			&i.ChatPath,
+			&i.ChatModel,
+			&i.OpAdapter,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -392,6 +412,76 @@ func (q *Queries) SetAPIRouterKeyStatus(ctx context.Context, arg SetAPIRouterKey
 	return i, err
 }
 
+const setAPIRouterProviderChatAdapter = `-- name: SetAPIRouterProviderChatAdapter :one
+UPDATE api_router_providers SET chat_adapter = $2, chat_path = $3, chat_model = $4, updated_at = now()
+WHERE id = $1
+RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter, created_at, updated_at
+`
+
+type SetAPIRouterProviderChatAdapterParams struct {
+	ID          int64
+	ChatAdapter string
+	ChatPath    string
+	ChatModel   string
+}
+
+func (q *Queries) SetAPIRouterProviderChatAdapter(ctx context.Context, arg SetAPIRouterProviderChatAdapterParams) (ApiRouterProvider, error) {
+	row := q.db.QueryRow(ctx, setAPIRouterProviderChatAdapter, arg.ID, arg.ChatAdapter, arg.ChatPath, arg.ChatModel)
+	var i ApiRouterProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.BaseUrl,
+		&i.AuthHeader,
+		&i.AuthScheme,
+		&i.UnauthorizedCodes,
+		&i.NoCreditCodes,
+		&i.TestPath,
+		&i.TestMethod,
+		&i.ChatAdapter,
+		&i.ChatPath,
+		&i.ChatModel,
+		&i.OpAdapter,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setAPIRouterProviderOpAdapter = `-- name: SetAPIRouterProviderOpAdapter :one
+UPDATE api_router_providers SET op_adapter = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter, created_at, updated_at
+`
+
+type SetAPIRouterProviderOpAdapterParams struct {
+	ID        int64
+	OpAdapter string
+}
+
+func (q *Queries) SetAPIRouterProviderOpAdapter(ctx context.Context, arg SetAPIRouterProviderOpAdapterParams) (ApiRouterProvider, error) {
+	row := q.db.QueryRow(ctx, setAPIRouterProviderOpAdapter, arg.ID, arg.OpAdapter)
+	var i ApiRouterProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.BaseUrl,
+		&i.AuthHeader,
+		&i.AuthScheme,
+		&i.UnauthorizedCodes,
+		&i.NoCreditCodes,
+		&i.TestPath,
+		&i.TestMethod,
+		&i.ChatAdapter,
+		&i.ChatPath,
+		&i.ChatModel,
+		&i.OpAdapter,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateAPIRouterKeyMeta = `-- name: UpdateAPIRouterKeyMeta :one
 UPDATE api_router_keys SET label = $3, priority = $4, updated_at = now()
 WHERE id = $1 AND provider_id = $2
@@ -435,9 +525,9 @@ const updateAPIRouterProvider = `-- name: UpdateAPIRouterProvider :one
 UPDATE api_router_providers SET
   name = $2, base_url = $3, auth_header = $4, auth_scheme = $5,
   unauthorized_codes = $6, no_credit_codes = $7, test_path = $8, test_method = $9,
-  updated_at = now()
+  chat_adapter = $10, chat_path = $11, chat_model = $12, op_adapter = $13, updated_at = now()
 WHERE id = $1
-RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, created_at, updated_at
+RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter, created_at, updated_at
 `
 
 type UpdateAPIRouterProviderParams struct {
@@ -450,6 +540,10 @@ type UpdateAPIRouterProviderParams struct {
 	NoCreditCodes     []int32
 	TestPath          string
 	TestMethod        string
+	ChatAdapter       string
+	ChatPath          string
+	ChatModel         string
+	OpAdapter         string
 }
 
 func (q *Queries) UpdateAPIRouterProvider(ctx context.Context, arg UpdateAPIRouterProviderParams) (ApiRouterProvider, error) {
@@ -463,6 +557,10 @@ func (q *Queries) UpdateAPIRouterProvider(ctx context.Context, arg UpdateAPIRout
 		arg.NoCreditCodes,
 		arg.TestPath,
 		arg.TestMethod,
+		arg.ChatAdapter,
+		arg.ChatPath,
+		arg.ChatModel,
+		arg.OpAdapter,
 	)
 	var i ApiRouterProvider
 	err := row.Scan(
@@ -475,6 +573,10 @@ func (q *Queries) UpdateAPIRouterProvider(ctx context.Context, arg UpdateAPIRout
 		&i.NoCreditCodes,
 		&i.TestPath,
 		&i.TestMethod,
+		&i.ChatAdapter,
+		&i.ChatPath,
+		&i.ChatModel,
+		&i.OpAdapter,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

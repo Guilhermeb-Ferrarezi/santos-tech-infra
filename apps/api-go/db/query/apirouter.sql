@@ -1,25 +1,35 @@
 -- Queries do roteador de chaves de API (failover automático em 401/sem-créditos)
 
 -- name: ListAPIRouterProviders :many
-SELECT id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, created_at, updated_at
+SELECT id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter, created_at, updated_at
 FROM api_router_providers ORDER BY name ASC;
 
 -- name: GetAPIRouterProvider :one
-SELECT id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, created_at, updated_at
+SELECT id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter, created_at, updated_at
 FROM api_router_providers WHERE id = $1;
 
 -- name: InsertAPIRouterProvider :one
-INSERT INTO api_router_providers (name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, created_at, updated_at;
+INSERT INTO api_router_providers (name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter, created_at, updated_at;
 
 -- name: UpdateAPIRouterProvider :one
 UPDATE api_router_providers SET
   name = $2, base_url = $3, auth_header = $4, auth_scheme = $5,
   unauthorized_codes = $6, no_credit_codes = $7, test_path = $8, test_method = $9,
-  updated_at = now()
+  chat_adapter = $10, chat_path = $11, chat_model = $12, op_adapter = $13, updated_at = now()
 WHERE id = $1
-RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, created_at, updated_at;
+RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter, created_at, updated_at;
+
+-- name: SetAPIRouterProviderChatAdapter :one
+UPDATE api_router_providers SET chat_adapter = $2, chat_path = $3, chat_model = $4, updated_at = now()
+WHERE id = $1
+RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter, created_at, updated_at;
+
+-- name: SetAPIRouterProviderOpAdapter :one
+UPDATE api_router_providers SET op_adapter = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, name, base_url, auth_header, auth_scheme, unauthorized_codes, no_credit_codes, test_path, test_method, chat_adapter, chat_path, chat_model, op_adapter, created_at, updated_at;
 
 -- name: DeleteAPIRouterProvider :execrows
 DELETE FROM api_router_providers WHERE id = $1;

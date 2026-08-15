@@ -184,9 +184,10 @@ abaixo responde 503 `NOT_CONFIGURED`.
 - `DELETE /auth/admin/api-router/providers/{id}` → 204 | 404 (**exige sudo**;
   apaga as chaves em cascata)
 - `GET /auth/admin/api-router/providers/{id}/keys` → `{keys:[{id,providerId,label,
-  secretTail,status,priority,failureCount,lastUsedAt?,lastErrorAt?,
-  lastErrorCode?,createdAt,updatedAt}]}` — `secretTail` = últimos 4 chars; o
-  segredo cru nunca é reexibido
+  secretTail,secret,status,priority,failureCount,lastUsedAt?,lastErrorAt?,
+  lastErrorCode?,createdAt,updatedAt}]}` — `secret` = segredo decifrado (rota
+  admin-only; o único ponto em que o valor cru sai do banco; vazio se a
+  decifragem falhar); `secretTail` = últimos 4 chars
 - `POST /auth/admin/api-router/providers/{id}/keys {label,secret,priority?}` →
   201 | 400 | 404 (**exige sudo**, mesmo critério de `POST /auth/api-keys`)
   (rate 10/min)
@@ -200,6 +201,64 @@ abaixo responde 503 `NOT_CONFIGURED`.
 - `POST /auth/admin/api-router/providers/{id}/keys/{keyId}/test` — dispara uma
   requisição real com essa chave (mesmo se não estiver `active`) e grava o
   resultado → 200 `{statusCode,outcome,error}` | 404 | 502 (rate 20/min)
+- `POST /auth/admin/api-router/providers/{id}/proxy {method?,path,headers?,body?}`
+  — USO REAL (não teste): repassa `method`/`path`/`body` pro `baseUrl` do
+  provider com rotação automática de chave e devolve a resposta **tal como o
+  provider respondeu** (sem envelope; formato nativo da API — ex.: JSON de
+  chat completion). Header `X-Api-Router-Key` na resposta identifica a chave
+  usada. `path` é obrigatório (ex.: `/v1/chat/completions`); `method` default
+  POST. Sem streaming (SSE) — lê a resposta inteira antes de devolver. →
+  200 (passthrough) | 400 | 404 | 502 `ALL_KEYS_EXHAUSTED`/`PROXY_FAILED` |
+  503 `NO_ACTIVE_KEYS`/`NOT_CONFIGURED` (rate 20/min)
+- `POST /auth/admin/api-router/providers/{id}/chat {prompt,model?}` — versão
+  NORMALIZADA do `/proxy`: monta a requisição no formato nativo do provider via
+  `provider.chatAdapter` (`openai_compatible` cobre OpenAI/Groq/Mistral/DeepSeek/
+  OpenRouter/Together/xAI/Grok; `anthropic`, `google` e `cohere` têm adapter
+  próprio) e devolve só o texto —
+  o chamador não precisa saber o formato de request/response de cada API.
+  `model` opcional; quando vazio, usa `provider.chatModel` (modelo nativo da
+  família registrado pelo sync — ex.: `mistral-large-latest` na Mistral,
+  `deepseek-chat` na DeepSeek, `openai/gpt-4o-mini` na OpenRouter) e, se também
+  vazio, o default do adapter. O path chamado é `provider.chatPath` (ex.:
+  `/api/v1/chat/completions` na OpenRouter) ou o default do adapter. Rotação
+  automática de chave, sem streaming. → 200 `{text,keyUsed}` | 400 | 404 | 422
+  `PROVIDER_ERROR` (chave ok, mas o provider recusou a requisição — ex. modelo
+  inexistente) | 502 `ALL_KEYS_EXHAUSTED` | 503 `NO_ACTIVE_KEYS`/`NOT_CONFIGURED`
+  (rate 10/min)
+- `POST /auth/admin/api-router/providers/{id}/op/{op}` — operação NORMALIZADA
+  por provider (transcribe/tts/image/predict/voices), montada via
+  `provider.opAdapter` e com o resultado extraído de volta. `op` aceitos por
+  adapter: **transcribe** = transcrição de áudio (AssemblyAI/Deepgram/ElevenLabs;
+  envie `url` ou `audioB64`+`audioMime`; AssemblyAI faz upload interno e
+  acompanha o job por polling) → `{text, confidence?, language?, audioDuration?}`;
+  **tts** = texto→voz (ElevenLabs; `text` + `voice?` default Rachel + `model?`)
+  → `{audioB64, contentType:"audio/mpeg"}`; **image** = geração (Stability;
+  `prompt` + `negativePrompt?/aspectRatio?/outputFormat?/seed?`) →
+  `{imageB64, finishReason?, seed?}`; **predict** = modelo do Replicate
+  (`input` bruto ou `prompt` + `version?`; assíncrono com polling interno ~90s)
+  → `{output, status}`; **voices** = lista de vozes da ElevenLabs (GET, sem
+  corpo) → `{voices:[{id,name}]}`. Polling sempre com a MESMA chave que criou o
+  job. → 200 `{...resultado, keyUsed}` | 400 `OP_UNSUPPORTED`/`INVALID_BODY` |
+  404 | 422 `PROVIDER_ERROR` | 502 `ALL_KEYS_EXHAUSTED`/`OP_TIMEOUT` |
+  503 `NO_ACTIVE_KEYS`/`NOT_CONFIGURED` (rate 10/min)
+
+### Sync automático com o scanner de secrets vazados (secrets-go)
+O api-go importa periodicamente (padrão `1h`, via `SECRETS_SYNC_INTERVAL`) os hits
+que o scanner confirmou **ativos** (`liveActive`) e os cadastra no roteador como
+chaves de failover — **criando o provider por provedor automaticamente** quando ele
+ainda não existe (catálogo em `sync_apirouter.go`: OpenAI, Anthropic, Groq,
+Mistral, DeepSeek, OpenRouter, Together, Fireworks, xAI, Stability, Deepgram,
+AssemblyAI, ElevenLabs, Replicate, GitHub, Hugging Face, DigitalOcean, Vercel,
+Netlify, npm, Heroku, Cloudflare, GitLab, CircleCI, Datadog, Figma, Slack,
+Discord, SendGrid, Mercado Pago, Asaas, Square, Clerk, Resend, Sentry,
+AbacatePay, Dotfy). Idempotente: chave com o mesmo valor não duplica (dedupe por
+plaintext decifrado). Providers que exigem Basic Auth (Stripe/Pagar.me/Mailgun),
+token na URL (Telegram) ou query param (Gemini/Firebase) **não** entram — o modelo
+de auth do roteador é header único, e o sync pula essas families. Habilitado só
+com `SECRETS_SYNC_TOKEN` E `API_VAULT_SECRET` setados; consome o endpoint interno
+do secrets-go `GET /internal/sync-hits` (header `x-sync-token`, tempo constante —
+mesmo valor de `INTERNAL_SYNC_TOKEN` no secrets-go), base configurável em
+`SECRETS_SYNC_URL` (ex.: `https://api.santos-tech.com/secrets`).
 
 ## Claude Agent — `api.santos-tech.com/claude`
 
@@ -269,6 +328,14 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 - `PATCH /social/posts/{id}/status {status}` — registra histórico; `revisao` alerta o CEO
 - `GET /social/posts/{id}/history` — `{history:[{oldStatus,newStatus,changedBy,changedAt}]}`
 - `GET|POST /social/posts/{id}/notes` — comentários internos
+- `POST /social/posts/{id}/publish-confirmations/{platform}` — confirma publicação
+  naquela plataforma (upsert; reconfirmar atualiza, não duplica). `confirmedBy` vem
+  sempre da sessão autenticada, nunca do corpo da requisição. → `{confirmations:[...]}`
+- `DELETE /social/posts/{id}/publish-confirmations/{platform}` — desconfirma. → `{confirmations:[...]}`
+- **Trava de publicação**: `PUT`/`PATCH .../status` recusam a *transição* pra
+  `status: publicado` (400 `PUBLISH_NOT_CONFIRMED`) se sobrar alguma plataforma de
+  `plataformasDestino` sem confirmação. Só vale na transição — post já `publicado`
+  continua editável mesmo sem confirmação retroativa (feature é de 13/08/2026).
 
 **SocialPost** (campos do briefing): `title` (interno), `caption` (legenda),
 `platform`, `pilar` (educacional|institucional|captacao|prova_social|bastidores|tech_mundo_real),
@@ -284,7 +351,9 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 `responsavelId` (nullable, FK users — quem executa o post; settable via POST/PUT, um por post),
 `responsavelNome` (denormalizado, só leitura, vazio se sem responsável ou usuário removido),
 `funilEtapa` (''|topo|meio|fundo — função da peça no funil de tráfego pago; vazio é o
-default das peças criadas antes do campo existir. Valor inválido → 400).
+default das peças criadas antes do campo existir. Valor inválido → 400),
+`publishConfirmations[]` ({platform,confirmedById,confirmedByName,confirmedAt} — só
+populado em `GET /social/posts/{id}` (post único), vazio em `GET /social/posts` (lista)).
 
 ## Tarefas — `api.santos-tech.com/tasks`
 
@@ -405,6 +474,50 @@ auth central (cookie/Bearer); `POST /send` usa `X-Api-Key` (chave própria).
 - IA (proxy pro Claude Agent): `POST /ai/generate|rewrite|subjects|spam-check|`
   `insights|command|image` · `GET /ai/logs`
 - Público: `GET /unsubscribe` (HTML; token HMAC) · `GET /t/open` · `GET /t/click`
+
+## Notificações Push (Web Push) — `api.santos-tech.com/push`
+
+Notificações do navegador para staff/admin do dashboard (nova tarefa, novo
+email) — **diferente** do sistema de notificações do portal do aluno (seção
+"Portal — notificações" mais abaixo, in-app, proxy pro gateway .NET do portal).
+Sem VAPID configurado (`VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`), os endpoints
+respondem 503.
+
+- `POST /auth/push/subscribe {endpoint, keys:{p256dh,auth}, userAgent?}` —
+  registra/atualiza (upsert por endpoint) a subscription do navegador atual
+  para o usuário logado. Auth: sessão (`authGuard`). → 201 `{id}`
+- `DELETE /auth/push/subscribe {endpoint}` — remove a subscription do próprio
+  usuário. → 204
+- `POST /webhooks/email/new {to}` — chamado pelo docker-mailserver (Contabo,
+  repo `email/`, hook Sieve na entrega LMTP) a cada email recebido. Auth:
+  assinatura HMAC-SHA256 do corpo (`X-ST-Signature: sha256=<hex>` contra
+  `EMAIL_WEBHOOK_SECRET`), **não** cookie/PAT. `to` sem usuário correspondente
+  (alias, caixa compartilhada) → 200 silencioso, não é erro. Sempre 200 exceto
+  assinatura inválida (401) ou corpo malformado (400).
+
+**Disparo automático** (sem endpoint dedicado — acontece como efeito colateral):
+`POST /tasks` envia push ao `responsavelId` quando != quem criou a tarefa;
+`POST /webhooks/email/new` envia push ao dono do endereço `to` (via
+`userByEmail`). Envio é assíncrono (fila `asynq` sobre o mesmo Redis dos
+emails) — subscriptions que o navegador revogou (404/410 do push service) são
+apagadas automaticamente na tentativa seguinte. Todo disparo (`notifyUser`)
+também grava no histórico de `## Notificações (central/sino)` abaixo, então
+o histórico existe mesmo sem push ativado ou com a aba fechada.
+
+## Notificações (central/sino) — `api.santos-tech.com/notifications`
+
+Histórico das notificações do sino no header do dashboard — gravado junto
+com todo `notifyUser` (nova tarefa, novo email; ver seção de Web Push acima).
+Auth: sessão (`authGuard`), sempre escopado ao próprio usuário.
+
+- `GET /auth/notifications` — `{notifications:[Notification], unreadCount}`,
+  até 30 mais recentes, mais novas primeiro
+- `POST /auth/notifications/{id}/read` — marca uma como lida (não é erro se
+  já estava lida ou não existir/não for sua — sempre 204)
+- `POST /auth/notifications/read-all` — marca todas como lidas → 204
+
+**Notification**: `id`, `title`, `body`, `url` (rota do dashboard pra
+navegar ao clicar), `readAt` (null = não lida), `createdAt`.
 
 ## MCP — `api.santos-tech.com/mcp`
 

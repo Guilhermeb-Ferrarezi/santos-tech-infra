@@ -389,6 +389,54 @@ CREATE TABLE IF NOT EXISTS api_router_keys (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_api_router_keys_provider ON api_router_keys(provider_id);
+-- Família de adapter usada por /chat pra montar a requisição no formato nativo
+-- do provider e interpretar a resposta (ver apirouter_adapters.go).
+ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS chat_adapter TEXT NOT NULL DEFAULT 'openai_compatible';
+ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS chat_path    TEXT NOT NULL DEFAULT '';
+ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS chat_model   TEXT NOT NULL DEFAULT '';
+-- Família de adapter das operações normalizadas (/op/{transcribe|tts|image|predict}),
+-- ver apirouter_ops.go. Vazio = provider só suporta chat/proxy.
+ALTER TABLE api_router_providers ADD COLUMN IF NOT EXISTS op_adapter   TEXT NOT NULL DEFAULT '';
+-- Confirmação de publicação por plataforma (uma linha = "essa rede recebeu essa peça").
+-- UNIQUE garante upsert (reconfirmar atualiza, não duplica). confirmed_by vem sempre do
+-- usuário autenticado da sessão no handler, nunca de um valor mandado pelo cliente.
+CREATE TABLE IF NOT EXISTS social_post_platform_confirmations (
+  id           BIGSERIAL PRIMARY KEY,
+  post_id      UUID NOT NULL REFERENCES social_posts(id) ON DELETE CASCADE,
+  platform     TEXT NOT NULL,
+  confirmed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  confirmed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (post_id, platform)
+);
+CREATE INDEX IF NOT EXISTS idx_social_post_platform_confirmations_post ON social_post_platform_confirmations(post_id);
+
+-- Web Push (notificações do navegador — nova tarefa, novo email). endpoint é
+-- único porque o mesmo dispositivo/navegador reaparece com o mesmo endpoint
+-- ao re-subscrever (upsert em vez de duplicar).
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint   TEXT NOT NULL UNIQUE,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
+
+-- Histórico de notificações (sino no header do dashboard) — registrado junto
+-- com todo disparo de Web Push, pra existir uma central com histórico mesmo
+-- pra quem não ativou push ou estava com a aba fechada quando chegou.
+CREATE TABLE IF NOT EXISTS dashboard_notifications (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title      TEXT NOT NULL,
+  body       TEXT NOT NULL DEFAULT '',
+  url        TEXT NOT NULL DEFAULT '',
+  read_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_dashboard_notifications_user_created ON dashboard_notifications(user_id, created_at DESC);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

@@ -19,6 +19,19 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Preferências de UI do usuário (merge no JSONB users.preferences — precisa de sessão)
 	mux.HandleFunc("PATCH /auth/me/preferences", s.rateLimit(30, min, s.authGuard(s.handlePreferencesUpdate)))
 
+	// Web Push — subscription do navegador atual (gestão da própria conta,
+	// precisa de sessão). Nova tarefa / novo email disparam envio via
+	// enqueuePush (ver queue.go); webhook de email novo fica em
+	// registerInstagramRoutes-style, sem authGuard (ver routes abaixo).
+	mux.HandleFunc("POST /auth/push/subscribe", s.rateLimit(20, min, s.authGuard(s.handlePushSubscribe)))
+	mux.HandleFunc("DELETE /auth/push/subscribe", s.rateLimit(20, min, s.authGuard(s.handlePushUnsubscribe)))
+
+	// Central de notificações (sino no header) — histórico + marcar como lida.
+	// Rate limit folgado no GET: o sino faz polling periódico do front.
+	mux.HandleFunc("GET /auth/notifications", s.rateLimit(60, min, s.authGuard(s.handleListNotifications)))
+	mux.HandleFunc("POST /auth/notifications/{id}/read", s.rateLimit(60, min, s.authGuard(s.handleMarkNotificationRead)))
+	mux.HandleFunc("POST /auth/notifications/read-all", s.rateLimit(20, min, s.authGuard(s.handleMarkAllNotificationsRead)))
+
 	// Upload de avatar (multipart → R2 → users.avatar_url; precisa de sessão)
 	mux.HandleFunc("POST /auth/avatar", s.rateLimit(10, min, s.authGuard(s.handleAvatarUpload)))
 
@@ -75,7 +88,18 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /auth/admin/api-router/providers/{id}/keys/{keyId}", s.adminGuard(s.sudoGuard(s.handleDeleteAPIRouterKey)))
 	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/keys/{keyId}/status", s.rateLimit(20, min, s.adminGuard(s.handleSetAPIRouterKeyStatus)))
 	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/keys/{keyId}/test", s.rateLimit(20, min, s.adminGuard(s.handleTestAPIRouterKey)))
-
+	// Proxy real (uso de verdade da API, não só teste de chave): repassa
+	// method/path/body pro provider com rotação automática, devolve a
+	// resposta tal como veio. Sem streaming.
+	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/proxy", s.rateLimit(20, min, s.adminGuard(s.handleAPIRouterProxy)))
+	// Chat normalizado: mesma ideia do /proxy, mas monta a requisição nativa via
+	// provider.chatAdapter (openai_compatible/anthropic/google/cohere) e devolve
+	// só o texto — pro admin não precisar saber o formato de cada API.
+	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/chat", s.rateLimit(10, min, s.adminGuard(s.handleAPIRouterChat)))
+	// Operações normalizadas (transcribe/tts/image/predict/voices): monta o
+	// request nativo via provider.opAdapter e devolve o resultado extraído —
+	// AssemblyAI/Replicate rodam com polling interno do job.
+	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/op/{op}", s.rateLimit(10, min, s.adminGuard(s.handleAPIRouterOp)))
 	// Gestão admin de cargos personalizados
 	mux.HandleFunc("GET /auth/admin/custom-roles", s.adminGuard(s.handleListCustomRoles))
 	mux.HandleFunc("POST /auth/admin/custom-roles", s.rateLimit(10, min, s.adminGuard(s.handleCreateCustomRole)))
@@ -163,6 +187,11 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Meta (não cookie/PAT) + CRUD admin do mapeamento post -> link.
 	s.registerInstagramRoutes(mux)
 
+	// Webhook de "email novo" — chamado pelo docker-mailserver (Contabo, repo
+	// email/), não por um usuário logado. Autenticado por assinatura HMAC
+	// compartilhada (EMAIL_WEBHOOK_SECRET), sem authGuard/adminGuard.
+	mux.HandleFunc("POST /webhooks/email/new", s.rateLimit(120, min, s.handleEmailWebhook))
+
 	// OAuth Google
 	mux.HandleFunc("GET /auth/google", s.handleGoogleStart)
 	mux.HandleFunc("GET /auth/google/callback", s.handleGoogleCallback)
@@ -193,6 +222,8 @@ func (s *Server) registerSocialRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /social/posts/{id}/notes", s.permGuard("social", "read", false, s.handleListSocialPostNotes))
 	mux.HandleFunc("POST /social/posts/{id}/notes", s.rateLimit(30, min, s.permGuard("social", "execute", false, s.handleAddSocialPostNote)))
 	mux.HandleFunc("GET /social/posts/{id}/history", s.permGuard("social", "read", false, s.handleListSocialPostStatusHistory))
+	mux.HandleFunc("POST /social/posts/{id}/publish-confirmations/{platform}", s.rateLimit(60, min, s.permGuard("social", "execute", false, s.handleConfirmSocialPostPlatform)))
+	mux.HandleFunc("DELETE /social/posts/{id}/publish-confirmations/{platform}", s.rateLimit(60, min, s.permGuard("social", "execute", false, s.handleUnconfirmSocialPostPlatform)))
 	mux.HandleFunc("GET /tasks", s.permGuard("tarefas", "read", true, s.handleListTasks))
 	mux.HandleFunc("GET /tasks/{id}", s.permGuard("tarefas", "read", true, s.handleGetTask))
 	mux.HandleFunc("POST /tasks", s.rateLimit(30, min, s.permGuard("tarefas", "write", true, s.handleCreateTask)))

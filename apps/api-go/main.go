@@ -140,6 +140,39 @@ func main() {
 		}
 	}()
 
+	// Sync do roteador de chaves de API com o scanner de secrets vazados
+	// (secrets-go): uma passada no boot e depois a cada SECRETS_SYNC_INTERVAL.
+	// Idempotente — reimportar o que já existe não duplica. Habilitado só
+	// quando SECRETS_SYNC_TOKEN E API_VAULT_SECRET estão setados.
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic no sync do roteador com secrets-go", "panic", rec, "stack", string(debug.Stack()))
+			}
+		}()
+		if !srv.syncEnabled() {
+			return
+		}
+		runSync := func() {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if err := srv.syncAPIRouterFromSecrets(syncCtx); err != nil {
+				slog.Warn("sync do roteador com secrets-go falhou", "err", err)
+			}
+		}
+		runSync()
+		t := time.NewTicker(cfg.SecretsSyncInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				runSync()
+			}
+		}
+	}()
+
 	srv2 := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Routes(),

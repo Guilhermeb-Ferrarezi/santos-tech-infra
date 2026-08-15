@@ -71,6 +71,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/keyword-presets", s.requireAdmin(s.handlePresets))
 	mux.HandleFunc("/keyword-presets/{id}", s.requireAdmin(s.handlePresetByID))
 
+	// Endpoint service-to-service pro Roteador de APIs (api-go): sincroniza
+	// os hits confirmados ativos pro roteador de failover. Autenticado por
+	// token compartilhado (INTERNAL_SYNC_TOKEN), NUNCA por JWT de usuário —
+	// o chamador é outro backend, não um admin no navegador.
+	mux.HandleFunc("/internal/sync-hits", s.handleInternalSyncHits)
+
 	return golog.RequestLogger(s.cors(s.ipBanCheck(metricsMiddleware(mux))))
 }
 

@@ -61,6 +61,7 @@ var keywordFamilies = []struct {
 	{"ASAAS", "Asaas", "asaas"},
 	{"CLOUDFLARE", "Cloudflare", "cloudflare"},
 	{"ANTHROPIC", "Anthropic (Claude)", "anthropic"},
+	{"CLAUDE", "Anthropic (Claude)", "anthropic"}, // var nomeada CLAUDE_API_KEY/CLAUDE_CODE_* em vez de ANTHROPIC_*
 	{"HUGGINGFACE", "Hugging Face", "huggingface"},
 	{"HUGGING_FACE", "Hugging Face", "huggingface"},
 	{"DIGITALOCEAN", "DigitalOcean", "digitalocean"},
@@ -93,6 +94,15 @@ var keywordFamilies = []struct {
 	{"CIRCLECI", "CircleCI", "circleci"},
 	{"CIRCLE_CI", "CircleCI", "circleci"},
 	{"GITLAB", "GitLab", "gitlab"},
+	{"TOGETHER", "Together AI", "together"},
+	{"FIREWORKS", "Fireworks AI", "fireworks"},
+	{"XAI", "xAI (Grok)", "xai"},
+	{"GROK", "xAI (Grok)", "xai"},
+	{"DEEPSEEK", "DeepSeek", "deepseek"},
+	{"STABILITY", "Stability AI", "stability"},
+	{"DEEPGRAM", "Deepgram", "deepgram"},
+	{"ASSEMBLYAI", "AssemblyAI", "assemblyai"},
+	{"ASSEMBLY_AI", "AssemblyAI", "assemblyai"},
 }
 
 // keywordFamily busca a keyword (não o valor) contra provedores conhecidos

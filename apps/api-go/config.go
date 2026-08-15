@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -64,6 +65,27 @@ type Config struct {
 	// provedores externos). Deriva a chave AES-256 que cifra as chaves antes de
 	// persistir. Vazio = feature desabilitada, endpoints respondem 503.
 	VaultSecret string
+
+	// Web Push (notificações do navegador — nova tarefa, novo email). Par de
+	// chaves VAPID (gerado uma vez, ex. `npx web-push generate-vapid-keys`).
+	// Vazio (Public ou Private) = feature desabilitada, endpoints respondem 503.
+	VAPIDPublicKey  string
+	VAPIDPrivateKey string
+	VAPIDSubject    string // contato do remetente, ex. "mailto:contato@santos-tech.com"
+
+	// Segredo compartilhado do webhook POST /webhooks/email/new, chamado pelo
+	// docker-mailserver (Sieve pipe) quando chega um email novo. Vazio =
+	// webhook sempre rejeita (fail-closed), mesmo padrão do InstagramAppSecret.
+	EmailWebhookSecret string
+
+	// Sync automático do roteador com o scanner de secrets vazados
+	// (secrets-go): a cada SecretsSyncInterval, importa os hits confirmados
+	// ativos e cadastra no roteador (provider automático por provedor).
+	// Habilitado quando SecretsSyncToken está setado E VaultSecret também
+	// (sem o vault não há como cifrar as chaves antes de persistir).
+	SecretsSyncURL      string // base, ex: https://api.santos-tech.com/secrets
+	SecretsSyncToken    string // mesmo valor de INTERNAL_SYNC_TOKEN no secrets-go
+	SecretsSyncInterval time.Duration
 }
 
 func LoadConfig() Config {
@@ -107,6 +129,16 @@ func LoadConfig() Config {
 		InstagramWebhookVerifyToken: getEnv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN", ""),
 
 		VaultSecret: getEnv("API_VAULT_SECRET", ""),
+
+		VAPIDPublicKey:  getEnv("VAPID_PUBLIC_KEY", ""),
+		VAPIDPrivateKey: getEnv("VAPID_PRIVATE_KEY", ""),
+		VAPIDSubject:    getEnv("VAPID_SUBJECT", ""),
+
+		EmailWebhookSecret: getEnv("EMAIL_WEBHOOK_SECRET", ""),
+
+		SecretsSyncURL:      strings.TrimRight(getEnv("SECRETS_SYNC_URL", ""), "/"),
+		SecretsSyncToken:    getEnv("SECRETS_SYNC_TOKEN", ""),
+		SecretsSyncInterval: getEnvDuration("SECRETS_SYNC_INTERVAL", time.Hour),
 	}
 	if c.AuthWebOrigin == "" && len(c.CORSOrigins) > 0 {
 		c.AuthWebOrigin = c.CORSOrigins[0]
@@ -142,4 +174,13 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func getEnvDuration(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return fallback
 }

@@ -1761,7 +1761,7 @@ paths:
     get:
       tags: [Admin]
       summary: Listar as chaves de um provider
-      description: Nunca inclui o segredo cru — só `secretTail` (últimos 4 caracteres).
+      description: Rota admin-only. Devolve o segredo decifrado de cada chave (em `secret`).
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
@@ -1981,7 +1981,236 @@ paths:
         "503":
           $ref: "#/components/responses/APIRouterNotConfigured"
 
-  # ── payments-go: Extrato (GET /statement) ────────────────────────────────
+  /auth/admin/api-router/providers/{id}/proxy:
+    post:
+      tags: [Admin]
+      summary: Repassar uma requisição real pro provider (uso de verdade, não teste)
+      description: |
+        Diferente do `/test` (que só verifica se a chave funciona), este
+        endpoint executa a chamada de verdade: `path`/`method`/`body` são
+        repassados ao `baseUrl` do provider com rotação automática de chave
+        (mesmo mecanismo do `/test`), e a resposta é devolvida **tal como o
+        provider respondeu** — sem envelope, no formato nativo da API (ex.:
+        o JSON de chat completion da OpenAI/Anthropic/etc.). O header
+        `X-Api-Router-Key` na resposta identifica qual chave foi usada.
+
+        **Sem suporte a streaming** (SSE) — a resposta é lida inteira antes
+        de devolver. `body`, se presente, vai como JSON no corpo da
+        requisição ao provider (Content-Type: application/json por padrão,
+        sobrescrevível via `headers`).
+
+        Rate limit: **20 req/min por IP**.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                method: { type: string, default: POST, example: POST }
+                path: { type: string, example: "/v1/chat/completions", description: "Path relativo ao baseUrl do provider." }
+                headers: { type: object, additionalProperties: { type: string }, description: "Headers extras (além do de auth, que o roteador já injeta)." }
+                body: { type: object, description: "Corpo repassado como JSON — no formato que a API do provider espera." }
+              required: [path]
+      responses:
+        "200":
+          description: "Resposta do provider, passthrough (status e corpo tal como vieram)."
+          content:
+            application/json:
+              schema: { type: object, description: "Formato nativo da API do provider — varia por provider/endpoint." }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Provider não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "provider não encontrado" }
+        "502":
+          description: Todas as chaves ativas falharam, ou falha ao montar/enviar a requisição
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: ALL_KEYS_EXHAUSTED, message: "todas as chaves do provider falharam (401/sem créditos)" }
+        "503":
+          description: "API_VAULT_SECRET não configurada, ou provider sem nenhuma chave ativa"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NO_ACTIVE_KEYS, message: "provider sem chaves ativas" }
+
+  /auth/admin/api-router/providers/{id}/chat:
+    post:
+      tags: [Admin]
+      summary: Chat normalizado — envia um prompt e recebe só o texto de resposta
+      description: |
+        Versão normalizada do `/proxy`: monta a requisição no formato nativo
+        do provider a partir de `provider.chatAdapter`
+        (`openai_compatible`/`anthropic`/`google`/`cohere`) e devolve só o
+        texto extraído da resposta — o chamador não precisa saber o formato de
+        request/response de cada API. `model` é opcional; cada adapter tem
+        um default razoável.
+
+        Rotação automática de chave (mesmo mecanismo do `/proxy`/`/test`).
+        Sem streaming.
+
+        Rate limit: **10 req/min por IP**.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt: { type: string, example: "Explique o que é rotação de chaves de API em 1 frase." }
+                model: { type: string, description: "Opcional — default depende do adapter (ex.: gpt-4o-mini, claude-sonnet-4-5, gemini-2.5-flash)." }
+              required: [prompt]
+      responses:
+        "200":
+          description: Resposta normalizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  text: { type: string, description: "Texto extraído da resposta do provider." }
+                  keyUsed: { type: string, description: "Rótulo da chave que respondeu." }
+                required: [text, keyUsed]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Provider não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "provider não encontrado" }
+        "422":
+          description: "A chave funcionou, mas o provider recusou a requisição (ex.: modelo inexistente) — ver o `message` para o motivo nativo do provider."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: PROVIDER_ERROR, message: "model: the model `gpt-99` does not exist" }
+        "502":
+          description: Todas as chaves ativas falharam
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: ALL_KEYS_EXHAUSTED, message: "todas as chaves do provider falharam (401/sem créditos)" }
+        "503":
+          description: "API_VAULT_SECRET não configurada, ou provider sem nenhuma chave ativa"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NO_ACTIVE_KEYS, message: "provider sem chaves ativas" }
+
+  /auth/admin/api-router/providers/{id}/op/{op}:
+    post:
+      tags: [Admin]
+      summary: Operação normalizada (transcribe/tts/image/predict/voices) via provider.opAdapter
+      description: |
+        Executa uma operação específica do provider a partir de um corpo
+        normalizado, usando `provider.opAdapter` para montar a requisição no
+        formato nativo de cada API e devolver só o resultado extraído.
+
+        `op` aceitos (dependem do adapter):
+        - **transcribe** — transcrição de áudio (AssemblyAI/Deepgram/ElevenLabs).
+          Envie `url` (áudio remoto) ou `audioB64`+`audioMime`. AssemblyAI é
+          assíncrono: faz o upload interno e acompanha o job por polling.
+        - **tts** — texto para voz (ElevenLabs). Envie `text` e opcional `voice`
+          (default Rachel) e `model`. Devolve `audioB64`+`contentType`.
+        - **image** — geração de imagem (Stability). Envie `prompt` e opcionais
+          `negativePrompt`, `aspectRatio`, `outputFormat`, `seed`. Devolve
+          `imageB64`.
+        - **predict** — execução de modelo (Replicate). Envie `input` (bruto)
+          ou `prompt`, e opcional `version`. Assíncrono: o job é acompanhado
+          por polling interno (timeout ~90s). Devolve `output`+`status`.
+        - **voices** — lista de vozes (ElevenLabs). Sem corpo.
+
+        Rotação automática de chave. Polling sempre com a MESMA chave que criou
+        o job.
+
+        Rate limit: **10 req/min por IP**.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: op, in: path, required: true, schema: { type: string, enum: [transcribe, tts, image, predict, voices] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: { type: string, description: "URL remota do áudio (transcribe)." }
+                audioB64: { type: string, description: "Áudio em base64 (transcribe)." }
+                audioMime: { type: string, example: "audio/mpeg", description: "MIME do áudio (transcribe)." }
+                text: { type: string, description: "Texto a sintetizar (tts)." }
+                voice: { type: string, description: "voice_id da ElevenLabs (tts)." }
+                model: { type: string, description: "Modelo específico (tts/transcribe), opcional." }
+                prompt: { type: string, description: "Prompt (image/predict)." }
+                negativePrompt: { type: string, description: "Prompt negativo (image)." }
+                aspectRatio: { type: string, example: "16:9", description: "Razão de aspecto (image)." }
+                outputFormat: { type: string, example: "png", description: "Formato de saída (image)." }
+                seed: { type: integer, description: "Seed determinística (image)." }
+                version: { type: string, description: "version do modelo Replicate (predict)." }
+                input: { description: "input bruto do Replicate (predict) — alternativa ao prompt." }
+      responses:
+        "200":
+          description: Resultado normalizado (campos variam por op)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  text: { type: string, description: "transcribe: transcrição." }
+                  confidence: { type: number, description: "transcribe: confiança (quando o provider devolve)." }
+                  language: { type: string, description: "transcribe (AssemblyAI): código do idioma." }
+                  audioDuration: { type: number, description: "transcribe (AssemblyAI): duração em segundos." }
+                  audioB64: { type: string, description: "tts: áudio MP3 em base64." }
+                  contentType: { type: string, description: "tts: MIME do áudio (audio/mpeg)." }
+                  imageB64: { type: string, description: "image: imagem em base64." }
+                  finishReason: { type: string, description: "image (Stability): motivo do término." }
+                  seed: { type: integer, description: "image (Stability): seed usada." }
+                  output: { description: "predict: saída do modelo." }
+                  status: { type: string, description: "predict: status final do job." }
+                  voices: { type: array, items: { type: object, properties: { id: { type: string }, name: { type: string } } }, description: "voices: lista de vozes." }
+                  keyUsed: { type: string, description: "Rótulo da chave que respondeu." }
+                required: [keyUsed]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Provider não encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_FOUND, message: "provider não encontrado" }
+        "422":
+          description: "A chave funcionou, mas o provider recusou a requisição ou o job falhou — ver o `message`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: PROVIDER_ERROR, message: "deepgram: Audio did not contain speech" }
+        "502":
+          description: "Todas as chaves falharam, ou job assíncrono estourou o timeout de ~90s"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: OP_TIMEOUT, message: "tempo esgotado aguardando o job abcd1234" }
+        "503":
+          description: "API_VAULT_SECRET não configurada, ou provider sem nenhuma chave ativa"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NO_ACTIVE_KEYS, message: "provider sem chaves ativas" }
   # Serviço: apps/payments-go · prefixo em produção: /payments (via proxy reverso)
   # TODO: atualizar llms.txt central (api.santos-tech.com/llms.txt) com esta rota.
   /payments/statement:
@@ -3370,6 +3599,9 @@ components:
         noCreditCodes: { type: array, items: { type: integer }, default: [402, 429], description: "Códigos que fazem o roteador marcar a chave no_credits e tentar a próxima." }
         testPath: { type: string, description: "Path usado pelo botão \"testar chave\"; vazio = raiz da baseUrl." }
         testMethod: { type: string, default: GET }
+        chatAdapter: { type: string, enum: [openai_compatible, anthropic, google, cohere], default: openai_compatible, description: "Formato usado por POST .../chat pra montar a requisição nativa. openai_compatible cobre OpenAI, Mistral, DeepSeek, xAI/Grok." }
+        chatPath: { type: string, description: "Path do endpoint de chat nativo (ex.: /api/v1/chat/completions na OpenRouter). Vazio = usa o default do adapter." }
+        chatModel: { type: string, description: "Modelo default do /chat quando o corpo não informa model (ex.: mistral-large-latest na Mistral). Vazio = usa o default do adapter." }
       required: [name, baseUrl]
     APIRouterProvider:
       allOf:
@@ -3390,12 +3622,13 @@ components:
       required: [label, secret]
     APIRouterKey:
       type: object
-      description: "Nunca inclui o segredo — só secretTail (últimos 4 caracteres) para reconhecimento visual."
+      description: "Inclui o segredo decifrado (rota admin-only) — é o único ponto em que o valor cru sai do banco. `secret` vem vazio se a decifragem falhar."
       properties:
         id: { type: integer }
         providerId: { type: integer }
         label: { type: string }
         secretTail: { type: string, example: "7890" }
+        secret: { type: string, description: "Valor real da chave, decifrado do AES-256-GCM.", example: "sk-1234567890abcdef7890" }
         status: { type: string, enum: [active, unauthorized, no_credits, disabled] }
         priority: { type: integer }
         failureCount: { type: integer }
