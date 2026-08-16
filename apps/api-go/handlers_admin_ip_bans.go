@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/santos-tech/auth/db"
 )
@@ -101,12 +103,20 @@ func (s *Server) handleDeleteIPBan(w http.ResponseWriter, r *http.Request) {
 
 	ban, err := s.q.GetIPBan(r.Context(), id)
 	if err != nil {
-		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "ban não encontrado"))
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "ban não encontrado"))
+		} else {
+			writeErr(w, err)
+		}
 		return
 	}
 
 	n, err := s.q.DeleteIPBan(r.Context(), id)
-	if err != nil || n == 0 {
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if n == 0 {
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "ban não encontrado"))
 		return
 	}
