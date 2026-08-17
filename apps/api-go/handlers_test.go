@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -197,5 +199,27 @@ func TestHandleLoginRedisDown(t *testing.T) {
 		strings.NewReader(`{"identifier":"user@example.com","password":"senha123"}`)))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("Redis indisponível deve retornar 503 (fail-closed), veio %d", w.Code)
+	}
+}
+
+// TestWriteErrWrappedAppError garante que writeErr unwraps corretamente um
+// *AppError embrulhado com fmt.Errorf("%w", ...) — sem errors.As, erros
+// embrulhados cairiam no branch genérico de 500.
+func TestWriteErrWrappedAppError(t *testing.T) {
+	inner := appErr(http.StatusNotFound, "NOT_FOUND", "recurso não encontrado")
+	wrapped := fmt.Errorf("camada de serviço: %w", inner)
+
+	w := httptest.NewRecorder()
+	writeErr(w, wrapped)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("AppError embrulhado deve preservar status %d, veio %d", http.StatusNotFound, w.Code)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("resposta não é JSON válido: %v", err)
+	}
+	if body["code"] != "NOT_FOUND" {
+		t.Errorf("code esperado NOT_FOUND, veio %q", body["code"])
 	}
 }
