@@ -183,6 +183,26 @@ func (s *Server) startHourSession(ctx context.Context, clientID string, createdB
 	return h, token, nil
 }
 
+// reissueHourSessionToken gera um novo token pro link público de uma sessão
+// já existente (ex.: admin perdeu o link original, ou a sessão foi iniciada
+// antes de existir cache local pro link). O token antigo para de funcionar —
+// só o hash mais recente fica válido.
+func (s *Server) reissueHourSessionToken(ctx context.Context, id string) (string, error) {
+	token := randomToken(32)
+	tokenHash := sha256Hex(token)
+	tag, err := s.db.Exec(ctx, `
+		UPDATE hour_sessions SET token_hash = $2, updated_at = now()
+		WHERE id = $1::uuid AND status != 'ended'`,
+		id, tokenHash)
+	if err != nil {
+		return "", err
+	}
+	if tag.RowsAffected() == 0 {
+		return "", errHourSessionNotFound
+	}
+	return token, nil
+}
+
 // listActiveHourSessions traz as sessões ainda não encerradas (painel "ao
 // vivo" do admin), com o tempo decorrido já calculado.
 func (s *Server) listActiveHourSessions(ctx context.Context) ([]HourSession, error) {

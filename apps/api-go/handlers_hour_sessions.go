@@ -127,6 +127,27 @@ func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// POST /hour-sessions/{id}/link — gera (ou reemite) o link público da sessão.
+// Não depende de cache local: cobre sessão iniciada antes dessa função
+// existir, noutro navegador, ou com o link perdido. O token antigo, se
+// houver, para de funcionar.
+func (s *Server) handleReissueHourSessionLink(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errHourSessionNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	token, err := s.reissueHourSessionToken(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"token":     token,
+		"publicUrl": s.cfg.DashboardWebOrigin + "/sessao/" + token,
+	})
+}
+
 // POST /hour-sessions/{id}/pause
 func (s *Server) handlePauseHourSession(w http.ResponseWriter, r *http.Request) {
 	id, err := hourUUIDFrom(r, "id", errHourSessionNotFound)

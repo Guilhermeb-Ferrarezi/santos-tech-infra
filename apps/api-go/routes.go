@@ -340,6 +340,7 @@ func (s *Server) registerHourSessionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /hour-sessions/{id}/resume", s.rateLimit(60, min, s.adminGuard(s.handleResumeHourSession)))
 	mux.HandleFunc("POST /hour-sessions/{id}/end", s.rateLimit(60, min, s.adminGuard(s.handleEndHourSession)))
 	mux.HandleFunc("POST /hour-sessions/{id}/deny-pause", s.rateLimit(60, min, s.adminGuard(s.handleDenyHourSessionPause)))
+	mux.HandleFunc("POST /hour-sessions/{id}/link", s.rateLimit(30, min, s.adminGuard(s.handleReissueHourSessionLink)))
 
 	// Público — identificado pelo token da sessão (posse == acesso), não por
 	// cookie/sessão. GET tem rate limit folgado (o front faz polling); o

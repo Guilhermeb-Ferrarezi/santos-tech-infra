@@ -3260,6 +3260,36 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /hour-sessions/{id}/link:
+    post:
+      tags: [Horas]
+      summary: Gera (ou reemite) o link público da sessão
+      description: |
+        Admin-only. Não depende de cache local — cobre sessão iniciada antes do
+        link ter sido copiado, iniciada noutro navegador/dispositivo, ou com o
+        link perdido. Gera um token novo; o token anterior (se houver) para de
+        funcionar. Rate limit 30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Novo link gerado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string, description: "64 chars hex — só aparece nesta resposta." }
+                  publicUrl: { type: string }
+                required: [token, publicUrl]
+        "404":
+          description: Sessão não encontrada ou já encerrada.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /public/hour-sessions/{token}:
     get:
       tags: [Horas]
