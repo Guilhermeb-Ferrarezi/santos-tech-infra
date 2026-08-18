@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func taskReq(method, id, body string, userID int64) *http.Request {
@@ -29,6 +30,7 @@ func TestHandleTaskBadUUID(t *testing.T) {
 	for _, h := range []http.HandlerFunc{
 		s.handleGetTask, s.handleUpdateTask, s.handleDeleteTask,
 		s.handleListTaskNotes, s.handleAddTaskNote,
+		s.handleConfirmTask, s.handleUnconfirmTask,
 	} {
 		w := httptest.NewRecorder()
 		h(w, taskReq("GET", "nao-e-uuid", "{}", 1))
@@ -79,8 +81,8 @@ func TestCanSeeTask(t *testing.T) {
 	resp := int64(10)
 	creator := int64(20)
 	other := int64(30)
-	assignee := int64(40)
-	task := &Task{ResponsavelID: &resp, CreatedBy: &creator, AssigneeIDs: []int64{assignee}}
+	coResp := int64(40)
+	task := &Task{ResponsavelID: &resp, CreatedBy: &creator, CoResponsaveis: []TaskCoResponsavel{{UserID: coResp}}}
 
 	if !canSeeTask(task, resp, false) {
 		t.Fatal("responsável deveria ver a própria tarefa")
@@ -88,13 +90,81 @@ func TestCanSeeTask(t *testing.T) {
 	if !canSeeTask(task, creator, false) {
 		t.Fatal("criador deveria ver a própria tarefa")
 	}
-	if !canSeeTask(task, assignee, false) {
-		t.Fatal("responsável adicional deveria ver a própria tarefa")
+	if !canSeeTask(task, coResp, false) {
+		t.Fatal("co-responsável deveria ver a própria tarefa")
 	}
 	if canSeeTask(task, other, false) {
 		t.Fatal("staff comum não deveria ver tarefa alheia")
 	}
 	if !canSeeTask(task, other, true) {
 		t.Fatal("admin deveria ver qualquer tarefa")
+	}
+}
+
+func TestCheckTaskConfirmationsComplete(t *testing.T) {
+	confirmed := time.Now()
+
+	// Tarefa comum (sem co-responsáveis) nunca trava, mesmo sem confirmação do
+	// responsável.
+	if err := checkTaskConfirmationsComplete(&Task{}); err != nil {
+		t.Fatalf("tarefa comum não deveria travar: %v", err)
+	}
+
+	base := func() *Task {
+		return &Task{CoResponsaveis: []TaskCoResponsavel{{UserID: 2}, {UserID: 3}}}
+	}
+
+	if err := checkTaskConfirmationsComplete(base()); err == nil {
+		t.Fatal("nenhuma confirmação: deveria travar")
+	}
+
+	responsavelOnly := base()
+	responsavelOnly.ResponsavelConfirmedAt = &confirmed
+	if err := checkTaskConfirmationsComplete(responsavelOnly); err == nil {
+		t.Fatal("só o responsável confirmou: deveria travar (co-responsáveis faltando)")
+	}
+
+	partial := base()
+	partial.ResponsavelConfirmedAt = &confirmed
+	partial.CoResponsaveis[0].ConfirmedAt = &confirmed
+	if err := checkTaskConfirmationsComplete(partial); err == nil {
+		t.Fatal("um co-responsável ainda não confirmou: deveria travar")
+	}
+
+	all := base()
+	all.ResponsavelConfirmedAt = &confirmed
+	all.CoResponsaveis[0].ConfirmedAt = &confirmed
+	all.CoResponsaveis[1].ConfirmedAt = &confirmed
+	if err := checkTaskConfirmationsComplete(all); err != nil {
+		t.Fatalf("todos confirmaram: não deveria travar: %v", err)
+	}
+}
+
+func TestTargetConfirmUserID(t *testing.T) {
+	// Sem corpo (comum em DELETE) ou sem userId: alvo é o próprio requisitante.
+	r := taskReq("DELETE", validUUID, "", 7)
+	uid, err := targetConfirmUserID(r, false)
+	if err != nil || uid != 7 {
+		t.Fatalf("esperava (7, nil), veio (%d, %v)", uid, err)
+	}
+
+	// userId igual ao próprio: sempre aceito, mesmo sem ser admin.
+	r = taskReq("POST", validUUID, `{"userId":7}`, 7)
+	uid, err = targetConfirmUserID(r, false)
+	if err != nil || uid != 7 {
+		t.Fatalf("esperava (7, nil), veio (%d, %v)", uid, err)
+	}
+
+	// userId de outra pessoa, requisitante não-admin: 403.
+	r = taskReq("POST", validUUID, `{"userId":9}`, 7)
+	if _, err := targetConfirmUserID(r, false); err == nil {
+		t.Fatal("não-admin confirmando por outra pessoa deveria falhar")
+	}
+
+	// userId de outra pessoa, requisitante admin: aceito (correção manual).
+	r = taskReq("POST", validUUID, `{"userId":9}`, 7)
+	uid, err = targetConfirmUserID(r, true)
+	if err != nil || uid != 9 {
+		t.Fatalf("esperava (9, nil), veio (%d, %v)", uid, err)
 	}
 }

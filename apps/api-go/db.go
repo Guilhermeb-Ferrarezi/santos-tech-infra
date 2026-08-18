@@ -446,17 +446,9 @@ CREATE TABLE IF NOT EXISTS dashboard_notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_dashboard_notifications_user_created ON dashboard_notifications(user_id, created_at DESC);
 
--- Responsáveis adicionais (além de responsavel_id, que continua sendo o
--- "principal" — dono da regra de visibilidade, notificação padrão etc.).
--- Uma tarefa/post pode ter N pessoas atribuídas além do principal.
-CREATE TABLE IF NOT EXISTS task_assignees (
-  task_id   UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  added_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  added_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (task_id, user_id)
-);
-CREATE INDEX IF NOT EXISTS idx_task_assignees_user ON task_assignees(user_id);
+-- Responsáveis adicionais no Calendário Editorial (além de responsavel_id, que
+-- continua sendo o "principal" — dono da visibilidade padrão, notificação etc.).
+-- Um post pode ter N pessoas atribuídas além do principal.
 CREATE TABLE IF NOT EXISTS social_post_assignees (
   post_id   UUID NOT NULL REFERENCES social_posts(id) ON DELETE CASCADE,
   user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -465,6 +457,69 @@ CREATE TABLE IF NOT EXISTS social_post_assignees (
   PRIMARY KEY (post_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_social_post_assignees_user ON social_post_assignees(user_id);
+
+-- Tarefa em dupla/conjunta (ver docs/superpowers/specs/2026-08-18-tarefa-conjunta-design.md
+-- no repo dashboard): responsavel_id continua existindo (compatibilidade — filtro "minhas
+-- tarefas", card, notificação), mas deixa de significar "o dono" pra virar só o "âncora"
+-- técnico quando há co-responsáveis. Conclusão trava até QUEM ESTIVER envolvido confirmar
+-- a própria parte (self-service, não delegável — exceto admin). confirmed_at nulo = ainda
+-- não confirmou. Tarefa sem nenhuma linha aqui = tarefa comum, comportamento idêntico ao
+-- de hoje (sem trava).
+CREATE TABLE IF NOT EXISTS task_co_responsaveis (
+  id            BIGSERIAL PRIMARY KEY,
+  task_id       UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  confirmed_at  TIMESTAMPTZ,
+  UNIQUE (task_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_co_responsaveis_task ON task_co_responsaveis(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_co_responsaveis_user ON task_co_responsaveis(user_id);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS responsavel_confirmed_at TIMESTAMPTZ;
+
+-- Controle de horas de clientes (lan house/escola): cliente compra pacote de
+-- horas, admin inicia/pausa/retoma/encerra sessão, link público (token) mostra
+-- o cronômetro. Tempo decorrido é sempre recalculado a partir de
+-- hour_session_events (nunca um contador acumulado que pode dessincronizar).
+CREATE TABLE IF NOT EXISTS hour_clients (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name            TEXT NOT NULL,
+  phone           TEXT,
+  balance_minutes INTEGER NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS hour_purchases (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id     UUID NOT NULL REFERENCES hour_clients(id) ON DELETE CASCADE,
+  minutes_added INTEGER NOT NULL,
+  note          TEXT,
+  created_by    INTEGER NOT NULL REFERENCES users(id),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hour_purchases_client ON hour_purchases(client_id);
+
+CREATE TABLE IF NOT EXISTS hour_sessions (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id          UUID NOT NULL REFERENCES hour_clients(id) ON DELETE CASCADE,
+  status             TEXT NOT NULL CHECK (status IN ('active', 'paused', 'ended')),
+  token_hash         TEXT NOT NULL UNIQUE,
+  pause_requested_at TIMESTAMPTZ,
+  created_by         INTEGER NOT NULL REFERENCES users(id),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hour_sessions_client ON hour_sessions(client_id);
+CREATE INDEX IF NOT EXISTS idx_hour_sessions_status ON hour_sessions(status) WHERE status != 'ended';
+
+CREATE TABLE IF NOT EXISTS hour_session_events (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id    UUID NOT NULL REFERENCES hour_sessions(id) ON DELETE CASCADE,
+  event_type    TEXT NOT NULL CHECK (event_type IN ('start', 'pause', 'resume', 'end')),
+  actor_user_id INTEGER NOT NULL REFERENCES users(id),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hour_session_events_session ON hour_session_events(session_id, created_at);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

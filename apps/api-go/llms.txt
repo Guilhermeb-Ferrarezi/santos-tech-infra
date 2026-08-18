@@ -377,24 +377,49 @@ Auth: admin (3)/professor (2) sempre; role 4 com permissão `tarefas` (read/writ
 Gestão de tarefas da empresa (financeiro, compras, cliente, recepção, pedagógico,
 manutenção), separado do Calendário Editorial. **Visibilidade enforced no servidor**
 (diferente de `social`): staff comum só recebe tarefas onde é `responsavelId`, `createdBy`
-OU está em `assigneeIds`; admin recebe todas, sem filtro.
+OU é um dos `coResponsaveis`; admin recebe todas, sem filtro.
 
 - `GET /tasks` — `{tasks:[Task]}`, já filtrado pela visibilidade do requisitante
 - `POST /tasks {TaskInput}` → 201 `{task}` · campo inválido → 400
 - `GET /tasks/{id}` — `{task}` · inexistente ou sem visibilidade → 404
-- `PUT /tasks/{id} {TaskInput}` → `{task}` · sem visibilidade → 404
+- `PUT /tasks/{id} {TaskInput}` → `{task}` · sem visibilidade → 404 · transição pra
+  `concluida` sem todo mundo confirmado → 400 `TASK_NOT_CONFIRMED` (ver abaixo)
 - `DELETE /tasks/{id}` → 204 · sem visibilidade → 404
 - `GET|POST /tasks/{id}/notes` — comentários internos
+- `POST /tasks/{id}/confirm` — confirma a PRÓPRIA parte (responsável ou co-responsável).
+  `{"userId": N}` opcional no corpo pra confirmar em nome de outra pessoa envolvida —
+  **admin-only** (correção manual); qualquer outro papel mandando userId de terceiro → 403.
+  Sem envolvimento nenhum na tarefa → 403 `TASK_NOT_INVOLVED`. → `{task}`
+- `DELETE /tasks/{id}/confirm` — desfaz a própria confirmação (mesma regra de alvo). → `{task}`
 - `GET /tasks/categories` — `{categories:[TaskCategory]}`
 - `POST|PUT|DELETE /tasks/categories[/{id}]` — **admin-only**, não é permissão delegável
 
+**Tarefa em dupla/conjunta** (feature de 18/08/2026 — ver
+`docs/superpowers/specs/2026-08-18-tarefa-conjunta-design.md` no repo `dashboard`):
+`responsavel_id` continua existindo (compatibilidade — filtro "minhas tarefas", card,
+notificação), mas numa tarefa com co-responsáveis ele deixa de significar "o dono" e vira
+só o "âncora" técnico — pra fins de confirmação ele é só mais um dos envolvidos. Uma tarefa
+sem nenhum `coResponsavel` é uma tarefa comum, comportamento idêntico ao de sempre (sem
+trava). Com 1+, **`status: concluida` só é aceito na transição** (post já concluído continua
+editável) **quando o responsável E todo co-responsável já confirmaram a própria parte**
+(`responsavelConfirmedAt` e cada `coResponsaveis[].confirmedAt` preenchidos) — senão 400
+`TASK_NOT_CONFIRMED`. `status: cancelada` não exige confirmação de ninguém. Confirmação é
+**self-service, não delegável** (cada um só confirma a própria linha — cobrança entre
+pares), exceto admin, que pode confirmar em nome de alguém. Trocar o `responsavelId`
+(âncora) zera `responsavelConfirmedAt` dele; remover alguém de `coResponsavelIds` apaga a
+confirmação dessa pessoa também (a composição mudou, a confirmação antiga não faz mais
+sentido) — quem permanece na lista entre saves mantém a própria confirmação.
+
 **Task**: `title`, `description`, `categoryId` (nullable, FK task_categories),
 `categoryName` (denormalizado), `status` (a_fazer|em_andamento|concluida|cancelada),
-`priority` (baixa|media|alta), `dueDate`, `responsavelId`/`responsavelNome` (1 pessoa,
-o principal), `assigneeIds[]` (responsáveis ADICIONAIS — settable via POST/PUT,
-substitui a lista inteira a cada save; ids inexistentes → 400; cada um também conta
-pra visibilidade e recebe a notificação de criação. Feature de 18/08/2026),
-`createdBy`/`createdByNome`.
+`priority` (baixa|media|alta), `dueDate`, `responsavelId`/`responsavelNome` (1 pessoa, o
+"âncora"), `responsavelConfirmedAt` (nullable — confirmação do âncora numa tarefa
+conjunta), `coResponsaveis[]` (`{userId, nome, confirmedAt}`, populado em toda leitura,
+lista e único — volume baixo, sem custo de N+1), `createdBy`/`createdByNome`.
+
+**TaskInput**: mesmos campos de escrita de `Task` mais `coResponsavelIds: number[]` no
+lugar de `coResponsaveis` — substitui a lista inteira a cada save (mesmo contrato de
+`hashtags`/`plataformasDestino` no social); ids inexistentes → 400.
 
 **TaskCategory**: `id`, `name`. Apagar categoria em uso não trava — tarefas ficam com
 `categoryId: null` (ON DELETE SET NULL).
@@ -515,8 +540,8 @@ respondem 503.
   assinatura inválida (401) ou corpo malformado (400).
 
 **Disparo automático** (sem endpoint dedicado — acontece como efeito colateral):
-`POST /tasks` envia push ao `responsavelId` e a cada um de `assigneeIds`, exceto quem
-criou a tarefa e duplicados;
+`POST /tasks` envia push ao `responsavelId` e a cada `coResponsavel`, exceto quem criou a
+tarefa e duplicados;
 `POST /webhooks/email/new` envia push ao dono do endereço `to` (via
 `userByEmail`). Envio é assíncrono (fila `asynq` sobre o mesmo Redis dos
 emails) — subscriptions que o navegador revogou (404/410 do push service) são

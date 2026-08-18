@@ -30,8 +30,9 @@ func validateTaskInput(in *TaskInput) error {
 	return nil
 }
 
-// canSeeTask: admin sempre; staff comum só se é responsável ou criador da
-// tarefa (mesma regra de listTasks, aplicada a get/update/delete individual).
+// canSeeTask: admin sempre; staff comum só se é responsável, criador ou
+// co-responsável da tarefa (mesma regra de listTasks, aplicada a
+// get/update/delete individual).
 func canSeeTask(t *Task, requesterID int64, isAdmin bool) bool {
 	if isAdmin {
 		return true
@@ -42,8 +43,8 @@ func canSeeTask(t *Task, requesterID int64, isAdmin bool) bool {
 	if t.CreatedBy != nil && *t.CreatedBy == requesterID {
 		return true
 	}
-	for _, id := range t.AssigneeIDs {
-		if id == requesterID {
+	for _, cr := range t.CoResponsaveis {
+		if cr.UserID == requesterID {
 			return true
 		}
 	}
@@ -98,7 +99,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if err := s.validateAssigneeIDs(r.Context(), in.AssigneeIDs); err != nil {
+	if err := s.validateAssigneeIDs(r.Context(), in.CoResponsavelIDs); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -107,18 +108,18 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	// Avisa o responsável e os responsáveis adicionais por push — exceto quem
-	// criou a própria tarefa (não faz sentido se auto-notificar).
+	// Avisa o responsável e os co-responsáveis por push — exceto quem criou a
+	// própria tarefa (não faz sentido se auto-notificar).
 	creatorID := userIDFrom(r)
 	notified := map[int64]bool{creatorID: true}
 	if task.ResponsavelID != nil && !notified[*task.ResponsavelID] {
 		s.notifyUser(r.Context(), int32(*task.ResponsavelID), "Nova tarefa", task.Title, "/dashboard/tarefas")
 		notified[*task.ResponsavelID] = true
 	}
-	for _, uid := range task.AssigneeIDs {
-		if !notified[uid] {
-			s.notifyUser(r.Context(), int32(uid), "Nova tarefa", task.Title, "/dashboard/tarefas")
-			notified[uid] = true
+	for _, cr := range task.CoResponsaveis {
+		if !notified[cr.UserID] {
+			s.notifyUser(r.Context(), int32(cr.UserID), "Nova tarefa", task.Title, "/dashboard/tarefas")
+			notified[cr.UserID] = true
 		}
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"task": task})
@@ -144,7 +145,7 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if err := s.validateAssigneeIDs(r.Context(), in.AssigneeIDs); err != nil {
+	if err := s.validateAssigneeIDs(r.Context(), in.CoResponsavelIDs); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -157,12 +158,73 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errTaskNotFound)
 		return
 	}
-	task, err := s.updateTask(r.Context(), id, in, userIDFrom(r))
+	task, err := s.updateTask(r.Context(), id, in, userIDFrom(r), current.Status)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"task": task})
+}
+
+// POST /tasks/{id}/confirm
+// Confirma a PRÓPRIA parte (responsável ou co-responsável) — self-service, não
+// delegável. Admin pode confirmar em nome de outra pessoa envolvida via
+// {"userId": N} no corpo (correção manual); qualquer outro papel que mande um
+// userId diferente do próprio toma 403.
+func (s *Server) handleConfirmTask(w http.ResponseWriter, r *http.Request) {
+	s.handleSetTaskConfirmation(w, r, true)
+}
+
+// DELETE /tasks/{id}/confirm — desfaz a própria confirmação (mesma regra de alvo).
+func (s *Server) handleUnconfirmTask(w http.ResponseWriter, r *http.Request) {
+	s.handleSetTaskConfirmation(w, r, false)
+}
+
+func (s *Server) handleSetTaskConfirmation(w http.ResponseWriter, r *http.Request, confirm bool) {
+	id, err := taskIDFrom(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	target, err := targetConfirmUserID(r, s.requesterIsAdmin(r))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	current, err := s.getTask(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if current == nil || !canSeeTask(current, userIDFrom(r), s.requesterIsAdmin(r)) {
+		writeErr(w, errTaskNotFound)
+		return
+	}
+	task, err := s.setTaskConfirmation(r.Context(), id, target, confirm)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": task})
+}
+
+// targetConfirmUserID resolve de quem é a confirmação: por padrão o próprio
+// requisitante; um {"userId": N} diferente no corpo só é aceito de admin
+// (correção manual em nome de alguém). Corpo ausente/vazio (comum em DELETE)
+// é tratado como "sem userId" — não é erro, cai no default (o próprio).
+func targetConfirmUserID(r *http.Request, isAdmin bool) (int64, error) {
+	self := userIDFrom(r)
+	var in struct {
+		UserID *int64 `json:"userId"`
+	}
+	_ = decodeJSON(r, &in)
+	if in.UserID == nil || *in.UserID == self {
+		return self, nil
+	}
+	if !isAdmin {
+		return 0, appErr(http.StatusForbidden, "FORBIDDEN", "Só admin pode confirmar em nome de outra pessoa")
+	}
+	return *in.UserID, nil
 }
 
 // DELETE /tasks/{id}
