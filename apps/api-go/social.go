@@ -37,10 +37,13 @@ type SocialPost struct {
 	ResponsavelID      *int64          `json:"responsavelId"`
 	FunilEtapa         string          `json:"funilEtapa"`
 
-	ResponsavelNome string    `json:"responsavelNome"`
-	CreatedBy       *int64    `json:"createdBy"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	ResponsavelNome string `json:"responsavelNome"`
+	// AssigneeIDs são responsáveis ADICIONAIS além de ResponsavelID (o
+	// principal), mesma convenção de Task.AssigneeIDs em task.go.
+	AssigneeIDs []int64   `json:"assigneeIds"`
+	CreatedBy   *int64    `json:"createdBy"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 
 	// Só populado por handleGetSocialPost (post único) — listSocialPosts não
 	// busca isso pra não pagar N+1 numa tela com dezenas de posts; o checklist
@@ -102,6 +105,7 @@ type SocialPostInput struct {
 	Mandatorios        string          `json:"mandatorios"`
 	ResponsavelID      *int64          `json:"responsavelId"`
 	FunilEtapa         string          `json:"funilEtapa"`
+	AssigneeIDs        []int64         `json:"assigneeIds"`
 }
 
 var validSocialPlatforms = map[string]bool{
@@ -147,6 +151,7 @@ const socialPostCols = `id::text, title, caption, platform, pilar, status,
 	formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
 	conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
 	responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
+	COALESCE((SELECT array_agg(sa.user_id ORDER BY sa.added_at) FROM social_post_assignees sa WHERE sa.post_id = social_posts.id), '{}'),
 	created_by, created_at, updated_at`
 
 func scanSocialPost(row pgx.Row) (*SocialPost, error) {
@@ -155,7 +160,7 @@ func scanSocialPost(row pgx.Row) (*SocialPost, error) {
 		&p.ScheduledAt, &p.MediaURL, &p.ReferenceURL,
 		&p.Formato, &p.Objetivo, &p.Programa, &p.Receita, &p.PlataformasDestino, &p.CopyArte, &p.Hashtags,
 		&p.ConceitoVisual, &p.Paleta, &p.PromptIA, &p.Specs, &p.MasterURL, &p.Mandatorios,
-		&p.ResponsavelID, &p.FunilEtapa, &p.ResponsavelNome,
+		&p.ResponsavelID, &p.FunilEtapa, &p.ResponsavelNome, &p.AssigneeIDs,
 		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -199,39 +204,85 @@ func (s *Server) getSocialPost(ctx context.Context, id string) (*SocialPost, err
 		`SELECT `+socialPostCols+` FROM social_posts WHERE id = $1::uuid`, id))
 }
 
+// replaceSocialPostAssignees espelha replaceTaskAssignees (task.go) para
+// social_post_assignees — mesmo contrato "manda a lista completa".
+func replaceSocialPostAssignees(ctx context.Context, tx pgx.Tx, postID string, userIDs []int64, addedBy int64) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM social_post_assignees WHERE post_id=$1::uuid`, postID); err != nil {
+		return err
+	}
+	if len(userIDs) == 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO social_post_assignees (post_id, user_id, added_by)
+		SELECT $1::uuid, uid, $3 FROM unnest($2::bigint[]) AS uid
+		ON CONFLICT (post_id, user_id) DO NOTHING`,
+		postID, userIDs, addedBy)
+	return err
+}
+
 func (s *Server) insertSocialPost(ctx context.Context, in SocialPostInput, createdBy int64) (*SocialPost, error) {
-	post, err := scanSocialPost(s.db.QueryRow(ctx, `
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var id string
+	err = tx.QueryRow(ctx, `
 		INSERT INTO social_posts (title, caption, platform, pilar, status, scheduled_at, media_url, reference_url,
 			formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
 			conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios, responsavel_id, funil_etapa, created_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
-		RETURNING `+socialPostCols,
+		RETURNING id::text`,
 		in.Title, in.Caption, in.Platform, in.Pilar, in.Status, in.ScheduledAt, in.MediaURL, in.ReferenceURL,
 		in.Formato, in.Objetivo, in.Programa, in.Receita, sliceOrEmpty(in.PlataformasDestino),
 		jsonbOrDefault(in.CopyArte, "[]"), sliceOrEmpty(in.Hashtags),
 		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.PromptIA, jsonbOrDefault(in.Specs, "{}"),
-		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.FunilEtapa, createdBy))
+		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.FunilEtapa, createdBy).Scan(&id)
 	if err != nil {
 		return nil, portalDBErr(err)
+	}
+	if err := replaceSocialPostAssignees(ctx, tx, id, in.AssigneeIDs, createdBy); err != nil {
+		return nil, portalDBErr(err)
+	}
+	post, err := scanSocialPost(tx.QueryRow(ctx, `SELECT `+socialPostCols+` FROM social_posts WHERE id=$1::uuid`, id))
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return post, nil
 }
 
-func (s *Server) updateSocialPost(ctx context.Context, id string, in SocialPostInput) (*SocialPost, error) {
-	post, err := scanSocialPost(s.db.QueryRow(ctx, `
+func (s *Server) updateSocialPost(ctx context.Context, id string, in SocialPostInput, updatedBy int64) (*SocialPost, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
 		UPDATE social_posts SET
 			title=$2, caption=$3, platform=$4, pilar=$5, status=$6, scheduled_at=$7, media_url=$8, reference_url=$9,
 			formato=$10, objetivo=$11, programa=$12, receita=$13, plataformas_destino=$14, copy_arte=$15, hashtags=$16,
 			conceito_visual=$17, paleta=$18, prompt_ia=$19, specs=$20, master_url=$21, mandatorios=$22, responsavel_id=$23, funil_etapa=$24, updated_at=now()
-		WHERE id=$1::uuid
-		RETURNING `+socialPostCols,
+		WHERE id=$1::uuid`,
 		id, in.Title, in.Caption, in.Platform, in.Pilar, in.Status, in.ScheduledAt, in.MediaURL, in.ReferenceURL,
 		in.Formato, in.Objetivo, in.Programa, in.Receita, sliceOrEmpty(in.PlataformasDestino),
 		jsonbOrDefault(in.CopyArte, "[]"), sliceOrEmpty(in.Hashtags),
 		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.PromptIA, jsonbOrDefault(in.Specs, "{}"),
-		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.FunilEtapa))
-	if err != nil {
+		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.FunilEtapa); err != nil {
 		return nil, portalDBErr(err)
+	}
+	if err := replaceSocialPostAssignees(ctx, tx, id, in.AssigneeIDs, updatedBy); err != nil {
+		return nil, portalDBErr(err)
+	}
+	post, err := scanSocialPost(tx.QueryRow(ctx, `SELECT `+socialPostCols+` FROM social_posts WHERE id=$1::uuid`, id))
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return post, nil
 }

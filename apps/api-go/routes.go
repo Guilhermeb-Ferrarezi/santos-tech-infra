@@ -234,6 +234,8 @@ func (s *Server) registerSocialRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /tasks/{id}", s.permGuard("tarefas", "delete", true, s.handleDeleteTask))
 	mux.HandleFunc("GET /tasks/{id}/notes", s.permGuard("tarefas", "read", true, s.handleListTaskNotes))
 	mux.HandleFunc("POST /tasks/{id}/notes", s.rateLimit(30, min, s.permGuard("tarefas", "write", true, s.handleAddTaskNote)))
+	mux.HandleFunc("POST /tasks/{id}/confirm", s.rateLimit(30, min, s.permGuard("tarefas", "write", true, s.handleConfirmTask)))
+	mux.HandleFunc("DELETE /tasks/{id}/confirm", s.rateLimit(30, min, s.permGuard("tarefas", "write", true, s.handleUnconfirmTask)))
 	mux.HandleFunc("GET /tasks/categories", s.permGuard("tarefas", "read", true, s.handleListTaskCategories))
 	mux.HandleFunc("POST /tasks/categories", s.adminGuard(s.handleCreateTaskCategory))
 	mux.HandleFunc("PUT /tasks/categories/{id}", s.adminGuard(s.handleUpdateTaskCategory))

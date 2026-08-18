@@ -102,6 +102,10 @@ func (s *Server) handleCreateSocialPost(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
+	if err := s.validateAssigneeIDs(r.Context(), in.AssigneeIDs); err != nil {
+		writeErr(w, err)
+		return
+	}
 	post, err := s.insertSocialPost(r.Context(), in, userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
@@ -127,6 +131,10 @@ func (s *Server) handleUpdateSocialPost(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
+	if err := s.validateAssigneeIDs(r.Context(), in.AssigneeIDs); err != nil {
+		writeErr(w, err)
+		return
+	}
 
 	current, err := s.getSocialPost(r.Context(), id)
 	if err != nil {
@@ -146,7 +154,7 @@ func (s *Server) handleUpdateSocialPost(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	post, err := s.updateSocialPost(r.Context(), id, in)
+	post, err := s.updateSocialPost(r.Context(), id, in, userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
 		return
