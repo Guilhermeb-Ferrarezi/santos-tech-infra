@@ -397,10 +397,12 @@ func (s *Server) handleDownloadDriveFile(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// POST /drive-folders/{id}/files — folderAccessGuard("write") já garantiu o
-// acesso. Lê o multipart via MultipartReader (streaming puro, sem
-// ParseMultipartForm) pra nunca bufferizar o arquivo inteiro — cada parte vai
-// direto pro pipe que UploadFile lê e envia ao Drive.
+// POST /drive-folders/{id}/files?parent=<driveFileId> — folderAccessGuard("write")
+// já garantiu o acesso à pasta raiz {id}. `parent` (opcional, mesma validação
+// de ancestralidade do GET) envia pra uma SUBPASTA em vez da raiz. Lê o
+// multipart via MultipartReader (streaming puro, sem ParseMultipartForm) pra
+// nunca bufferizar o arquivo inteiro — cada parte vai direto pro pipe que
+// UploadFile lê e envia ao Drive.
 func (s *Server) handleUploadDriveFile(w http.ResponseWriter, r *http.Request) {
 	if s.drive == nil {
 		writeErr(w, appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED", "Arquivos (Google Drive) não configurado"))
@@ -415,6 +417,22 @@ func (s *Server) handleUploadDriveFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "pasta não encontrada"))
 		return
 	}
+
+	target := folder.DriveFolderID
+	if parent := strings.TrimSpace(r.URL.Query().Get("parent")); parent != "" && parent != folder.DriveFolderID {
+		ok, err := s.drive.IsDescendant(r.Context(), parent, folder.DriveFolderID)
+		if err != nil {
+			slog.Error("falha ao validar ancestralidade de subpasta do Drive", "folder", folder.ID, "err", err)
+			writeErr(w, appErr(http.StatusBadGateway, "UPLOAD_FAILED", "falha ao verificar a subpasta"))
+			return
+		}
+		if !ok {
+			writeErr(w, appErr(http.StatusForbidden, "FORBIDDEN", "pasta fora do escopo autorizado"))
+			return
+		}
+		target = parent
+	}
+
 	if r.ContentLength > maxDriveUploadSize+(64<<10) {
 		writeErr(w, appErr(http.StatusRequestEntityTooLarge, "VALIDATION_ERROR", "arquivo grande demais (máx 25MB)"))
 		return
@@ -451,7 +469,7 @@ func (s *Server) handleUploadDriveFile(w http.ResponseWriter, r *http.Request) {
 		if contentType == "" {
 			contentType = "application/octet-stream"
 		}
-		f, uploadErr := s.drive.UploadFile(r.Context(), folder.DriveFolderID, filename, contentType, part)
+		f, uploadErr := s.drive.UploadFile(r.Context(), target, filename, contentType, part)
 		part.Close()
 		if uploadErr != nil {
 			slog.Error("falha no upload pro Drive", "folder", folder.ID, "err", uploadErr)

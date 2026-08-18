@@ -389,9 +389,10 @@ Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por pe
   imagem/vídeo/PDF quando sabe); `?download=1` força attachment. Repassa
   header `Range` pro Drive (206 Partial Content) — dá seek em vídeo sem
   baixar tudo primeiro
-- `POST /drive-folders/{id}/files` — exige `write`; `multipart/form-data` campo
-  `file` (máx. 25MB, streamado sem bufferizar inteiro em memória) → 201
-  `{file}` · rate limit 10/min
+- `POST /drive-folders/{id}/files[?parent=<driveFileId>]` — exige `write` na
+  raiz `{id}`; `multipart/form-data` campo `file` (máx. 25MB, streamado sem
+  bufferizar inteiro em memória) → 201 `{file}` · rate limit 10/min ·
+  `parent` envia pra uma subpasta (mesma validação de ancestralidade do GET)
 
 ## Social — Calendário Editorial — `api.santos-tech.com/social`
 

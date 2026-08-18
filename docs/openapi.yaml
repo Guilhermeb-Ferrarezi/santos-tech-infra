@@ -3619,16 +3619,23 @@ paths:
           $ref: "#/components/responses/Unauthorized"
     post:
       tags: [Arquivos]
-      summary: Envia um arquivo pra pasta
+      summary: Envia um arquivo pra pasta (ou subpasta)
       description: |
-        Exige acesso `write` na pasta. Rate limit 10/min. `multipart/form-data`
-        com o arquivo no campo `file` (máx. 25MB), streamado direto pro Drive
-        sem bufferizar o arquivo inteiro em memória.
+        Exige acesso `write` na pasta raiz `{id}`. Rate limit 10/min.
+        `multipart/form-data` com o arquivo no campo `file` (máx. 25MB),
+        streamado direto pro Drive sem bufferizar o arquivo inteiro em
+        memória. `?parent=<driveFileId>` envia pra uma SUBPASTA (mesma
+        validação de ancestralidade do GET) em vez da raiz.
       parameters:
         - name: id
           in: path
           required: true
           schema: { type: string, format: uuid }
+        - name: parent
+          in: query
+          required: false
+          schema: { type: string }
+          description: "ID de uma subpasta dentro da árvore de `{id}`; sem isso, envia pra raiz."
       requestBody:
         required: true
         content:
