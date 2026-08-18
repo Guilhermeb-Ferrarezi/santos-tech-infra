@@ -22,6 +22,7 @@ type Config struct {
 	PublicOrigin       string // origem pública desta API (issuer OAuth, metadata)
 	CORSOrigins        []string
 	AuthWebOrigin      string
+	DashboardWebOrigin string // origem pública do dashboard (santos-tech.com/dashboard) — usada pra montar links públicos (ex.: /sessao/{token})
 	GoogleClientID     string
 	GoogleClientSecret string
 	GoogleCallbackURL  string
@@ -100,6 +101,7 @@ func LoadConfig() Config {
 		PublicOrigin:       strings.TrimRight(getEnv("PUBLIC_ORIGIN", "https://api.santos-tech.com"), "/"),
 		CORSOrigins:        splitCSV(getEnv("CORS_ORIGIN", "")),
 		AuthWebOrigin:      getEnv("AUTH_WEB_ORIGIN", ""),
+		DashboardWebOrigin: strings.TrimRight(getEnv("DASHBOARD_WEB_ORIGIN", "https://santos-tech.com/dashboard"), "/"),
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
 		GoogleCallbackURL:  getEnv("GOOGLE_CALLBACK_URL", ""),

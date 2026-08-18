@@ -123,7 +123,7 @@ func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"session":   h,
 		"token":     token,
-		"publicUrl": s.cfg.AuthWebOrigin + "/sessao/" + token,
+		"publicUrl": s.cfg.DashboardWebOrigin + "/sessao/" + token,
 	})
 }
 
