@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
+	"net/http"
 	"runtime/debug"
 )
 
@@ -83,6 +85,23 @@ func sha256Hex(s string) string {
 }
 
 func hashRefreshToken(token string) string { return sha256Hex(token) }
+
+// validateAssigneeIDs confere que cada id de responsável adicional (tasks.assigneeIds /
+// socialPosts.assigneeIds) corresponde a um usuário existente, devolvendo um 400 claro
+// em vez de deixar a FK de task_assignees/social_post_assignees estourar como 500 —
+// mesma convenção de handleSetSocialPlatformOwner para o dono de plataforma.
+func (s *Server) validateAssigneeIDs(ctx context.Context, ids []int64) error {
+	for _, id := range ids {
+		u, err := s.cachedUserByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if u == nil {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Responsável adicional inválido")
+		}
+	}
+	return nil
+}
 
 // newAPIKey gera um Personal Access Token: o segredo completo (mostrado uma única
 // vez ao usuário), um prefixo curto para exibição na listagem e o hash SHA-256 —

@@ -25,10 +25,14 @@ type Task struct {
 	DueDate         *time.Time `json:"dueDate"`
 	ResponsavelID   *int64     `json:"responsavelId"`
 	ResponsavelNome string     `json:"responsavelNome"`
-	CreatedBy       *int64     `json:"createdBy"`
-	CreatedByNome   string     `json:"createdByNome"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	UpdatedAt       time.Time  `json:"updatedAt"`
+	// AssigneeIDs são responsáveis ADICIONAIS além de ResponsavelID (o
+	// principal — quem dirige a visibilidade padrão e a notificação de
+	// criação). Nunca inclui o próprio ResponsavelID duplicado.
+	AssigneeIDs   []int64   `json:"assigneeIds"`
+	CreatedBy     *int64    `json:"createdBy"`
+	CreatedByNome string    `json:"createdByNome"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 type TaskInput struct {
@@ -39,6 +43,7 @@ type TaskInput struct {
 	Priority      string     `json:"priority"`
 	DueDate       *time.Time `json:"dueDate"`
 	ResponsavelID *int64     `json:"responsavelId"`
+	AssigneeIDs   []int64    `json:"assigneeIds"`
 }
 
 type TaskNote struct {
@@ -61,13 +66,14 @@ const taskCols = `id::text, title, description, category_id::text,
 	COALESCE((SELECT name FROM task_categories WHERE id = category_id), ''),
 	status, priority, due_date, responsavel_id,
 	COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
+	COALESCE((SELECT array_agg(ta.user_id ORDER BY ta.added_at) FROM task_assignees ta WHERE ta.task_id = tasks.id), '{}'),
 	created_by, COALESCE((SELECT name FROM users WHERE id = created_by), ''),
 	created_at, updated_at`
 
 func scanTask(row pgx.Row) (*Task, error) {
 	var t Task
 	err := row.Scan(&t.ID, &t.Title, &t.Description, &t.CategoryID, &t.CategoryName,
-		&t.Status, &t.Priority, &t.DueDate, &t.ResponsavelID, &t.ResponsavelNome,
+		&t.Status, &t.Priority, &t.DueDate, &t.ResponsavelID, &t.ResponsavelNome, &t.AssigneeIDs,
 		&t.CreatedBy, &t.CreatedByNome, &t.CreatedAt, &t.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -75,9 +81,9 @@ func scanTask(row pgx.Row) (*Task, error) {
 	return &t, err
 }
 
-// listTasks: admin vê tudo; staff comum só vê onde é responsável OU criador
-// (diferente de social_posts — aqui a visibilidade é enforced no servidor, não
-// é um pré-filtro de conveniência client-side).
+// listTasks: admin vê tudo; staff comum só vê onde é responsável, criador OU
+// responsável adicional (diferente de social_posts — aqui a visibilidade é
+// enforced no servidor, não é um pré-filtro de conveniência client-side).
 func (s *Server) listTasks(ctx context.Context, requesterID int64, isAdmin bool) ([]Task, error) {
 	var rows pgx.Rows
 	var err error
@@ -85,7 +91,10 @@ func (s *Server) listTasks(ctx context.Context, requesterID int64, isAdmin bool)
 		rows, err = s.db.Query(ctx, `SELECT `+taskCols+` FROM tasks ORDER BY COALESCE(due_date, created_at) DESC`)
 	} else {
 		rows, err = s.db.Query(ctx,
-			`SELECT `+taskCols+` FROM tasks WHERE responsavel_id=$1 OR created_by=$1 ORDER BY COALESCE(due_date, created_at) DESC`,
+			`SELECT `+taskCols+` FROM tasks
+			 WHERE responsavel_id=$1 OR created_by=$1
+			    OR EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.task_id = tasks.id AND ta.user_id = $1)
+			 ORDER BY COALESCE(due_date, created_at) DESC`,
 			requesterID)
 	}
 	if err != nil {
@@ -107,28 +116,77 @@ func (s *Server) getTask(ctx context.Context, id string) (*Task, error) {
 	return scanTask(s.db.QueryRow(ctx, `SELECT `+taskCols+` FROM tasks WHERE id = $1::uuid`, id))
 }
 
+// replaceTaskAssignees substitui o conjunto inteiro de responsáveis
+// adicionais (delete+insert, dentro da transação do chamador) — mesmo
+// contrato "manda a lista completa, recebe a lista completa" já usado em
+// campos multivalorados como plataformas_destino/hashtags nos social posts.
+// ON CONFLICT DO NOTHING absorve ids duplicados mandados pelo cliente.
+func replaceTaskAssignees(ctx context.Context, tx pgx.Tx, taskID string, userIDs []int64, addedBy int64) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM task_assignees WHERE task_id=$1::uuid`, taskID); err != nil {
+		return err
+	}
+	if len(userIDs) == 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO task_assignees (task_id, user_id, added_by)
+		SELECT $1::uuid, uid, $3 FROM unnest($2::bigint[]) AS uid
+		ON CONFLICT (task_id, user_id) DO NOTHING`,
+		taskID, userIDs, addedBy)
+	return err
+}
+
 func (s *Server) insertTask(ctx context.Context, in TaskInput, createdBy int64) (*Task, error) {
-	task, err := scanTask(s.db.QueryRow(ctx, `
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var id string
+	err = tx.QueryRow(ctx, `
 		INSERT INTO tasks (title, description, category_id, status, priority, due_date, responsavel_id, created_by)
 		VALUES ($1,$2,$3::uuid,$4,$5,$6,$7,$8)
-		RETURNING `+taskCols,
-		in.Title, in.Description, in.CategoryID, in.Status, in.Priority, in.DueDate, in.ResponsavelID, createdBy))
+		RETURNING id::text`,
+		in.Title, in.Description, in.CategoryID, in.Status, in.Priority, in.DueDate, in.ResponsavelID, createdBy).Scan(&id)
 	if err != nil {
 		return nil, portalDBErr(err)
+	}
+	if err := replaceTaskAssignees(ctx, tx, id, in.AssigneeIDs, createdBy); err != nil {
+		return nil, portalDBErr(err)
+	}
+	task, err := scanTask(tx.QueryRow(ctx, `SELECT `+taskCols+` FROM tasks WHERE id=$1::uuid`, id))
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return task, nil
 }
 
-func (s *Server) updateTask(ctx context.Context, id string, in TaskInput) (*Task, error) {
-	task, err := scanTask(s.db.QueryRow(ctx, `
+func (s *Server) updateTask(ctx context.Context, id string, in TaskInput, updatedBy int64) (*Task, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
 		UPDATE tasks SET
 			title=$2, description=$3, category_id=$4::uuid, status=$5, priority=$6,
 			due_date=$7, responsavel_id=$8, updated_at=now()
-		WHERE id=$1::uuid
-		RETURNING `+taskCols,
-		id, in.Title, in.Description, in.CategoryID, in.Status, in.Priority, in.DueDate, in.ResponsavelID))
-	if err != nil {
+		WHERE id=$1::uuid`,
+		id, in.Title, in.Description, in.CategoryID, in.Status, in.Priority, in.DueDate, in.ResponsavelID); err != nil {
 		return nil, portalDBErr(err)
+	}
+	if err := replaceTaskAssignees(ctx, tx, id, in.AssigneeIDs, updatedBy); err != nil {
+		return nil, portalDBErr(err)
+	}
+	task, err := scanTask(tx.QueryRow(ctx, `SELECT `+taskCols+` FROM tasks WHERE id=$1::uuid`, id))
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return task, nil
 }

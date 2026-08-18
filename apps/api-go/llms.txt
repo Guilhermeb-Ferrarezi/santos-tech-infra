@@ -359,6 +359,10 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 `specs` ({proporcao,largura,altura,safeZone,formatoArquivo,duracaoSeg}), `masterUrl`, `mandatorios`,
 `responsavelId` (nullable, FK users — quem executa o post; settable via POST/PUT, um por post),
 `responsavelNome` (denormalizado, só leitura, vazio se sem responsável ou usuário removido),
+`assigneeIds[]` (responsáveis ADICIONAIS além de `responsavelId` — settable via POST/PUT,
+substitui a lista inteira a cada save, igual `hashtags`/`plataformasDestino`; ids inexistentes
+→ 400. Não entra na trava de publicação nem no dono de plataforma, é só "quem mais está
+envolvido". Feature de 18/08/2026),
 `funilEtapa` (''|topo|meio|fundo — função da peça no funil de tráfego pago; vazio é o
 default das peças criadas antes do campo existir. Valor inválido → 400),
 `publishConfirmations[]` ({platform,confirmedById,confirmedByName,confirmedAt} — só
@@ -372,8 +376,8 @@ populado em `GET /social/posts/{id}` (post único), vazio em `GET /social/posts`
 Auth: admin (3)/professor (2) sempre; role 4 com permissão `tarefas` (read/write/delete).
 Gestão de tarefas da empresa (financeiro, compras, cliente, recepção, pedagógico,
 manutenção), separado do Calendário Editorial. **Visibilidade enforced no servidor**
-(diferente de `social`): staff comum só recebe tarefas onde é `responsavelId` OU
-`createdBy`; admin recebe todas, sem filtro.
+(diferente de `social`): staff comum só recebe tarefas onde é `responsavelId`, `createdBy`
+OU está em `assigneeIds`; admin recebe todas, sem filtro.
 
 - `GET /tasks` — `{tasks:[Task]}`, já filtrado pela visibilidade do requisitante
 - `POST /tasks {TaskInput}` → 201 `{task}` · campo inválido → 400
@@ -386,7 +390,10 @@ manutenção), separado do Calendário Editorial. **Visibilidade enforced no ser
 
 **Task**: `title`, `description`, `categoryId` (nullable, FK task_categories),
 `categoryName` (denormalizado), `status` (a_fazer|em_andamento|concluida|cancelada),
-`priority` (baixa|media|alta), `dueDate`, `responsavelId`/`responsavelNome` (1 pessoa),
+`priority` (baixa|media|alta), `dueDate`, `responsavelId`/`responsavelNome` (1 pessoa,
+o principal), `assigneeIds[]` (responsáveis ADICIONAIS — settable via POST/PUT,
+substitui a lista inteira a cada save; ids inexistentes → 400; cada um também conta
+pra visibilidade e recebe a notificação de criação. Feature de 18/08/2026),
 `createdBy`/`createdByNome`.
 
 **TaskCategory**: `id`, `name`. Apagar categoria em uso não trava — tarefas ficam com
@@ -508,7 +515,8 @@ respondem 503.
   assinatura inválida (401) ou corpo malformado (400).
 
 **Disparo automático** (sem endpoint dedicado — acontece como efeito colateral):
-`POST /tasks` envia push ao `responsavelId` quando != quem criou a tarefa;
+`POST /tasks` envia push ao `responsavelId` e a cada um de `assigneeIds`, exceto quem
+criou a tarefa e duplicados;
 `POST /webhooks/email/new` envia push ao dono do endereço `to` (via
 `userByEmail`). Envio é assíncrono (fila `asynq` sobre o mesmo Redis dos
 emails) — subscriptions que o navegador revogou (404/410 do push service) são

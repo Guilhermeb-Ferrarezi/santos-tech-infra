@@ -42,6 +42,11 @@ func canSeeTask(t *Task, requesterID int64, isAdmin bool) bool {
 	if t.CreatedBy != nil && *t.CreatedBy == requesterID {
 		return true
 	}
+	for _, id := range t.AssigneeIDs {
+		if id == requesterID {
+			return true
+		}
+	}
 	return false
 }
 
@@ -93,15 +98,28 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	if err := s.validateAssigneeIDs(r.Context(), in.AssigneeIDs); err != nil {
+		writeErr(w, err)
+		return
+	}
 	task, err := s.insertTask(r.Context(), in, userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	// Avisa o responsável por push — exceto quando ele mesmo criou a tarefa
-	// (não faz sentido se auto-notificar).
-	if task.ResponsavelID != nil && *task.ResponsavelID != userIDFrom(r) {
+	// Avisa o responsável e os responsáveis adicionais por push — exceto quem
+	// criou a própria tarefa (não faz sentido se auto-notificar).
+	creatorID := userIDFrom(r)
+	notified := map[int64]bool{creatorID: true}
+	if task.ResponsavelID != nil && !notified[*task.ResponsavelID] {
 		s.notifyUser(r.Context(), int32(*task.ResponsavelID), "Nova tarefa", task.Title, "/dashboard/tarefas")
+		notified[*task.ResponsavelID] = true
+	}
+	for _, uid := range task.AssigneeIDs {
+		if !notified[uid] {
+			s.notifyUser(r.Context(), int32(uid), "Nova tarefa", task.Title, "/dashboard/tarefas")
+			notified[uid] = true
+		}
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"task": task})
 }
@@ -126,6 +144,10 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	if err := s.validateAssigneeIDs(r.Context(), in.AssigneeIDs); err != nil {
+		writeErr(w, err)
+		return
+	}
 	current, err := s.getTask(r.Context(), id)
 	if err != nil {
 		writeErr(w, err)
@@ -135,7 +157,7 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errTaskNotFound)
 		return
 	}
-	task, err := s.updateTask(r.Context(), id, in)
+	task, err := s.updateTask(r.Context(), id, in, userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
 		return

@@ -445,6 +445,26 @@ CREATE TABLE IF NOT EXISTS dashboard_notifications (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_dashboard_notifications_user_created ON dashboard_notifications(user_id, created_at DESC);
+
+-- Responsáveis adicionais (além de responsavel_id, que continua sendo o
+-- "principal" — dono da regra de visibilidade, notificação padrão etc.).
+-- Uma tarefa/post pode ter N pessoas atribuídas além do principal.
+CREATE TABLE IF NOT EXISTS task_assignees (
+  task_id   UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  added_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  added_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (task_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_assignees_user ON task_assignees(user_id);
+CREATE TABLE IF NOT EXISTS social_post_assignees (
+  post_id   UUID NOT NULL REFERENCES social_posts(id) ON DELETE CASCADE,
+  user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  added_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  added_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (post_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_social_post_assignees_user ON social_post_assignees(user_id);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

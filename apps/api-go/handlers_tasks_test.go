@@ -79,13 +79,17 @@ func TestCanSeeTask(t *testing.T) {
 	resp := int64(10)
 	creator := int64(20)
 	other := int64(30)
-	task := &Task{ResponsavelID: &resp, CreatedBy: &creator}
+	assignee := int64(40)
+	task := &Task{ResponsavelID: &resp, CreatedBy: &creator, AssigneeIDs: []int64{assignee}}
 
 	if !canSeeTask(task, resp, false) {
 		t.Fatal("responsável deveria ver a própria tarefa")
 	}
 	if !canSeeTask(task, creator, false) {
 		t.Fatal("criador deveria ver a própria tarefa")
+	}
+	if !canSeeTask(task, assignee, false) {
+		t.Fatal("responsável adicional deveria ver a própria tarefa")
 	}
 	if canSeeTask(task, other, false) {
 		t.Fatal("staff comum não deveria ver tarefa alheia")
