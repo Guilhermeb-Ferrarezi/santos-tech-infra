@@ -105,6 +105,12 @@ CREATE TABLE IF NOT EXISTS social_posts (
   scheduled_at        TIMESTAMPTZ,
   media_url           TEXT NOT NULL DEFAULT '',
   reference_url       TEXT NOT NULL DEFAULT '',
+  -- FK para drive_folders(id) omitida aqui (ela é criada mais abaixo neste
+  -- arquivo) — a constraint real é adicionada via ALTER TABLE em db.go,
+  -- depois que drive_folders já existe.
+  drive_folder_id     UUID,
+  drive_file_id       TEXT NOT NULL DEFAULT '',
+  drive_file_name     TEXT NOT NULL DEFAULT '',
   formato             TEXT NOT NULL DEFAULT 'estatico',
   objetivo            TEXT NOT NULL DEFAULT 'alcance',
   programa            TEXT NOT NULL DEFAULT '',

@@ -40,12 +40,13 @@ type Server struct {
 	loki      *lokiClient      // consulta de logs (Loki); nil = desabilitado
 	sentry    *sentryClient    // consulta de issues (Sentry); nil = desabilitado
 	queue     *asynq.Client    // fila durável de emails; nil = sem fila (fallback fire-and-forget)
-	instagram *instagramClient // private reply automática (comentário -> DM); enabled()=false = desabilitado
+	instagram *instagramClient // private reply automática (comentário -> DM) + publicação de conteúdo; enabled()=false = desabilitado
+	facebook  *facebookClient  // publicação automática na Página (ver social_publish.go); enabled()=false = desabilitado
 	vault     *Vault           // cifra as chaves do roteador de APIs; nil = feature desabilitada (endpoints respondem 503)
 }
 
 func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), instagram: newInstagramClient(cfg), vault: newVault(cfg.VaultSecret)}
+	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), instagram: newInstagramClient(cfg), facebook: newFacebookClient(cfg), vault: newVault(cfg.VaultSecret)}
 	if s.portalDB == nil {
 		s.portalDB = authDB
 	}

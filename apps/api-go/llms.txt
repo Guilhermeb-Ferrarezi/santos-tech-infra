@@ -410,6 +410,21 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 - `PATCH /social/posts/{id}/status {status}` — registra histórico; `revisao` alerta o CEO
 - `GET /social/posts/{id}/history` — `{history:[{oldStatus,newStatus,changedBy,changedAt}]}`
 - `GET|POST /social/posts/{id}/notes` — comentários internos
+- `POST /social/posts/{id}/publish` — **publicador universal**: dispara a publicação
+  automática do post em TODA plataforma de `plataformasDestino` que já tem adaptador
+  plugado (hoje: `instagram`, `facebook` — ver `social_publish.go`). Mídia vem de
+  `driveFileId` (baixa via service account do Drive, sobe temporário pro R2 público,
+  usa essa URL na Graph API) ou, sem arquivo do Drive, de `mediaUrl` direto. Carrossel
+  e story ainda não são suportados (`status: "unsupported"`, confirme manualmente).
+  Publicação com sucesso já confirma a plataforma (mesma tabela do checklist manual) e
+  registra uma nota de auditoria com o ID externo. → `{results:[{platform,status,
+  externalId?,error?}]}` — `status`: `published`|`manual` (sem adaptador)|`failed`|
+  `unsupported`. Nenhuma plataforma de destino com adaptador → 400 `NO_AUTOMATED_PLATFORMS`.
+  Sem `plataformasDestino` → 400 `NO_TARGET_PLATFORMS`. Rate limit 10/min. Requer envs
+  `INSTAGRAM_ACCESS_TOKEN`/`INSTAGRAM_USER_ID` e/ou `FACEBOOK_ACCESS_TOKEN`/
+  `FACEBOOK_PAGE_ID` (Page Access Token de longa duração, não expira sozinho — ver
+  `facebook_client.go`); adaptador sem env configurada cai pro checklist manual, nunca
+  erro. Feature de 18/08/2026.
 - `POST /social/posts/{id}/publish-confirmations/{platform}` — confirma publicação
   naquela plataforma (upsert; reconfirmar atualiza, não duplica). `confirmedBy` vem
   sempre da sessão autenticada, nunca do corpo da requisição. → `{confirmations:[...]}`
@@ -432,6 +447,10 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 `platform`, `pilar` (educacional|institucional|captacao|prova_social|bastidores|tech_mundo_real),
 `status` (ideia|planejado|em_producao|revisao|aprovado|agendado|publicado|arquivado),
 `scheduledAt`, `mediaUrl`, `referenceUrl` (link da foto ref),
+`driveFolderId` (nullable, FK `drive_folders.id` — QUALQUER pasta cadastrada em Arquivos,
+não uma fixa), `driveFileId` (id do arquivo no Google Drive dentro dela), `driveFileName`
+(cache de exibição). Quando preenchidos, `POST .../publish` usa esse arquivo como mídia em
+vez de `mediaUrl`. Feature de 18/08/2026.
 `formato` (estatico|carrossel|reel|story|video_longo|short|thumbnail|card_link),
 `objetivo` (alcance|engajamento|conversao|autoridade),
 `programa` (''|create|jr|camps|academies), `receita` (catálogo de composição:

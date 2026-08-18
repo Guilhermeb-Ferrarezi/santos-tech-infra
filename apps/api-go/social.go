@@ -21,6 +21,15 @@ type SocialPost struct {
 	MediaURL     string     `json:"mediaUrl"`
 	ReferenceURL string     `json:"referenceUrl"`
 
+	// Mídia via Arquivos (Google Drive) em vez de/além de MediaURL colada à
+	// mão — DriveFolderID é o id de QUALQUER pasta cadastrada em drive_folders
+	// (múltiplas pastas, não uma fixa), DriveFileID o arquivo escolhido dentro
+	// dela. DriveFileName é só cache de exibição (evita nova chamada ao Drive
+	// só pra mostrar o nome no card do post). Ver social_publish.go.
+	DriveFolderID *string `json:"driveFolderId"`
+	DriveFileID   string  `json:"driveFileId"`
+	DriveFileName string  `json:"driveFileName"`
+
 	Formato            string          `json:"formato"`
 	Objetivo           string          `json:"objetivo"`
 	Programa           string          `json:"programa"`
@@ -90,6 +99,10 @@ type SocialPostInput struct {
 	MediaURL     string     `json:"mediaUrl"`
 	ReferenceURL string     `json:"referenceUrl"`
 
+	DriveFolderID *string `json:"driveFolderId"`
+	DriveFileID   string  `json:"driveFileId"`
+	DriveFileName string  `json:"driveFileName"`
+
 	Formato            string          `json:"formato"`
 	Objetivo           string          `json:"objetivo"`
 	Programa           string          `json:"programa"`
@@ -147,7 +160,7 @@ var validSocialReceitas = map[string]bool{
 }
 
 const socialPostCols = `id::text, title, caption, platform, pilar, status,
-	scheduled_at, media_url, reference_url,
+	scheduled_at, media_url, reference_url, drive_folder_id::text, drive_file_id, drive_file_name,
 	formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
 	conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
 	responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
@@ -157,7 +170,7 @@ const socialPostCols = `id::text, title, caption, platform, pilar, status,
 func scanSocialPost(row pgx.Row) (*SocialPost, error) {
 	var p SocialPost
 	err := row.Scan(&p.ID, &p.Title, &p.Caption, &p.Platform, &p.Pilar, &p.Status,
-		&p.ScheduledAt, &p.MediaURL, &p.ReferenceURL,
+		&p.ScheduledAt, &p.MediaURL, &p.ReferenceURL, &p.DriveFolderID, &p.DriveFileID, &p.DriveFileName,
 		&p.Formato, &p.Objetivo, &p.Programa, &p.Receita, &p.PlataformasDestino, &p.CopyArte, &p.Hashtags,
 		&p.ConceitoVisual, &p.Paleta, &p.PromptIA, &p.Specs, &p.MasterURL, &p.Mandatorios,
 		&p.ResponsavelID, &p.FunilEtapa, &p.ResponsavelNome, &p.AssigneeIDs,
@@ -230,11 +243,13 @@ func (s *Server) insertSocialPost(ctx context.Context, in SocialPostInput, creat
 	var id string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO social_posts (title, caption, platform, pilar, status, scheduled_at, media_url, reference_url,
+			drive_folder_id, drive_file_id, drive_file_name,
 			formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
 			conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios, responsavel_id, funil_etapa, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
 		RETURNING id::text`,
 		in.Title, in.Caption, in.Platform, in.Pilar, in.Status, in.ScheduledAt, in.MediaURL, in.ReferenceURL,
+		in.DriveFolderID, in.DriveFileID, in.DriveFileName,
 		in.Formato, in.Objetivo, in.Programa, in.Receita, sliceOrEmpty(in.PlataformasDestino),
 		jsonbOrDefault(in.CopyArte, "[]"), sliceOrEmpty(in.Hashtags),
 		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.PromptIA, jsonbOrDefault(in.Specs, "{}"),
@@ -264,10 +279,12 @@ func (s *Server) updateSocialPost(ctx context.Context, id string, in SocialPostI
 	if _, err := tx.Exec(ctx, `
 		UPDATE social_posts SET
 			title=$2, caption=$3, platform=$4, pilar=$5, status=$6, scheduled_at=$7, media_url=$8, reference_url=$9,
-			formato=$10, objetivo=$11, programa=$12, receita=$13, plataformas_destino=$14, copy_arte=$15, hashtags=$16,
-			conceito_visual=$17, paleta=$18, prompt_ia=$19, specs=$20, master_url=$21, mandatorios=$22, responsavel_id=$23, funil_etapa=$24, updated_at=now()
+			drive_folder_id=$10::uuid, drive_file_id=$11, drive_file_name=$12,
+			formato=$13, objetivo=$14, programa=$15, receita=$16, plataformas_destino=$17, copy_arte=$18, hashtags=$19,
+			conceito_visual=$20, paleta=$21, prompt_ia=$22, specs=$23, master_url=$24, mandatorios=$25, responsavel_id=$26, funil_etapa=$27, updated_at=now()
 		WHERE id=$1::uuid`,
 		id, in.Title, in.Caption, in.Platform, in.Pilar, in.Status, in.ScheduledAt, in.MediaURL, in.ReferenceURL,
+		in.DriveFolderID, in.DriveFileID, in.DriveFileName,
 		in.Formato, in.Objetivo, in.Programa, in.Receita, sliceOrEmpty(in.PlataformasDestino),
 		jsonbOrDefault(in.CopyArte, "[]"), sliceOrEmpty(in.Hashtags),
 		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.PromptIA, jsonbOrDefault(in.Specs, "{}"),

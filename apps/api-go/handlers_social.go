@@ -52,6 +52,15 @@ func validateSocialPostInput(in *SocialPostInput) error {
 	if !validSocialFunilEtapas[in.FunilEtapa] {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Etapa de funil inválida")
 	}
+	// "" chegaria do front como "nenhuma pasta selecionada" — normaliza pra nil
+	// antes do ::uuid do INSERT/UPDATE (string vazia não é um uuid válido).
+	if in.DriveFolderID != nil && strings.TrimSpace(*in.DriveFolderID) == "" {
+		in.DriveFolderID = nil
+	}
+	if in.DriveFolderID == nil {
+		in.DriveFileID = ""
+		in.DriveFileName = ""
+	}
 	return nil
 }
 
@@ -261,6 +270,23 @@ func (s *Server) handleUpdateSocialPostStatus(w http.ResponseWriter, r *http.Req
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"post": post})
+}
+
+// POST /social/posts/{id}/publish — dispara a publicação automática em toda
+// plataforma de destino que já tem adaptador plugado (ver social_publish.go);
+// as demais continuam exigindo confirmação manual no checklist, como hoje.
+func (s *Server) handlePublishSocialPost(w http.ResponseWriter, r *http.Request) {
+	id, err := socialPostIDFrom(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	results, err := s.PublishSocialPost(r.Context(), id, userIDFrom(r))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 // GET /social/posts/{id}/history

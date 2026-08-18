@@ -550,6 +550,15 @@ CREATE TABLE IF NOT EXISTS drive_folder_members (
   PRIMARY KEY (folder_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_drive_folder_members_user ON drive_folder_members(user_id);
+
+-- Publicador universal (ver social_publish.go): a mídia de um post pode vir
+-- de um arquivo do Drive em vez de/além de media_url colado à mão.
+-- drive_folder_id aponta pra QUALQUER pasta já cadastrada em drive_folders
+-- (múltiplas pastas suportadas, não uma fixa); drive_file_id é o ID do
+-- arquivo dentro dela no Google Drive; drive_file_name é só cache de exibição.
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_folder_id UUID REFERENCES drive_folders(id) ON DELETE SET NULL;
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_file_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_file_name TEXT NOT NULL DEFAULT '';
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

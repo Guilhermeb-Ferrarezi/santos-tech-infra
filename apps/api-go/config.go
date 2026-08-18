@@ -68,6 +68,14 @@ type Config struct {
 	InstagramUserID             string // ID numérico da conta IG business
 	InstagramWebhookVerifyToken string // hub.verify_token do handshake de assinatura do webhook
 
+	// Publicação automática na Página do Facebook (ver social_publish.go).
+	// FacebookAccessToken é um Page Access Token (não expira sozinho, só se
+	// revogado — obtido trocando um User Token de longa duração via
+	// /me/accounts). Vazio (Token ou PageID) = adaptador do Facebook
+	// desabilitado, plataforma cai de volta pro checklist manual.
+	FacebookAccessToken string
+	FacebookPageID      string
+
 	// Roteador de chaves de API (failover automático em 401/sem-créditos de
 	// provedores externos). Deriva a chave AES-256 que cifra as chaves antes de
 	// persistir. Vazio = feature desabilitada, endpoints respondem 503.
@@ -137,6 +145,9 @@ func LoadConfig() Config {
 		InstagramAccessToken:        getEnv("INSTAGRAM_ACCESS_TOKEN", ""),
 		InstagramUserID:             getEnv("INSTAGRAM_USER_ID", ""),
 		InstagramWebhookVerifyToken: getEnv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN", ""),
+
+		FacebookAccessToken: getEnv("FACEBOOK_ACCESS_TOKEN", ""),
+		FacebookPageID:      getEnv("FACEBOOK_PAGE_ID", ""),
 
 		VaultSecret: getEnv("API_VAULT_SECRET", ""),
 
