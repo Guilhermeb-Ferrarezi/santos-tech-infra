@@ -338,6 +338,44 @@ pela rota `/sessao/:token` do dashboard/web, com polling):
 - `GET /public/hour-sessions/{token}` — `{clientName, status, elapsedSeconds, remainingMinutes, pauseRequested}` · rate limit 120/min
 - `POST /public/hour-sessions/{token}/request-pause` → 204 · rate limit 5/min (evita virar canal de spam pro admin) · 409 se já não está `active` ou já tem pedido pendente
 
+## Arquivos (Google Drive) — `api.santos-tech.com/auth/admin/drive-folders` e `/drive-folders`
+
+Pastas cadastradas pelo admin, vinculadas a uma pasta real do Google Drive. O
+conteúdo (arquivos) mora todo no Drive — o dashboard só guarda metadados de
+pasta e a ACL de quem enxerga/envia arquivo em cada uma. A API fala com o
+Drive via **service account** (`GOOGLE_DRIVE_SA_JSON_B64`; vazio = rotas de
+arquivo respondem 503) — o admin precisa compartilhar cada pasta manualmente
+com o e-mail da service account direto no Google Drive. Downloads sempre
+passam pelo backend (nunca um link direto do Drive pro navegador): quem tem
+acesso no Drive é só a service account, a autorização real é a ACL daqui.
+
+ACL por pasta = **união** de cargo (fixo `"1"`=Student/`"2"`=Teacher, ou
+personalizado por UUID do cargo) **e** usuário individual — não é o mecanismo
+de `resource:read/write` de cargo genérico (tipo `portal_materiais`), é
+resolvido por registro (ver `drive_access.go`). Admin sempre tem acesso total,
+não precisa estar na ACL.
+
+Admin-only (cria pasta e define quem tem acesso; professor não administra):
+- `GET /auth/admin/drive-folders` — `{folders:[DriveFolder]}`
+- `POST /auth/admin/drive-folders {name, description?, driveFolderId}` → 201
+  `{folder}` · rate limit 20/min · `driveFolderId` aceita a URL colada
+  (`.../drive/folders/<id>?...`), o backend extrai o ID
+- `PUT /auth/admin/drive-folders/{id} {name, description?, driveFolderId}` → `{folder}` · rate limit 30/min
+- `DELETE /auth/admin/drive-folders/{id}` → 204 · admin + sudo mode (só apaga o registro, não mexe no Drive)
+- `GET /auth/admin/drive-folders/{id}/access` — `{roles:[DriveFolderRoleAccess], members:[DriveFolderMemberAccess]}`
+- `PUT /auth/admin/drive-folders/{id}/access {roles:[{roleKind,roleValue,access}], members:[{userId,access}]}`
+  → substitui o conjunto COMPLETO (não é delta) · rate limit 30/min · valida
+  cargo fixo/personalizado, `access` em `read|write`, duplicatas e existência
+  dos `userId` (400 se algum não existir)
+
+Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por permissão de cargo):
+- `GET /drive-folders/mine` — só pastas com acesso ≥ `read`; admin vê todas com `access:"write"` → `{folders:[MyDriveFolder]}`
+- `GET /drive-folders/{id}/files` — exige `read` na pasta → `{files:[DriveFile]}` (403 sem acesso, 503 sem Drive configurado)
+- `GET /drive-folders/{id}/files/{fileId}/download` — exige `read`; stream binário proxeado (nunca link direto do Drive)
+- `POST /drive-folders/{id}/files` — exige `write`; `multipart/form-data` campo
+  `file` (máx. 25MB, streamado sem bufferizar inteiro em memória) → 201
+  `{file}` · rate limit 10/min
+
 ## Social — Calendário Editorial — `api.santos-tech.com/social`
 
 Auth: admin (3)/professor (2) ou role 4 com permissão `social` (read/execute).

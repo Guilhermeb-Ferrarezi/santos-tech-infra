@@ -193,6 +193,12 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Meta (não cookie/PAT) + CRUD admin do mapeamento post -> link.
 	s.registerInstagramRoutes(mux)
 
+	// Arquivos (pastas vinculadas ao Google Drive) — CRUD de pasta e ACL são
+	// admin-only; leitura/envio de arquivo usa acesso resolvido por PASTA (cargo
+	// fixo/personalizado OU usuário individual — não um resource fixo de cargo),
+	// ver drive_access.go.
+	s.registerDriveRoutes(mux)
+
 	// Webhook de "email novo" — chamado pelo docker-mailserver (Contabo, repo
 	// email/), não por um usuário logado. Autenticado por assinatura HMAC
 	// compartilhada (EMAIL_WEBHOOK_SECRET), sem authGuard/adminGuard.
@@ -359,4 +365,25 @@ func (s *Server) registerInstagramRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /instagram/links", s.adminGuard(s.handleListInstagramCommentLinks))
 	mux.HandleFunc("PUT /instagram/links/{mediaId}", s.rateLimit(30, min, s.adminGuard(s.handleUpsertInstagramCommentLink)))
 	mux.HandleFunc("DELETE /instagram/links/{mediaId}", s.adminGuard(s.handleDeleteInstagramCommentLink))
+}
+
+// registerDriveRoutes: pastas de arquivos vinculadas ao Google Drive. CRUD de
+// pasta e configuração de ACL são admin-only (só admin decide quem vê o quê);
+// leitura/listagem/download/upload de arquivo usam folderAccessGuard, que
+// resolve o acesso EFETIVO daquela pasta (cargo fixo/personalizado ou membro
+// individual — ver drive_access.go), não um resource fixo de cargo.
+func (s *Server) registerDriveRoutes(mux *http.ServeMux) {
+	const min = time.Minute
+
+	mux.HandleFunc("GET /auth/admin/drive-folders", s.adminGuard(s.handleListDriveFoldersAdmin))
+	mux.HandleFunc("POST /auth/admin/drive-folders", s.rateLimit(20, min, s.adminGuard(s.handleCreateDriveFolder)))
+	mux.HandleFunc("PUT /auth/admin/drive-folders/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateDriveFolder)))
+	mux.HandleFunc("DELETE /auth/admin/drive-folders/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteDriveFolder)))
+	mux.HandleFunc("GET /auth/admin/drive-folders/{id}/access", s.adminGuard(s.handleGetDriveFolderAccess))
+	mux.HandleFunc("PUT /auth/admin/drive-folders/{id}/access", s.rateLimit(30, min, s.adminGuard(s.handleSetDriveFolderAccess)))
+
+	mux.HandleFunc("GET /drive-folders/mine", s.authGuard(s.handleListMyDriveFolders))
+	mux.HandleFunc("GET /drive-folders/{id}/files", s.folderAccessGuard("read", s.handleListDriveFolderFiles))
+	mux.HandleFunc("GET /drive-folders/{id}/files/{fileId}/download", s.folderAccessGuard("read", s.handleDownloadDriveFile))
+	mux.HandleFunc("POST /drive-folders/{id}/files", s.rateLimit(10, min, s.folderAccessGuard("write", s.handleUploadDriveFile)))
 }

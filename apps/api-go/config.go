@@ -53,6 +53,12 @@ type Config struct {
 	R2Bucket    string
 	R2PublicURL string // base pública (CDN), ex: https://cdn.santos-tech.com
 
+	// Arquivos (pastas de admin vinculadas ao Google Drive, ver drive.go): JSON
+	// da service account em base64. Vazio = feature desabilitada, rotas de
+	// /drive-folders respondem 503. O admin compartilha cada pasta manualmente
+	// com o e-mail da service account no próprio Google Drive.
+	GoogleDriveSAJSONB64 string
+
 	// Automação de resposta a comentário do Instagram (private reply via
 	// Graph API — substitui o ManyChat). Vazio (AppSecret ou AccessToken) =
 	// webhook desabilitado (responde 503 em vez de processar sem validar
@@ -124,6 +130,8 @@ func LoadConfig() Config {
 		R2SecretKey: getEnv("CF_R2_SECRET_KEY", ""),
 		R2Bucket:    getEnv("CF_R2_BUCKET_NAME", ""),
 		R2PublicURL: strings.TrimRight(getEnv("CF_R2_PUBLIC_URL", ""), "/"),
+
+		GoogleDriveSAJSONB64: getEnv("GOOGLE_DRIVE_SA_JSON_B64", ""),
 
 		InstagramAppSecret:          getEnv("INSTAGRAM_APP_SECRET", ""),
 		InstagramAccessToken:        getEnv("INSTAGRAM_ACCESS_TOKEN", ""),

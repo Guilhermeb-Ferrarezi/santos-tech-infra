@@ -36,6 +36,7 @@ type Server struct {
 	email     *emailClient
 	google    *oauth2.Config
 	r2        *R2              // uploads (Cloudflare R2); nil = desabilitado
+	drive     *DriveClient     // pastas de arquivos no Google Drive (Arquivos); nil = desabilitado
 	loki      *lokiClient      // consulta de logs (Loki); nil = desabilitado
 	sentry    *sentryClient    // consulta de issues (Sentry); nil = desabilitado
 	queue     *asynq.Client    // fila durável de emails; nil = sem fila (fallback fire-and-forget)
@@ -44,7 +45,7 @@ type Server struct {
 }
 
 func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), instagram: newInstagramClient(cfg), vault: newVault(cfg.VaultSecret)}
+	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), instagram: newInstagramClient(cfg), vault: newVault(cfg.VaultSecret)}
 	if s.portalDB == nil {
 		s.portalDB = authDB
 	}

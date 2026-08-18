@@ -3317,6 +3317,309 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /auth/admin/drive-folders:
+    get:
+      tags: [Arquivos]
+      summary: Lista pastas de arquivos (Google Drive)
+      description: Admin-only.
+      responses:
+        "200":
+          description: Pastas cadastradas, ordenadas por nome.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  folders: { type: array, items: { $ref: "#/components/schemas/DriveFolder" } }
+                required: [folders]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Arquivos]
+      summary: Cadastra pasta
+      description: |
+        Admin-only. Rate limit 20/min. `driveFolderId` aceita tanto o ID puro
+        quanto a URL da pasta colada do navegador — o backend extrai o ID.
+        A pasta correspondente no Google Drive precisa ser compartilhada
+        manualmente com o e-mail da service account configurada no servidor.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 120 }
+                description: { type: string, maxLength: 500, nullable: true }
+                driveFolderId: { type: string, description: "ID ou URL da pasta no Google Drive." }
+              required: [name, driveFolderId]
+      responses:
+        "201":
+          description: Pasta criada, sem nenhum acesso concedido ainda.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  folder: { $ref: "#/components/schemas/DriveFolder" }
+                required: [folder]
+        "400":
+          description: Nome ou ID da pasta ausente/inválido.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/admin/drive-folders/{id}:
+    put:
+      tags: [Arquivos]
+      summary: Atualiza pasta
+      description: Admin-only. Rate limit 30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 120 }
+                description: { type: string, maxLength: 500, nullable: true }
+                driveFolderId: { type: string }
+              required: [name, driveFolderId]
+      responses:
+        "200":
+          description: Pasta atualizada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  folder: { $ref: "#/components/schemas/DriveFolder" }
+                required: [folder]
+        "404":
+          description: Pasta não encontrada.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [Arquivos]
+      summary: Exclui pasta
+      description: |
+        Admin-only + sudo mode. Apaga só o registro/ACL no dashboard — não
+        exclui nada no Google Drive.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Excluída.
+        "404":
+          description: Pasta não encontrada.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/admin/drive-folders/{id}/access:
+    get:
+      tags: [Arquivos]
+      summary: Lê a ACL de uma pasta
+      description: Admin-only. Acesso por cargo (fixo/personalizado) e por usuário individual, união dos dois.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: ACL atual da pasta.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  roles: { type: array, items: { $ref: "#/components/schemas/DriveFolderRoleAccess" } }
+                  members: { type: array, items: { $ref: "#/components/schemas/DriveFolderMemberAccess" } }
+                required: [roles, members]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    put:
+      tags: [Arquivos]
+      summary: Substitui a ACL de uma pasta
+      description: |
+        Admin-only. Rate limit 30/min. Substitui o conjunto COMPLETO de acesso
+        (cargos + membros) — o admin manda o estado final desejado, não deltas.
+        `roleValue` é `"1"` (Student) ou `"2"` (Teacher) para `roleKind: fixed`,
+        ou o UUID do cargo personalizado para `roleKind: custom`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                roles:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      roleKind: { type: string, enum: [fixed, custom] }
+                      roleValue: { type: string }
+                      access: { type: string, enum: [read, write] }
+                    required: [roleKind, roleValue, access]
+                members:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      userId: { type: integer }
+                      access: { type: string, enum: [read, write] }
+                    required: [userId, access]
+              required: [roles, members]
+      responses:
+        "200":
+          description: ACL substituída.
+        "400":
+          description: Entrada inválida (cargo/usuário duplicado, access fora de read/write, cargo fixo/personalizado inválido, usuário inexistente).
+        "404":
+          description: Pasta não encontrada.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /drive-folders/mine:
+    get:
+      tags: [Arquivos]
+      summary: Lista as pastas que o usuário logado pode acessar
+      description: |
+        Autenticado (qualquer papel). Admin sempre vê todas com `access: write`;
+        os demais só as pastas onde a ACL (cargo ou membro individual) dá
+        `read` ou `write`.
+      responses:
+        "200":
+          description: Pastas acessíveis, já com o nível de acesso resolvido.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  folders: { type: array, items: { $ref: "#/components/schemas/MyDriveFolder" } }
+                required: [folders]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /drive-folders/{id}/files:
+    get:
+      tags: [Arquivos]
+      summary: Lista os arquivos de uma pasta
+      description: |
+        Exige acesso `read` (ou superior) na pasta — resolvido por registro
+        (cargo/membro), não por permissão fixa de cargo. Responde 503 se o
+        Drive não estiver configurado (`GOOGLE_DRIVE_SA_JSON_B64` vazio).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Arquivos da pasta (não inclui subpastas).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files: { type: array, items: { $ref: "#/components/schemas/DriveFile" } }
+                required: [files]
+        "403":
+          description: Sem acesso a essa pasta.
+        "404":
+          description: Pasta não encontrada.
+        "503":
+          description: Google Drive não configurado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Arquivos]
+      summary: Envia um arquivo pra pasta
+      description: |
+        Exige acesso `write` na pasta. Rate limit 10/min. `multipart/form-data`
+        com o arquivo no campo `file` (máx. 25MB), streamado direto pro Drive
+        sem bufferizar o arquivo inteiro em memória.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+              required: [file]
+      responses:
+        "201":
+          description: Arquivo enviado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file: { $ref: "#/components/schemas/DriveFile" }
+                required: [file]
+        "400":
+          description: Campo 'file' ausente ou requisição multipart inválida.
+        "403":
+          description: Sem acesso de escrita a essa pasta.
+        "413":
+          description: Arquivo maior que 25MB.
+        "503":
+          description: Google Drive não configurado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /drive-folders/{id}/files/{fileId}/download:
+    get:
+      tags: [Arquivos]
+      summary: Baixa um arquivo (proxeado pelo backend)
+      description: |
+        Exige acesso `read` na pasta. O download SEMPRE passa pelo backend
+        (nunca um link direto do Drive) — quem tem permissão no Drive é a
+        service account, não o usuário final; a autorização real é a ACL
+        deste dashboard.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Conteúdo binário do arquivo, com Content-Type e Content-Disposition originais.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "403":
+          description: Sem acesso a essa pasta.
+        "502":
+          description: Falha ao baixar do Drive.
+        "503":
+          description: Google Drive não configurado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -3971,6 +4274,64 @@ components:
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
       required: [id, clientId, clientName, status, elapsedSeconds, balanceMinutes, createdAt, updatedAt]
+
+    DriveFolder:
+      type: object
+      description: Metadados de uma pasta vinculada ao Google Drive (visão admin). O conteúdo em si mora no Drive; ver DriveFile.
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        driveFolderId: { type: string, description: "ID da pasta no Google Drive (já extraído de URL, se colada)." }
+        createdBy: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, name, description, driveFolderId, createdBy, createdAt, updatedAt]
+
+    MyDriveFolder:
+      type: object
+      description: Visão de uma pasta pro usuário comum — sem createdBy, com o nível de acesso efetivo já resolvido.
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        driveFolderId: { type: string }
+        access: { type: string, enum: [read, write] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, name, description, driveFolderId, access, createdAt, updatedAt]
+
+    DriveFolderRoleAccess:
+      type: object
+      description: Entrada de ACL por cargo.
+      properties:
+        roleKind: { type: string, enum: [fixed, custom] }
+        roleValue: { type: string, description: "'1'=Student/'2'=Teacher pra fixed; UUID do cargo pra custom." }
+        access: { type: string, enum: [read, write] }
+      required: [roleKind, roleValue, access]
+
+    DriveFolderMemberAccess:
+      type: object
+      description: Entrada de ACL por usuário individual, já enriquecida com nome/email pra tela de gestão.
+      properties:
+        userId: { type: integer }
+        name: { type: string }
+        email: { type: string }
+        access: { type: string, enum: [read, write] }
+        addedAt: { type: string, format: date-time }
+      required: [userId, name, email, access, addedAt]
+
+    DriveFile:
+      type: object
+      description: Arquivo dentro de uma pasta do Drive — espelho reduzido da resposta da Drive API v3.
+      properties:
+        id: { type: string, description: "ID do arquivo no Google Drive." }
+        name: { type: string }
+        mimeType: { type: string }
+        size: { type: integer, format: int64 }
+        modifiedTime: { type: string, format: date-time }
+        iconLink: { type: string, nullable: true }
+      required: [id, name, mimeType, size, modifiedTime]
 
 # Por padrão, as rotas exigem o access_token (cookie ou Bearer).
 # Rotas públicas sobrescrevem com `security: []`.
