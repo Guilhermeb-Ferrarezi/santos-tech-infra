@@ -62,12 +62,37 @@ func socialPostIsVideo(formato string) (isVideo, supported bool) {
 	return false, false
 }
 
-// PublishSocialPost dispara a publicação automática do post em toda
-// plataforma de PlataformasDestino que já tem adaptador plugado. Publicação
-// com sucesso já confirma a plataforma no checklist (mesma tabela usada pela
-// confirmação manual) e registra uma nota de auditoria com o ID externo —
-// plataformas sem adaptador continuam exigindo confirmação manual, como hoje.
-func (s *Server) PublishSocialPost(ctx context.Context, postID string, actingUserID int64) ([]SocialPublishResult, error) {
+// resolvePublishTargets decide QUAIS plataformas publicar nesta chamada:
+// sem `requested` (vazio), publica em toda plataformasDestino (comportamento
+// original); com `requested`, restringe a esse subconjunto — usado pelo
+// diálogo de revisão pra deixar de fora uma plataforma já confirmada (evita
+// publicar de novo e duplicar o post na rede, já que publicar não edita um
+// post existente, sempre CRIA um novo). Pedir uma plataforma fora de
+// plataformasDestino é erro — não é "publicar em qualquer coisa".
+func resolvePublishTargets(destino, requested []string) ([]string, error) {
+	if len(requested) == 0 {
+		return destino, nil
+	}
+	destinoSet := make(map[string]bool, len(destino))
+	for _, d := range destino {
+		destinoSet[d] = true
+	}
+	for _, r := range requested {
+		if !destinoSet[r] {
+			return nil, appErr(http.StatusBadRequest, "PLATFORM_NOT_TARGET",
+				fmt.Sprintf("%q não é uma plataforma de destino deste post", r))
+		}
+	}
+	return requested, nil
+}
+
+// PublishSocialPost dispara a publicação automática do post nas plataformas
+// resolvidas por resolvePublishTargets que já têm adaptador plugado.
+// Publicação com sucesso já confirma a plataforma no checklist (mesma tabela
+// usada pela confirmação manual) e registra uma nota de auditoria com o ID
+// externo — plataformas sem adaptador continuam exigindo confirmação manual,
+// como hoje. `requestedPlatforms` vazio publica em toda plataformasDestino.
+func (s *Server) PublishSocialPost(ctx context.Context, postID string, actingUserID int64, requestedPlatforms []string) ([]SocialPublishResult, error) {
 	post, err := s.getSocialPost(ctx, postID)
 	if err != nil {
 		return nil, err
@@ -78,10 +103,14 @@ func (s *Server) PublishSocialPost(ctx context.Context, postID string, actingUse
 	if len(post.PlataformasDestino) == 0 {
 		return nil, appErr(http.StatusBadRequest, "NO_TARGET_PLATFORMS", "Post sem plataformas de destino definidas")
 	}
+	targets, err := resolvePublishTargets(post.PlataformasDestino, requestedPlatforms)
+	if err != nil {
+		return nil, err
+	}
 
 	adapters := s.socialPublishAdapters()
 	hasAdapter := false
-	for _, p := range post.PlataformasDestino {
+	for _, p := range targets {
 		if adapters[p] != nil {
 			hasAdapter = true
 			break
@@ -100,8 +129,8 @@ func (s *Server) PublishSocialPost(ctx context.Context, postID string, actingUse
 	}
 	defer cleanup()
 
-	results := make([]SocialPublishResult, 0, len(post.PlataformasDestino))
-	for _, platform := range post.PlataformasDestino {
+	results := make([]SocialPublishResult, 0, len(targets))
+	for _, platform := range targets {
 		adapter, ok := adapters[platform]
 		if !ok {
 			results = append(results, SocialPublishResult{Platform: platform, Status: "manual"})

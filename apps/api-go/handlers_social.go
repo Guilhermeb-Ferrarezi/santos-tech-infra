@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"html"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -275,13 +277,25 @@ func (s *Server) handleUpdateSocialPostStatus(w http.ResponseWriter, r *http.Req
 // POST /social/posts/{id}/publish — dispara a publicação automática em toda
 // plataforma de destino que já tem adaptador plugado (ver social_publish.go);
 // as demais continuam exigindo confirmação manual no checklist, como hoje.
+// Corpo opcional `{platforms: [...]}` restringe a publicação a um SUBCONJUNTO
+// de plataformasDestino nesta chamada (ex.: diálogo de revisão deixando de
+// fora uma plataforma já confirmada, pra não duplicar a publicação lá) — sem
+// corpo/vazio, publica em todas de plataformasDestino (comportamento original).
 func (s *Server) handlePublishSocialPost(w http.ResponseWriter, r *http.Request) {
 	id, err := socialPostIDFrom(r)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	results, err := s.PublishSocialPost(r.Context(), id, userIDFrom(r))
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var in struct {
+		Platforms []string `json:"platforms"`
+	}
+	if err := decodeJSON(r, &in); err != nil && !errors.Is(err, io.EOF) {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	results, err := s.PublishSocialPost(r.Context(), id, userIDFrom(r), in.Platforms)
 	if err != nil {
 		writeErr(w, err)
 		return

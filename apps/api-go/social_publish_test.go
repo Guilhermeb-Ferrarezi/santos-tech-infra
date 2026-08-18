@@ -35,6 +35,25 @@ func TestSocialPublishAdaptersEmptyWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestResolvePublishTargets(t *testing.T) {
+	destino := []string{"instagram", "facebook", "tiktok"}
+
+	got, err := resolvePublishTargets(destino, nil)
+	if err != nil || len(got) != 3 {
+		t.Errorf("sem requested deveria devolver toda plataformasDestino, got=%v err=%v", got, err)
+	}
+
+	got, err = resolvePublishTargets(destino, []string{"instagram"})
+	if err != nil || len(got) != 1 || got[0] != "instagram" {
+		t.Errorf("subconjunto válido deveria passar, got=%v err=%v", got, err)
+	}
+
+	_, err = resolvePublishTargets(destino, []string{"linkedin"})
+	if err == nil {
+		t.Error("plataforma fora de plataformasDestino deveria falhar")
+	}
+}
+
 func TestSocialPublishAdaptersEnabled(t *testing.T) {
 	cfg := Config{
 		InstagramAccessToken: "tok", InstagramUserID: "123",
