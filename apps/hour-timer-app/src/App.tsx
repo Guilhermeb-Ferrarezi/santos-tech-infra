@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Clock, HandPalm, ArrowCounterClockwise } from "@phosphor-icons/react";
 import { useStoredToken } from "./lib/useStoredToken";
 import { useTickingSeconds } from "./lib/useTickingSeconds";
+import { useLowBalanceNotifier } from "./lib/useLowBalanceNotifier";
 
 const API_ORIGIN = "https://api.santos-tech.com";
 
@@ -108,6 +109,7 @@ function TimerScreen({ token, onChangeSession }: { token: string; onChangeSessio
   const displaySeconds = useTickingSeconds(data?.elapsedSeconds ?? 0, data?.status === "active");
   const tickedMinutes = Math.floor(displaySeconds / 60) - Math.floor((data?.elapsedSeconds ?? 0) / 60);
   const remainingMinutes = (data?.remainingMinutes ?? 0) - tickedMinutes;
+  useLowBalanceNotifier(data ? remainingMinutes : null, data?.status === "active");
 
   async function requestPause() {
     setRequesting(true);
