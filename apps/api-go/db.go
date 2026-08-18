@@ -520,6 +520,36 @@ CREATE TABLE IF NOT EXISTS hour_session_events (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_hour_session_events_session ON hour_session_events(session_id, created_at);
+
+-- Arquivos (Google Drive): o conteúdo real mora no Drive; aqui só guardamos
+-- metadados de pasta e a ACL de quem enxerga/envia arquivo em cada uma — por
+-- cargo (fixo ou personalizado) E por usuário individual, união dos dois.
+CREATE TABLE IF NOT EXISTS drive_folders (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name            TEXT NOT NULL,
+  description     TEXT,
+  drive_folder_id TEXT NOT NULL,
+  created_by      INTEGER NOT NULL REFERENCES users(id),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS drive_folder_role_access (
+  folder_id  UUID NOT NULL REFERENCES drive_folders(id) ON DELETE CASCADE,
+  role_kind  TEXT NOT NULL CHECK (role_kind IN ('fixed', 'custom')),
+  role_value TEXT NOT NULL,
+  access     TEXT NOT NULL CHECK (access IN ('read', 'write')),
+  PRIMARY KEY (folder_id, role_kind, role_value)
+);
+
+CREATE TABLE IF NOT EXISTS drive_folder_members (
+  folder_id UUID NOT NULL REFERENCES drive_folders(id) ON DELETE CASCADE,
+  user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  access    TEXT NOT NULL CHECK (access IN ('read', 'write')),
+  added_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (folder_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_drive_folder_members_user ON drive_folder_members(user_id);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
