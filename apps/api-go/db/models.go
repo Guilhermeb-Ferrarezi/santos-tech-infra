@@ -79,6 +79,16 @@ type CustomRole struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
+type DashboardNotification struct {
+	ID        int64
+	UserID    int32
+	Title     string
+	Body      string
+	Url       string
+	ReadAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type IpBan struct {
 	ID        int64
 	Ip        string
@@ -117,6 +127,16 @@ type OauthClient struct {
 	RedirectUris []string
 	IsActive     bool
 	CreatedAt    pgtype.Timestamptz
+}
+
+type PushSubscription struct {
+	ID        int64
+	UserID    int32
+	Endpoint  string
+	P256dh    string
+	Auth      string
+	UserAgent *string
+	CreatedAt pgtype.Timestamptz
 }
 
 type RecoveryCode struct {

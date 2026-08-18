@@ -12,12 +12,11 @@ import (
 // (/mailbox/me): o From é forçado pela API ao dono do token, então um agente
 // não consegue se passar por outra pessoa.
 
-type mailboxListInput struct {
-	Limit int `json:"limit,omitempty" jsonschema:"máximo de mensagens a retornar"`
-}
-
+// mailboxReadInput: sem uid lista a caixa (limit se aplica); com uid lê uma
+// mensagem específica (limit é ignorado).
 type mailboxReadInput struct {
-	UID string `json:"uid" jsonschema:"uid da mensagem (vem de mailbox_list)"`
+	UID   string `json:"uid,omitempty" jsonschema:"uid da mensagem; omitido lista a caixa"`
+	Limit int    `json:"limit,omitempty" jsonschema:"lista: máximo de mensagens a retornar"`
 }
 
 type mailboxSendInput struct {
@@ -34,21 +33,18 @@ type emailLogsInput struct {
 
 func (s *Server) addEmailTools(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "mailbox_list",
-		Description: "Lista as mensagens da caixa de email do dono do token (conta @santos-tech.com).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in mailboxListInput) (*mcp.CallToolResult, any, error) {
+		Name: "mailbox_read",
+		Description: "Sem uid: lista as mensagens da caixa de email do dono do token (conta @santos-tech.com). " +
+			"Com uid: lê uma mensagem específica.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in mailboxReadInput) (*mcp.CallToolResult, any, error) {
+		if in.UID != "" {
+			return s.proxy(ctx, req, "GET", s.cfg.EmailAPIURL+"/mailbox/me/messages/"+url.PathEscape(in.UID), nil)
+		}
 		u := s.cfg.EmailAPIURL + "/mailbox/me/messages"
 		if in.Limit > 0 {
 			u += fmt.Sprintf("?limit=%d", in.Limit)
 		}
 		return s.proxy(ctx, req, "GET", u, nil)
-	})
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "mailbox_read",
-		Description: "Lê uma mensagem da caixa do dono do token pelo uid.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in mailboxReadInput) (*mcp.CallToolResult, any, error) {
-		return s.proxy(ctx, req, "GET", s.cfg.EmailAPIURL+"/mailbox/me/messages/"+url.PathEscape(in.UID), nil)
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -30,7 +31,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeErr(w http.ResponseWriter, err error) {
 	rid := w.Header().Get("X-Request-Id")
-	if ae, ok := err.(*AppError); ok {
+	var ae *AppError
+	if errors.As(err, &ae) {
 		body := map[string]string{"code": ae.Code, "message": ae.Message}
 		if rid != "" {
 			body["request_id"] = rid

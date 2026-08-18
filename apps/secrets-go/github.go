@@ -79,6 +79,29 @@ func refillTokenTicker(bucket chan *ghToken, t *ghToken, interval time.Duration)
 	}
 }
 
+// retryAfterWait interpreta o header Retry-After (segundos ou data HTTP) e
+// espera o tempo indicado, respeitando o cancelamento do contexto. Retorna
+// ctx.Err() se o contexto for cancelado durante a espera.
+func retryAfterWait(ctx context.Context, resp *http.Response, fallback time.Duration) error {
+	wait := fallback
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		if secs, err := strconv.Atoi(ra); err == nil {
+			wait = time.Duration(secs) * time.Second
+		} else if t, err := http.ParseTime(ra); err == nil {
+			wait = time.Until(t)
+			if wait < 0 {
+				wait = 0
+			}
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(wait):
+	}
+	return nil
+}
+
 type CodeSearchItem struct {
 	Path       string `json:"path"`
 	HTMLURL    string `json:"html_url"`
@@ -178,63 +201,78 @@ type contentsAPIResponse struct {
 // FetchFileContent baixa o conteúdo real de um arquivo (via Contents API) pra
 // verificação — a Search API só serve como pré-filtro barulhento, quem confirma
 // se o segredo é real é uma checagem no texto de verdade.
+//
+// O limite geral de 5000 req/h é por token e, em scans grandes, pode ser
+// estourado — então em 403/429 (rate limit) o token específico vai pro
+// cooldown (ele some do rotation até o Retry-After passar), esperamos e
+// tentamos de novo, até 3 tentativas por arquivo (cada uma pode pegar outro
+// token do pool, se houver). Arquivo que falha volta como erro e é
+// simplesmente pulado — nunca trava o scan.
 func (c *GitHubClient) FetchFileContent(ctx context.Context, contentsURL string) (string, error) {
 	if contentsURL == "" {
 		return "", fmt.Errorf("contentsURL vazia")
 	}
 
-	var tok *ghToken
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case tok = <-c.contentAvail:
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, contentsURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+tok.token)
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "secrets-go")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
-		wait := 30 * time.Second
-		if ra := resp.Header.Get("Retry-After"); ra != "" {
-			if secs, err := strconv.Atoi(ra); err == nil {
-				wait = time.Duration(secs) * time.Second
-			}
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		var tok *ghToken
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case tok = <-c.contentAvail:
 		}
-		tok.disable(wait)
-	}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("fetch content falhou (%s)", resp.Status)
-	}
-
-	var out contentsAPIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
-	}
-
-	if out.Encoding == "base64" && out.Content != "" {
-		decoded, err := base64.StdEncoding.DecodeString(stripNewlines(out.Content))
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, contentsURL, nil)
 		if err != nil {
 			return "", err
 		}
-		return string(decoded), nil
-	}
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("Authorization", "Bearer "+tok.token)
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+		req.Header.Set("User-Agent", "secrets-go")
 
-	// arquivo grande demais pra Contents API embutir (sem "content"): não
-	// verificamos o texto, quem chamou decide o que fazer com isso.
-	return "", fmt.Errorf("conteúdo não disponível diretamente (arquivo grande?)")
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return "", err
+		}
+
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+			// Só esse token vai pro cooldown — a próxima tentativa pode
+			// pegar outro disponível do pool em vez de travar esperando.
+			tok.disable(30 * time.Second)
+			waitErr := retryAfterWait(ctx, resp, 20*time.Second)
+			resp.Body.Close()
+			if waitErr != nil {
+				return "", waitErr
+			}
+			continue // estourou o rate limit — esperou, tenta de novo
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return "", fmt.Errorf("fetch content falhou (%s)", resp.Status)
+		}
+
+		var out contentsAPIResponse
+		decodeErr := json.NewDecoder(resp.Body).Decode(&out)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return "", decodeErr
+		}
+
+		if out.Encoding == "base64" && out.Content != "" {
+			decoded, err := base64.StdEncoding.DecodeString(stripNewlines(out.Content))
+			if err != nil {
+				return "", err
+			}
+			return string(decoded), nil
+		}
+
+		// arquivo grande demais pra Contents API embutir (sem "content"): não
+		// verificamos o texto, quem chamou decide o que fazer com isso.
+		return "", fmt.Errorf("conteúdo não disponível diretamente (arquivo grande?)")
+	}
+	return "", fmt.Errorf("fetch content falhou (rate limit persistente)")
 }
 
 func stripNewlines(s string) string {

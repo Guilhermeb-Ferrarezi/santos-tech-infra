@@ -66,6 +66,18 @@ type Config struct {
 	// persistir. Vazio = feature desabilitada, endpoints respondem 503.
 	VaultSecret string
 
+	// Web Push (notificações do navegador — nova tarefa, novo email). Par de
+	// chaves VAPID (gerado uma vez, ex. `npx web-push generate-vapid-keys`).
+	// Vazio (Public ou Private) = feature desabilitada, endpoints respondem 503.
+	VAPIDPublicKey  string
+	VAPIDPrivateKey string
+	VAPIDSubject    string // contato do remetente, ex. "mailto:contato@santos-tech.com"
+
+	// Segredo compartilhado do webhook POST /webhooks/email/new, chamado pelo
+	// docker-mailserver (Sieve pipe) quando chega um email novo. Vazio =
+	// webhook sempre rejeita (fail-closed), mesmo padrão do InstagramAppSecret.
+	EmailWebhookSecret string
+
 	// Sync automático do roteador com o scanner de secrets vazados
 	// (secrets-go): a cada SecretsSyncInterval, importa os hits confirmados
 	// ativos e cadastra no roteador (provider automático por provedor).
@@ -117,6 +129,12 @@ func LoadConfig() Config {
 		InstagramWebhookVerifyToken: getEnv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN", ""),
 
 		VaultSecret: getEnv("API_VAULT_SECRET", ""),
+
+		VAPIDPublicKey:  getEnv("VAPID_PUBLIC_KEY", ""),
+		VAPIDPrivateKey: getEnv("VAPID_PRIVATE_KEY", ""),
+		VAPIDSubject:    getEnv("VAPID_SUBJECT", ""),
+
+		EmailWebhookSecret: getEnv("EMAIL_WEBHOOK_SECRET", ""),
 
 		SecretsSyncURL:      strings.TrimRight(getEnv("SECRETS_SYNC_URL", ""), "/"),
 		SecretsSyncToken:    getEnv("SECRETS_SYNC_TOKEN", ""),

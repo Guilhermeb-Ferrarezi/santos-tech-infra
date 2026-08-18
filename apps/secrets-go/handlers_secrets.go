@@ -19,7 +19,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		StateData
 		Revalidating bool `json:"revalidating"`
-	}{StateData: s.state.Get(), Revalidating: s.revalidator.IsRunning()})
+		Tokens       int  `json:"tokens"`
+	}{StateData: s.state.Get(), Revalidating: s.revalidator.IsRunning(), Tokens: len(s.cfg.GitHubTokens)})
 }
 
 func (s *Server) handleRevalidate(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +56,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		KeywordWorkers        *int  `json:"keywordWorkers"`
 		PageConcurrency       *int  `json:"pageConcurrency"`
 		MaxPages              *int  `json:"maxPages"`
+		IncludeForks          *bool `json:"includeForks"`
+		DateSplit             *bool `json:"dateSplit"`
+		DateSplitYears        *int  `json:"dateSplitYears"`
 		AutoRevalidate        *bool `json:"autoRevalidate"`
 		AutoRevalidateMaxRuns *int  `json:"autoRevalidateMaxRuns"`
 	}
@@ -74,6 +78,15 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.MaxPages != nil {
 			st.MaxPages = clampMaxPages(*body.MaxPages)
+		}
+		if body.IncludeForks != nil {
+			st.IncludeForks = *body.IncludeForks
+		}
+		if body.DateSplit != nil {
+			st.DateSplit = *body.DateSplit
+		}
+		if body.DateSplitYears != nil {
+			st.DateSplitYears = clampDateSplitYears(*body.DateSplitYears)
 		}
 		if body.AutoRevalidate != nil {
 			if *body.AutoRevalidate && !st.AutoRevalidate {

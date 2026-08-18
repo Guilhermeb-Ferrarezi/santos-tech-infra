@@ -19,6 +19,19 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Preferências de UI do usuário (merge no JSONB users.preferences — precisa de sessão)
 	mux.HandleFunc("PATCH /auth/me/preferences", s.rateLimit(30, min, s.authGuard(s.handlePreferencesUpdate)))
 
+	// Web Push — subscription do navegador atual (gestão da própria conta,
+	// precisa de sessão). Nova tarefa / novo email disparam envio via
+	// enqueuePush (ver queue.go); webhook de email novo fica em
+	// registerInstagramRoutes-style, sem authGuard (ver routes abaixo).
+	mux.HandleFunc("POST /auth/push/subscribe", s.rateLimit(20, min, s.authGuard(s.handlePushSubscribe)))
+	mux.HandleFunc("DELETE /auth/push/subscribe", s.rateLimit(20, min, s.authGuard(s.handlePushUnsubscribe)))
+
+	// Central de notificações (sino no header) — histórico + marcar como lida.
+	// Rate limit folgado no GET: o sino faz polling periódico do front.
+	mux.HandleFunc("GET /auth/notifications", s.rateLimit(60, min, s.authGuard(s.handleListNotifications)))
+	mux.HandleFunc("POST /auth/notifications/{id}/read", s.rateLimit(60, min, s.authGuard(s.handleMarkNotificationRead)))
+	mux.HandleFunc("POST /auth/notifications/read-all", s.rateLimit(20, min, s.authGuard(s.handleMarkAllNotificationsRead)))
+
 	// Upload de avatar (multipart → R2 → users.avatar_url; precisa de sessão)
 	mux.HandleFunc("POST /auth/avatar", s.rateLimit(10, min, s.authGuard(s.handleAvatarUpload)))
 
@@ -87,7 +100,6 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// request nativo via provider.opAdapter e devolve o resultado extraído —
 	// AssemblyAI/Replicate rodam com polling interno do job.
 	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/op/{op}", s.rateLimit(10, min, s.adminGuard(s.handleAPIRouterOp)))
-
 	// Gestão admin de cargos personalizados
 	mux.HandleFunc("GET /auth/admin/custom-roles", s.adminGuard(s.handleListCustomRoles))
 	mux.HandleFunc("POST /auth/admin/custom-roles", s.rateLimit(10, min, s.adminGuard(s.handleCreateCustomRole)))
@@ -175,9 +187,14 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Meta (não cookie/PAT) + CRUD admin do mapeamento post -> link.
 	s.registerInstagramRoutes(mux)
 
+	// Webhook de "email novo" — chamado pelo docker-mailserver (Contabo, repo
+	// email/), não por um usuário logado. Autenticado por assinatura HMAC
+	// compartilhada (EMAIL_WEBHOOK_SECRET), sem authGuard/adminGuard.
+	mux.HandleFunc("POST /webhooks/email/new", s.rateLimit(120, min, s.handleEmailWebhook))
+
 	// OAuth Google
-	mux.HandleFunc("GET /auth/google", s.handleGoogleStart)
-	mux.HandleFunc("GET /auth/google/callback", s.handleGoogleCallback)
+	mux.HandleFunc("GET /auth/google", s.rateLimit(20, min, s.handleGoogleStart))
+	mux.HandleFunc("GET /auth/google/callback", s.rateLimit(20, min, s.handleGoogleCallback))
 
 	// OAuth provider ("Entrar com Santos Tech") — authorization code + PKCE
 	mux.HandleFunc("GET /oauth/authorize", s.rateLimit(30, min, s.handleOAuthAuthorize))

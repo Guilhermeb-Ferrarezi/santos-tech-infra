@@ -82,6 +82,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := s.insertUser(r.Context(), body.Email, body.Name, hash)
 	if err != nil {
+		// Violação de UNIQUE no banco: a checagem userByEmail + insertUser tem uma
+		// janela TOCTOU onde dois requests concorrentes com o mesmo email passam pelo
+		// check e ambos tentam inserir. O segundo recebe 23505 do Postgres; sem este
+		// tratamento ele virava 500 em vez do 409 correto.
+		if isUniqueViolation(err) {
+			writeErr(w, appErr(http.StatusConflict, "EMAIL_ALREADY_EXISTS", "Este email já está cadastrado"))
+			return
+		}
 		writeErr(w, err)
 		return
 	}
