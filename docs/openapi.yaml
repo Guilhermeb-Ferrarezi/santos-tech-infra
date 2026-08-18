@@ -70,6 +70,12 @@ tags:
       pública (sem cookie/token, só posts com status `published`). `/blog/*` é o
       CRUD admin — requer role Admin ou cargo personalizado com a permissão
       `blog_posts:read`/`blog_posts:write`; exclusão é admin-only + sudo mode.
+  - name: Horas
+    description: |
+      Controle de horas de clientes (lan house/escola). `/hour-clients` e
+      `/hour-sessions` são admin-only (dado financeiro). `/public/hour-sessions/{token}`
+      é a rota sem autenticação usada pelo link que o cliente abre — o token
+      (posse) é a credencial, não cookie/sessão.
 
 paths:
   /health:
@@ -3021,6 +3027,296 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /hour-clients:
+    get:
+      tags: [Horas]
+      summary: Lista clientes do controle de horas
+      description: Admin-only.
+      responses:
+        "200":
+          description: Clientes cadastrados, ordenados por nome.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  clients: { type: array, items: { $ref: "#/components/schemas/HourClient" } }
+                required: [clients]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Horas]
+      summary: Cadastra cliente
+      description: Admin-only. Rate limit 20/min.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 200 }
+                phone: { type: string, nullable: true }
+              required: [name]
+      responses:
+        "201":
+          description: Cliente criado, com saldo zerado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  client: { $ref: "#/components/schemas/HourClient" }
+                required: [client]
+        "400":
+          description: Nome ausente ou grande demais.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-clients/{id}/purchases:
+    post:
+      tags: [Horas]
+      summary: Registra compra de pacote de horas
+      description: |
+        Admin-only. Credita `minutesAdded` no saldo do cliente e grava o registro
+        de auditoria (quem, quando, nota). Rate limit 30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                minutesAdded: { type: integer, description: "Minutos a creditar (não pode ser zero)." }
+                note: { type: string, nullable: true }
+              required: [minutesAdded]
+      responses:
+        "200":
+          description: Cliente com saldo atualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  client: { $ref: "#/components/schemas/HourClient" }
+                required: [client]
+        "404":
+          description: Cliente não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-sessions:
+    get:
+      tags: [Horas]
+      summary: Lista sessões ao vivo (painel admin)
+      description: Admin-only. Só sessões ainda não encerradas, com `elapsedSeconds` já calculado a partir do histórico de eventos.
+      responses:
+        "200":
+          description: Sessões ativas/pausadas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions: { type: array, items: { $ref: "#/components/schemas/HourSession" } }
+                required: [sessions]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Horas]
+      summary: Inicia sessão para um cliente
+      description: |
+        Admin-only. Gera o token do link público (devolvido em texto puro só nesta
+        resposta — o banco guarda apenas o hash). Rate limit 30/min.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clientId: { type: string, format: uuid }
+              required: [clientId]
+      responses:
+        "201":
+          description: Sessão criada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: "#/components/schemas/HourSession" }
+                  token: { type: string, description: "64 chars hex — só aparece nesta resposta." }
+                  publicUrl: { type: string }
+                required: [session, token, publicUrl]
+        "400":
+          description: clientId inválido.
+        "404":
+          description: Cliente não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-sessions/{id}/pause:
+    post:
+      tags: [Horas]
+      summary: Pausa sessão (admin)
+      description: Admin-only. Só permitido a partir do estado `active`. Limpa um eventual pedido de pausa pendente do cliente.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Sessão pausada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: "#/components/schemas/HourSession" }
+        "404":
+          description: Sessão não encontrada.
+        "409":
+          description: Sessão não está em estado `active`.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-sessions/{id}/resume:
+    post:
+      tags: [Horas]
+      summary: Retoma sessão pausada (admin)
+      description: Admin-only. Só permitido a partir do estado `paused`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Sessão retomada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: "#/components/schemas/HourSession" }
+        "404":
+          description: Sessão não encontrada.
+        "409":
+          description: Sessão não está em estado `paused`.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-sessions/{id}/end:
+    post:
+      tags: [Horas]
+      summary: Encerra sessão (admin)
+      description: |
+        Admin-only. Debita do saldo do cliente o tempo decorrido (calculado a
+        partir dos eventos, nunca de um contador acumulado). Saldo pode ficar
+        negativo — sem corte automático nesta versão.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Sessão encerrada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: "#/components/schemas/HourSession" }
+        "404":
+          description: Sessão não encontrada.
+        "409":
+          description: Sessão já estava encerrada.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-sessions/{id}/deny-pause:
+    post:
+      tags: [Horas]
+      summary: Recusa o pedido de pausa do cliente (admin)
+      description: Admin-only. Limpa `pauseRequestedAt` sem alterar o status da sessão.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Pedido recusado.
+        "404":
+          description: Sessão não encontrada.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /public/hour-sessions/{token}:
+    get:
+      tags: [Horas]
+      summary: Consulta a sessão pelo link público (sem autenticação)
+      description: |
+        Sem cookie/token de sessão — o token na URL é a própria credencial (posse).
+        Usado pela rota `/sessao/:token` do dashboard/web, com polling do cliente.
+        Rate limit 120/min por IP.
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string, description: "64 chars hex" }
+      responses:
+        "200":
+          description: Estado atual da sessão.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  clientName: { type: string }
+                  status: { type: string, enum: [active, paused, ended] }
+                  elapsedSeconds: { type: integer }
+                  remainingMinutes: { type: integer, description: "Saldo do cliente menos o tempo decorrido nesta sessão; pode ser negativo." }
+                  pauseRequested: { type: boolean }
+                required: [clientName, status, elapsedSeconds, remainingMinutes, pauseRequested]
+        "404":
+          description: Token inválido ou sessão inexistente.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /public/hour-sessions/{token}/request-pause:
+    post:
+      tags: [Horas]
+      summary: Cliente solicita pausa (sem autenticação)
+      description: |
+        Só marca o pedido — quem decide pausar de fato é o admin
+        (`POST /hour-sessions/{id}/pause`). Rate limit apertado (5/min por IP) pra
+        não virar canal de spam de notificação pro admin.
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string, description: "64 chars hex" }
+      responses:
+        "204":
+          description: Pedido registrado.
+        "404":
+          description: Token inválido ou sessão inexistente.
+        "409":
+          description: Sessão não está ativa ou já tem pedido pendente.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -3645,6 +3941,36 @@ components:
         outcome: { type: string, enum: [success, unauthorized, no_credits, transport_error] }
         error: { type: string, description: "Mensagem de erro de transporte; vazio nos outros casos." }
       required: [statusCode, outcome]
+
+    HourClient:
+      type: object
+      description: Cliente do controle de horas (lan house/escola) — não tem login no ecossistema.
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        phone: { type: string, nullable: true }
+        balanceMinutes: { type: integer, description: "Pode ficar negativo (sem corte automático)." }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, name, balanceMinutes, createdAt, updatedAt]
+
+    HourSession:
+      type: object
+      description: |
+        Sessão de horas de um cliente. `elapsedSeconds` é sempre recalculado a
+        partir do histórico de eventos (start/pause/resume/end), nunca um
+        contador guardado.
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        clientName: { type: string }
+        status: { type: string, enum: [active, paused, ended] }
+        pauseRequestedAt: { type: string, format: date-time, nullable: true }
+        elapsedSeconds: { type: integer }
+        balanceMinutes: { type: integer, description: "Saldo atual do cliente (antes de debitar o tempo desta sessão, que só é debitado no end)." }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, clientId, clientName, status, elapsedSeconds, balanceMinutes, createdAt, updatedAt]
 
 # Por padrão, as rotas exigem o access_token (cookie ou Bearer).
 # Rotas públicas sobrescrevem com `security: []`.

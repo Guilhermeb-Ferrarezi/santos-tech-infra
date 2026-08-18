@@ -182,6 +182,12 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// alimenta santos-tech.com/links (Santos-Tech-Home-Page).
 	s.registerLinkShowcaseRoutes(mux)
 
+	// Controle de horas de clientes (lan house/escola) — CRUD admin-only
+	// (dado financeiro); leitura + pedido de pausa públicos por token em
+	// /public/hour-sessions/{token}, consumidos pela rota /sessao/:token do
+	// dashboard/web (sem login).
+	s.registerHourSessionRoutes(mux)
+
 	// Automação de resposta a comentário do Instagram (private reply,
 	// substitui o ManyChat) — webhook público autenticado por assinatura
 	// Meta (não cookie/PAT) + CRUD admin do mapeamento post -> link.
@@ -311,6 +317,29 @@ func (s *Server) registerLinkShowcaseRoutes(mux *http.ServeMux) {
 
 	// Público — sem guard nenhum (igual /public/blog/posts), só rate limit por IP.
 	mux.HandleFunc("GET /public/links", s.rateLimit(120, min, s.handleListPublicLinkShowcaseItems))
+}
+
+// registerHourSessionRoutes: controle de horas de clientes. Admin-only (dado
+// financeiro, sem cargo personalizado por enquanto) + rota pública por token
+// pro link que o cliente abre (sem sessão/cookie).
+func (s *Server) registerHourSessionRoutes(mux *http.ServeMux) {
+	const min = time.Minute
+	mux.HandleFunc("GET /hour-clients", s.adminGuard(s.handleListHourClients))
+	mux.HandleFunc("POST /hour-clients", s.rateLimit(20, min, s.adminGuard(s.handleCreateHourClient)))
+	mux.HandleFunc("POST /hour-clients/{id}/purchases", s.rateLimit(30, min, s.adminGuard(s.handleAddHourPurchase)))
+
+	mux.HandleFunc("GET /hour-sessions", s.adminGuard(s.handleListHourSessions))
+	mux.HandleFunc("POST /hour-sessions", s.rateLimit(30, min, s.adminGuard(s.handleStartHourSession)))
+	mux.HandleFunc("POST /hour-sessions/{id}/pause", s.rateLimit(60, min, s.adminGuard(s.handlePauseHourSession)))
+	mux.HandleFunc("POST /hour-sessions/{id}/resume", s.rateLimit(60, min, s.adminGuard(s.handleResumeHourSession)))
+	mux.HandleFunc("POST /hour-sessions/{id}/end", s.rateLimit(60, min, s.adminGuard(s.handleEndHourSession)))
+	mux.HandleFunc("POST /hour-sessions/{id}/deny-pause", s.rateLimit(60, min, s.adminGuard(s.handleDenyHourSessionPause)))
+
+	// Público — identificado pelo token da sessão (posse == acesso), não por
+	// cookie/sessão. GET tem rate limit folgado (o front faz polling); o
+	// pedido de pausa é mais restrito pra não virar canal de spam pro admin.
+	mux.HandleFunc("GET /public/hour-sessions/{token}", s.rateLimit(120, min, s.handleGetPublicHourSession))
+	mux.HandleFunc("POST /public/hour-sessions/{token}/request-pause", s.rateLimit(5, min, s.handleRequestHourSessionPause))
 }
 
 func (s *Server) registerInstagramRoutes(mux *http.ServeMux) {

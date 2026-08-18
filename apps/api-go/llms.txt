@@ -312,6 +312,32 @@ com concorrência otimista via `sceneVersion`.
   usuário por email (email inexistente OU sem papel de staff → mesmo 404)
 - `DELETE /boards/{id}/members/{userId}` → 204
 
+## Controle de horas de clientes — `api.santos-tech.com/hour-clients` e `/hour-sessions`
+
+Lan house/escola: cliente compra pacote de horas, admin inicia/pausa/retoma/
+encerra a sessão, um link público (token) mostra o cronômetro pro cliente.
+`elapsedSeconds` é sempre recalculado a partir do histórico de eventos
+(start/pause/resume/end) — nunca um contador acumulado. Saldo pode ficar
+negativo (sem corte automático nesta versão).
+
+Admin (role admin, sem cargo personalizado):
+- `GET /hour-clients` — `{clients:[HourClient]}`
+- `POST /hour-clients {name, phone?}` → 201 `{client}`
+- `POST /hour-clients/{id}/purchases {minutesAdded, note?}` → credita o saldo → `{client}`
+- `GET /hour-sessions` — sessões não encerradas, com `elapsedSeconds` calculado → `{sessions:[HourSession]}`
+- `POST /hour-sessions {clientId}` → cria e devolve o token em texto puro (só
+  aqui — o banco guarda o hash) → 201 `{session, token, publicUrl}`
+- `POST /hour-sessions/{id}/pause` — só de `active` → `paused`; limpa pedido de pausa pendente
+- `POST /hour-sessions/{id}/resume` — só de `paused` → `active`
+- `POST /hour-sessions/{id}/end` — debita o tempo decorrido do saldo do cliente → `ended`
+- `POST /hour-sessions/{id}/deny-pause` — recusa o pedido do cliente sem pausar → 204
+- Transição fora de ordem (ex.: pause numa sessão já `ended`) → 409 `HOUR_SESSION_BAD_STATE`
+
+Público (sem auth — token da URL é a credencial, não cookie/sessão; consumido
+pela rota `/sessao/:token` do dashboard/web, com polling):
+- `GET /public/hour-sessions/{token}` — `{clientName, status, elapsedSeconds, remainingMinutes, pauseRequested}` · rate limit 120/min
+- `POST /public/hour-sessions/{token}/request-pause` → 204 · rate limit 5/min (evita virar canal de spam pro admin) · 409 se já não está `active` ou já tem pedido pendente
+
 ## Social — Calendário Editorial — `api.santos-tech.com/social`
 
 Auth: admin (3)/professor (2) ou role 4 com permissão `social` (read/execute).
