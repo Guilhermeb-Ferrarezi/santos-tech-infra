@@ -313,7 +313,10 @@ func (s *Server) handleListMyDriveFolders(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"folders": folders})
 }
 
-// GET /drive-folders/{id}/files — folderAccessGuard("read") já garantiu o acesso.
+// GET /drive-folders/{id}/files?parent=<driveFileId> — folderAccessGuard("read")
+// já garantiu o acesso à pasta raiz {id}. `parent` (opcional) navega pra uma
+// SUBPASTA dentro dela — validado via IsDescendant pra ninguém escapar da
+// árvore autorizada colando um ID de pasta arbitrário do Drive.
 func (s *Server) handleListDriveFolderFiles(w http.ResponseWriter, r *http.Request) {
 	if s.drive == nil {
 		writeErr(w, appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED", "Arquivos (Google Drive) não configurado"))
@@ -328,7 +331,23 @@ func (s *Server) handleListDriveFolderFiles(w http.ResponseWriter, r *http.Reque
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "pasta não encontrada"))
 		return
 	}
-	files, err := s.drive.ListFiles(r.Context(), folder.DriveFolderID)
+
+	target := folder.DriveFolderID
+	if parent := strings.TrimSpace(r.URL.Query().Get("parent")); parent != "" && parent != folder.DriveFolderID {
+		ok, err := s.drive.IsDescendant(r.Context(), parent, folder.DriveFolderID)
+		if err != nil {
+			slog.Error("falha ao validar ancestralidade de subpasta do Drive", "folder", folder.ID, "err", err)
+			writeErr(w, appErr(http.StatusBadGateway, "LIST_FAILED", "falha ao verificar a subpasta"))
+			return
+		}
+		if !ok {
+			writeErr(w, appErr(http.StatusForbidden, "FORBIDDEN", "pasta fora do escopo autorizado"))
+			return
+		}
+		target = parent
+	}
+
+	files, err := s.drive.ListFiles(r.Context(), target)
 	if err != nil {
 		slog.Error("falha ao listar arquivos do Drive", "folder", folder.ID, "err", err)
 		writeErr(w, appErr(http.StatusBadGateway, "LIST_FAILED", "falha ao listar arquivos"))
@@ -337,8 +356,12 @@ func (s *Server) handleListDriveFolderFiles(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"files": files})
 }
 
-// GET /drive-folders/{id}/files/{fileId}/download — sempre proxeado pelo
-// backend (a service account é quem tem acesso no Drive, não o usuário final).
+// GET /drive-folders/{id}/files/{fileId}/download?download=1 — sempre
+// proxeado pelo backend (a service account é quem tem acesso no Drive, não o
+// usuário final). Por padrão abre INLINE (o navegador renderiza imagem/vídeo/
+// PDF quando sabe); `?download=1` força o download (Content-Disposition:
+// attachment). Repassa o header Range pro Drive — dá pra dar seek num vídeo
+// sem baixar o arquivo inteiro primeiro.
 func (s *Server) handleDownloadDriveFile(w http.ResponseWriter, r *http.Request) {
 	if s.drive == nil {
 		writeErr(w, appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED", "Arquivos (Google Drive) não configurado"))
@@ -349,7 +372,7 @@ func (s *Server) handleDownloadDriveFile(w http.ResponseWriter, r *http.Request)
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido"))
 		return
 	}
-	body, filename, contentType, err := s.drive.StreamDownload(r.Context(), fileID)
+	body, filename, contentType, status, rangeHeaders, err := s.drive.StreamDownload(r.Context(), fileID, r.Header.Get("Range"))
 	if err != nil {
 		slog.Error("falha ao baixar arquivo do Drive", "fileId", fileID, "err", err)
 		writeErr(w, appErr(http.StatusBadGateway, "DOWNLOAD_FAILED", "falha ao baixar o arquivo"))
@@ -359,9 +382,16 @@ func (s *Server) handleDownloadDriveFile(w http.ResponseWriter, r *http.Request)
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
+	disposition := "inline"
+	if r.URL.Query().Get("download") != "" {
+		disposition = "attachment"
+	}
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilenameForHeader(filename)+`"`)
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Disposition", disposition+`; filename="`+sanitizeFilenameForHeader(filename)+`"`)
+	for k, v := range rangeHeaders {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(status)
 	if _, err := io.Copy(w, body); err != nil {
 		slog.Warn("download do Drive interrompido no meio do stream", "fileId", fileID, "err", err)
 	}

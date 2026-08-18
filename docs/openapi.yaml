@@ -3578,19 +3578,30 @@ paths:
   /drive-folders/{id}/files:
     get:
       tags: [Arquivos]
-      summary: Lista os arquivos de uma pasta
+      summary: Lista o conteúdo de uma pasta (arquivos e subpastas)
       description: |
-        Exige acesso `read` (ou superior) na pasta — resolvido por registro
-        (cargo/membro), não por permissão fixa de cargo. Responde 503 se o
-        Drive não estiver configurado (`GOOGLE_DRIVE_SA_JSON_B64` vazio).
+        Exige acesso `read` (ou superior) na pasta raiz `{id}` — resolvido por
+        registro (cargo/membro), não por permissão fixa de cargo. Responde 503
+        se o Drive não estiver configurado (`GOOGLE_DRIVE_SA_JSON_B64` vazio).
+        Itens vêm misturados (pastas e arquivos); distinga pelo `mimeType`
+        (`application/vnd.google-apps.folder` = pasta) pra navegação estilo Drive.
       parameters:
         - name: id
           in: path
           required: true
           schema: { type: string, format: uuid }
+        - name: parent
+          in: query
+          required: false
+          schema: { type: string }
+          description: |
+            ID de uma SUBPASTA do Drive dentro da árvore de `{id}` (obtido do
+            `id` de um item com mimeType de pasta na resposta anterior). Sem
+            isso, lista a raiz. Validado via ancestralidade (IsDescendant) —
+            um ID fora da árvore autorizada devolve 403.
       responses:
         "200":
-          description: Arquivos da pasta (não inclui subpastas).
+          description: Conteúdo da pasta (ou subpasta, se `parent` informado).
           content:
             application/json:
               schema:
@@ -3651,12 +3662,15 @@ paths:
   /drive-folders/{id}/files/{fileId}/download:
     get:
       tags: [Arquivos]
-      summary: Baixa um arquivo (proxeado pelo backend)
+      summary: Baixa ou visualiza um arquivo (proxeado pelo backend)
       description: |
         Exige acesso `read` na pasta. O download SEMPRE passa pelo backend
         (nunca um link direto do Drive) — quem tem permissão no Drive é a
         service account, não o usuário final; a autorização real é a ACL
-        deste dashboard.
+        deste dashboard. Por padrão abre INLINE (o navegador renderiza
+        imagem/vídeo/PDF quando sabe); `?download=1` força o download
+        (Content-Disposition: attachment). Suporta o header `Range` — dá pra
+        dar seek num vídeo sem baixar o arquivo inteiro.
       parameters:
         - name: id
           in: path
@@ -3666,12 +3680,19 @@ paths:
           in: path
           required: true
           schema: { type: string }
+        - name: download
+          in: query
+          required: false
+          schema: { type: string }
+          description: "Qualquer valor não-vazio força `Content-Disposition: attachment`."
       responses:
         "200":
-          description: Conteúdo binário do arquivo, com Content-Type e Content-Disposition originais.
+          description: Conteúdo binário do arquivo, com Content-Type e Content-Disposition (inline por padrão).
           content:
             application/octet-stream:
               schema: { type: string, format: binary }
+        "206":
+          description: Conteúdo parcial (resposta a um header `Range`) — usado pelo player de vídeo pra seek.
         "403":
           description: Sem acesso a essa pasta.
         "502":

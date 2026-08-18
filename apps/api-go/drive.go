@@ -18,6 +18,17 @@ import (
 
 const driveScope = "https://www.googleapis.com/auth/drive"
 
+// driveFolderMimeType é o mimeType que o Drive usa pra pasta — usado tanto
+// pra INCLUIR pastas na listagem (ListFiles devolve pasta e arquivo juntos;
+// o frontend distingue pelo mimeType) quanto pra excluir da query de subida.
+const driveFolderMimeType = "application/vnd.google-apps.folder"
+
+// maxDriveAncestryDepth limita quantos níveis IsDescendant sobe checando
+// `parents` antes de desistir — navegação legítima não passa disso, e um
+// ID forjado pra escapar da pasta autorizada não consegue "provar" ancestry
+// gastando um número ilimitado de chamadas à API.
+const maxDriveAncestryDepth = 12
+
 // DriveClient é um cliente mínimo da API do Google Drive v3 via service
 // account — sem o SDK oficial (google.golang.org/api/drive/v3, que traz
 // dezenas de dependências transitivas só pra 3 chamadas REST). Usa apenas
@@ -82,12 +93,15 @@ func driveAPIError(resp *http.Response) error {
 	return fmt.Errorf("drive api %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 }
 
-// ListFiles lista os arquivos (não-pasta, não-lixeira) dentro de driveFolderID.
+// ListFiles lista o conteúdo (arquivos E subpastas, não-lixeira) dentro de
+// driveFolderID — o chamador distingue pasta de arquivo pelo mimeType
+// (driveFolderMimeType) pra navegação estilo Drive (entrar em subpasta).
 func (d *DriveClient) ListFiles(ctx context.Context, driveFolderID string) ([]DriveFile, error) {
 	escaped := strings.ReplaceAll(strings.ReplaceAll(driveFolderID, `\`, `\\`), `'`, `\'`)
 	q := url.Values{}
-	q.Set("q", fmt.Sprintf("'%s' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'", escaped))
+	q.Set("q", fmt.Sprintf("'%s' in parents and trashed = false", escaped))
 	q.Set("fields", "files(id,name,mimeType,size,modifiedTime,iconLink)")
+	q.Set("orderBy", "folder,name")
 	q.Set("pageSize", "200")
 	q.Set("supportsAllDrives", "true")
 	q.Set("includeItemsFromAllDrives", "true")
@@ -162,46 +176,109 @@ func (d *DriveClient) ListSharedFolders(ctx context.Context) ([]DriveFolderInfo,
 	return out.Files, nil
 }
 
-// StreamDownload devolve o corpo do arquivo (chamador DEVE fechar) + nome +
-// content-type. fileID não é validado contra driveFolderID aqui — o chamador
-// (handler HTTP) já garantiu, via folderAccessGuard, que o usuário tem acesso
-// à pasta antes de pedir o download de um arquivo listado dessa pasta.
-func (d *DriveClient) StreamDownload(ctx context.Context, fileID string) (body io.ReadCloser, filename, contentType string, err error) {
+// IsDescendant reporta se folderID é a própria rootID ou está dentro dela em
+// qualquer profundidade — sobe por `parents` (um arquivo/pasta do Drive pode
+// ter múltiplos pais; segue todos) até achar rootID, esgotar parents ou
+// estourar maxDriveAncestryDepth. Usado pra impedir que alguém com acesso à
+// pasta A navegue pra um ID de pasta arbitrário fora da árvore de A (a ACL é
+// por pasta raiz, não por ID do Drive — ver handleListDriveFolderFiles).
+func (d *DriveClient) IsDescendant(ctx context.Context, folderID, rootID string) (bool, error) {
+	if folderID == rootID {
+		return true, nil
+	}
+	frontier := []string{folderID}
+	seen := map[string]bool{folderID: true}
+	for depth := 0; depth < maxDriveAncestryDepth && len(frontier) > 0; depth++ {
+		next := []string{}
+		for _, id := range frontier {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+				"https://www.googleapis.com/drive/v3/files/"+url.PathEscape(id)+"?fields=parents&supportsAllDrives=true", nil)
+			if err != nil {
+				return false, err
+			}
+			resp, err := d.http.Do(req)
+			if err != nil {
+				return false, err
+			}
+			var meta struct {
+				Parents []string `json:"parents"`
+			}
+			decodeErr := json.NewDecoder(resp.Body).Decode(&meta)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				continue // pasta sumiu/sem acesso: só não conta como ancestral, não aborta a busca inteira
+			}
+			if decodeErr != nil {
+				return false, decodeErr
+			}
+			for _, p := range meta.Parents {
+				if p == rootID {
+					return true, nil
+				}
+				if !seen[p] {
+					seen[p] = true
+					next = append(next, p)
+				}
+			}
+		}
+		frontier = next
+	}
+	return false, nil
+}
+
+// StreamDownload devolve o corpo do arquivo (chamador DEVE fechar), nome,
+// content-type, status HTTP (200 ou 206) e os headers de range que devem ser
+// espelhados na resposta (Content-Range/Accept-Ranges/Content-Length, só
+// quando presentes). rangeHeader é repassado direto pro Drive — dá pra
+// dar seek num vídeo sem baixar o arquivo inteiro. fileID não é validado
+// contra driveFolderID aqui — o chamador (handler HTTP) já garantiu, via
+// folderAccessGuard, que o usuário tem acesso à pasta antes de pedir o
+// download de um arquivo listado dessa pasta.
+func (d *DriveClient) StreamDownload(ctx context.Context, fileID, rangeHeader string) (body io.ReadCloser, filename, contentType string, status int, rangeHeaders http.Header, err error) {
 	metaReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"https://www.googleapis.com/drive/v3/files/"+url.PathEscape(fileID)+"?fields=name,mimeType&supportsAllDrives=true", nil)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", 0, nil, err
 	}
 	metaResp, err := d.http.Do(metaReq)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", 0, nil, err
 	}
 	defer metaResp.Body.Close()
 	if metaResp.StatusCode != http.StatusOK {
-		return nil, "", "", driveAPIError(metaResp)
+		return nil, "", "", 0, nil, driveAPIError(metaResp)
 	}
 	var meta struct {
 		Name     string `json:"name"`
 		MimeType string `json:"mimeType"`
 	}
 	if err := json.NewDecoder(metaResp.Body).Decode(&meta); err != nil {
-		return nil, "", "", err
+		return nil, "", "", 0, nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"https://www.googleapis.com/drive/v3/files/"+url.PathEscape(fileID)+"?alt=media&supportsAllDrives=true", nil)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", 0, nil, err
+	}
+	if rangeHeader != "" {
+		req.Header.Set("Range", rangeHeader)
 	}
 	resp, err := d.http.Do(req)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", 0, nil, err
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		defer resp.Body.Close()
-		return nil, "", "", driveAPIError(resp)
+		return nil, "", "", 0, nil, driveAPIError(resp)
 	}
-	return resp.Body, meta.Name, meta.MimeType, nil
+	headers := http.Header{}
+	for _, h := range []string{"Content-Range", "Accept-Ranges", "Content-Length"} {
+		if v := resp.Header.Get(h); v != "" {
+			headers.Set(h, v)
+		}
+	}
+	return resp.Body, meta.Name, meta.MimeType, resp.StatusCode, headers, nil
 }
 
 // UploadFile envia um arquivo pra dentro de driveFolderID via multipart

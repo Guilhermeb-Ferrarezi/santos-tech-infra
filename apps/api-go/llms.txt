@@ -376,8 +376,19 @@ Admin-only (cria pasta e define quem tem acesso; professor não administra):
 
 Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por permissão de cargo):
 - `GET /drive-folders/mine` — só pastas com acesso ≥ `read`; admin vê todas com `access:"write"` → `{folders:[MyDriveFolder]}`
-- `GET /drive-folders/{id}/files` — exige `read` na pasta → `{files:[DriveFile]}` (403 sem acesso, 503 sem Drive configurado)
-- `GET /drive-folders/{id}/files/{fileId}/download` — exige `read`; stream binário proxeado (nunca link direto do Drive)
+- `GET /drive-folders/{id}/files[?parent=<driveFileId>]` — exige `read` na
+  pasta raiz `{id}` → `{files:[DriveFile]}` (403 sem acesso, 503 sem Drive
+  configurado). Itens vêm misturados (pasta+arquivo); distinga pelo
+  `mimeType` (`application/vnd.google-apps.folder`=pasta) pra navegação
+  estilo Drive. `parent` navega numa subpasta — validado por ancestralidade
+  (`DriveClient.IsDescendant`, sobe até 12 níveis por `parents`), 403 se o ID
+  não for descendente da raiz autorizada
+- `GET /drive-folders/{id}/files/{fileId}/download[?download=1]` — exige
+  `read`; stream binário proxeado (nunca link direto do Drive). Sem
+  `download`, abre INLINE (Content-Disposition: inline — navegador renderiza
+  imagem/vídeo/PDF quando sabe); `?download=1` força attachment. Repassa
+  header `Range` pro Drive (206 Partial Content) — dá seek em vídeo sem
+  baixar tudo primeiro
 - `POST /drive-folders/{id}/files` — exige `write`; `multipart/form-data` campo
   `file` (máx. 25MB, streamado sem bufferizar inteiro em memória) → 201
   `{file}` · rate limit 10/min
