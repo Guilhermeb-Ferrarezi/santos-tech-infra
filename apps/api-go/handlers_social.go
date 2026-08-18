@@ -325,6 +325,16 @@ func (s *Server) handleConfirmSocialPostPlatform(w http.ResponseWriter, r *http.
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Plataforma inválida"))
 		return
 	}
+	owner, err := s.getSocialPlatformOwner(r.Context(), platform)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if owner != nil && owner.UserID != userIDFrom(r) {
+		writeErr(w, appErr(http.StatusForbidden, "NOT_PLATFORM_OWNER",
+			fmt.Sprintf("Só %s pode confirmar esta plataforma.", owner.UserName)))
+		return
+	}
 	post, err := s.getSocialPost(r.Context(), id)
 	if err != nil {
 		writeErr(w, err)
@@ -354,6 +364,20 @@ func (s *Server) handleUnconfirmSocialPostPlatform(w http.ResponseWriter, r *htt
 		return
 	}
 	platform := r.PathValue("platform")
+	if !validSocialPlatforms[platform] {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Plataforma inválida"))
+		return
+	}
+	owner, err := s.getSocialPlatformOwner(r.Context(), platform)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if owner != nil && owner.UserID != userIDFrom(r) {
+		writeErr(w, appErr(http.StatusForbidden, "NOT_PLATFORM_OWNER",
+			fmt.Sprintf("Só %s pode confirmar esta plataforma.", owner.UserName)))
+		return
+	}
 	post, err := s.getSocialPost(r.Context(), id)
 	if err != nil {
 		writeErr(w, err)
@@ -373,4 +397,68 @@ func (s *Server) handleUnconfirmSocialPostPlatform(w http.ResponseWriter, r *htt
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"confirmations": confirmations})
+}
+
+// GET /social/platform-owners
+func (s *Server) handleListSocialPlatformOwners(w http.ResponseWriter, r *http.Request) {
+	owners, err := s.listSocialPlatformOwners(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"owners": owners})
+}
+
+// PUT /social/platform-owners/{platform}
+func (s *Server) handleSetSocialPlatformOwner(w http.ResponseWriter, r *http.Request) {
+	platform := r.PathValue("platform")
+	if !validSocialPlatforms[platform] {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Plataforma inválida"))
+		return
+	}
+	var in struct {
+		UserID int64 `json:"userId"`
+	}
+	if err := decodeJSON(r, &in); err != nil || in.UserID <= 0 {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	target, err := s.cachedUserByID(r.Context(), in.UserID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if target == nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Usuário não encontrado"))
+		return
+	}
+	if err := s.setSocialPlatformOwner(r.Context(), platform, in.UserID, userIDFrom(r)); err != nil {
+		writeErr(w, err)
+		return
+	}
+	owners, err := s.listSocialPlatformOwners(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"owners": owners})
+}
+
+// DELETE /social/platform-owners/{platform}
+func (s *Server) handleDeleteSocialPlatformOwner(w http.ResponseWriter, r *http.Request) {
+	platform := r.PathValue("platform")
+	if !validSocialPlatforms[platform] {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Plataforma inválida"))
+		return
+	}
+	if err := s.deleteSocialPlatformOwner(r.Context(), platform); err != nil {
+		writeErr(w, err)
+		return
+	}
+	owners, err := s.listSocialPlatformOwners(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"owners": owners})
 }

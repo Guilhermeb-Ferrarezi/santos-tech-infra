@@ -59,6 +59,15 @@ type SocialPostPublishConfirmation struct {
 	ConfirmedAt   time.Time `json:"confirmedAt"`
 }
 
+// SocialPlatformOwner: mapeamento global (não por post) de quem pode
+// confirmar/desconfirmar aquele canal no checklist de publicação.
+type SocialPlatformOwner struct {
+	Platform  string    `json:"platform"`
+	UserID    int64     `json:"userId"`
+	UserName  string    `json:"userName"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 type SocialPostNote struct {
 	ID         int64     `json:"id"`
 	PostID     string    `json:"postId"`
@@ -355,6 +364,62 @@ func (s *Server) deleteSocialPostPublishConfirmation(ctx context.Context, postID
 	_, err := s.db.Exec(ctx, `
 		DELETE FROM social_post_platform_confirmations WHERE post_id=$1::uuid AND platform=$2`,
 		postID, platform)
+	return err
+}
+
+func (s *Server) listSocialPlatformOwners(ctx context.Context) ([]SocialPlatformOwner, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT o.platform, o.user_id, COALESCE(u.name,''), o.updated_at
+		FROM social_platform_owners o
+		JOIN users u ON u.id = o.user_id
+		ORDER BY o.platform`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SocialPlatformOwner{}
+	for rows.Next() {
+		var o SocialPlatformOwner
+		if err := rows.Scan(&o.Platform, &o.UserID, &o.UserName, &o.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// getSocialPlatformOwner retorna nil (sem erro) se a plataforma não tiver dono configurado —
+// esse é o caminho de fail-open, não uma condição de erro.
+func (s *Server) getSocialPlatformOwner(ctx context.Context, platform string) (*SocialPlatformOwner, error) {
+	var o SocialPlatformOwner
+	err := s.db.QueryRow(ctx, `
+		SELECT o.platform, o.user_id, COALESCE(u.name,''), o.updated_at
+		FROM social_platform_owners o
+		JOIN users u ON u.id = o.user_id
+		WHERE o.platform = $1`, platform).
+		Scan(&o.Platform, &o.UserID, &o.UserName, &o.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &o, nil
+}
+
+// setSocialPlatformOwner grava/atualiza o dono (upsert). updatedBy é sempre o usuário
+// autenticado (chamador nunca aceita esse valor do cliente) — mesma convenção da confirmação.
+func (s *Server) setSocialPlatformOwner(ctx context.Context, platform string, userID, updatedBy int64) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO social_platform_owners (platform, user_id, updated_by, updated_at)
+		VALUES ($1, $2, $3, now())
+		ON CONFLICT (platform) DO UPDATE SET user_id = $2, updated_by = $3, updated_at = now()`,
+		platform, userID, updatedBy)
+	return err
+}
+
+func (s *Server) deleteSocialPlatformOwner(ctx context.Context, platform string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM social_platform_owners WHERE platform = $1`, platform)
 	return err
 }
 

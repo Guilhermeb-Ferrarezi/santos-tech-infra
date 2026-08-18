@@ -409,6 +409,14 @@ CREATE TABLE IF NOT EXISTS social_post_platform_confirmations (
   UNIQUE (post_id, platform)
 );
 CREATE INDEX IF NOT EXISTS idx_social_post_platform_confirmations_post ON social_post_platform_confirmations(post_id);
+-- Dono por plataforma (global, não por post) — quem pode confirmar/desconfirmar aquele
+-- canal no checklist de publicação. Sem linha = sem dono = qualquer um confirma (fail-open).
+CREATE TABLE IF NOT EXISTS social_platform_owners (
+  platform    TEXT PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  updated_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- Web Push (notificações do navegador — nova tarefa, novo email). endpoint é
 -- único porque o mesmo dispositivo/navegador reaparece com o mesmo endpoint

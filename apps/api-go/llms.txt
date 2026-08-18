@@ -336,6 +336,15 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
   `status: publicado` (400 `PUBLISH_NOT_CONFIRMED`) se sobrar alguma plataforma de
   `plataformasDestino` sem confirmação. Só vale na transição — post já `publicado`
   continua editável mesmo sem confirmação retroativa (feature é de 13/08/2026).
+- `GET /social/platform-owners` — mapeamento dono→plataforma. → `{owners:[SocialPlatformOwner]}`
+- `PUT /social/platform-owners/{platform} {userId}` — define o dono (upsert). **Admin-only**
+  (não é cargo `social`). → `{owners:[...]}` · plataforma/userId inválido → 400
+- `DELETE /social/platform-owners/{platform}` — remove o dono (volta pro modelo de confiança,
+  qualquer um confirma). **Admin-only**. → `{owners:[...]}`
+- **Dono da plataforma**: se configurado, só ele confirma/desconfirma aquele item do checklist
+  de publicação (`POST`/`DELETE .../publish-confirmations/{platform}` → 403 `NOT_PLATFORM_OWNER`
+  pra qualquer outro usuário). Sem dono configurado, comportamento de 13/08 (qualquer um com
+  `social:execute` confirma). Feature de 17/08/2026.
 
 **SocialPost** (campos do briefing): `title` (interno), `caption` (legenda),
 `platform`, `pilar` (educacional|institucional|captacao|prova_social|bastidores|tech_mundo_real),
@@ -354,6 +363,9 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 default das peças criadas antes do campo existir. Valor inválido → 400),
 `publishConfirmations[]` ({platform,confirmedById,confirmedByName,confirmedAt} — só
 populado em `GET /social/posts/{id}` (post único), vazio em `GET /social/posts` (lista)).
+
+**SocialPlatformOwner**: `{platform, userId, userName, updatedAt}` — mapeamento global
+(não por post) de quem pode confirmar aquele canal.
 
 ## Tarefas — `api.santos-tech.com/tasks`
 
