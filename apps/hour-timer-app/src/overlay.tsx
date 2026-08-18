@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { Clock } from "@phosphor-icons/react";
 import { useStoredToken } from "./lib/useStoredToken";
 import { useTickingSeconds } from "./lib/useTickingSeconds";
 import "./index.css";
@@ -24,7 +23,7 @@ function formatDuration(totalSeconds: number) {
   return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
 }
 
-// Widget compacto, só o essencial — nasce a partir do menu da bandeja (ver
+// Widget transparente, só texto — nasce a partir do menu da bandeja (ver
 // toggle_overlay em src-tauri/src/lib.rs). Faz seu próprio poll, independente
 // da janela principal — sem IPC entre janelas, só o token salvo em comum.
 function OverlayApp() {
@@ -53,18 +52,21 @@ function OverlayApp() {
   }, [token]);
 
   const displaySeconds = useTickingSeconds(data?.elapsedSeconds ?? 0, data?.status === "active");
-  const tickedMinutes = Math.floor(displaySeconds / 60) - Math.floor((data?.elapsedSeconds ?? 0) / 60);
-  const remainingMinutes = (data?.remainingMinutes ?? 0) - tickedMinutes;
-  const low = remainingMinutes < 10;
+
+  // O backend só devolve o saldo em minutos inteiros (remainingMinutes =
+  // balance - floor(elapsedSeconds/60)). Como floor(elapsedSeconds/60) é
+  // exatamente o que falta pra achar o segundo exato, dá pra reconstruir a
+  // contagem regressiva sem precisão extra do servidor: minutos*60 menos o
+  // resto de segundos dentro do minuto atual.
+  const remainingSeconds = Math.max(0, (data?.remainingMinutes ?? 0) * 60 - (displaySeconds % 60));
+  const low = remainingSeconds < 10 * 60;
 
   return (
-    <div className="flex h-screen w-screen items-center gap-3 rounded-xl border border-white/10 bg-[#04325A] px-4 text-white">
-      <Clock className={low ? "size-6 text-red-300" : "size-6 text-[#0DB88F]"} />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[11px] text-white/60">{data?.clientName ?? (token ? "Carregando..." : "Sem sessão")}</p>
-        <p className="font-mono text-xl font-bold tabular-nums leading-tight">{formatDuration(displaySeconds)}</p>
-      </div>
-      <p className={`text-xs font-semibold ${low ? "text-red-300" : "text-white/70"}`}>{remainingMinutes} min</p>
+    <div className="flex h-screen w-screen flex-col items-center justify-center gap-0.5 bg-transparent text-white [text-shadow:0_1px_6px_rgba(0,0,0,0.9)]">
+      <p className="text-xs font-medium text-white/80">Tempo restante:</p>
+      <p className={`font-mono text-4xl font-bold tabular-nums ${low ? "text-red-400" : "text-white"}`}>
+        {data ? formatDuration(remainingSeconds) : "--:--"}
+      </p>
     </div>
   );
 }

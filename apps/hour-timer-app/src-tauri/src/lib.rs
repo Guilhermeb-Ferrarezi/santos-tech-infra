@@ -43,6 +43,7 @@ fn toggle_overlay(app: &AppHandle) {
         .skip_taskbar(true)
         .resizable(false)
         .shadow(false)
+        .transparent(true)
         .build();
 }
 
