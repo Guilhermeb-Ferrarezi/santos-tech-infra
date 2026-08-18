@@ -68,6 +68,23 @@ func (in driveFolderInput) validate() error {
 	return nil
 }
 
+// GET /auth/admin/drive-folders/browse — pastas que a service account já
+// enxerga no Drive (compartilhadas com ela), pro admin escolher em vez de
+// colar ID/URL na mão.
+func (s *Server) handleBrowseDriveFolders(w http.ResponseWriter, r *http.Request) {
+	if s.drive == nil {
+		writeErr(w, appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED", "Arquivos (Google Drive) não configurado"))
+		return
+	}
+	folders, err := s.drive.ListSharedFolders(r.Context())
+	if err != nil {
+		slog.Error("falha ao listar pastas compartilhadas do Drive", "err", err)
+		writeErr(w, appErr(http.StatusBadGateway, "LIST_FAILED", "falha ao listar pastas do Drive"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"folders": folders})
+}
+
 // GET /auth/admin/drive-folders
 func (s *Server) handleListDriveFoldersAdmin(w http.ResponseWriter, r *http.Request) {
 	folders, err := s.listDriveFolders(r.Context())

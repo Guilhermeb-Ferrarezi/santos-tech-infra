@@ -357,6 +357,11 @@ resolvido por registro (ver `drive_access.go`). Admin sempre tem acesso total,
 não precisa estar na ACL.
 
 Admin-only (cria pasta e define quem tem acesso; professor não administra):
+- `GET /auth/admin/drive-folders/browse` — pastas já compartilhadas com a
+  service account no Drive (ela não tem "Meu Drive" próprio; tudo que
+  aparece aqui foi compartilhado manualmente) → `{folders:[{id,name}]}` ·
+  rate limit 30/min · alimenta o seletor de pasta na tela de criar/editar
+  (evita colar ID/URL na mão)
 - `GET /auth/admin/drive-folders` — `{folders:[DriveFolder]}`
 - `POST /auth/admin/drive-folders {name, description?, driveFolderId}` → 201
   `{folder}` · rate limit 20/min · `driveFolderId` aceita a URL colada

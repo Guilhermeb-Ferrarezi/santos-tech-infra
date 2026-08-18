@@ -376,6 +376,7 @@ func (s *Server) registerInstagramRoutes(mux *http.ServeMux) {
 func (s *Server) registerDriveRoutes(mux *http.ServeMux) {
 	const min = time.Minute
 
+	mux.HandleFunc("GET /auth/admin/drive-folders/browse", s.rateLimit(30, min, s.adminGuard(s.handleBrowseDriveFolders)))
 	mux.HandleFunc("GET /auth/admin/drive-folders", s.adminGuard(s.handleListDriveFoldersAdmin))
 	mux.HandleFunc("POST /auth/admin/drive-folders", s.rateLimit(20, min, s.adminGuard(s.handleCreateDriveFolder)))
 	mux.HandleFunc("PUT /auth/admin/drive-folders/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateDriveFolder)))

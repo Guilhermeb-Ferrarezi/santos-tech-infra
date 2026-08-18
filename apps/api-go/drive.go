@@ -117,6 +117,51 @@ func (d *DriveClient) ListFiles(ctx context.Context, driveFolderID string) ([]Dr
 	return files, nil
 }
 
+// DriveFolderInfo é uma pasta do Drive visível pela service account — usado
+// pro admin ESCOLHER a pasta em vez de colar o ID/URL na mão.
+type DriveFolderInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// ListSharedFolders lista as pastas que a service account enxerga — ou seja,
+// que já foram compartilhadas com ela no Drive (uma service account não tem
+// "Meu Drive" próprio, então tudo que files.list devolve é compartilhamento
+// explícito). Usado pro admin escolher a pasta num seletor em vez de colar
+// o ID/URL manualmente.
+func (d *DriveClient) ListSharedFolders(ctx context.Context) ([]DriveFolderInfo, error) {
+	q := url.Values{}
+	q.Set("q", "trashed = false and mimeType = 'application/vnd.google-apps.folder'")
+	q.Set("fields", "files(id,name)")
+	q.Set("pageSize", "200")
+	q.Set("orderBy", "name")
+	q.Set("supportsAllDrives", "true")
+	q.Set("includeItemsFromAllDrives", "true")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/drive/v3/files?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := d.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, driveAPIError(resp)
+	}
+	var out struct {
+		Files []DriveFolderInfo `json:"files"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	if out.Files == nil {
+		out.Files = []DriveFolderInfo{}
+	}
+	return out.Files, nil
+}
+
 // StreamDownload devolve o corpo do arquivo (chamador DEVE fechar) + nome +
 // content-type. fileID não é validado contra driveFolderID aqui — o chamador
 // (handler HTTP) já garantiu, via folderAccessGuard, que o usuário tem acesso

@@ -3347,6 +3347,37 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /auth/admin/drive-folders/browse:
+    get:
+      tags: [Arquivos]
+      summary: Lista pastas do Drive já compartilhadas com a service account
+      description: |
+        Admin-only. Rate limit 30/min. Usado pro seletor de pasta na tela de
+        criar/editar (em vez do admin colar o ID/URL na mão) — uma service
+        account não tem "Meu Drive" próprio, então tudo que aparece aqui já
+        foi compartilhado com ela manualmente no Google Drive.
+      responses:
+        "200":
+          description: Pastas visíveis pela service account.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  folders:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                      required: [id, name]
+                required: [folders]
+        "503":
+          description: Google Drive não configurado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /auth/admin/drive-folders:
     get:
       tags: [Arquivos]
