@@ -85,7 +85,18 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" && s.allowedOrigin(origin) {
+		// Rotas /public/* não usam cookie/credencial (token na URL é a
+		// credencial) — liberadas pra qualquer origem, sem
+		// Allow-Credentials. Cobre o app desktop (Tauri: origem
+		// tauri://localhost/http://tauri.localhost), que nunca vai entrar
+		// na allowlist de origens do dashboard/auth-web.
+		if strings.HasPrefix(r.URL.Path, "/public/") {
+			if origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			} else {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			}
+		} else if origin != "" && s.allowedOrigin(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
