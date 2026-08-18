@@ -225,3 +225,84 @@ CREATE TABLE IF NOT EXISTS api_router_keys (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Controle de horas de clientes (lan house/escola): cliente compra pacote de
+-- horas, admin inicia/pausa/retoma/encerra sessão, link público (token) mostra
+-- o cronômetro. Tempo decorrido é sempre recalculado a partir de
+-- hour_session_events (nunca um contador acumulado que pode dessincronizar).
+CREATE TABLE IF NOT EXISTS hour_clients (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name            TEXT NOT NULL,
+  phone           TEXT,
+  balance_minutes INTEGER NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS hour_purchases (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id     UUID NOT NULL REFERENCES hour_clients(id) ON DELETE CASCADE,
+  minutes_added INTEGER NOT NULL,
+  note          TEXT,
+  created_by    INTEGER NOT NULL REFERENCES users(id),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_hour_purchases_client ON hour_purchases(client_id);
+
+CREATE TABLE IF NOT EXISTS hour_sessions (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id          UUID NOT NULL REFERENCES hour_clients(id) ON DELETE CASCADE,
+  status             TEXT NOT NULL CHECK (status IN ('active', 'paused', 'ended')),
+  token_hash         TEXT NOT NULL UNIQUE,
+  pause_requested_at TIMESTAMPTZ,
+  created_by         INTEGER NOT NULL REFERENCES users(id),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_hour_sessions_client ON hour_sessions(client_id);
+CREATE INDEX IF NOT EXISTS idx_hour_sessions_status ON hour_sessions(status) WHERE status != 'ended';
+
+CREATE TABLE IF NOT EXISTS hour_session_events (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id    UUID NOT NULL REFERENCES hour_sessions(id) ON DELETE CASCADE,
+  event_type    TEXT NOT NULL CHECK (event_type IN ('start', 'pause', 'resume', 'end')),
+  actor_user_id INTEGER NOT NULL REFERENCES users(id),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_hour_session_events_session ON hour_session_events(session_id, created_at);
+
+-- Arquivos (Google Drive): o conteúdo real mora no Drive; aqui só guardamos
+-- metadados de pasta e a ACL de quem enxerga/envia arquivo em cada uma — por
+-- cargo (fixo ou personalizado) E por usuário individual, união dos dois.
+-- O Drive só conhece uma identidade (a service account); a autorização de
+-- "quem vê o quê" é toda nossa (ver drive_access.go).
+CREATE TABLE IF NOT EXISTS drive_folders (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name            TEXT NOT NULL,
+  description     TEXT,
+  drive_folder_id TEXT NOT NULL,
+  created_by      INTEGER NOT NULL REFERENCES users(id),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS drive_folder_role_access (
+  folder_id  UUID NOT NULL REFERENCES drive_folders(id) ON DELETE CASCADE,
+  role_kind  TEXT NOT NULL CHECK (role_kind IN ('fixed', 'custom')),
+  role_value TEXT NOT NULL,
+  access     TEXT NOT NULL CHECK (access IN ('read', 'write')),
+  PRIMARY KEY (folder_id, role_kind, role_value)
+);
+
+CREATE TABLE IF NOT EXISTS drive_folder_members (
+  folder_id UUID NOT NULL REFERENCES drive_folders(id) ON DELETE CASCADE,
+  user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  access    TEXT NOT NULL CHECK (access IN ('read', 'write')),
+  added_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (folder_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_drive_folder_members_user ON drive_folder_members(user_id);
