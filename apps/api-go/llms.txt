@@ -390,7 +390,9 @@ OU é um dos `coResponsaveis`; admin recebe todas, sem filtro.
   `{"userId": N}` opcional no corpo pra confirmar em nome de outra pessoa envolvida —
   **admin-only** (correção manual); qualquer outro papel mandando userId de terceiro → 403.
   Sem envolvimento nenhum na tarefa → 403 `TASK_NOT_INVOLVED`. → `{task}`
-- `DELETE /tasks/{id}/confirm` — desfaz a própria confirmação (mesma regra de alvo). → `{task}`
+- `POST /tasks/{id}/unconfirm` — desfaz a própria confirmação (mesma regra de alvo; é
+  `POST`, não `DELETE`, porque `DELETE /tasks/{id}/confirm` colide com
+  `DELETE /tasks/categories/{id}` no `net/http.ServeMux`). → `{task}`
 - `GET /tasks/categories` — `{categories:[TaskCategory]}`
 - `POST|PUT|DELETE /tasks/categories[/{id}]` — **admin-only**, não é permissão delegável
 

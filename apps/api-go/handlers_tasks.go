@@ -175,7 +175,9 @@ func (s *Server) handleConfirmTask(w http.ResponseWriter, r *http.Request) {
 	s.handleSetTaskConfirmation(w, r, true)
 }
 
-// DELETE /tasks/{id}/confirm — desfaz a própria confirmação (mesma regra de alvo).
+// POST /tasks/{id}/unconfirm — desfaz a própria confirmação (mesma regra de alvo).
+// POST em vez de DELETE: DELETE /tasks/{id}/confirm colide (ambiguidade do
+// net/http.ServeMux) com DELETE /tasks/categories/{id} já registrada.
 func (s *Server) handleUnconfirmTask(w http.ResponseWriter, r *http.Request) {
 	s.handleSetTaskConfirmation(w, r, false)
 }

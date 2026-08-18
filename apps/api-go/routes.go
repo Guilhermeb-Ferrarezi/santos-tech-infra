@@ -234,8 +234,12 @@ func (s *Server) registerSocialRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /tasks/{id}", s.permGuard("tarefas", "delete", true, s.handleDeleteTask))
 	mux.HandleFunc("GET /tasks/{id}/notes", s.permGuard("tarefas", "read", true, s.handleListTaskNotes))
 	mux.HandleFunc("POST /tasks/{id}/notes", s.rateLimit(30, min, s.permGuard("tarefas", "write", true, s.handleAddTaskNote)))
+	// DELETE /tasks/{id}/confirm colidiria (ambiguidade do net/http.ServeMux) com
+	// DELETE /tasks/categories/{id} já registrada — "/tasks/categories/confirm"
+	// bate nos dois padrões e nenhum é mais específico (Go recusa subir o
+	// processo nesse caso). POST evita a colisão (não existe POST /tasks/categories/{id}).
 	mux.HandleFunc("POST /tasks/{id}/confirm", s.rateLimit(30, min, s.permGuard("tarefas", "write", true, s.handleConfirmTask)))
-	mux.HandleFunc("DELETE /tasks/{id}/confirm", s.rateLimit(30, min, s.permGuard("tarefas", "write", true, s.handleUnconfirmTask)))
+	mux.HandleFunc("POST /tasks/{id}/unconfirm", s.rateLimit(30, min, s.permGuard("tarefas", "write", true, s.handleUnconfirmTask)))
 	mux.HandleFunc("GET /tasks/categories", s.permGuard("tarefas", "read", true, s.handleListTaskCategories))
 	mux.HandleFunc("POST /tasks/categories", s.adminGuard(s.handleCreateTaskCategory))
 	mux.HandleFunc("PUT /tasks/categories/{id}", s.adminGuard(s.handleUpdateTaskCategory))

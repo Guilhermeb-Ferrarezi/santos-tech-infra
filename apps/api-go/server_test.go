@@ -23,6 +23,25 @@ func testServerWithRedis(t *testing.T, cfg Config) *Server {
 	return s
 }
 
+// TestRoutesRegisterWithoutPanic exercita o registro de TODAS as rotas
+// (mux.HandleFunc), o único lugar onde o net/http.ServeMux detecta padrões
+// ambíguos (ex.: "DELETE /tasks/{id}/confirm" vs "DELETE /tasks/categories/{id}")
+// — um panic aí só acontece no boot real (main.go → s.Routes()), nunca em
+// go build/go vet/go test isolados, e já derrubou produção uma vez (18/08/2026,
+// container em crash-loop) porque nenhum teste chamava s.Routes(). Não precisa
+// de Postgres/Redis: registerPoolMetrics é nil-safe com s.db == nil.
+func TestRoutesRegisterWithoutPanic(t *testing.T) {
+	s := testServer(Config{})
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("s.Routes() entrou em panic — padrões de rota ambíguos: %v", r)
+		}
+	}()
+	if s.Routes() == nil {
+		t.Fatal("Routes() devolveu nil")
+	}
+}
+
 func TestClearAuthCookies(t *testing.T) {
 	s := testServer(Config{CookieDomain: "santos-tech.com"})
 	w := httptest.NewRecorder()
