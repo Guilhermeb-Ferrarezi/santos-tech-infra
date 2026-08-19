@@ -1011,8 +1011,10 @@ func toDashLog(e ProcessingLogEntry) dashProcessingLog {
 // Upgrade para WebSocket. Auth por (a) cookie de sessão de admin — o browser
 // manda cookies no handshake automaticamente, é o caminho do painel — ou
 // (b) DASH_API_KEY via sub-protocol "dash, <key>" (browser JS não suporta
-// headers customizados em WebSocket), para integrações server-to-server. O
-// query param ?key= segue aceito como fallback de transição.
+// headers customizados em WebSocket), para integrações server-to-server.
+//
+// NÃO aceita ?key=: query string vaza para o log de acesso, para o Traefik e
+// para o histórico do browser, e o golog não redige a chave "key".
 
 func (s *Server) handleDashWS(w http.ResponseWriter, r *http.Request) {
 	if s.hub == nil {
@@ -1030,13 +1032,11 @@ func (s *Server) handleDashWS(w http.ResponseWriter, r *http.Request) {
 // sub-protocol/query em vez do header (limitação da API WebSocket do browser).
 func (s *Server) dashWSAuthorized(r *http.Request) bool {
 	if s.cfg.DashAPIKey != "" {
-		key := r.URL.Query().Get("key")
-		if key == "" {
-			// Browser manda a chave como sub-protocol: "dash, <key>".
-			for _, p := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
-				if p = strings.TrimSpace(p); p != "" && p != "dash" {
-					key = p
-				}
+		// Browser manda a chave como sub-protocol: "dash, <key>".
+		var key string
+		for _, p := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
+			if p = strings.TrimSpace(p); p != "" && p != "dash" {
+				key = p
 			}
 		}
 		if key != "" && subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) == 1 {
