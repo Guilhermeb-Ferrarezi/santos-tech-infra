@@ -491,6 +491,17 @@ Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por pe
   mesmo botão "Remover" da UI do Drive) → 204 · `fileId` validado por
   ancestralidade (403 se fora da árvore) · mesma rejeição de `fileId` igual
   ao `driveFolderId` da própria pasta (não dá pra excluir a raiz por aqui)
+- `POST /drive-folders/{id}/folders[?parent=<driveFileId>] {name}` — exige
+  `write` na raiz `{id}` · rate limit 20/min · cria subpasta (na raiz, ou
+  dentro de `parent` se informado — mesma validação de ancestralidade do
+  upload) → 201 `{file}`
+- `PATCH /drive-folders/{id}/files/{fileId}/move {toParent?}` — exige `write`
+  na raiz `{id}` · rate limit 30/min · move fileId pra dentro de `toParent`
+  (ou pra raiz da pasta se omitido) → `{file}` · SÓ reorganiza dentro da MESMA
+  pasta vinculada (fileId e toParent validados por ancestralidade contra
+  `{id}`; mover pra outra pasta raiz exigiria checar acesso lá também, fora
+  do escopo) · rejeita destino == fileId e mover uma pasta pra dentro de uma
+  subpasta dela mesma (ciclo, checado via IsDescendant invertido)
 
 ## Social — Calendário Editorial — `api.santos-tech.com/social`
 

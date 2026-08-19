@@ -293,3 +293,26 @@ func TestHandleDeleteDriveFileDriveDisabled(t *testing.T) {
 		t.Fatalf("code=%d", w.Code)
 	}
 }
+
+func TestHandleCreateDriveSubfolderDriveDisabled(t *testing.T) {
+	s := testServer(Config{}) // s.drive == nil
+	r := httptest.NewRequest("POST", "/drive-folders/"+validUUID+"/folders", strings.NewReader(`{"name":"Nova pasta"}`))
+	r.SetPathValue("id", validUUID)
+	w := httptest.NewRecorder()
+	s.handleCreateDriveSubfolder(w, reqAs(r, 1))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code=%d", w.Code)
+	}
+}
+
+func TestHandleMoveDriveFileDriveDisabled(t *testing.T) {
+	s := testServer(Config{}) // s.drive == nil
+	r := httptest.NewRequest("PATCH", "/drive-folders/"+validUUID+"/files/xyz/move", strings.NewReader(`{"toParent":"abc"}`))
+	r.SetPathValue("id", validUUID)
+	r.SetPathValue("fileId", "xyz")
+	w := httptest.NewRecorder()
+	s.handleMoveDriveFile(w, reqAs(r, 1))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code=%d", w.Code)
+	}
+}

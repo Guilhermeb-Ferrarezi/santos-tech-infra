@@ -126,3 +126,66 @@ func TestEnsureFileInFolderCachesDescendantCheck(t *testing.T) {
 		t.Fatalf("esperava 1 chamada HTTP real ao Drive (as outras 2 deviam vir do cache), veio %d", calls)
 	}
 }
+
+func TestCreateFolder(t *testing.T) {
+	var gotBody map[string]any
+	d := fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("método = %s, esperava POST", r.Method)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "newfolder1", "name": gotBody["name"], "mimeType": driveFolderMimeType})
+	})
+
+	f, err := d.CreateFolder(context.Background(), "parent123", "Nova pasta")
+	if err != nil {
+		t.Fatalf("CreateFolder err: %v", err)
+	}
+	if f.ID != "newfolder1" || f.Name != "Nova pasta" || f.MimeType != driveFolderMimeType {
+		t.Fatalf("resultado inesperado: %+v", f)
+	}
+	if gotBody["mimeType"] != driveFolderMimeType {
+		t.Fatalf("mimeType enviado = %v, esperava %q", gotBody["mimeType"], driveFolderMimeType)
+	}
+	parents, _ := gotBody["parents"].([]any)
+	if len(parents) != 1 || parents[0] != "parent123" {
+		t.Fatalf("parents enviado = %v, esperava [\"parent123\"]", gotBody["parents"])
+	}
+}
+
+// TestMoveFile cobre o fluxo de duas chamadas (getParents, depois PATCH com
+// addParents/removeParents) — o Drive não tem um "parent" único mutável, tem
+// que listar explicitamente quem sai e quem entra.
+func TestMoveFile(t *testing.T) {
+	var patchCalled bool
+	d := fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{"parents": []string{"oldParent1"}})
+		case http.MethodPatch:
+			patchCalled = true
+			if got := r.URL.Query().Get("addParents"); got != "newParent1" {
+				t.Fatalf("addParents = %q, esperava newParent1", got)
+			}
+			if got := r.URL.Query().Get("removeParents"); got != "oldParent1" {
+				t.Fatalf("removeParents = %q, esperava oldParent1", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "f1", "name": "movido.txt", "mimeType": "text/plain"})
+		default:
+			t.Fatalf("método inesperado: %s", r.Method)
+		}
+	})
+
+	f, err := d.MoveFile(context.Background(), "f1", "newParent1")
+	if err != nil {
+		t.Fatalf("MoveFile err: %v", err)
+	}
+	if !patchCalled {
+		t.Fatal("esperava um PATCH depois do GET de parents")
+	}
+	if f.ID != "f1" {
+		t.Fatalf("resultado inesperado: %+v", f)
+	}
+}

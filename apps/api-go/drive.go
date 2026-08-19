@@ -362,6 +362,106 @@ func (d *DriveClient) TrashFile(ctx context.Context, fileID string) error {
 	return nil
 }
 
+// CreateFolder cria uma subpasta dentro de parentID — o chamador (handler
+// HTTP) garante via ensureFileInFolder/IsDescendant que parentID está dentro
+// da árvore autorizada antes de chegar aqui.
+func (d *DriveClient) CreateFolder(ctx context.Context, parentID, name string) (DriveFile, error) {
+	body, err := json.Marshal(map[string]any{
+		"name":     name,
+		"mimeType": driveFolderMimeType,
+		"parents":  []string{parentID},
+	})
+	if err != nil {
+		return DriveFile{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name,mimeType,size,modifiedTime,iconLink",
+		bytes.NewReader(body))
+	if err != nil {
+		return DriveFile{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := d.http.Do(req)
+	if err != nil {
+		return DriveFile{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return DriveFile{}, driveAPIError(resp)
+	}
+	var f driveFileWire
+	if err := json.NewDecoder(resp.Body).Decode(&f); err != nil {
+		return DriveFile{}, err
+	}
+	return f.toDriveFile(), nil
+}
+
+// getParents devolve os parents ATUAIS de fileID — precisa disso antes de
+// mover, já que o Drive exige listar explicitamente quem sai (removeParents)
+// e quem entra (addParents), não tem um "parent" único mutável direto.
+func (d *DriveClient) getParents(ctx context.Context, fileID string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"https://www.googleapis.com/drive/v3/files/"+url.PathEscape(fileID)+"?fields=parents&supportsAllDrives=true", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := d.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, driveAPIError(resp)
+	}
+	var meta struct {
+		Parents []string `json:"parents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+		return nil, err
+	}
+	return meta.Parents, nil
+}
+
+// MoveFile troca o parent de um arquivo/subpasta (equivalente a "mover" no
+// Drive, que não tem um único "parent" mutável — files.update com
+// addParents/removeParents é o jeito oficial). Busca os parents atuais
+// primeiro (pra saber quem remover). O chamador garante via ensureFileInFolder
+// que fileID e toParentID estão dentro da árvore que o usuário tem acesso de
+// escrita.
+func (d *DriveClient) MoveFile(ctx context.Context, fileID, toParentID string) (DriveFile, error) {
+	current, err := d.getParents(ctx, fileID)
+	if err != nil {
+		return DriveFile{}, err
+	}
+
+	q := url.Values{}
+	q.Set("supportsAllDrives", "true")
+	q.Set("addParents", toParentID)
+	if len(current) > 0 {
+		q.Set("removeParents", strings.Join(current, ","))
+	}
+	q.Set("fields", "id,name,mimeType,size,modifiedTime,iconLink")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch,
+		"https://www.googleapis.com/drive/v3/files/"+url.PathEscape(fileID)+"?"+q.Encode(), nil)
+	if err != nil {
+		return DriveFile{}, err
+	}
+	resp, err := d.http.Do(req)
+	if err != nil {
+		return DriveFile{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return DriveFile{}, driveAPIError(resp)
+	}
+	var f driveFileWire
+	if err := json.NewDecoder(resp.Body).Decode(&f); err != nil {
+		return DriveFile{}, err
+	}
+	return f.toDriveFile(), nil
+}
+
 // StreamDownload devolve o corpo do arquivo (chamador DEVE fechar), nome,
 // content-type, status HTTP (200 ou 206) e os headers de range que devem ser
 // espelhados na resposta (Content-Range/Accept-Ranges/Content-Length, só

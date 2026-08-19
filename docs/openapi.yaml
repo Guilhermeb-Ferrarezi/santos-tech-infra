@@ -4260,6 +4260,104 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /drive-folders/{id}/folders:
+    post:
+      tags: [Arquivos]
+      summary: Cria uma subpasta
+      description: |
+        Exige acesso `write` na pasta raiz `{id}`. Rate limit 20/min. Cria a
+        subpasta na raiz por padrão, ou dentro de `?parent=<driveFileId>` se
+        informado (mesma validação de ancestralidade das demais rotas de
+        arquivo — `parent` precisa estar dentro da árvore de `{id}`).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: parent
+          in: query
+          required: false
+          schema: { type: string }
+          description: "ID de uma subpasta dentro da árvore de `{id}`; sem isso, cria na raiz."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, minLength: 1, maxLength: 255 }
+              required: [name]
+      responses:
+        "201":
+          description: Subpasta criada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file: { $ref: "#/components/schemas/DriveFile" }
+                required: [file]
+        "400":
+          description: Nome ausente/vazio ou maior que 255 caracteres.
+        "403":
+          description: Sem acesso de escrita a essa pasta, ou parent fora da árvore autorizada.
+        "502":
+          description: Falha ao criar a pasta no Drive.
+        "503":
+          description: Google Drive não configurado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /drive-folders/{id}/files/{fileId}/move:
+    patch:
+      tags: [Arquivos]
+      summary: Move um arquivo ou subpasta pra outro lugar DENTRO da mesma pasta vinculada
+      description: |
+        Exige acesso `write` na pasta raiz `{id}`. Rate limit 30/min. `fileId`
+        e o destino (`toParent` no corpo, ou a raiz da pasta se omitido) são
+        validados por ancestralidade contra `{id}` — só dá pra reorganizar
+        DENTRO da mesma pasta vinculada, não mover pra outra pasta raiz
+        (exigiria checar acesso de escrita nela também, fora do escopo desta
+        rota). Rejeita mover um item pra dentro dele mesmo, e mover uma pasta
+        pra dentro de uma subpasta dela mesma (ciclo).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                toParent: { type: string, description: "ID de uma subpasta dentro da árvore de `{id}`; sem isso, move pra raiz." }
+      responses:
+        "200":
+          description: Arquivo movido.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file: { $ref: "#/components/schemas/DriveFile" }
+                required: [file]
+        "400":
+          description: Corpo inválido, destino igual ao próprio item, ou moveria a pasta pra dentro dela mesma.
+        "403":
+          description: Sem acesso de escrita a essa pasta, ou fileId/toParent fora da árvore autorizada.
+        "502":
+          description: Falha ao mover no Drive.
+        "503":
+          description: Google Drive não configurado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
 components:
   securitySchemes:
     cookieAuth:

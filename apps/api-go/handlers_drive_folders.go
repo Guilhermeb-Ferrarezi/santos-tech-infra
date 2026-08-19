@@ -548,6 +548,130 @@ func (s *Server) handleDriveFileThumbnail(w http.ResponseWriter, r *http.Request
 	_, _ = w.Write(thumb.Data)
 }
 
+// POST /drive-folders/{id}/folders[?parent=<driveFileId>] — folderAccessGuard
+// ("write") já garantiu acesso de escrita à raiz {id}. Cria uma SUBPASTA
+// dentro da árvore autorizada — na raiz por padrão, ou dentro de `parent` se
+// informado (mesma validação de ancestralidade das demais rotas).
+func (s *Server) handleCreateDriveSubfolder(w http.ResponseWriter, r *http.Request) {
+	if s.drive == nil {
+		writeErr(w, appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED", "Arquivos (Google Drive) não configurado"))
+		return
+	}
+	folder, err := s.getDriveFolder(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if folder == nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "pasta não encontrada"))
+		return
+	}
+
+	target := folder.DriveFolderID
+	if parent := strings.TrimSpace(r.URL.Query().Get("parent")); parent != "" && parent != folder.DriveFolderID {
+		if err := s.ensureFileInFolder(r.Context(), folder, parent, true); err != nil {
+			writeErr(w, err)
+			return
+		}
+		target = parent
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<10)
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" || len(name) > 255 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome deve ter entre 1 e 255 caracteres"))
+		return
+	}
+
+	f, err := s.drive.CreateFolder(r.Context(), target, name)
+	if err != nil {
+		slog.Error("falha ao criar subpasta no Drive", "folder", folder.ID, "err", err)
+		writeErr(w, appErr(http.StatusBadGateway, "CREATE_FOLDER_FAILED", "falha ao criar a pasta"))
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"file": f})
+}
+
+// PATCH /drive-folders/{id}/files/{fileId}/move — folderAccessGuard("write")
+// já garantiu acesso de escrita à raiz {id}. Move fileId pra outra subpasta
+// DENTRO da mesma árvore — tanto fileId quanto o destino (`toParent`, ou a
+// raiz da pasta se omitido) são validados por ancestralidade. Mover pra fora
+// da árvore de {id} não é possível por aqui: o escopo é reorganizar dentro da
+// MESMA pasta vinculada (mover entre pastas raiz diferentes exigiria checar
+// acesso de escrita na pasta de destino também, fora do escopo desta ação).
+func (s *Server) handleMoveDriveFile(w http.ResponseWriter, r *http.Request) {
+	if s.drive == nil {
+		writeErr(w, appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED", "Arquivos (Google Drive) não configurado"))
+		return
+	}
+	folder, err := s.getDriveFolder(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if folder == nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "pasta não encontrada"))
+		return
+	}
+	fileID := strings.TrimSpace(r.PathValue("fileId"))
+	if fileID == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido"))
+		return
+	}
+	if err := s.ensureFileInFolder(r.Context(), folder, fileID, false); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<10)
+	var body struct {
+		ToParent string `json:"toParent"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
+		return
+	}
+	toParent := strings.TrimSpace(body.ToParent)
+	if toParent == "" {
+		toParent = folder.DriveFolderID
+	}
+	if err := s.ensureFileInFolder(r.Context(), folder, toParent, true); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if toParent == fileID {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "não é possível mover um item pra dentro dele mesmo"))
+		return
+	}
+	// O Drive não valida ciclo sozinho — sem essa checagem dava pra mover uma
+	// pasta pra dentro de uma subpasta dela mesma (destino é descendente da
+	// própria pasta sendo movida), quebrando a árvore.
+	cyclic, err := s.drive.IsDescendant(r.Context(), toParent, fileID)
+	if err != nil {
+		writeErr(w, appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar o destino"))
+		return
+	}
+	if cyclic {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "não é possível mover uma pasta pra dentro de uma subpasta dela mesma"))
+		return
+	}
+
+	f, err := s.drive.MoveFile(r.Context(), fileID, toParent)
+	if err != nil {
+		slog.Error("falha ao mover arquivo no Drive", "fileId", fileID, "err", err)
+		writeErr(w, appErr(http.StatusBadGateway, "MOVE_FAILED", "falha ao mover o arquivo"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"file": f})
+}
+
 // POST /drive-folders/{id}/files?parent=<driveFileId> — folderAccessGuard("write")
 // já garantiu o acesso à pasta raiz {id}. `parent` (opcional, mesma validação
 // de ancestralidade do GET) envia pra uma SUBPASTA em vez da raiz. Lê o
