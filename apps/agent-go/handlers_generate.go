@@ -184,10 +184,11 @@ func (s *Server) generateOnce(ctx context.Context, task, prompt, imageB64, image
 		args = append(args, "--allowedTools", strings.Join(allowed, ","))
 	}
 
-	// Imagem anexada (multimodal): grava no dir temporário e habilita SÓ o Read,
-	// escopado nesse dir (que só contém a imagem; o env já é mínimo). O Claude lê a
-	// imagem antes de responder. Mantém o resto do sandbox (sem skip-permissions,
-	// sem outras tools, sem MCP).
+	// Imagem anexada (multimodal): grava no dir temporário e pede o Read escopado
+	// nesse dir (que só contém a imagem). O Claude lê a imagem antes de responder.
+	// ATENÇÃO: este caminho ADICIONA --dangerously-skip-permissions (ver abaixo) —
+	// não é um sandbox "sem skip-permissions". O que continua valendo é: sem MCP,
+	// env mínimo (allow-list de claudeEnv) e --add-dir restrito ao temp da imagem.
 	if strings.TrimSpace(imageB64) != "" {
 		ext, ok := imageExtFromMime(imageMime)
 		if !ok {
@@ -207,8 +208,9 @@ func (s *Server) generateOnce(ctx context.Context, task, prompt, imageB64, image
 		// Pra o Claude LER o arquivo no modo -p, o --allowedTools sozinho não bastava
 		// (ele respondia "sem acesso a ferramentas"). Usamos a mesma combinação
 		// comprovada do caminho de sessão: --dangerously-skip-permissions --add-dir.
-		// A diferença de segurança é o ENV: aqui é mínimo (só OAuth, SEM tokens de
-		// infra) e o dir é um temp que só contém a imagem.
+		// A flag é intencional (o Claude ter ferramentas é o produto); a contenção
+		// vem do ENV mínimo (claudeEnv: sem JWT_SECRET/DATABASE_URL/tokens de infra),
+		// do dir temp que só contém a imagem e do guard admin-only da rota.
 		args = append(args, "--dangerously-skip-permissions", "--add-dir", dir)
 		prompt = "Há uma imagem anexada no arquivo ./" + name +
 			" (no diretório de trabalho atual). Use a ferramenta Read para visualizá-la e leve-a em conta na resposta.\n\n" + prompt
