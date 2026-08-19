@@ -149,7 +149,7 @@ func (w *Worker) outboxLoop(ctx context.Context) {
 		default:
 		}
 
-		events, err := w.deps.Outbox.Drain(ctx, cfg.OutboxBatchSize)
+		events, err := w.deps.Outbox.Drain(ctx, cfg.OutboxBatchSize, cfg.OutboxClaimLease)
 		if err != nil {
 			if ctx.Err() != nil {
 				return

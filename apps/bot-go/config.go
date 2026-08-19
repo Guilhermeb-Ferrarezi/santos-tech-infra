@@ -54,6 +54,9 @@ type Config struct {
 	OutboxBatchSize      int
 	OutboxIdleIntervalMs int
 	OutboxMaxAttempts    int
+	// OutboxClaimLease: por quanto tempo um evento drenado fica reservado para a
+	// réplica que o pegou. Vencido, volta à fila (cobre réplica morta no meio).
+	OutboxClaimLease time.Duration
 	FollowUpConcurrency  int
 
 	// Redis Stream de retries de webhook (reprocesso quase em tempo real).
@@ -144,6 +147,7 @@ func LoadConfig() Config {
 		OutboxBatchSize:      envInt("OUTBOX_BATCH_SIZE", 50),
 		OutboxIdleIntervalMs: envInt("OUTBOX_IDLE_INTERVAL_MS", 500),
 		OutboxMaxAttempts:    envInt("OUTBOX_MAX_ATTEMPTS", 5),
+		OutboxClaimLease:     time.Duration(envInt("OUTBOX_CLAIM_LEASE_SEC", 300)) * time.Second,
 		FollowUpConcurrency:  envInt("FOLLOW_UP_CONCURRENCY", 5),
 
 		RetryStreamKey:      getEnv("RETRY_STREAM_KEY", "bot-go:webhook-retries"),
