@@ -62,7 +62,7 @@ function PairScreen({ deviceId, onConfirm }: { deviceId: string | null; onConfir
           body: JSON.stringify({ code: trimmed }),
         });
         if (!res.ok) {
-          setError("Código inválido ou expirado — peça um código novo no painel admin.");
+          setError("Código inválido ou expirado — peça um código novo pro colaborador.");
           return;
         }
         const data: { token: string } = await res.json();
@@ -76,7 +76,7 @@ function PairScreen({ deviceId, onConfirm }: { deviceId: string | null; onConfir
     }
     const token = extractToken(trimmed);
     if (!token) {
-      setError("Link, token ou código inválido — cole o link (ou digite o código de 6 dígitos) do painel admin.");
+      setError("Link, token ou código inválido — cole o link (ou digite o código de 6 dígitos) que o colaborador te passou.");
       return;
     }
     setError("");
@@ -88,10 +88,10 @@ function PairScreen({ deviceId, onConfirm }: { deviceId: string | null; onConfir
       <div className="w-full max-w-sm space-y-5">
         <div className="text-center">
           <p className="text-lg font-bold">Santos Tech</p>
-          <p className="text-sm text-white/70">Escaneie o QR com o celular do admin</p>
+          <p className="text-sm text-white/70">Escaneie o QR com o celular do colaborador</p>
         </div>
 
-        <div className="flex flex-col items-center gap-2 rounded-lg bg-white p-3">
+        <div className="flex flex-col items-center gap-2 rounded-2xl bg-white p-4 shadow-lg shadow-black/30">
           {deviceId ? (
             <QRCodeSVG value={`${DASHBOARD_ORIGIN}/admin/horas/parear/${deviceId}`} size={168} />
           ) : (
