@@ -8,8 +8,27 @@ COPY apps/pay-web .
 
 ARG VITE_API_URL=https://api.santos-tech.com/payments
 ARG VITE_AUTH_URL=https://auth.santos-tech.com
+
+# Efí — o build de produção HOJE sai correto porque a env é injetada por fora
+# (Coolify), mas isso não estava documentado em lugar nenhum: um rebuild em
+# outro contexto (CI, `docker build` na mão) cairia no default "sandbox" de
+# efi.ts e mandaria cartão real pro sandbox da Efí. O default aqui é
+# "production" justamente porque esta imagem SÓ existe pra produção; pra
+# homologação passe --build-arg VITE_EFI_ENV=sandbox explicitamente.
+# VITE_EFI_PAYEE_CODE não tem default: é segredo, vem do CI/CD.
+ARG VITE_EFI_ENV=production
+ARG VITE_EFI_PAYEE_CODE=
+
+# Sem este ARG o Vite não enxerga a env do build e initSentry()
+# (src/lib/sentry.ts) vira no-op: o checkout rodava sem telemetria de erro
+# nenhuma, pagando o custo do @sentry/react no bundle à toa.
+ARG VITE_SENTRY_DSN=
+
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_AUTH_URL=$VITE_AUTH_URL
+ENV VITE_EFI_ENV=$VITE_EFI_ENV
+ENV VITE_EFI_PAYEE_CODE=$VITE_EFI_PAYEE_CODE
+ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
 
 RUN bun run build
 
@@ -38,7 +57,7 @@ RUN set -eux; \
       '  add_header X-Content-Type-Options "nosniff" always;' \
       '  add_header X-Frame-Options "DENY" always;' \
       '  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' \
-      "  add_header Content-Security-Policy \"default-src 'self'; script-src 'self' https://device.clearsale.com.br https://web.fpcs-monitor.com.br; connect-src 'self' https://api.santos-tech.com https://auth.santos-tech.com https://tokenizer.sejaefi.com.br https://cobrancas.api.efipay.com.br https://cobrancas-h.api.efipay.com.br https://device.clearsale.com.br; img-src 'self' data: https://device.clearsale.com.br https://web.fpcs-monitor.com.br; style-src 'self' 'unsafe-inline'; font-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'\" always;" \
+      "  add_header Content-Security-Policy \"default-src 'self'; script-src 'self' https://device.clearsale.com.br https://web.fpcs-monitor.com.br; connect-src 'self' https://api.santos-tech.com https://auth.santos-tech.com https://tokenizer.sejaefi.com.br https://cobrancas.api.efipay.com.br https://cobrancas-h.api.efipay.com.br https://device.clearsale.com.br https://*.ingest.sentry.io https://*.ingest.us.sentry.io; img-src 'self' data: https://device.clearsale.com.br https://web.fpcs-monitor.com.br; style-src 'self' 'unsafe-inline'; font-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'\" always;" \
       '  location / {' \
       '    try_files $uri $uri/ /index.html;' \
       '  }' \
