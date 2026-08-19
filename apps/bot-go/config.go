@@ -77,6 +77,15 @@ type Config struct {
 
 	Production bool
 
+	// Rate limit do caminho de entrada (Redis). Cada mensagem recebida vira uma
+	// chamada ao LLM; sem teto, o webhook é um gerador de custo.
+	RateLimitEnabled bool
+	RatePhoneBurst   int
+	RatePhonePerMin  int
+	RateGlobalBurst  int
+	RateGlobalPerMin int
+	LLMDailyMax      int
+
 	// Dashboard
 	DashAPIKey     string
 	DashCORSOrigin string
@@ -165,6 +174,13 @@ func LoadConfig() Config {
 		FollowUpTemplateLanguage:     getEnv("FOLLOW_UP_TEMPLATE_LANGUAGE", "pt_BR"),
 
 		Production: getEnv("NODE_ENV", "development") == "production",
+
+		RateLimitEnabled: getEnv("RATE_LIMIT_ENABLED", "true") == "true",
+		RatePhoneBurst:   envInt("RATE_PHONE_BURST", 10),
+		RatePhonePerMin:  envInt("RATE_PHONE_PER_MIN", 10),
+		RateGlobalBurst:  envInt("RATE_GLOBAL_BURST", 120),
+		RateGlobalPerMin: envInt("RATE_GLOBAL_PER_MIN", 120),
+		LLMDailyMax:      envInt("LLM_DAILY_MAX", 5000),
 
 		DashAPIKey:     getEnv("DASH_API_KEY", ""),
 		DashCORSOrigin: getEnv("DASH_CORS_ORIGIN", "https://santos-tech.com"),

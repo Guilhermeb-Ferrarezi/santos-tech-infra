@@ -150,6 +150,8 @@ type Server struct {
 	// bg roda o processamento dos webhooks fora do handler, com paralelismo
 	// limitado e esperado no shutdown (ver bgpool.go).
 	bg *bgPool
+	// rateLimit segura o caminho de entrada antes de virar chamada ao LLM.
+	rateLimit *LLMRateLimiter
 }
 
 // NewServer cria um Server com as dependências fornecidas.
@@ -177,6 +179,7 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		tenantCache: NewTenantCache(rdb, cfg.DebounceCacheTTL, logger),
 		session:     NewSessionAuth(cfg.AuthMeURL, cfg.AuthTimeout, cfg.AuthCacheTTL),
 		bg:          newBGPool(cfg.BGPoolSlots, logger),
+		rateLimit:   NewLLMRateLimiter(cfg, rdb, logger),
 	}
 }
 
@@ -356,6 +359,12 @@ func (s *Server) processInbound(ctx context.Context, body []byte) {
 		}
 
 		msg.TenantID = s.cfg.TenantID
+
+		// Rate limit ANTES de gravar/enfileirar: mensagem barrada não vira
+		// chamada ao LLM nem ocupa slot de rajada.
+		if !s.allowInbound(ctx, "whatsapp", msg.ExternalID) {
+			continue
+		}
 
 		// Dedup via WebhookRepo
 		id, isDuplicate, err := s.webhook.Record(ctx, msg.TenantID, "whatsapp", msg.ProviderMessageID, body)
@@ -740,6 +749,12 @@ func (s *Server) captureEvolutionLead(ctx context.Context, ev evolutionWebhook) 
 		providerMsgID := ev.Data.Key.ID
 		if providerMsgID == "" {
 			s.logger.Debug("evolution: sem id de mensagem, ignorando resposta do bot", "phone", phone)
+			return
+		}
+
+		// Mesmo teto do número oficial — o lead já foi capturado acima; o que o
+		// rate limit corta é só a resposta gerada pelo LLM.
+		if !s.allowInbound(ctx, "evolution", phone) {
 			return
 		}
 

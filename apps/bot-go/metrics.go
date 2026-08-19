@@ -41,6 +41,16 @@ var (
 		},
 		[]string{"task"},
 	)
+
+	// llmRateLimited conta mensagens descartadas no caminho de entrada por
+	// estouro de rate limit, por canal e motivo (phone | global | daily).
+	llmRateLimited = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bot_llm_rate_limited_total",
+			Help: "Mensagens de entrada descartadas por rate limit antes de chamar o LLM.",
+		},
+		[]string{"channel", "reason"},
+	)
 )
 
 // metricsMiddleware mede cada requisição e alimenta os coletores. Usa o padrão de
