@@ -408,7 +408,8 @@ func (s *Server) ensureFileInFolder(ctx context.Context, folder *DriveFolder, fi
 	if !allowRoot && fileID == folder.DriveFolderID {
 		return appErr(http.StatusForbidden, "FORBIDDEN", "não é possível modificar a pasta raiz por aqui")
 	}
-	ok, err := s.drive.IsDescendant(ctx, fileID, folder.DriveFolderID)
+	ok, err := getOrSetJSON(ctx, s.rdb, cacheDriveDescendantKey(fileID, folder.DriveFolderID), cacheDriveDescendantTTL,
+		func(ctx context.Context) (bool, error) { return s.drive.IsDescendant(ctx, fileID, folder.DriveFolderID) })
 	if err != nil {
 		return appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar o arquivo")
 	}
@@ -482,10 +483,21 @@ func (s *Server) handleDownloadDriveFile(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// driveThumbnailCacheEntry é o que fica em cache (Redis) por handleDriveFileThumbnail
+// — Data em JSON vira base64 automaticamente ([]byte). Found separa "sem
+// miniatura" (cacheável, 404 estável) de erro de rede (nunca cacheado, ver
+// getOrSetJSON: só grava em cache quando fetchFn não devolve erro).
+type driveThumbnailCacheEntry struct {
+	Data        []byte `json:"data"`
+	ContentType string `json:"contentType"`
+	Found       bool   `json:"found"`
+}
+
 // GET /drive-folders/{id}/files/{fileId}/thumbnail — miniatura pro grid/lista
 // (não todo arquivo tem: 404 nesse caso, o frontend cai pro ícone genérico).
-// Cache-Control curto: a miniatura do Drive raramente muda, mas não vale a
-// pena investir em cache mais sofisticado só pra isso.
+// Resultado cacheado no Redis por 1h (ver cacheDriveThumbnailTTL) — sem isso,
+// cada render de item na lista/grade dispara pelo menos 2 chamadas à API do
+// Drive (metadata + bytes da miniatura), pra uma imagem que quase nunca muda.
 func (s *Server) handleDriveFileThumbnail(w http.ResponseWriter, r *http.Request) {
 	if s.drive == nil {
 		writeErr(w, appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED", "Arquivos (Google Drive) não configurado"))
@@ -509,21 +521,31 @@ func (s *Server) handleDriveFileThumbnail(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
-	data, contentType, ok, err := s.drive.GetThumbnail(r.Context(), fileID)
+	// Cacheado (1h) — inclui o caso "sem miniatura" (Found=false), pra não
+	// martelar o Drive de novo a cada render de um arquivo que nunca vai ter
+	// thumbnail (ex. .docx, .zip).
+	thumb, err := getOrSetJSON(r.Context(), s.rdb, cacheDriveThumbnailKey(fileID), cacheDriveThumbnailTTL,
+		func(ctx context.Context) (driveThumbnailCacheEntry, error) {
+			data, contentType, ok, err := s.drive.GetThumbnail(ctx, fileID)
+			if err != nil {
+				return driveThumbnailCacheEntry{}, err
+			}
+			return driveThumbnailCacheEntry{Data: data, ContentType: contentType, Found: ok}, nil
+		})
 	if err != nil {
 		slog.Error("falha ao buscar miniatura do Drive", "fileId", fileID, "err", err)
 		writeErr(w, appErr(http.StatusBadGateway, "THUMBNAIL_FAILED", "falha ao buscar miniatura"))
 		return
 	}
-	if !ok {
+	if !thumb.Found {
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "sem miniatura pra esse arquivo"))
 		return
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Type", thumb.ContentType)
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	_, _ = w.Write(thumb.Data)
 }
 
 // POST /drive-folders/{id}/files?parent=<driveFileId> — folderAccessGuard("write")

@@ -256,6 +256,72 @@ paths:
             Set-Cookie:
               $ref: "#/components/headers/ClearAuthCookies"
 
+  /auth/qr-login/start:
+    post:
+      tags: [Auth]
+      summary: Gerar par token (QR)/código (login por QR code)
+      description: |
+        Login por QR code estilo WhatsApp Web, mas invertido: quem GERA precisa
+        estar logado (é essa sessão que autoriza o dispositivo novo); quem TROCA
+        (`POST /public/qr-login/exchange`) não precisa de sessão nenhuma — é
+        assim que um app recém-aberto sem sessão (ex.: Santos Hub) consegue
+        logar. `token` (64 chars hex) vai no payload do QR, pra leitura por
+        câmera; `code` (6 dígitos) é o fallback digitável à mão. Os dois
+        resgatam a MESMA sessão — usar um invalida o outro. Expira em 2min.
+        Rate limit: 20 req/min por IP.
+      responses:
+        "200":
+          description: Par gerado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string, description: "64 chars hex — payload do QR." }
+                  code: { type: string, description: "6 dígitos — fallback digitável." }
+                  expiresAt: { type: string, format: date-time }
+                required: [token, code, expiresAt]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /public/qr-login/exchange:
+    post:
+      tags: [Auth]
+      summary: Trocar token/código de QR login por uma sessão
+      description: |
+        Público — o próprio `code` (token de 64 chars OU código de 6 dígitos,
+        mesmo campo) é a credencial, uso único. Sempre trata como cliente nativo
+        (o Hub nunca manda `Origin`): devolve `accessToken`/`refreshToken` no
+        corpo, igual ao login normal sem MFA. Rate limit: 20 req/min por IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code: { type: string, description: "Token (64 chars) ou código (6 dígitos)." }
+              required: [code]
+      responses:
+        "200":
+          description: Sessão emitida
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          description: Token/código expirado, já usado, ou conta suspensa/desabilitada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: QR_LOGIN_INVALID, message: "código expirado ou já usado" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /auth/me:
     get:
       tags: [Auth]
@@ -3932,7 +3998,10 @@ paths:
         ecossistema inteiro). Responde 503 se o Drive não estiver configurado
         (`GOOGLE_DRIVE_SA_JSON_B64` vazio). Itens vêm misturados (pastas e
         arquivos); distinga pelo `mimeType` (`application/vnd.google-apps.folder`
-        = pasta) pra navegação estilo Drive.
+        = pasta) pra navegação estilo Drive. Pagina internamente pelo Drive
+        (até 2000 itens); acima disso, devolve os 2000 primeiros e loga um
+        aviso — sem paginação exposta na API ainda (pasta com mais de 2000
+        itens é um caso raro, não vale a pena expor cursor por enquanto).
       parameters:
         - name: id
           in: path

@@ -94,41 +94,66 @@ func driveAPIError(resp *http.Response) error {
 	return fmt.Errorf("drive api %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 }
 
+// driveListFilesMaxPages limita quantas páginas de 200 itens ListFiles segue
+// (10 * 200 = 2000 itens) — teto generoso pra pastas normais, só existe pra
+// não deixar uma pasta anormalmente grande (ou um bug de paginação do lado do
+// Drive) fazer a listagem rodar indefinidamente.
+const driveListFilesMaxPages = 10
+
 // ListFiles lista o conteúdo (arquivos E subpastas, não-lixeira) dentro de
 // driveFolderID — o chamador distingue pasta de arquivo pelo mimeType
 // (driveFolderMimeType) pra navegação estilo Drive (entrar em subpasta).
+// Segue `nextPageToken` internamente até esgotar ou até driveListFilesMaxPages
+// — sem isso, uma pasta com mais de 200 itens perdia o resto silenciosamente
+// (o chamador só via os 200 primeiros, sem nenhum sinal de que havia mais).
 func (d *DriveClient) ListFiles(ctx context.Context, driveFolderID string) ([]DriveFile, error) {
 	escaped := strings.ReplaceAll(strings.ReplaceAll(driveFolderID, `\`, `\\`), `'`, `\'`)
-	q := url.Values{}
-	q.Set("q", fmt.Sprintf("'%s' in parents and trashed = false", escaped))
-	q.Set("fields", "files(id,name,mimeType,size,modifiedTime,iconLink)")
-	q.Set("orderBy", "folder,name")
-	q.Set("pageSize", "200")
-	q.Set("supportsAllDrives", "true")
-	q.Set("includeItemsFromAllDrives", "true")
+	files := make([]DriveFile, 0, 64)
+	pageToken := ""
+	for page := 0; page < driveListFilesMaxPages; page++ {
+		q := url.Values{}
+		q.Set("q", fmt.Sprintf("'%s' in parents and trashed = false", escaped))
+		q.Set("fields", "nextPageToken,files(id,name,mimeType,size,modifiedTime,iconLink)")
+		q.Set("orderBy", "folder,name")
+		q.Set("pageSize", "200")
+		q.Set("supportsAllDrives", "true")
+		q.Set("includeItemsFromAllDrives", "true")
+		if pageToken != "" {
+			q.Set("pageToken", pageToken)
+		}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/drive/v3/files?"+q.Encode(), nil)
-	if err != nil {
-		return nil, err
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/drive/v3/files?"+q.Encode(), nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := d.http.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			err := driveAPIError(resp)
+			resp.Body.Close()
+			return nil, err
+		}
+		var out struct {
+			Files         []driveFileWire `json:"files"`
+			NextPageToken string          `json:"nextPageToken"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&out)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		for _, f := range out.Files {
+			files = append(files, f.toDriveFile())
+		}
+		if out.NextPageToken == "" {
+			return files, nil
+		}
+		pageToken = out.NextPageToken
 	}
-	resp, err := d.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, driveAPIError(resp)
-	}
-	var out struct {
-		Files []driveFileWire `json:"files"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
-	}
-	files := make([]DriveFile, 0, len(out.Files))
-	for _, f := range out.Files {
-		files = append(files, f.toDriveFile())
-	}
+	slog.Warn("ListFiles: atingiu o teto de páginas, lista pode estar incompleta",
+		"folder", driveFolderID, "pages", driveListFilesMaxPages, "items", len(files))
 	return files, nil
 }
 

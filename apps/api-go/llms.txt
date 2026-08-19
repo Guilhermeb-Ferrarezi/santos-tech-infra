@@ -99,6 +99,23 @@ navegador. Não requer `access_token` — basta o cookie `accounts`.
   `SESSION_EXPIRED` | 403 `ACCOUNT_SUSPENDED` (rate 20/min)
   — rotaciona a sessão escolhida e seta os cookies `access_token` + `refresh_token`
 
+### QR login (estilo WhatsApp Web, invertido) — dashboard/web gera, Santos Hub troca
+
+Pensado pro Santos Hub (app Tauri sem sessão nenhuma ao abrir): quem GERA
+precisa estar logado (é essa sessão que autoriza); quem TROCA não precisa —
+o próprio token/código já é a credencial, uso único, 2min de vida. Redis puro
+(`qr_login:token:<token>` e `qr_login:code:<code>`, mesmo payload nas duas
+chaves, TTL 2min) — sem tabela no Postgres.
+
+- `POST /auth/qr-login/start` (sessão) → `{token, code, expiresAt}` · rate
+  20/min. `token` (64 chars hex) vira o payload do QR (leitura por câmera);
+  `code` (6 dígitos) é o fallback digitável.
+- `POST /public/qr-login/exchange {code}` (público — mesmo campo aceita token
+  OU code) → mesma resposta do login sem MFA, sempre com `accessToken`/
+  `refreshToken` no corpo (trata como cliente nativo incondicionalmente,
+  já que quem chama isso nunca tem sessão/cookie ainda) · rate 20/min ·
+  401 `QR_LOGIN_INVALID` se expirado/já usado/conta suspensa.
+
 ### OAuth provider ("Entrar com Santos Tech") — authorization code + PKCE S256
 
 Fluxo em 3 passos; **PKCE S256 obrigatório**; code de uso único (TTL 60s);
@@ -427,15 +444,18 @@ Admin-only (cria pasta e define quem tem acesso; professor não administra):
 Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por permissão de cargo):
 - `GET /drive-folders/mine` — só pastas com acesso ≥ `read`; admin vê todas com `access:"write"` → `{folders:[MyDriveFolder]}`
 - `GET /drive-folders/{id}/files[?parent=<driveFileId>]` — exige `read` na
-  pasta raiz `{id}` → `{files:[DriveFile]}` (403 sem acesso, 503 sem Drive
-  configurado). Itens vêm misturados (pasta+arquivo); distinga pelo
-  `mimeType` (`application/vnd.google-apps.folder`=pasta) pra navegação
-  estilo Drive. `parent` navega numa subpasta — validado por ancestralidade
-  (`DriveClient.IsDescendant`, sobe até 12 níveis por `parents`), 403 se o ID
-  não for descendente da raiz autorizada
+  pasta raiz `{id}` · rate limit 60/min → `{files:[DriveFile]}` (403 sem
+  acesso, 503 sem Drive configurado). Itens vêm misturados (pasta+arquivo);
+  distinga pelo `mimeType` (`application/vnd.google-apps.folder`=pasta) pra
+  navegação estilo Drive. `parent` navega numa subpasta — validado por
+  ancestralidade (`DriveClient.IsDescendant`, sobe até 12 níveis por
+  `parents`, resultado cacheado 5min no Redis), 403 se o ID não for
+  descendente da raiz autorizada. Pagina internamente pelo Drive até 2000
+  itens (10 páginas de 200) — acima disso loga aviso e devolve o que já tem,
+  sem cursor exposto na API ainda
 - `GET /drive-folders/{id}/files/{fileId}/download[?download=1]` — exige
-  `read`; stream binário proxeado (nunca link direto do Drive). Sem
-  `download`, abre INLINE (Content-Disposition: inline — navegador renderiza
+  `read` · rate limit 60/min; stream binário proxeado (nunca link direto do
+  Drive). Sem `download`, abre INLINE (Content-Disposition: inline — navegador renderiza
   imagem/vídeo/PDF quando sabe); `?download=1` força attachment. Repassa
   header `Range` pro Drive (206 Partial Content) — dá seek em vídeo sem
   baixar tudo primeiro. `fileId` validado por ancestralidade contra `{id}`
@@ -448,8 +468,8 @@ Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por pe
 - `GET /drive-folders/{id}/files/{fileId}/thumbnail` — exige `read`; miniatura
   proxeada (thumbnailLink do Drive exige o Bearer token da service account,
   não é URL pública) · rate limit 120/min · 404 se o arquivo não tem
-  miniatura (frontend cai pro ícone genérico) · mesma validação de
-  ancestralidade de `fileId` do download
+  miniatura (frontend cai pro ícone genérico, resultado cacheado 1h no Redis
+  também) · mesma validação de ancestralidade de `fileId` do download
 - `POST /drive-folders/{id}/files[?parent=<driveFileId>]` — exige `write` na
   raiz `{id}`; `multipart/form-data` campo `file` (máx. 25MB, streamado sem
   bufferizar inteiro em memória) → 201 `{file}` · rate limit 10/min ·
