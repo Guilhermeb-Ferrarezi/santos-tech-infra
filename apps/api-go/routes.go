@@ -198,12 +198,14 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// /public/downloads (o app não pede autenticação nenhuma).
 	s.registerDownloadsRoutes(mux)
 
-	// Login por QR code / código curto (estilo WhatsApp Web, mas invertido: quem
-	// gera precisa estar logado, quem troca não). /auth/qr-login/start exige
-	// sessão (é ela que autoriza o dispositivo novo); /public/qr-login/exchange
-	// é público — o próprio token/código é a credencial, uso único, 2min de vida.
-	mux.HandleFunc("POST /auth/qr-login/start", s.rateLimit(20, min, s.authGuard(s.handleQRLoginStart)))
-	mux.HandleFunc("POST /public/qr-login/exchange", s.rateLimit(20, min, s.handleQRLoginExchange))
+	// Login por QR code / código curto (estilo WhatsApp Web, igual ao pareamento
+	// dos PCs do laboratório): o Santos Hub (sem sessão) gera e MOSTRA o QR/
+	// código; quem já está logado (celular escaneando, ou outra aba) confirma
+	// em /auth/qr-login/confirm; o Hub só fica com poll em /public/qr-login/poll
+	// até aprovar. Uso único, 5min de vida.
+	mux.HandleFunc("POST /public/qr-login/create", s.rateLimit(20, min, s.handleQRLoginCreate))
+	mux.HandleFunc("POST /auth/qr-login/confirm", s.rateLimit(20, min, s.authGuard(s.handleQRLoginConfirm)))
+	mux.HandleFunc("GET /public/qr-login/poll", s.rateLimit(60, min, s.handleQRLoginPoll))
 
 	// Automação de resposta a comentário do Instagram (private reply,
 	// substitui o ManyChat) — webhook público autenticado por assinatura
