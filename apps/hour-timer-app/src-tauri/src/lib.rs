@@ -99,6 +99,15 @@ fn show_main(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Precisa ser o primeiro plugin registrado (requisito do Tauri no
+        // Windows). O watchdog (watchdog.bat/Tarefa Agendada, ver
+        // installer-hooks.nsh) já evita chamar o .exe quando ele está
+        // rodando, então isso aqui é rede de segurança pra um duplo-clique
+        // manual no atalho/instalador com o app já aberto: só foca a janela
+        // principal existente em vez de abrir uma instância nova.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_notification::init())

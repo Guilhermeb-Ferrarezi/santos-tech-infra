@@ -237,7 +237,8 @@ func RequestLogger(next http.Handler) http.Handler {
 			case r.Method == http.MethodGet && lw.status >= 200 && lw.status < 300 && durMs < 5000:
 				level = slog.LevelDebug // GET 2xx rápido: sem valor diagnóstico
 			case lw.status >= 200 && lw.status < 300 &&
-				(r.URL.Path == "/auth/me" || r.URL.Path == "/auth/refresh"):
+				(r.URL.Path == "/auth/me" || r.URL.Path == "/auth/refresh" ||
+					r.URL.Path == "/public/lab-devices/heartbeat"):
 				level = slog.LevelDebug // polling frequente do frontend: só interessa quando falha
 			}
 
