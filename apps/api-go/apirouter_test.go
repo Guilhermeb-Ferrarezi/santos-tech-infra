@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/santos-tech/auth/db"
 )
@@ -224,5 +228,39 @@ func TestAPIRouterValidPath(t *testing.T) {
 		if apiRouterValidPath(p) {
 			t.Errorf("apiRouterValidPath(%q) = true, queria false", p)
 		}
+	}
+}
+
+// Resposta do provider é lida INTEIRA em memória: sem teto, um provider (ou
+// quem sequestrasse a rota) derrubava o processo por OOM.
+func TestReadAPIRouterBodyLimite(t *testing.T) {
+	b, err := readAPIRouterBody(strings.NewReader("ola"))
+	if err != nil || string(b) != "ola" {
+		t.Fatalf("corpo pequeno: %q, %v", b, err)
+	}
+
+	noLimite := bytes.Repeat([]byte("x"), apiRouterMaxResponseBytes)
+	b, err = readAPIRouterBody(bytes.NewReader(noLimite))
+	if err != nil || len(b) != apiRouterMaxResponseBytes {
+		t.Fatalf("corpo no limite: len=%d, err=%v", len(b), err)
+	}
+
+	// Um byte além do teto → erro, nunca truncamento silencioso.
+	if _, err := readAPIRouterBody(bytes.NewReader(append(noLimite, 'x'))); !errors.Is(err, errAPIRouterResponseTooLarge) {
+		t.Fatalf("corpo acima do teto: err=%v", err)
+	}
+}
+
+// Rotação: teto total de tempo e de chaves tentadas, para uma requisição não
+// ficar presa 30s × N chaves.
+func TestAPIRouterRotationBudget(t *testing.T) {
+	if apiRouterRotationBudget > 90*time.Second {
+		t.Errorf("orçamento da rotação alto demais: %v", apiRouterRotationBudget)
+	}
+	if apiRouterRotationBudget < apiRouterHTTP.Timeout {
+		t.Errorf("orçamento (%v) menor que o timeout de uma única tentativa (%v)", apiRouterRotationBudget, apiRouterHTTP.Timeout)
+	}
+	if apiRouterMaxKeyAttempts < 2 || apiRouterMaxKeyAttempts > 10 {
+		t.Errorf("teto de tentativas fora do razoável: %d", apiRouterMaxKeyAttempts)
 	}
 }

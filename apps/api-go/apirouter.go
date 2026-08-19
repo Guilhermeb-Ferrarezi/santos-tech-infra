@@ -23,6 +23,41 @@ import (
 
 var apiRouterHTTP = &http.Client{Timeout: 30 * time.Second}
 
+const (
+	// apiRouterMaxResponseBytes limita o corpo lido de um provider. Sem teto,
+	// um provider (ou quem sequestrasse a rota) podia streamar até derrubar o
+	// processo por OOM: a resposta é lida INTEIRA em memória antes de voltar.
+	// 32MB cobre com folga áudio/imagem em base64 (o request de op já é 25MB).
+	apiRouterMaxResponseBytes = 32 << 20
+
+	// apiRouterRotationBudget é o teto TOTAL da rotação de chaves. Cada
+	// tentativa tem 30s (apiRouterHTTP.Timeout); com 10 chaves cadastradas, a
+	// requisição do admin ficava presa até 300s. Agora o ctx morre em 60s.
+	apiRouterRotationBudget = 60 * time.Second
+
+	// apiRouterMaxKeyAttempts limita quantas chaves são tentadas numa mesma
+	// requisição, independente do relógio.
+	apiRouterMaxKeyAttempts = 4
+)
+
+// errAPIRouterResponseTooLarge: o provider devolveu mais do que
+// apiRouterMaxResponseBytes.
+var errAPIRouterResponseTooLarge = errors.New("apirouter: resposta do provider grande demais")
+
+// readAPIRouterBody lê o corpo com teto. Devolve erro em vez de truncar em
+// silêncio — um JSON cortado pela metade viraria "erro do adapter" mais na
+// frente, escondendo a causa.
+func readAPIRouterBody(r io.Reader) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, apiRouterMaxResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > apiRouterMaxResponseBytes {
+		return nil, errAPIRouterResponseTooLarge
+	}
+	return b, nil
+}
+
 var errAPIRouterNoActiveKeys = errors.New("apirouter: nenhuma chave ativa para o provider")
 var errAPIRouterAllKeysExhausted = errors.New("apirouter: todas as chaves ativas falharam")
 
@@ -194,8 +229,18 @@ func (s *Server) executeAPIRouterRequest(ctx context.Context, provider db.ApiRou
 		return nil, errAPIRouterNoActiveKeys
 	}
 
+	// Teto TOTAL da rotação: sem ele, N chaves × 30s prendiam a requisição do
+	// admin por minutos (10 chaves = 300s). Duas travas independentes, porque
+	// falha rápida (connection refused) não gasta relógio: o ctx com deadline e
+	// o número de chaves tentadas.
+	ctx, cancel := context.WithTimeout(ctx, apiRouterRotationBudget)
+	defer cancel()
+
 	var attempts []apiRouterAttempt
-	for _, key := range keys {
+	for i, key := range keys {
+		if i >= apiRouterMaxKeyAttempts || ctx.Err() != nil {
+			break
+		}
 		secret, err := s.vault.Decrypt(key.SecretEnc)
 		if err != nil {
 			attempts = append(attempts, apiRouterAttempt{KeyID: key.ID, KeyLabel: key.Label, Outcome: apiRouterOutcomeTransportError})
@@ -210,7 +255,7 @@ func (s *Server) executeAPIRouterRequest(ctx context.Context, provider db.ApiRou
 			attempts = append(attempts, apiRouterAttempt{KeyID: key.ID, KeyLabel: key.Label, Outcome: apiRouterOutcomeTransportError})
 			continue
 		}
-		respBody, readErr := io.ReadAll(resp.Body)
+		respBody, readErr := readAPIRouterBody(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
 			attempts = append(attempts, apiRouterAttempt{KeyID: key.ID, KeyLabel: key.Label, StatusCode: resp.StatusCode, Outcome: apiRouterOutcomeTransportError})
@@ -255,7 +300,7 @@ func (s *Server) executeAPIRouterRequestOnce(ctx context.Context, provider db.Ap
 	if err != nil {
 		return nil, err
 	}
-	respBody, readErr := io.ReadAll(resp.Body)
+	respBody, readErr := readAPIRouterBody(resp.Body)
 	resp.Body.Close()
 	if readErr != nil {
 		return nil, readErr
@@ -304,7 +349,9 @@ func (s *Server) testAPIRouterKey(ctx context.Context, provider db.ApiRouterProv
 		return apiRouterTestResult{Outcome: apiRouterOutcomeTransportError, Error: err.Error()}, nil
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
+	// Só interessa o status: drena o começo pra reaproveitar a conexão, com teto
+	// (io.Copy sem limite deixaria um provider hostil nos alimentando à vontade).
+	_, _ = io.CopyN(io.Discard, resp.Body, 32<<10)
 
 	outcome := classifyAPIRouterStatus(provider.UnauthorizedCodes, provider.NoCreditCodes, resp.StatusCode)
 	switch outcome {
