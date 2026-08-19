@@ -242,6 +242,18 @@ func (r *R2) HeadObject(ctx context.Context, key string) (size int64, contentTyp
 	return size, strings.ToLower(contentType), true, nil
 }
 
+// PresignGet gera uma URL GET pré-assinada pra key, válida por `expiry` —
+// substitui o link público permanente onde o objeto não deve ficar acessível
+// pra sempre a quem já viu a URL uma vez (ver downloadURL).
+//
+// ATENÇÃO: isto só protege de fato se o objeto NÃO estiver sendo servido
+// publicamente pelo domínio de CDN do bucket (CF_R2_PUBLIC_URL). Se o prefixo
+// continuar público, o mesmo arquivo segue acessível pela URL permanente,
+// assinada ou não — a parte do R2/Cloudflare tem que acompanhar.
+func (r *R2) PresignGet(key string, expiry time.Duration) string {
+	return r.presign(http.MethodGet, key, "", expiry)
+}
+
 // PresignPut gera uma URL PUT pré-assinada (SigV4 via query string) pra key,
 // válida por `expiry`: o cliente sobe o arquivo direto pro R2 com um PUT nessa URL,
 // sem os bytes passarem pelo backend — usado pra arquivos grandes demais pra
@@ -261,9 +273,15 @@ func (r *R2) HeadObject(ctx context.Context, key string) (size int64, contentTyp
 // sobrescrever o objeto. Upgrade se abuso virar problema: presigned POST com
 // policy de content-length-range, que o R2 também suporta.
 func (r *R2) PresignPut(key, contentType string, expiry time.Duration) string {
+	return r.presign(http.MethodPut, key, strings.TrimSpace(contentType), expiry)
+}
+
+// presign monta a URL SigV4 por query string. contentType vazio => só o header
+// "host" é assinado (correto pro GET, que não manda Content-Type); com valor,
+// "content-type;host" (ver PresignPut).
+func (r *R2) presign(method, key, contentType string, expiry time.Duration) string {
 	host := r.accountID + ".r2.cloudflarestorage.com"
 	canonURI := "/" + r.bucket + "/" + key
-	contentType = strings.TrimSpace(contentType)
 
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
@@ -275,15 +293,18 @@ func (r *R2) PresignPut(key, contentType string, expiry time.Duration) string {
 	q.Set("X-Amz-Credential", r.accessKey+"/"+scope)
 	q.Set("X-Amz-Date", amzDate)
 	q.Set("X-Amz-Expires", strconv.Itoa(int(expiry.Seconds())))
-	q.Set("X-Amz-SignedHeaders", "content-type;host")
+	// Ordem alfabética dos headers assinados, nome em minúsculas.
+	canonicalHeaders := "host:" + host + "\n"
+	signedHeaders := "host"
+	if contentType != "" {
+		canonicalHeaders = "content-type:" + contentType + "\n" + canonicalHeaders
+		signedHeaders = "content-type;host"
+	}
+	q.Set("X-Amz-SignedHeaders", signedHeaders)
 	canonicalQuery := q.Encode()
 
-	// Ordem alfabética dos headers assinados, nome em minúsculas.
-	canonicalHeaders := "content-type:" + contentType + "\n" + "host:" + host + "\n"
-	signedHeaders := "content-type;host"
-
 	canonicalRequest := strings.Join([]string{
-		http.MethodPut, canonURI, canonicalQuery, canonicalHeaders, signedHeaders, "UNSIGNED-PAYLOAD",
+		method, canonURI, canonicalQuery, canonicalHeaders, signedHeaders, "UNSIGNED-PAYLOAD",
 	}, "\n")
 
 	stringToSign := strings.Join([]string{

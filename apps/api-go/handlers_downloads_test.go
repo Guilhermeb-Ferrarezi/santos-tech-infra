@@ -115,3 +115,100 @@ func TestDownloadsPresignExpiryCurta(t *testing.T) {
 		t.Errorf("uploadUrl sem a expiração curta esperada: %s", w.Body.String())
 	}
 }
+
+// ── /public/downloads: credencial do Santos Hub ─────────────────────────────
+
+func publicDownloadsReq(s *Server, header, value string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest("GET", "/public/downloads", nil)
+	if header != "" {
+		r.Header.Set(header, value)
+	}
+	w := httptest.NewRecorder()
+	s.santosHubGuard(s.handleListPublicDownloads)(w, r)
+	return w
+}
+
+// TestPublicDownloadsSemTokenConfigurado: fail-closed. Sem SANTOS_HUB_TOKEN a
+// rota não pode "liberar porque não tem token configurado" — ela entrega
+// instaladores .exe/.msi/.ps1/.bat.
+func TestPublicDownloadsSemTokenConfigurado(t *testing.T) {
+	s := testServer(Config{})
+	if w := publicDownloadsReq(s, "X-Santos-Hub-Token", "qualquer"); w.Code != 503 {
+		t.Fatalf("code=%d, quer 503 (%s)", w.Code, w.Body.String())
+	}
+}
+
+// TestPublicDownloadsExigeCredencial: era público, sem autenticação nenhuma.
+func TestPublicDownloadsExigeCredencial(t *testing.T) {
+	s := testServer(Config{SantosHubToken: "segredo-do-hub"})
+	casos := []struct{ header, value string }{
+		{"", ""},
+		{"X-Santos-Hub-Token", ""},
+		{"X-Santos-Hub-Token", "errado"},
+		{"Authorization", "Bearer errado"},
+		{"X-Santos-Hub-Token", "segredo-do-hub-mais-coisa"},
+	}
+	for _, c := range casos {
+		if w := publicDownloadsReq(s, c.header, c.value); w.Code != 401 {
+			t.Errorf("%s=%q: code=%d, quer 401", c.header, c.value, w.Code)
+		}
+	}
+}
+
+// TestPublicDownloadsAceitaOsDoisHeaders: o Hub pode mandar em qualquer um dos
+// dois formatos. Passa do guard e morre no banco (s.q == nil), o que já prova
+// que a credencial foi aceita.
+func TestPublicDownloadsAceitaOsDoisHeaders(t *testing.T) {
+	s := testServer(Config{SantosHubToken: "segredo-do-hub"})
+	for _, c := range []struct{ header, value string }{
+		{"X-Santos-Hub-Token", "segredo-do-hub"},
+		{"Authorization", "Bearer segredo-do-hub"},
+	} {
+		func() {
+			defer func() { _ = recover() }() // s.q == nil: o handler entra no banco
+			if w := publicDownloadsReq(s, c.header, c.value); w.Code == 401 || w.Code == 503 {
+				t.Errorf("%s: credencial válida recusada (code=%d)", c.header, w.Code)
+			}
+		}()
+	}
+}
+
+// TestR2PresignGet: o link do catálogo deixou de ser a URL pública permanente
+// do R2 (uma vez vista, valia pra sempre e pra qualquer um) e virou uma URL
+// SigV4 de curta duração. GET não manda Content-Type, então só "host" é
+// assinado.
+func TestR2PresignGet(t *testing.T) {
+	r := newR2(Config{
+		R2AccountID: "acc123",
+		R2AccessKey: "key123",
+		R2SecretKey: "secret123",
+		R2Bucket:    "bucket",
+		R2PublicURL: "https://cdn.santos-tech.com",
+	})
+	u, err := url.Parse(r.PresignGet("downloads/abc.exe", downloadSignedURLTTL))
+	if err != nil {
+		t.Fatalf("URL inválida: %v", err)
+	}
+	if u.Host != "acc123.r2.cloudflarestorage.com" || u.Path != "/bucket/downloads/abc.exe" {
+		t.Errorf("host/path inesperados: %s%s", u.Host, u.Path)
+	}
+	q := u.Query()
+	if q.Get("X-Amz-SignedHeaders") != "host" {
+		t.Errorf("SignedHeaders = %q, quer \"host\"", q.Get("X-Amz-SignedHeaders"))
+	}
+	if q.Get("X-Amz-Expires") != strconv.Itoa(int(downloadSignedURLTTL.Seconds())) {
+		t.Errorf("X-Amz-Expires = %q", q.Get("X-Amz-Expires"))
+	}
+	if len(q.Get("X-Amz-Signature")) != 64 {
+		t.Errorf("assinatura com tamanho inesperado: %d", len(q.Get("X-Amz-Signature")))
+	}
+	// Assinaturas de GET e PUT pra mesma key têm que diferir (o método entra na
+	// canonical request) — senão um link de leitura viraria um de escrita.
+	pu, err := url.Parse(r.PresignPut("downloads/abc.exe", "application/x-msi", downloadSignedURLTTL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Get("X-Amz-Signature") == pu.Query().Get("X-Amz-Signature") {
+		t.Error("GET e PUT com a mesma assinatura — o método não está sendo assinado")
+	}
+}

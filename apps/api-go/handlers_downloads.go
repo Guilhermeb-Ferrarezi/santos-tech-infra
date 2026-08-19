@@ -1,10 +1,12 @@
 package main
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/santos-tech/auth/db"
@@ -333,8 +335,42 @@ func (s *Server) handleDeleteDownload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// GET /public/downloads — catálogo completo, sem login: é o que o Santos Hub
-// (app Tauri dos PCs da empresa) consome pra listar o que dá pra baixar.
+// downloadSignedURLTTL: validade do link de download entregue na listagem.
+// Curto o bastante pra não virar um link permanente que circula por aí, longo o
+// bastante pra o usuário clicar num item da lista que acabou de carregar (o R2
+// valida a assinatura ao receber a requisição, então um download grande que
+// COMEÇOU dentro da janela termina normalmente).
+const downloadSignedURLTTL = 15 * time.Minute
+
+// santosHubGuard exige o PAT embarcado no build do Santos Hub. A rota entrega
+// instaladores .exe/.msi/.ps1/.bat da empresa — sem credencial nenhuma, o
+// catálogo inteiro (e os binários) ficava aberto à internet.
+//
+// FAIL-CLOSED: sem SANTOS_HUB_TOKEN configurado a rota responde 503, nunca
+// "libera porque não tem token". Ao subir isto, configure a variável no api-go
+// E no build do Hub antes de popular o catálogo.
+func (s *Server) santosHubGuard(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.SantosHubToken == "" {
+			writeErr(w, appErr(http.StatusServiceUnavailable, "HUB_TOKEN_UNSET",
+				"catálogo indisponível: SANTOS_HUB_TOKEN não configurado no servidor"))
+			return
+		}
+		token := strings.TrimSpace(r.Header.Get("X-Santos-Hub-Token"))
+		if token == "" {
+			token = strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		}
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.SantosHubToken)) != 1 {
+			writeErr(w, appErr(http.StatusUnauthorized, "HUB_UNAUTHORIZED", "credencial do Santos Hub ausente ou inválida"))
+			return
+		}
+		next(w, r)
+	}
+}
+
+// GET /public/downloads — catálogo consumido pelo Santos Hub (app Tauri dos PCs
+// da empresa). Protegido por santosHubGuard: a rota continua sem login de
+// usuário, mas exige o PAT do Hub.
 func (s *Server) handleListPublicDownloads(w http.ResponseWriter, r *http.Request) {
 	items, err := s.q.ListDownloads(r.Context())
 	if err != nil {
@@ -348,11 +384,18 @@ func (s *Server) handleListPublicDownloads(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
 
-// downloadURL devolve o link efetivo do item — URL pública no R2 (kind=file)
-// ou a URL externa cadastrada (kind=link).
+// downloadURL devolve o link efetivo do item — URL ASSINADA de curta duração no
+// R2 (kind=file) ou a URL externa cadastrada (kind=link).
+//
+// Era a URL pública permanente do R2: uma vez vista, valia pra sempre e pra
+// qualquer um. Agora é uma URL SigV4 com validade de downloadSignedURLTTL.
+//
+// Depende de o prefixo downloads/ NÃO estar sendo servido pelo domínio público
+// do bucket (CF_R2_PUBLIC_URL): se estiver, o arquivo continua acessível pela
+// URL permanente e a assinatura não muda nada. Ver PresignGet.
 func (s *Server) downloadURL(d *db.Download) string {
 	if d.Kind == "file" && d.ObjectKey.Valid && s.r2 != nil {
-		return s.r2.PublicURL(d.ObjectKey.String)
+		return s.r2.PresignGet(d.ObjectKey.String, downloadSignedURLTTL)
 	}
 	if d.ExternalUrl.Valid {
 		return d.ExternalUrl.String

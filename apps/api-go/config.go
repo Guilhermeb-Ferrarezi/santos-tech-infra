@@ -61,6 +61,12 @@ type Config struct {
 	R2Bucket    string
 	R2PublicURL string // base pública (CDN), ex: https://cdn.santos-tech.com
 
+	// Santos Hub (app Tauri dos PCs da empresa): PAT embarcado no build do app,
+	// exigido em GET /public/downloads. VAZIO = a rota responde 503 — o
+	// catálogo lista instaladores .exe/.msi/.ps1/.bat e não pode ficar aberto
+	// à internet por falta de configuração (fail-closed de propósito).
+	SantosHubToken string
+
 	// Arquivos (pastas de admin vinculadas ao Google Drive, ver drive.go): JSON
 	// da service account em base64. Vazio = feature desabilitada, rotas de
 	// /drive-folders respondem 503. O admin compartilha cada pasta manualmente
@@ -157,6 +163,8 @@ func LoadConfig() Config {
 		R2SecretKey: getEnv("CF_R2_SECRET_KEY", ""),
 		R2Bucket:    getEnv("CF_R2_BUCKET_NAME", ""),
 		R2PublicURL: strings.TrimRight(getEnv("CF_R2_PUBLIC_URL", ""), "/"),
+
+		SantosHubToken: getEnv("SANTOS_HUB_TOKEN", ""),
 
 		GoogleDriveSAJSONB64: getEnv("GOOGLE_DRIVE_SA_JSON_B64", ""),
 

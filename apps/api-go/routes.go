@@ -399,8 +399,9 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 
 // registerDownloadsRoutes: catálogo de downloads do Santos Hub. Cadastro/edição/
 // remoção são admin-only (mesmo critério de model3d — biblioteca gerida à mão,
-// sem cargo personalizado dedicado); leitura pública em /public/downloads
-// alimenta o app Tauri instalado nos PCs da empresa, sem exigir login.
+// sem cargo personalizado dedicado); /public/downloads alimenta o app Tauri
+// instalado nos PCs da empresa — sem login de usuário, mas exigindo o PAT do
+// Hub (santosHubGuard): o catálogo entrega instaladores .exe/.msi/.ps1/.bat.
 func (s *Server) registerDownloadsRoutes(mux *http.ServeMux) {
 	const min = time.Minute
 	mux.HandleFunc("GET /auth/admin/downloads", s.adminGuard(s.handleListDownloadsAdmin))
@@ -409,7 +410,7 @@ func (s *Server) registerDownloadsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /auth/admin/downloads/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateDownload)))
 	mux.HandleFunc("DELETE /auth/admin/downloads/{id}", s.adminGuard(s.handleDeleteDownload))
 
-	mux.HandleFunc("GET /public/downloads", s.rateLimit(120, min, s.handleListPublicDownloads))
+	mux.HandleFunc("GET /public/downloads", s.rateLimit(120, min, s.santosHubGuard(s.handleListPublicDownloads)))
 }
 
 func (s *Server) registerInstagramRoutes(mux *http.ServeMux) {
