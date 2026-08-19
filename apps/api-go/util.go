@@ -32,17 +32,31 @@ func randomToken(nbytes int) string {
 	return hex.EncodeToString(b)
 }
 
-// randomDigits gera um código numérico de n dígitos (crypto/rand, sem viés) —
-// pro código curto do QR login (digitável à mão, ao contrário do token hex).
+// randomDigits gera um código numérico de n dígitos (crypto/rand) — pro código
+// curto do QR login e do pareamento (digitável à mão, ao contrário do token hex).
+//
+// Usa amostragem com rejeição porque 256 não é múltiplo de 10: mapear byte%10
+// direto faz os dígitos 0-5 saírem em 26 dos 256 valores e os 6-9 em apenas 25
+// (~4% de viés). Descartando os bytes >= 250 sobram 250 valores, exatamente 25
+// por dígito — distribuição uniforme de verdade.
 func randomDigits(n int) string {
 	const digits = "0123456789"
-	out := make([]byte, n)
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand unavailable: " + err.Error())
-	}
-	for i, v := range b {
-		out[i] = digits[int(v)%len(digits)]
+	const maxUnbiased = 250 // 25 * 10; bytes >= 250 são descartados
+	out := make([]byte, 0, n)
+	buf := make([]byte, n+n/4+8) // folga para os bytes rejeitados
+	for len(out) < n {
+		if _, err := rand.Read(buf); err != nil {
+			panic("crypto/rand unavailable: " + err.Error())
+		}
+		for _, v := range buf {
+			if v >= maxUnbiased {
+				continue
+			}
+			out = append(out, digits[v%10])
+			if len(out) == n {
+				break
+			}
+		}
 	}
 	return string(out)
 }
