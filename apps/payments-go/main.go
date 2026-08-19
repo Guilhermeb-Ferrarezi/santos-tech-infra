@@ -133,8 +133,11 @@ func main() {
 		Handler:           srv.Routes(),
 		ReadHeaderTimeout: 10 * time.Second, // anti slow-loris
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      60 * time.Second, // generoso para o SSE de /pay/{token}/events
-		IdleTimeout:       30 * time.Second,
+		// WriteTimeout vale para a resposta INTEIRA. Os handlers SSE removem o
+		// deadline da própria conexão (startSSE) — sem isso o stream de
+		// /pay/{token}/events morria aos 60s e o cliente nunca via o 'paid'.
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  30 * time.Second,
 	}
 
 	go func() {
