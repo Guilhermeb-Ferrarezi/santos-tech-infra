@@ -29,17 +29,10 @@ COPY --from=builder /app/apps/auth-web/dist /usr/share/nginx/html
 #
 # CSP: FONTE ÚNICA (apps/auth-web/Dockerfile + nginx.conf, que serviam a mesma
 # app SEM header de segurança nenhum, foram removidos). Notas de cada diretiva:
-#   style-src 'unsafe-inline' — AuthLayout.tsx:9 e BrandPanel.tsx:5 usam
-#     style={{background: linear-gradient(...)}}, e o Radix injeta estilo inline
-#     em runtime. Sem style-src a diretiva caía no default-src 'self' e os
-#     gradientes da tela de login eram BLOQUEADOS em produção.
-#   img-src cdn.santos-tech.com — avatares (oauth-choose.tsx:93,
-#     switch-account.tsx:76, confirm.tsx:88) vêm do R2/CDN (ver
-#     handlers_avatar.go: a URL gravada em users.avatar_url é a pública do R2).
-#   connect-src *.ingest*.sentry.io — destino do @sentry/react agora que o DSN
-#     chega ao build.
-#   base-uri / form-action / frame-ancestors — NÃO são cobertos por default-src;
-#     sem eles um <base> ou <form action> injetado escapa da política.
+#   style-src 'self' — verificado em produção: a tela não injeta nenhum bloco
+#     <style> em runtime (0 no DOM) e os gradientes de AuthLayout/BrandPanel
+#     são aplicados via propriedade DOM pelo React, que a CSP não governa.
+#     Se algum componente passar a injetar <style>, reavaliar esta diretiva.
 RUN set -eux; \
     printf '%s\n' \
       'server {' \
@@ -50,7 +43,7 @@ RUN set -eux; \
       '  add_header X-Content-Type-Options "nosniff" always;' \
       '  add_header X-Frame-Options "DENY" always;' \
       '  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' \
-      "  add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; connect-src 'self' https://api.santos-tech.com https://*.ingest.sentry.io https://*.ingest.us.sentry.io; img-src 'self' data: https://cdn.santos-tech.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; base-uri 'none'; form-action 'self' https://api.santos-tech.com; frame-ancestors 'none'\" always;" \
+      "  add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; connect-src 'self' https://api.santos-tech.com https://*.ingest.sentry.io https://*.ingest.us.sentry.io; img-src 'self' data: https://cdn.santos-tech.com; style-src 'self'; font-src 'self' data:; base-uri 'none'; form-action 'self' https://api.santos-tech.com; frame-ancestors 'none'\" always;" \
       '  location / {' \
       '    try_files $uri $uri/ /index.html;' \
       '  }' \
