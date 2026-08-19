@@ -65,6 +65,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/keywords", s.requireAdmin(s.handleKeywords))
 	mux.HandleFunc("/keywords/stats", s.requireAdmin(s.handleKeywordStats))
 	mux.HandleFunc("/repos", s.requireAdmin(s.handleRepos))
+	// Revelar o valor de UMA chave (a listagem só devolve prefixo + hash).
+	// POST de propósito, e com auditoria no handler.
+	mux.HandleFunc("POST /reveal", s.requireAdmin(s.handleReveal))
 	mux.HandleFunc("/clear", s.requireAdmin(s.handleClear))
 	mux.HandleFunc("/revalidate", s.requireAdmin(s.handleRevalidate))
 	mux.HandleFunc("/events", s.requireAdmin(s.hub.ServeSSE))

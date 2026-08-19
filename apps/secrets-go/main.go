@@ -63,7 +63,21 @@ func main() {
 	}
 
 	gh := NewGitHubClient(cfg.GitHubTokens)
-	es := NewElasticClient(cfg.ElasticsearchURL)
+
+	// Cofre do matchedValue: sem ele o valor bruto das chaves vazadas nunca é
+	// gravado (só prefixo + hash), e revalidação/sync param de funcionar — daí
+	// o aviso alto no boot.
+	vaultInfo := vaultHKDFInfo
+	if cfg.VaultFromJWT {
+		vaultInfo = vaultFallbackInfo
+		slog.Warn("SECRETS_VAULT_SECRET ausente — cifrando matchedValue com chave derivada do JWT_SECRET; " +
+			"defina uma env dedicada (trocar depois torna ilegível o que já foi cifrado)")
+	}
+	vault := newVault(cfg.VaultSecret, cfg.VaultSalt, vaultInfo)
+	if vault == nil {
+		slog.Error("cofre desabilitado — o valor das chaves vazadas NÃO será persistido (só prefixo/hash)")
+	}
+	es := NewElasticClient(cfg.ElasticsearchURL, vault)
 	if err := es.EnsurePresetsIndex(context.Background()); err != nil {
 		slog.Error("falha ao garantir índice de presets de keywords (segue sem travar o boot)", "err", err)
 	}
