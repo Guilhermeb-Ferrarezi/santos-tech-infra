@@ -87,10 +87,12 @@ func (s *Server) grantPointsForAnswers(ctx context.Context, answerIDs []int64) {
 
 // ── Rankings ─────────────────────────────────────────────────────────────────
 
+// portalRankingNotaDTO — leaderboard não carrega e-mail: a rota é liberada a
+// qualquer cargo com portal_rankings:read e um placar não precisa de PII de
+// contato para ordenar alunos.
 type portalRankingNotaDTO struct {
 	StudentID      string  `json:"studentId"`
 	Name           string  `json:"name"`
-	Email          string  `json:"email"`
 	TotalAnswers   int64   `json:"totalAnswers"`
 	CorrectAnswers int64   `json:"correctAnswers"`
 	PercentCorrect float64 `json:"percentCorrect"`
@@ -99,7 +101,6 @@ type portalRankingNotaDTO struct {
 type portalRankingPontoDTO struct {
 	StudentID   string  `json:"studentId"`
 	Name        string  `json:"name"`
-	Email       string  `json:"email"`
 	TotalPoints float64 `json:"totalPoints"`
 }
 
@@ -115,11 +116,11 @@ func (s *Server) portalRankingNotas(ctx context.Context, p portalPagination) ([]
 	) t`, portalMinAnswersForRanking).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''),
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''),
 		COUNT(*) FILTER (WHERE a.is_correct IS NOT NULL) AS total_respondidas,
 		COUNT(*) FILTER (WHERE a.is_correct IS TRUE) AS corretas
 		FROM answer a JOIN "user" u ON u.id = a.user_id
-		GROUP BY u.id, u.name, u.email
+		GROUP BY u.id, u.name
 		HAVING COUNT(*) FILTER (WHERE a.is_correct IS NOT NULL) >= $1
 		ORDER BY (COUNT(*) FILTER (WHERE a.is_correct IS TRUE))::float
 			/ NULLIF(COUNT(*) FILTER (WHERE a.is_correct IS NOT NULL), 0) DESC,
@@ -132,7 +133,7 @@ func (s *Server) portalRankingNotas(ctx context.Context, p portalPagination) ([]
 	items := []portalRankingNotaDTO{}
 	for rows.Next() {
 		var dto portalRankingNotaDTO
-		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.Email, &dto.TotalAnswers, &dto.CorrectAnswers); err != nil {
+		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.TotalAnswers, &dto.CorrectAnswers); err != nil {
 			return nil, 0, err
 		}
 		if dto.TotalAnswers > 0 {
@@ -150,9 +151,9 @@ func (s *Server) portalRankingPontos(ctx context.Context, p portalPagination) ([
 	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(DISTINCT user_id) FROM portal_point`).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''), SUM(pp.points) AS total_points
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), SUM(pp.points) AS total_points
 		FROM portal_point pp JOIN "user" u ON u.id = pp.user_id
-		GROUP BY u.id, u.name, u.email
+		GROUP BY u.id, u.name
 		ORDER BY total_points DESC, u.id ASC
 		LIMIT $1 OFFSET $2`, p.Limit, p.Offset)
 	if err != nil {
@@ -162,7 +163,7 @@ func (s *Server) portalRankingPontos(ctx context.Context, p portalPagination) ([
 	items := []portalRankingPontoDTO{}
 	for rows.Next() {
 		var dto portalRankingPontoDTO
-		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.Email, &dto.TotalPoints); err != nil {
+		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.TotalPoints); err != nil {
 			return nil, 0, err
 		}
 		items = append(items, dto)

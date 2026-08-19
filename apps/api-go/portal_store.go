@@ -59,11 +59,18 @@ func (s *Server) portalOverviewFromDB(ctx context.Context) (portalOverview, erro
 
 // portalSearchUsers busca usuários do portal (tabela "user") por nome/email,
 // para os seletores de aluno (atribuir medalha/meta, matricular em turma).
-func (s *Server) portalSearchUsers(ctx context.Context, q string, limit int) ([]portalStudentDTO, error) {
+//
+// O filtro de role é obrigatório: sem ele a rota virava um diretório completo
+// com e-mail e papel de QUALQUER usuário — inclusive admins — acessível a
+// qualquer cargo com uma permissão portal_*:read (portalAnyRead). O handler
+// só permite role != aluno quando o ator é admin. O termo de busca também é
+// obrigatório (>= 2 chars, validado no handler): com q vazio a query casava
+// a base inteira.
+func (s *Server) portalSearchUsers(ctx context.Context, q string, role int16, limit int) ([]portalStudentDTO, error) {
 	rows, err := s.portalDB.Query(ctx, `SELECT id::text, COALESCE(email,''), COALESCE(name,''), COALESCE(role,1)
 		FROM "user"
-		WHERE ($1 = '' OR name ILIKE $2 OR email ILIKE $2)
-		ORDER BY name ASC LIMIT $3`, q, "%"+q+"%", limit)
+		WHERE COALESCE(role,1) = $1 AND (name ILIKE $2 OR email ILIKE $2)
+		ORDER BY name ASC LIMIT $3`, role, "%"+q+"%", limit)
 	if err != nil {
 		return nil, err
 	}

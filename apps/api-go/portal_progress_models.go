@@ -37,7 +37,6 @@ type portalAnswerStats struct {
 type portalAnswerStudentSummaryDTO struct {
 	StudentID      string     `json:"studentId"`
 	Name           string     `json:"name"`
-	Email          string     `json:"email"`
 	TotalAnswers   int64      `json:"totalAnswers"`
 	LastAnsweredAt *time.Time `json:"lastAnsweredAt"`
 }
@@ -94,10 +93,12 @@ func (in *portalAnswerBatchInput) validate() error {
 
 // ── Progresso por fase ───────────────────────────────────────────────────────
 
+// portalProgressDTO — sem e-mail: as telas de progresso identificam o aluno
+// por id + nome, e a rota é alcançável por qualquer cargo com
+// portal_correcao:read.
 type portalProgressDTO struct {
 	StudentID   string     `json:"studentId"`
 	Name        string     `json:"name"`
-	Email       string     `json:"email"`
 	PhaseID     string     `json:"phaseId"`
 	PhaseName   *string    `json:"phaseName,omitempty"`
 	Status      int        `json:"status"`

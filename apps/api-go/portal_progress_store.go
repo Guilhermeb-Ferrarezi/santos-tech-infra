@@ -185,10 +185,10 @@ func (s *Server) portalBatchUpdateAnswers(ctx context.Context, ids []int64, patc
 // ── Visões "quem respondeu" ──────────────────────────────────────────────────
 
 func (s *Server) portalExerciseAnswerStudents(ctx context.Context, exerciseID int64) ([]portalAnswerStudentSummaryDTO, error) {
-	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''), COUNT(*), MAX(a.answered_at)
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COUNT(*), MAX(a.answered_at)
 		FROM answer a JOIN "user" u ON u.id = a.user_id
 		WHERE a.exercise_id = $1
-		GROUP BY u.id, u.name, u.email
+		GROUP BY u.id, u.name
 		ORDER BY COALESCE(u.name,'') ASC`, exerciseID)
 	if err != nil {
 		return nil, err
@@ -210,9 +210,9 @@ func (s *Server) portalAnswerStudents(ctx context.Context, q string, p portalPag
 		return nil, 0, err
 	}
 	args = append(args, p.Limit, p.Offset)
-	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''), COUNT(*), MAX(a.answered_at)
+	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT u.id::text, COALESCE(u.name,''), COUNT(*), MAX(a.answered_at)
 		FROM answer a JOIN "user" u ON u.id = a.user_id %s
-		GROUP BY u.id, u.name, u.email
+		GROUP BY u.id, u.name
 		ORDER BY MAX(a.answered_at) DESC NULLS LAST
 		LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
 	if err != nil {
@@ -227,7 +227,7 @@ func scanAnswerStudentSummaries(rows pgx.Rows) ([]portalAnswerStudentSummaryDTO,
 	items := []portalAnswerStudentSummaryDTO{}
 	for rows.Next() {
 		var dto portalAnswerStudentSummaryDTO
-		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.Email, &dto.TotalAnswers, &dto.LastAnsweredAt); err != nil {
+		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.TotalAnswers, &dto.LastAnsweredAt); err != nil {
 			return nil, err
 		}
 		items = append(items, dto)
@@ -275,7 +275,7 @@ func (s *Server) portalStudentAnsweredExercises(ctx context.Context, studentID i
 // ── Progresso ────────────────────────────────────────────────────────────────
 
 func (s *Server) portalPhaseProgress(ctx context.Context, phaseID int64) ([]portalProgressDTO, error) {
-	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''),
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''),
 		psp.status, COALESCE(psp.progress, 0), psp.unlocked_at, psp.completed_at
 		FROM progress_student_phase psp JOIN "user" u ON u.id = psp.user_id
 		WHERE psp.phase_id = $1
@@ -289,7 +289,7 @@ func (s *Server) portalPhaseProgress(ctx context.Context, phaseID int64) ([]port
 	for rows.Next() {
 		var dto portalProgressDTO
 		var status *int
-		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.Email, &status, &dto.Progress, &dto.UnlockedAt, &dto.CompletedAt); err != nil {
+		if err := rows.Scan(&dto.StudentID, &dto.Name, &status, &dto.Progress, &dto.UnlockedAt, &dto.CompletedAt); err != nil {
 			return nil, err
 		}
 		dto.PhaseID = phaseStr
@@ -303,7 +303,7 @@ func (s *Server) portalPhaseProgress(ctx context.Context, phaseID int64) ([]port
 // do módulo atual da turma (linhas aluno×fase; sem registro de progresso conta
 // como não iniciado).
 func (s *Server) portalClassProgress(ctx context.Context, classID int64) ([]portalProgressDTO, error) {
-	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''),
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''),
 		p.id::text, COALESCE(p.name,''), psp.status, COALESCE(psp.progress, 0), psp.unlocked_at, psp.completed_at
 		FROM class c
 		JOIN (SELECT DISTINCT user_id FROM enrollment WHERE class_id = $1) en ON true
@@ -321,7 +321,7 @@ func (s *Server) portalClassProgress(ctx context.Context, classID int64) ([]port
 		var dto portalProgressDTO
 		var status *int
 		var phaseName string
-		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.Email, &dto.PhaseID, &phaseName, &status, &dto.Progress, &dto.UnlockedAt, &dto.CompletedAt); err != nil {
+		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.PhaseID, &phaseName, &status, &dto.Progress, &dto.UnlockedAt, &dto.CompletedAt); err != nil {
 			return nil, err
 		}
 		dto.PhaseName = &phaseName
