@@ -8,65 +8,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"golang.org/x/time/rate"
 )
-
-// ── Rate-limit por IP para POST /link/{token}/pay ────────────────────────────
-// Process-level (in-memory); em produção com múltiplas instâncias, combine com
-// Redis (deferred). Cada IP tem um bucket: 5 req/min, burst=5.
-// NOTA: Em deploy com múltiplas instâncias, use rate-limit distribuído via Redis
-// (deferred — ver seção "Deferred" no código-fonte).
-
-type ipLimiterEntry struct {
-	lim     *rate.Limiter
-	lastUse time.Time
-}
-
-var (
-	ipLimiters   = make(map[string]*ipLimiterEntry)
-	ipLimitersMu sync.Mutex
-)
-
-// payLinkLimiterFor devolve (ou cria) o rate-limiter associado ao IP dado.
-// Limpa entradas ociosas (>5 min) na mesma passagem para evitar crescimento ilimitado.
-func payLinkLimiterFor(ip string) *rate.Limiter {
-	ipLimitersMu.Lock()
-	defer ipLimitersMu.Unlock()
-	now := time.Now()
-	// Limpeza lazy: remove entradas não usadas nos últimos 5 min.
-	for k, e := range ipLimiters {
-		if now.Sub(e.lastUse) > 5*time.Minute {
-			delete(ipLimiters, k)
-		}
-	}
-	e, ok := ipLimiters[ip]
-	if !ok {
-		e = &ipLimiterEntry{lim: rate.NewLimiter(rate.Every(time.Minute/5), 5)}
-		ipLimiters[ip] = e
-	}
-	e.lastUse = now
-	return e.lim
-}
-
-// clientIP extrai o IP do request (X-Forwarded-For ou RemoteAddr).
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Primeiro IP da lista é o cliente original.
-		if idx := strings.IndexByte(xff, ','); idx != -1 {
-			return strings.TrimSpace(xff[:idx])
-		}
-		return strings.TrimSpace(xff)
-	}
-	// RemoteAddr pode incluir porta: "1.2.3.4:5678"
-	if idx := strings.LastIndexByte(r.RemoteAddr, ':'); idx != -1 {
-		return r.RemoteAddr[:idx]
-	}
-	return r.RemoteAddr
-}
 
 // linkStoreOf devolve s.links se configurado (injeção de teste), senão s.store.
 func (s *Server) linkStoreOf() paymentLinkStore {
