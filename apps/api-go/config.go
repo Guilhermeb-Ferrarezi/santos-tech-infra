@@ -98,6 +98,10 @@ type Config struct {
 	// provedores externos). Deriva a chave AES-256 que cifra as chaves antes de
 	// persistir. Vazio = feature desabilitada, endpoints respondem 503.
 	VaultSecret string
+	// VaultSalt: salt do HKDF que deriva a chave do cofre (API_VAULT_SALT).
+	// Vazio cai num default fixo. ATENÇÃO: trocar o salt depois de cadastrar
+	// chaves torna ilegível tudo que foi cifrado no formato v2.
+	VaultSalt string
 
 	// Web Push (notificações do navegador — nova tarefa, novo email). Par de
 	// chaves VAPID (gerado uma vez, ex. `npx web-push generate-vapid-keys`).
@@ -171,6 +175,7 @@ func LoadConfig() Config {
 		FacebookPlaceID:     getEnv("FACEBOOK_PLACE_ID", ""),
 
 		VaultSecret: getEnv("API_VAULT_SECRET", ""),
+		VaultSalt:   getEnv("API_VAULT_SALT", ""),
 
 		VAPIDPublicKey:  getEnv("VAPID_PUBLIC_KEY", ""),
 		VAPIDPrivateKey: getEnv("VAPID_PRIVATE_KEY", ""),

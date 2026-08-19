@@ -308,7 +308,7 @@ func (s *Server) handleRevealAPIRouterKey(w http.ResponseWriter, r *http.Request
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "chave não encontrada"))
 		return
 	}
-	secret, err := s.vault.Decrypt(k.SecretEnc)
+	secret, err := s.decryptAPIRouterKeySecret(r.Context(), k)
 	if err != nil {
 		writeErr(w, appErr(http.StatusInternalServerError, "DECRYPT_FAILED", "não foi possível decifrar a chave"))
 		return
@@ -362,13 +362,14 @@ func (s *Server) handleCreateAPIRouterKey(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	enc, err := s.vault.Encrypt(body.Secret)
+	tail := maskSecret(body.Secret)
+	enc, err := s.vault.EncryptKeySecret(body.Secret, providerID, tail)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	k, err := s.q.InsertAPIRouterKey(r.Context(), db.InsertAPIRouterKeyParams{
-		ProviderID: providerID, Label: body.Label, SecretEnc: enc, SecretTail: maskSecret(body.Secret), Priority: body.Priority,
+		ProviderID: providerID, Label: body.Label, SecretEnc: enc, SecretTail: tail, Priority: body.Priority,
 	})
 	if err != nil {
 		writeErr(w, err)

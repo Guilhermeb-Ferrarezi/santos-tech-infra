@@ -216,6 +216,14 @@ type apiRouterOutcome struct {
 	Attempts   []apiRouterAttempt
 }
 
+// decryptAPIRouterKeySecret decifra o segredo de uma chave do roteador. Aceita
+// tanto o formato v2 (HKDF + AAD amarrado ao provider/tail) quanto o legado
+// v1 que já está gravado no banco — ver vault.go.
+func (s *Server) decryptAPIRouterKeySecret(ctx context.Context, k db.ApiRouterKey) (string, error) {
+	secret, _, err := s.vault.DecryptKeySecret(k.SecretEnc, k.ProviderID, k.SecretTail)
+	return secret, err
+}
+
 // executeAPIRouterRequest tenta a requisição com cada chave ativa do provider,
 // em ordem de prioridade, até uma responder fora dos códigos de
 // unauthorized/no-credits. Erro de rede com uma chave não a penaliza (o
@@ -241,7 +249,7 @@ func (s *Server) executeAPIRouterRequest(ctx context.Context, provider db.ApiRou
 		if i >= apiRouterMaxKeyAttempts || ctx.Err() != nil {
 			break
 		}
-		secret, err := s.vault.Decrypt(key.SecretEnc)
+		secret, err := s.decryptAPIRouterKeySecret(ctx, key)
 		if err != nil {
 			attempts = append(attempts, apiRouterAttempt{KeyID: key.ID, KeyLabel: key.Label, Outcome: apiRouterOutcomeTransportError})
 			continue
@@ -288,7 +296,7 @@ func (s *Server) executeAPIRouterRequestOnce(ctx context.Context, provider db.Ap
 	if err != nil {
 		return nil, fmt.Errorf("apirouter: buscar chave do job: %w", err)
 	}
-	secret, err := s.vault.Decrypt(key.SecretEnc)
+	secret, err := s.decryptAPIRouterKeySecret(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("apirouter: decifrar chave do job: %w", err)
 	}
@@ -330,7 +338,7 @@ type apiRouterTestResult struct {
 // TestMethod, ou GET na base_url se ambos vazios) usando uma chave
 // específica, e já grava o resultado.
 func (s *Server) testAPIRouterKey(ctx context.Context, provider db.ApiRouterProvider, key db.ApiRouterKey) (apiRouterTestResult, error) {
-	secret, err := s.vault.Decrypt(key.SecretEnc)
+	secret, err := s.decryptAPIRouterKeySecret(ctx, key)
 	if err != nil {
 		return apiRouterTestResult{}, fmt.Errorf("apirouter: decifrar chave: %w", err)
 	}

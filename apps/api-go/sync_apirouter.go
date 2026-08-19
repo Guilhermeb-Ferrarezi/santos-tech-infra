@@ -133,7 +133,8 @@ func (s *Server) syncAPIRouterFromSecrets(ctx context.Context) error {
 			continue
 		}
 
-		enc, err := s.vault.Encrypt(hit.MatchedValue)
+		tail := maskSecret(hit.MatchedValue)
+		enc, err := s.vault.EncryptKeySecret(hit.MatchedValue, provider.ID, tail)
 		if err != nil {
 			slog.Warn("sync: falha ao cifrar chave", "provider", provider.Name, "err", err)
 			continue
@@ -142,7 +143,7 @@ func (s *Server) syncAPIRouterFromSecrets(ctx context.Context) error {
 			ProviderID: provider.ID,
 			Label:      syncKeyLabel(hit),
 			SecretEnc:  enc,
-			SecretTail: maskSecret(hit.MatchedValue),
+			SecretTail: tail,
 			Priority:   0,
 		}); err != nil {
 			slog.Warn("sync: falha ao inserir chave", "provider", provider.Name, "err", err)
@@ -265,7 +266,7 @@ func (s *Server) apirouterSecretExists(ctx context.Context, providerID int64, se
 		return false, err
 	}
 	for _, k := range keys {
-		plain, err := s.vault.Decrypt(k.SecretEnc)
+		plain, err := s.decryptAPIRouterKeySecret(ctx, k)
 		if err != nil {
 			continue // indecifrável (vault trocado?) — não bloqueia o sync
 		}

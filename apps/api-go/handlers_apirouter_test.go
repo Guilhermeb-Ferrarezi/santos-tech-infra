@@ -15,7 +15,7 @@ import (
 
 func apiRouterTestServer() *Server {
 	s := testServer(Config{})
-	s.vault = newVault("test-vault-secret")
+	s.vault = newVault("test-vault-secret", "test-vault-salt")
 	return s
 }
 
@@ -248,7 +248,7 @@ func TestHandleCreateAPIRouterProviderChatAdapterInvalido(t *testing.T) {
 // completo só sai pelo GET .../keys/{keyId}/reveal (sudo + auditoria).
 func TestAPIRouterKeyJSONNaoVazaSegredo(t *testing.T) {
 	s := apiRouterTestServer()
-	enc, err := s.vault.Encrypt("sk-super-secreto-123")
+	enc, err := s.vault.EncryptKeySecret("sk-super-secreto-123", 3, "e123")
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
