@@ -193,6 +193,11 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// (despairar/mandar aviso) entregues no heartbeat seguinte.
 	s.registerLabDeviceRoutes(mux)
 
+	// Catálogo de downloads (Santos Hub — app Tauri Windows distribuído nos PCs
+	// da empresa): CRUD admin-only; leitura pública sem login em
+	// /public/downloads (o app não pede autenticação nenhuma).
+	s.registerDownloadsRoutes(mux)
+
 	// Automação de resposta a comentário do Instagram (private reply,
 	// substitui o ManyChat) — webhook público autenticado por assinatura
 	// Meta (não cookie/PAT) + CRUD admin do mapeamento post -> link.
@@ -367,6 +372,21 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 
 	// Heartbeat a cada ~30s por PC — limite folgado pra cobrir reconexões/retries.
 	mux.HandleFunc("POST /public/lab-devices/heartbeat", s.rateLimit(120, min, s.handleLabDeviceHeartbeat))
+}
+
+// registerDownloadsRoutes: catálogo de downloads do Santos Hub. Cadastro/edição/
+// remoção são admin-only (mesmo critério de model3d — biblioteca gerida à mão,
+// sem cargo personalizado dedicado); leitura pública em /public/downloads
+// alimenta o app Tauri instalado nos PCs da empresa, sem exigir login.
+func (s *Server) registerDownloadsRoutes(mux *http.ServeMux) {
+	const min = time.Minute
+	mux.HandleFunc("GET /auth/admin/downloads", s.adminGuard(s.handleListDownloadsAdmin))
+	mux.HandleFunc("POST /auth/admin/downloads/presign", s.rateLimit(20, min, s.adminGuard(s.handleDownloadsPresign)))
+	mux.HandleFunc("POST /auth/admin/downloads", s.rateLimit(20, min, s.adminGuard(s.handleCreateDownload)))
+	mux.HandleFunc("PATCH /auth/admin/downloads/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateDownload)))
+	mux.HandleFunc("DELETE /auth/admin/downloads/{id}", s.adminGuard(s.handleDeleteDownload))
+
+	mux.HandleFunc("GET /public/downloads", s.rateLimit(120, min, s.handleListPublicDownloads))
 }
 
 func (s *Server) registerInstagramRoutes(mux *http.ServeMux) {

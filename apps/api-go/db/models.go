@@ -89,6 +89,24 @@ type DashboardNotification struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type Download struct {
+	ID          int64
+	Name        string
+	Description string
+	Category    string
+	Version     string
+	Kind        string
+	ObjectKey   pgtype.Text
+	ExternalUrl pgtype.Text
+	Filename    string
+	ContentType string
+	SizeBytes   pgtype.Int8
+	Pinned      bool
+	UploadedBy  pgtype.Int4
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
 type IpBan struct {
 	ID        int64
 	Ip        string

@@ -174,6 +174,24 @@ CREATE TABLE IF NOT EXISTS model3d_file (
   thumbnail_key TEXT
 );
 
+CREATE TABLE IF NOT EXISTS downloads (
+  id           BIGSERIAL PRIMARY KEY,
+  name         TEXT NOT NULL,
+  description  TEXT NOT NULL DEFAULT '',
+  category     TEXT NOT NULL DEFAULT '',
+  version      TEXT NOT NULL DEFAULT '',
+  kind         TEXT NOT NULL CHECK (kind IN ('file', 'link')),
+  object_key   TEXT,
+  external_url TEXT,
+  filename     TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL DEFAULT '',
+  size_bytes   BIGINT,
+  pinned       BOOLEAN NOT NULL DEFAULT false,
+  uploaded_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS api_router_providers (
   id                 BIGSERIAL PRIMARY KEY,
   name               TEXT NOT NULL UNIQUE,

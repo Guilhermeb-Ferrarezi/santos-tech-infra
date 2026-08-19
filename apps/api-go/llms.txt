@@ -366,6 +366,29 @@ Público (sem auth — `deviceId` é a identidade):
   (`unpairRequested`, `message`) são entregues exatamente uma vez — a query
   seguinte já não os vê mais (exceto `message`, que o app deduplica pelo id).
 
+## Catálogo de downloads (Santos Hub) — `api.santos-tech.com/auth/admin/downloads` e `/public/downloads`
+
+App desktop Tauri Windows (`apps/santos-hub`) instalado nos PCs da empresa,
+sem login nenhum: lista o catálogo e baixa/abre o item. Cada item é `kind:
+file` (instalador no R2 — `objectKey` interno, `url` pública calculada) OU
+`kind: link` (aponta pra uma URL externa) — nunca os dois.
+
+Admin (role admin, sem cargo personalizado — mesmo critério de model3d):
+- `GET /auth/admin/downloads` — `{items:[DownloadAdmin]}`, fixados primeiro e depois mais recente
+- `POST /auth/admin/downloads/presign {filename, size}` → `{uploadUrl, objectKey, contentType}` ·
+  rate limit 20/min · o cliente sobe o arquivo direto pro R2 via PUT em
+  `uploadUrl` (bytes não passam pelo backend); `uploadUrl` expira em 30min
+- `POST /auth/admin/downloads {name, kind, ...}` → 201 `{item}` · rate limit
+  20/min · `kind=file` exige `objectKey`+`filename`+`contentType`+`sizeBytes`
+  (do passo do `/presign`); `kind=link` exige `externalUrl` (http/https)
+- `PATCH /auth/admin/downloads/{id} {name?, description?, category?, version?, pinned?}` →
+  `{item}` · rate limit 30/min · só metadados — trocar o arquivo é apagar e recadastrar
+- `DELETE /auth/admin/downloads/{id}` → 204 — apaga o objeto no R2 também, se `kind=file`
+
+Público (sem auth nenhuma — leitura 100% aberta):
+- `GET /public/downloads` — `{items:[Download]}`, mesma ordenação do admin,
+  sem os campos internos (`objectKey`, `uploadedBy`) · rate limit 120/min
+
 ## Arquivos (Google Drive) — `api.santos-tech.com/auth/admin/drive-folders` e `/drive-folders`
 
 Pastas cadastradas pelo admin, vinculadas a uma pasta real do Google Drive. O

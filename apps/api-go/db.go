@@ -582,6 +582,35 @@ CREATE INDEX IF NOT EXISTS idx_drive_folder_members_user ON drive_folder_members
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_folder_id UUID REFERENCES drive_folders(id) ON DELETE SET NULL;
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_file_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_file_name TEXT NOT NULL DEFAULT '';
+
+-- Catálogo de downloads do Santos Hub (app Tauri Windows distribuído nos PCs da
+-- empresa): itens "file" (instalador hospedado no R2, object_key preenchido) ou
+-- "link" (aponta pra URL externa, external_url preenchido) — nunca os dois.
+-- Leitura pública (GET /public/downloads, sem login — o app não pede auth
+-- nenhuma); cadastro/edição/remoção são admin-only (mesmo padrão de model3d_file).
+CREATE TABLE IF NOT EXISTS downloads (
+  id           BIGSERIAL PRIMARY KEY,
+  name         TEXT NOT NULL,
+  description  TEXT NOT NULL DEFAULT '',
+  category     TEXT NOT NULL DEFAULT '',
+  version      TEXT NOT NULL DEFAULT '',
+  kind         TEXT NOT NULL CHECK (kind IN ('file', 'link')),
+  object_key   TEXT,
+  external_url TEXT,
+  filename     TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL DEFAULT '',
+  size_bytes   BIGINT,
+  pinned       BOOLEAN NOT NULL DEFAULT false,
+  uploaded_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (
+    (kind = 'file' AND object_key IS NOT NULL AND external_url IS NULL) OR
+    (kind = 'link' AND external_url IS NOT NULL AND object_key IS NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_downloads_category ON downloads(category);
+CREATE INDEX IF NOT EXISTS idx_downloads_pinned_created ON downloads(pinned DESC, created_at DESC);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

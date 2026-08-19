@@ -78,6 +78,12 @@ tags:
       (posse) é a credencial, não cookie/sessão. `/hour-lab-devices` identifica
       e controla os PCs do laboratório (hour-timer-app); `/public/lab-devices/heartbeat`
       é a contraparte sem autenticação usada pelo app (device_uuid local é a identidade).
+  - name: Downloads
+    description: |
+      Catálogo de downloads do Santos Hub (app Tauri Windows distribuído nos PCs
+      da empresa). `/auth/admin/downloads*` (cadastro/edição/remoção, upload
+      presigned pro R2) é admin-only. `/public/downloads` é leitura 100% pública,
+      sem cookie/token — o app não pede autenticação nenhuma.
 
 paths:
   /health:
@@ -1171,6 +1177,189 @@ paths:
           description: Modelo não encontrado
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /auth/admin/downloads:
+    get:
+      tags: [Downloads]
+      summary: Listar itens do catálogo de downloads
+      description: Catálogo do Santos Hub (app Tauri Windows dos PCs da empresa). Requer role Admin.
+      responses:
+        "200":
+          description: Lista de itens, fixados primeiro e depois mais recente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/DownloadAdmin" }
+                required: [items]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Downloads]
+      summary: Cadastrar item no catálogo de downloads
+      description: |
+        Cria a linha do catálogo. Para `kind: file`, o arquivo já deve ter sido
+        enviado direto ao R2 via `POST /auth/admin/downloads/presign` — esta rota
+        só registra o `objectKey` retornado por ele; para `kind: link` não há
+        upload nenhum, só a URL externa. Requer role Admin. Rate limit: 20 req/min por IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, description: "Máx 120 caracteres." }
+                description: { type: string, description: "Máx 2000 caracteres." }
+                category: { type: string, description: "Máx 60 caracteres." }
+                version: { type: string, description: "Máx 40 caracteres." }
+                kind: { type: string, enum: [file, link] }
+                objectKey:
+                  type: string
+                  description: "Obrigatório para kind=file — vem da resposta do /presign."
+                filename: { type: string, description: "Obrigatório para kind=file." }
+                contentType: { type: string, description: "Obrigatório para kind=file." }
+                sizeBytes: { type: integer, format: int64, description: "Obrigatório para kind=file." }
+                externalUrl:
+                  type: string
+                  format: uri
+                  description: "Obrigatório para kind=link — deve começar com http:// ou https://."
+              required: [name, kind]
+      responses:
+        "201":
+          description: Item criado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  item: { $ref: "#/components/schemas/DownloadAdmin" }
+                required: [item]
+        "400":
+          description: Corpo inválido (campos obrigatórios faltando ou fora do tamanho/kind esperado)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /auth/admin/downloads/presign:
+    post:
+      tags: [Downloads]
+      summary: Gerar URL pré-assinada para upload de um arquivo do catálogo
+      description: |
+        O cliente sobe o arquivo direto pro R2 via PUT na `uploadUrl` devolvida
+        (bytes não passam pelo backend) e depois chama `POST /auth/admin/downloads`
+        com o `objectKey` pra registrar o item. Extensões aceitas: exe, msi, zip,
+        7z, rar, dmg, pkg, deb, rpm, appimage, sh, ps1, bat, cmd, tar, gz, apk —
+        confiamos na extensão declarada (sem sniff de magic-bytes), já que a rota
+        é admin-only e os bytes nunca chegam ao backend. Requer role Admin.
+        Rate limit: 20 req/min por IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filename: { type: string }
+                size: { type: integer, format: int64, description: "Máx 2GB." }
+              required: [filename, size]
+      responses:
+        "200":
+          description: URL pré-assinada gerada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploadUrl: { type: string, format: uri, description: "PUT direto pro R2, expira em 30min." }
+                  objectKey: { type: string }
+                  contentType: { type: string }
+                required: [uploadUrl, objectKey, contentType]
+        "400":
+          description: Extensão não suportada ou tamanho inválido
+        "503":
+          description: Upload não configurado (R2 sem credenciais)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /auth/admin/downloads/{id}:
+    patch:
+      tags: [Downloads]
+      summary: Editar metadados de um item do catálogo
+      description: |
+        Só metadados (nome/descrição/categoria/versão/fixado) — trocar o arquivo em
+        si é apagar e recadastrar. Requer role Admin. Rate limit: 30 req/min por IP.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                category: { type: string }
+                version: { type: string }
+                pinned: { type: boolean }
+      responses:
+        "200":
+          description: Item atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  item: { $ref: "#/components/schemas/DownloadAdmin" }
+                required: [item]
+        "400":
+          description: Corpo inválido ou campo grande demais
+        "404":
+          description: Item não encontrado
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [Downloads]
+      summary: Apagar item do catálogo
+      description: Remove o objeto no R2 (se `kind=file`) e a linha no Postgres. Requer role Admin.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "204":
+          description: Apagado
+        "404":
+          description: Item não encontrado
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── Público: catálogo de downloads (Santos Hub) ──────────────────────────────
+
+  /public/downloads:
+    get:
+      tags: [Downloads]
+      summary: Listar catálogo de downloads
+      description: |
+        Sem autenticação — é o que o Santos Hub (app Tauri instalado nos PCs da
+        empresa) consome pra listar o que dá pra baixar. Rate limit: 120 req/min por IP.
+      responses:
+        "200":
+          description: Lista de itens, fixados primeiro e depois mais recente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Download" }
+                required: [items]
 
   /auth/admin/users:
     get:
@@ -4262,6 +4451,38 @@ components:
           description: Verdadeiro se esta sessão corresponde ao `refresh_token` atual.
       required: [sessionId, name, email, avatarUrl, active]
 
+    Download:
+      type: object
+      description: Item público do catálogo de downloads (Santos Hub).
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        description: { type: string }
+        category: { type: string }
+        version: { type: string }
+        kind: { type: string, enum: [file, link] }
+        url:
+          type: string
+          format: uri
+          description: URL pública do R2 (kind=file) ou a URL externa cadastrada (kind=link).
+        sizeBytes:
+          type: integer
+          format: int64
+          description: Ausente para kind=link.
+        pinned: { type: boolean, description: Favoritado — aparece no topo da lista. }
+        updatedAt: { type: string, format: date-time }
+      required: [id, name, description, category, version, kind, url, pinned, updatedAt]
+    DownloadAdmin:
+      description: Mesmo objeto de `Download`, com os campos internos que só o admin vê.
+      allOf:
+        - $ref: "#/components/schemas/Download"
+        - type: object
+          properties:
+            filename: { type: string }
+            contentType: { type: string }
+            objectKey: { type: string, description: Chave no R2 — presente só para kind=file. }
+            uploadedBy: { type: integer, description: ID do admin que cadastrou (ausente se a conta foi removida). }
+            createdAt: { type: string, format: date-time }
     Model3DFile:
       type: object
       description: Modelo 3D salvo na biblioteca admin (R2 + Postgres).

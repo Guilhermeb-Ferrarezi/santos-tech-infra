@@ -39,6 +39,16 @@ apps/
                    dashboard/web:/admin/horas/dispositivos. Sem deploy no Coolify —
                    instalador Windows gerado via `cargo tauri build`, distribuído
                    manualmente pros PCs.
+  santos-hub/  ← App desktop (Tauri v2 + React) "central de downloads" pros PCs da
+                   empresa: lista o catálogo (GET /public/downloads, sem login) e
+                   baixa/abre cada item no app padrão do Windows (instalador do
+                   controle de máquina, scripts internos, etc. — ver api-go,
+                   handlers_downloads.go). Sem tray/estado persistido (diferente do
+                   hour-timer-app) — é só um launcher, abre/fecha. Cadastro/edição
+                   do catálogo é admin-only em /auth/admin/downloads (upload
+                   presigned pro R2 pra kind=file, ou kind=link pra URL externa).
+                   Sem deploy no Coolify — instalador Windows gerado via
+                   `cargo tauri build`, distribuído manualmente pros PCs.
 infra/
   docker-compose.yml      ← Postgres 16 + Redis 7 + API + agent-go + mcp-go
   Dockerfile.api-go
