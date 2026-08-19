@@ -527,9 +527,17 @@ CREATE INDEX IF NOT EXISTS idx_hour_sessions_status ON hour_sessions(status) WHE
 -- do laboratório: mesmo token por baixo, só um jeito mais fácil de digitar.
 -- Uso único — zerado no primeiro pareamento bem-sucedido (ver
 -- pairHourSessionByCode) — e com validade curta, pra limitar a janela de
--- força-bruta sobre um espaço tão pequeno (1M combinações).
+-- força-bruta sobre um espaço tão pequeno (1M combinações). Também é zerado ao
+-- encerrar a sessão e quando expira (ver releaseStaleShortCodes): senão cada
+-- código já emitido ocuparia um dos 1M valores do UNIQUE pra sempre.
 ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code TEXT UNIQUE;
 ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code_expires_at TIMESTAMPTZ;
+
+-- Índice do UPDATE que devolve códigos curtos expirados/encerrados ao espaço
+-- UNIQUE (ver releaseStaleShortCodes) — parcial, porque a esmagadora maioria
+-- das linhas tem short_code NULL.
+CREATE INDEX IF NOT EXISTS idx_hour_sessions_short_code_stale
+  ON hour_sessions(short_code_expires_at) WHERE short_code IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS hour_session_events (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -545,8 +553,9 @@ CREATE INDEX IF NOT EXISTS idx_hour_session_events_session ON hour_session_event
 -- (nunca pelo próprio PC) para não bagunçar com quem estiver sentado nele.
 -- unpair_requested e message_id/text são comandos de admin entregues no
 -- próximo heartbeat: unpair_requested volta true uma única vez (o UPDATE que
--- zera roda na mesma query do upsert, ver upsertLabDeviceHeartbeat) e
--- message_id troca a cada envio para o app conseguir deduplicar no cliente.
+-- zera roda como comando separado, na mesma transação do upsert, ver
+-- upsertLabDeviceHeartbeat) e message_id troca a cada envio para o app
+-- conseguir deduplicar no cliente.
 CREATE TABLE IF NOT EXISTS hour_lab_devices (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   device_uuid         TEXT NOT NULL UNIQUE,
@@ -566,11 +575,26 @@ CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_last_seen ON hour_lab_devices(la
 -- pending_pair_token: pareamento via QR (admin escaneia com o celular e
 -- escolhe o cliente em /admin/horas/parear/:deviceId). Token em texto puro
 -- (o app precisa dele cru pra completar o pareamento sozinho) entregue uma
--- única vez no heartbeat seguinte e zerado na mesma query (ver
+-- única vez no heartbeat seguinte e zerado na mesma transação (ver
 -- upsertLabDeviceHeartbeat) — mesma janela de exposição de digitar o token
 -- na mão, só que automático.
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS pending_pair_token TEXT;
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS pending_pair_token_expires_at TIMESTAMPTZ;
+
+-- device_secret_hash: o heartbeat é público (o PC não faz login), então o
+-- device_uuid era a identidade inteira — e ele fica visível num QR na tela do
+-- próprio PC, o que deixava qualquer um pedir o heartbeat e receber o
+-- pending_pair_token em texto puro. Agora o servidor gera um segredo no
+-- primeiro heartbeat de um device_uuid, devolve UMA vez, e exige nos seguintes;
+-- aqui fica só o sha256. Coluna nula = PC ainda não adotado (o admin vê isso em
+-- hasSecret na listagem e pode forçar nova adoção zerando a coluna).
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS device_secret_hash TEXT;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS device_secret_set_at TIMESTAMPTZ;
+
+-- Índice do ORDER BY da listagem de PCs (ver listLabDevices): o heartbeat cria
+-- uma linha por device_uuid visto e a tabela só cresce.
+CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_order
+  ON hour_lab_devices(name NULLS LAST, device_uuid);
 
 -- Arquivos (Google Drive): o conteúdo real mora no Drive; aqui só guardamos
 -- metadados de pasta e a ACL de quem enxerga/envia arquivo em cada uma — por

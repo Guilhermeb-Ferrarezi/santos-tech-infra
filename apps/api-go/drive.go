@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2/google"
 )
@@ -43,7 +44,70 @@ const maxDriveAncestryDepth = 12
 // (drive_data.go/drive_access.go) — por isso downloads sempre passam pelo
 // backend (StreamDownload), nunca um link direto do Drive pro navegador.
 type DriveClient struct {
-	http *http.Client // *http.Client do oauth2/jwt, renova o Bearer token sozinho
+	// http: chamadas de API (metadados, listagem, rename, move...). Tem
+	// Timeout no cliente porque são requisições curtas — sem ele, uma
+	// requisição pendurada segurava um handler pra sempre (o R2 em r2.go já
+	// fazia certo).
+	http *http.Client
+	// stream: transferência do conteúdo do arquivo (download e upload). NÃO
+	// pode ter Timeout no cliente: http.Client.Timeout cobre também a leitura
+	// do corpo, e cortaria no meio o download de um vídeo ou o upload de 25MB
+	// numa conexão lenta. O limite aqui é o ctx da request (cancelado quando o
+	// navegador desiste) mais os timeouts de dial/TLS do transport.
+	stream *http.Client
+}
+
+const (
+	// driveAPITimeout: teto por requisição de API do Drive.
+	driveAPITimeout = 30 * time.Second
+	// driveMaxAttempts / driveRetryBaseDelay: retry com backoff exponencial
+	// (300ms, 600ms) em 429/5xx e em erro de rede — o Drive devolve 429 com
+	// alguma frequência e sem retry isso virava erro na cara do usuário.
+	driveMaxAttempts    = 3
+	driveRetryBaseDelay = 300 * time.Millisecond
+)
+
+// driveRetryableStatus: 429 (rate limit do Google) e 5xx são transitórios; 4xx
+// (exceto 429) é definitivo e repetir só gasta quota.
+func driveRetryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= 500
+}
+
+// do executa a requisição com retry em erro transitório. Só repete quando o
+// corpo é replayável (sem corpo, ou com GetBody — o que http.NewRequest
+// preenche sozinho para bytes.Reader): o upload streama de um io.Pipe, que não
+// dá pra reenviar, e nesse caso vai uma tentativa só.
+func (d *DriveClient) do(client *http.Client, req *http.Request) (*http.Response, error) {
+	replayable := req.Body == nil || req.GetBody != nil
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			if req.GetBody != nil {
+				b, err := req.GetBody()
+				if err != nil {
+					return nil, err
+				}
+				req.Body = b
+			}
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-time.After(driveRetryBaseDelay << (attempt - 1)):
+			}
+		}
+		resp, err := client.Do(req)
+		if !replayable || attempt >= driveMaxAttempts-1 {
+			return resp, err
+		}
+		if err != nil {
+			continue // erro de rede: tenta de novo
+		}
+		if !driveRetryableStatus(resp.StatusCode) {
+			return resp, nil
+		}
+		// Drena um pedaço do corpo pra devolver a conexão ao pool e repete.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		resp.Body.Close()
+	}
 }
 
 // newDriveClient devolve um cliente Drive, ou nil se a config estiver
@@ -62,7 +126,14 @@ func newDriveClient(cfg Config) *DriveClient {
 		slog.Error("GOOGLE_DRIVE_SA_JSON_B64 inválido (JSON da service account) — Arquivos/Drive desabilitado", "err", err)
 		return nil
 	}
-	return &DriveClient{http: jwtCfg.Client(context.Background())}
+	// jwtCfg.Client devolve um cliente SEM Timeout; reaproveitamos o Transport
+	// dele (é quem injeta e renova o Bearer da service account) em dois
+	// clientes com políticas de timeout diferentes.
+	oauthTransport := jwtCfg.Client(context.Background()).Transport
+	return &DriveClient{
+		http:   &http.Client{Transport: oauthTransport, Timeout: driveAPITimeout},
+		stream: &http.Client{Transport: oauthTransport},
+	}
 }
 
 // DriveFile é o que expomos pro frontend — só o essencial da resposta do Drive.
@@ -126,7 +197,7 @@ func (d *DriveClient) ListFiles(ctx context.Context, driveFolderID string) ([]Dr
 		if err != nil {
 			return nil, err
 		}
-		resp, err := d.http.Do(req)
+		resp, err := d.do(d.http, req)
 		if err != nil {
 			return nil, err
 		}
@@ -182,7 +253,7 @@ func (d *DriveClient) ListSharedFolders(ctx context.Context) ([]DriveFolderInfo,
 	if err != nil {
 		return nil, err
 	}
-	resp, err := d.http.Do(req)
+	resp, err := d.do(d.http, req)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +285,7 @@ func (d *DriveClient) GetThumbnail(ctx context.Context, fileID string) (data []b
 	if err != nil {
 		return nil, "", false, err
 	}
-	metaResp, err := d.http.Do(metaReq)
+	metaResp, err := d.do(d.http, metaReq)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -236,7 +307,7 @@ func (d *DriveClient) GetThumbnail(ctx context.Context, fileID string) (data []b
 	if err != nil {
 		return nil, "", false, err
 	}
-	resp, err := d.http.Do(req)
+	resp, err := d.do(d.http, req)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -261,6 +332,13 @@ func (d *DriveClient) GetThumbnail(ctx context.Context, fileID string) (data []b
 // estourar maxDriveAncestryDepth. Usado pra impedir que alguém com acesso à
 // pasta A navegue pra um ID de pasta arbitrário fora da árvore de A (a ACL é
 // por pasta raiz, não por ID do Drive — ver handleListDriveFolderFiles).
+//
+// Um item que o Drive recusa (404/403: sumiu, foi pra lixeira, ou a service
+// account não enxerga) simplesmente não conta como ancestral e a busca segue
+// pelos outros pais. Já 429/5xx é falha transitória e vira ERRO: antes qualquer
+// status != 200 era tratado como "não é ancestral", então um rate limit do
+// Google respondia "acesso negado" — e o false ainda ia parar no cache de 5min,
+// negando acesso legítimo muito depois do Drive já ter voltado.
 func (d *DriveClient) IsDescendant(ctx context.Context, folderID, rootID string) (bool, error) {
 	if folderID == rootID {
 		return true, nil
@@ -275,17 +353,23 @@ func (d *DriveClient) IsDescendant(ctx context.Context, folderID, rootID string)
 			if err != nil {
 				return false, err
 			}
-			resp, err := d.http.Do(req)
+			resp, err := d.do(d.http, req)
 			if err != nil {
 				return false, err
 			}
 			var meta struct {
 				Parents []string `json:"parents"`
 			}
+			status := resp.StatusCode
 			decodeErr := json.NewDecoder(resp.Body).Decode(&meta)
 			resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				continue // pasta sumiu/sem acesso: só não conta como ancestral, não aborta a busca inteira
+			if status != http.StatusOK {
+				if driveRetryableStatus(status) {
+					// d.do já repetiu e não adiantou: falha transitória do
+					// Drive não pode virar "não é ancestral" (= acesso negado).
+					return false, fmt.Errorf("drive ancestry %s: status %d", id, status)
+				}
+				continue // sumiu/sem acesso: só não conta como ancestral, não aborta a busca inteira
 			}
 			if decodeErr != nil {
 				return false, decodeErr
@@ -320,7 +404,7 @@ func (d *DriveClient) RenameFile(ctx context.Context, fileID, name string) (Driv
 		return DriveFile{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := d.http.Do(req)
+	resp, err := d.do(d.http, req)
 	if err != nil {
 		return DriveFile{}, err
 	}
@@ -351,7 +435,7 @@ func (d *DriveClient) TrashFile(ctx context.Context, fileID string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := d.http.Do(req)
+	resp, err := d.do(d.http, req)
 	if err != nil {
 		return err
 	}
@@ -381,7 +465,7 @@ func (d *DriveClient) CreateFolder(ctx context.Context, parentID, name string) (
 		return DriveFile{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := d.http.Do(req)
+	resp, err := d.do(d.http, req)
 	if err != nil {
 		return DriveFile{}, err
 	}
@@ -405,7 +489,7 @@ func (d *DriveClient) getParents(ctx context.Context, fileID string) ([]string, 
 	if err != nil {
 		return nil, err
 	}
-	resp, err := d.http.Do(req)
+	resp, err := d.do(d.http, req)
 	if err != nil {
 		return nil, err
 	}
@@ -447,7 +531,7 @@ func (d *DriveClient) MoveFile(ctx context.Context, fileID, toParentID string) (
 	if err != nil {
 		return DriveFile{}, err
 	}
-	resp, err := d.http.Do(req)
+	resp, err := d.do(d.http, req)
 	if err != nil {
 		return DriveFile{}, err
 	}
@@ -475,7 +559,7 @@ func (d *DriveClient) StreamDownload(ctx context.Context, fileID, rangeHeader st
 	if err != nil {
 		return nil, "", "", 0, nil, err
 	}
-	metaResp, err := d.http.Do(metaReq)
+	metaResp, err := d.do(d.http, metaReq)
 	if err != nil {
 		return nil, "", "", 0, nil, err
 	}
@@ -499,7 +583,9 @@ func (d *DriveClient) StreamDownload(ctx context.Context, fileID, rangeHeader st
 	if rangeHeader != "" {
 		req.Header.Set("Range", rangeHeader)
 	}
-	resp, err := d.http.Do(req)
+	// d.stream (sem Timeout de cliente): o corpo é o arquivo inteiro e vai ser
+	// lido pelo handler enquanto streama pro navegador.
+	resp, err := d.do(d.stream, req)
 	if err != nil {
 		return nil, "", "", 0, nil, err
 	}
@@ -560,7 +646,11 @@ func (d *DriveClient) UploadFile(ctx context.Context, driveFolderID, filename, c
 	}
 	req.Header.Set("Content-Type", "multipart/related; boundary="+boundary)
 
-	resp, err := d.http.Do(req)
+	// d.stream (sem Timeout de cliente): sobem até 25MB streamados do io.Pipe,
+	// que numa conexão lenta passa de qualquer teto fixo. Sem GetBody o pipe
+	// não é replayável, então d.do faz uma tentativa só — correto: reenviar
+	// metade de um upload seria pior que falhar.
+	resp, err := d.do(d.stream, req)
 	if err != nil {
 		return DriveFile{}, err
 	}

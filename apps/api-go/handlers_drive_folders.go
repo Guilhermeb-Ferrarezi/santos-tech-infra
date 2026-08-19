@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -131,6 +132,66 @@ func (s *Server) handleListDriveFoldersAdmin(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{"folders": folders})
 }
 
+// ensureDriveFolderNotNested recusa cadastrar uma pasta que seja ancestral ou
+// descendente de outra JÁ cadastrada (ou a mesma pasta duas vezes).
+//
+// A ACL deste dashboard é por pasta RAIZ e vale para toda a árvore abaixo dela
+// (ver ensureFileInFolder). Então com "Escola/" legível por aluno e
+// "Escola/Financeiro/" restrita a admin, o aluno lê o Financeiro inteiro
+// entrando pelo id da Escola e navegando — a ACL mais restrita da pasta de
+// dentro simplesmente não é consultada nesse caminho. Duas pastas cadastradas
+// só podem coexistir se forem árvores disjuntas.
+//
+// excludeID é a própria pasta na edição (não conflita consigo mesma).
+func (s *Server) ensureDriveFolderNotNested(ctx context.Context, driveFolderID, excludeID string) error {
+	if s.drive == nil {
+		return appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED",
+			"Arquivos (Google Drive) não configurado — sem ele não dá pra verificar se a pasta está dentro de outra já cadastrada")
+	}
+	existing, err := s.listDriveFolders(ctx)
+	if err != nil {
+		return err
+	}
+	return s.checkDriveFolderNesting(ctx, driveFolderID, excludeID, existing)
+}
+
+// checkDriveFolderNesting é a parte pura da checagem (recebe as pastas já
+// cadastradas), separada pra ser testável sem banco.
+func (s *Server) checkDriveFolderNesting(ctx context.Context, driveFolderID, excludeID string, existing []DriveFolder) error {
+	for i := range existing {
+		f := &existing[i]
+		if f.ID == excludeID {
+			continue
+		}
+		if f.DriveFolderID == driveFolderID {
+			return appErr(http.StatusConflict, "DRIVE_FOLDER_DUPLICATE",
+				"essa pasta do Drive já está cadastrada como \""+f.Name+"\"")
+		}
+		inside, err := s.driveIsDescendantCached(ctx, driveFolderID, f.DriveFolderID)
+		if err != nil {
+			slog.Error("falha ao verificar aninhamento de pasta do Drive", "err", err)
+			return appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar a pasta no Drive")
+		}
+		if inside {
+			return appErr(http.StatusConflict, "DRIVE_FOLDER_NESTED",
+				"essa pasta está DENTRO de \""+f.Name+"\", que já está cadastrada — quem tem acesso a \""+f.Name+
+					"\" já enxerga esta aqui, então a permissão separada não teria efeito. Restrinja o acesso em \""+f.Name+
+					"\" ou tire esta pasta de dentro dela no Drive.")
+		}
+		contains, err := s.driveIsDescendantCached(ctx, f.DriveFolderID, driveFolderID)
+		if err != nil {
+			slog.Error("falha ao verificar aninhamento de pasta do Drive", "err", err)
+			return appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar a pasta no Drive")
+		}
+		if contains {
+			return appErr(http.StatusConflict, "DRIVE_FOLDER_NESTED",
+				"essa pasta CONTÉM \""+f.Name+"\", que já está cadastrada — cadastrá-la daria a quem tem acesso aqui o conteúdo de \""+
+					f.Name+"\" também. Cadastre as subpastas separadamente ou remova \""+f.Name+"\".")
+		}
+	}
+	return nil
+}
+
 // POST /auth/admin/drive-folders
 func (s *Server) handleCreateDriveFolder(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
@@ -143,9 +204,13 @@ func (s *Server) handleCreateDriveFolder(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	driveID := extractDriveFolderID(in.DriveFolderID)
+	if err := s.ensureDriveFolderNotNested(r.Context(), driveID, ""); err != nil {
+		writeErr(w, err)
+		return
+	}
 	folder, err := s.insertDriveFolder(r.Context(),
-		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description),
-		extractDriveFolderID(in.DriveFolderID), userIDFrom(r))
+		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description), driveID, userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -170,8 +235,13 @@ func (s *Server) handleUpdateDriveFolder(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	driveID := extractDriveFolderID(in.DriveFolderID)
+	if err := s.ensureDriveFolderNotNested(r.Context(), driveID, id); err != nil {
+		writeErr(w, err)
+		return
+	}
 	folder, err := s.updateDriveFolderRow(r.Context(), id,
-		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description), extractDriveFolderID(in.DriveFolderID))
+		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description), driveID)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -370,7 +440,7 @@ func (s *Server) handleListDriveFolderFiles(w http.ResponseWriter, r *http.Reque
 
 	target := folder.DriveFolderID
 	if parent := strings.TrimSpace(r.URL.Query().Get("parent")); parent != "" && parent != folder.DriveFolderID {
-		ok, err := s.drive.IsDescendant(r.Context(), parent, folder.DriveFolderID)
+		ok, err := s.driveIsDescendantCached(r.Context(), parent, folder.DriveFolderID)
 		if err != nil {
 			slog.Error("falha ao validar ancestralidade de subpasta do Drive", "folder", folder.ID, "err", err)
 			writeErr(w, appErr(http.StatusBadGateway, "LIST_FAILED", "falha ao verificar a subpasta"))
@@ -408,8 +478,7 @@ func (s *Server) ensureFileInFolder(ctx context.Context, folder *DriveFolder, fi
 	if !allowRoot && fileID == folder.DriveFolderID {
 		return appErr(http.StatusForbidden, "FORBIDDEN", "não é possível modificar a pasta raiz por aqui")
 	}
-	ok, err := getOrSetJSON(ctx, s.rdb, cacheDriveDescendantKey(fileID, folder.DriveFolderID), cacheDriveDescendantTTL,
-		func(ctx context.Context) (bool, error) { return s.drive.IsDescendant(ctx, fileID, folder.DriveFolderID) })
+	ok, err := s.driveIsDescendantCached(ctx, fileID, folder.DriveFolderID)
 	if err != nil {
 		return appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar o arquivo")
 	}
@@ -417,6 +486,43 @@ func (s *Server) ensureFileInFolder(ctx context.Context, folder *DriveFolder, fi
 		return appErr(http.StatusForbidden, "FORBIDDEN", "arquivo fora do escopo autorizado")
 	}
 	return nil
+}
+
+// errDriveNotDescendant é um erro-sentinela interno: existe só pra manter o
+// "não é descendente" FORA do cache. getOrSetJSON só grava quando o fetch
+// retorna sem erro, então devolvendo erro no caso negativo o Redis guarda
+// apenas a resposta positiva.
+//
+// Cachear o negativo era perigoso: junto com um erro transitório do Drive
+// virando false (ver IsDescendant), um 429 do Google negava acesso legítimo
+// pelos 5 minutos inteiros do TTL. E o positivo é o único lado que vale
+// cachear de qualquer forma — é ele que se repete a cada item da listagem.
+var errDriveNotDescendant = errors.New("drive: item fora da árvore autorizada")
+
+// driveIsDescendantCached é o caminho ÚNICO de checagem de ancestralidade:
+// cache-aside sobre IsDescendant, que custa até maxDriveAncestryDepth (12) idas
+// SEQUENCIAIS ao Google por chamada. Chamar IsDescendant direto (como faziam a
+// listagem, o upload e a checagem de ciclo do move) significava até 12
+// round-trips por clique, contra a mesma cota da service account.
+func (s *Server) driveIsDescendantCached(ctx context.Context, fileID, rootID string) (bool, error) {
+	ok, err := getOrSetJSON(ctx, s.rdb, cacheDriveDescendantKey(fileID, rootID), cacheDriveDescendantTTL,
+		func(ctx context.Context) (bool, error) {
+			ok, err := s.drive.IsDescendant(ctx, fileID, rootID)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, errDriveNotDescendant
+			}
+			return true, nil
+		})
+	if errors.Is(err, errDriveNotDescendant) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
 }
 
 // GET /drive-folders/{id}/files/{fileId}/download?download=1 — sempre
@@ -653,7 +759,11 @@ func (s *Server) handleMoveDriveFile(w http.ResponseWriter, r *http.Request) {
 	// O Drive não valida ciclo sozinho — sem essa checagem dava pra mover uma
 	// pasta pra dentro de uma subpasta dela mesma (destino é descendente da
 	// própria pasta sendo movida), quebrando a árvore.
-	cyclic, err := s.drive.IsDescendant(r.Context(), toParent, fileID)
+	//
+	// Cacheado como o resto: como só o positivo vai pro cache, a staleness de
+	// 5min só pode recusar um move legítimo (fail-closed) — nunca deixar passar
+	// um ciclo.
+	cyclic, err := s.driveIsDescendantCached(r.Context(), toParent, fileID)
 	if err != nil {
 		writeErr(w, appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar o destino"))
 		return
@@ -695,7 +805,7 @@ func (s *Server) handleUploadDriveFile(w http.ResponseWriter, r *http.Request) {
 
 	target := folder.DriveFolderID
 	if parent := strings.TrimSpace(r.URL.Query().Get("parent")); parent != "" && parent != folder.DriveFolderID {
-		ok, err := s.drive.IsDescendant(r.Context(), parent, folder.DriveFolderID)
+		ok, err := s.driveIsDescendantCached(r.Context(), parent, folder.DriveFolderID)
 		if err != nil {
 			slog.Error("falha ao validar ancestralidade de subpasta do Drive", "folder", folder.ID, "err", err)
 			writeErr(w, appErr(http.StatusBadGateway, "UPLOAD_FAILED", "falha ao verificar a subpasta"))

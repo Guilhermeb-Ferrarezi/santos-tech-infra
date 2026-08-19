@@ -8,11 +8,13 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type LabDevice struct {
@@ -25,7 +27,12 @@ type LabDevice struct {
 	CurrentSessionID  *string    `json:"currentSessionId"`
 	CurrentClientName *string    `json:"currentClientName"`
 	CurrentStatus     *string    `json:"currentStatus"`
-	CreatedAt         time.Time  `json:"createdAt"`
+	// HasSecret diz se o PC já adotou um segredo de dispositivo. Enquanto for
+	// false qualquer um que saiba o device_uuid (que fica visível no QR da tela)
+	// consegue adotá-lo no primeiro heartbeat — o admin usa isto pra conferir
+	// que todos os PCs já adotaram depois do rollout.
+	HasSecret bool      `json:"hasSecret"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // LabDeviceHeartbeatResult é o que o app precisa saber a cada heartbeat: nome
@@ -36,10 +43,40 @@ type LabDeviceHeartbeatResult struct {
 	MessageID       *string
 	MessageText     *string
 	PairToken       *string
+	// DeviceSecret só vem preenchido no ÚNICO heartbeat em que o segredo é
+	// criado (dispositivo novo, ou legado ainda sem segredo). O app tem que
+	// gravar em disco: sem ele os heartbeats seguintes levam 401.
+	DeviceSecret *string
 }
 
 var errLabDeviceNotFound = appErr(http.StatusNotFound, "LAB_DEVICE_NOT_FOUND", "Dispositivo não encontrado")
 
+// errLabDeviceUnauthorized: o heartbeat é público (o PC não faz login), então o
+// segredo de dispositivo é a única credencial. Sem ele nada do estado do
+// dispositivo é lido nem escrito — em especial o pending_pair_token, que sai em
+// texto puro e antes bastava saber o device_uuid (exibido num QR na tela do PC)
+// pra roubar.
+var errLabDeviceUnauthorized = appErr(http.StatusUnauthorized, "LAB_DEVICE_UNAUTHORIZED", "Segredo do dispositivo ausente ou inválido")
+
+// labDeviceQuerier é o subconjunto de pgx.Tx que upsertLabDeviceHeartbeatTx usa.
+// Existe pra o teste conseguir provar a entrega-exatamente-uma-vez sem um
+// Postgres real (o harness de teste deste pacote roda com s.db == nil).
+type labDeviceQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// labDeviceHeartbeatUpsertSQL grava/atualiza os campos de heartbeat e devolve os
+// comandos pendentes. As colunas de comando (name, unpair_requested, message_*,
+// pending_pair_token) NÃO entram no SET, então o RETURNING traz justamente os
+// valores ANTIGOS — que é o que o app precisa receber.
+//
+// Antes isto era um único comando com dois CTEs (`upserted` fazendo
+// INSERT...ON CONFLICT DO UPDATE e `cleared` fazendo UPDATE) sobre a MESMA
+// linha: o Postgres aplica só uma das modificações por comando, e todos os
+// sub-statements enxergam o mesmo snapshot — o `cleared` nunca tinha efeito e
+// unpair_requested/pending_pair_token eram reentregues em TODO heartbeat,
+// apesar do comentário prometer "entregue exatamente uma vez".
 // pairTokenTTL é a validade do token deixado pendente pelo pareamento via QR
 // (pairLabDeviceViaQR). Pareamento por QR é uma ação ao vivo — admin escaneia
 // e confirma na hora — então 10min é folgado pro caso comum e ainda fecha a
@@ -49,43 +86,167 @@ var errLabDeviceNotFound = appErr(http.StatusNotFound, "LAB_DEVICE_NOT_FOUND", "
 // um token velho ressuscitando uma sessão antiga quebra essa regra.
 const pairTokenTTL = 10 * time.Minute
 
-// upsertLabDeviceHeartbeat grava/atualiza o dispositivo e devolve, na mesma
-// query, os comandos pendentes ANTES de zerar unpair_requested/pending_pair_token
-// — assim cada comando é entregue exatamente uma vez (a query seguinte já não
-// os vê mais). message_id/text não são zerados: o app deduplica localmente
-// pelo id. pending_pair_token só é devolvido se ainda não expirou (CASE
-// abaixo) — mas é zerado de qualquer jeito (expirado ou não) pra não deixar
-// lixo na tabela.
-func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, ip, appVersion string, sessionID *string) (*LabDeviceHeartbeatResult, error) {
-	var res LabDeviceHeartbeatResult
-	err := s.db.QueryRow(ctx, `
-		WITH upserted AS (
-			INSERT INTO hour_lab_devices (device_uuid, last_seen_at, last_ip, app_version, current_session_id)
-			VALUES ($1, now(), $2, $3, $4::uuid)
-			ON CONFLICT (device_uuid) DO UPDATE SET
-				last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid
-			RETURNING name, unpair_requested, message_id::text, message_text,
-				CASE WHEN pending_pair_token_expires_at > now() THEN pending_pair_token ELSE NULL END AS pending_pair_token
-		), cleared AS (
-			UPDATE hour_lab_devices SET unpair_requested = false, pending_pair_token = NULL, pending_pair_token_expires_at = NULL
-			WHERE device_uuid = $1 AND (unpair_requested = true OR pending_pair_token IS NOT NULL)
-		)
-		SELECT name, unpair_requested, message_id, message_text, pending_pair_token FROM upserted`,
-		deviceUUID, ip, appVersion, sessionID).
-		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken)
+const labDeviceHeartbeatUpsertSQL = `
+	INSERT INTO hour_lab_devices (device_uuid, last_seen_at, last_ip, app_version, current_session_id)
+	VALUES ($1, now(), $2, $3, $4::uuid)
+	ON CONFLICT (device_uuid) DO UPDATE SET
+		last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid
+	RETURNING name, unpair_requested, message_id::text, message_text,
+		CASE WHEN pending_pair_token_expires_at > now() THEN pending_pair_token ELSE NULL END AS pending_pair_token`
+
+// labDeviceHeartbeatClearSQL roda como comando SEPARADO, na mesma transação do
+// upsert — é assim que a limpeza de fato acontece. Como o upsert já segurou o
+// lock da linha, um pareamento concorrente (pairLabDeviceViaQR) fica bloqueado
+// até o commit e só então grava o token novo: nenhum token se perde.
+const labDeviceHeartbeatClearSQL = `
+	UPDATE hour_lab_devices SET unpair_requested = false, pending_pair_token = NULL, pending_pair_token_expires_at = NULL
+	WHERE device_uuid = $1 AND (unpair_requested = true OR pending_pair_token IS NOT NULL)`
+
+// labDeviceSecretLookupSQL trava a linha do dispositivo (FOR UPDATE) e lê o hash
+// do segredo — a trava é o que serializa a adoção contra um heartbeat
+// concorrente do mesmo device_uuid.
+const labDeviceSecretLookupSQL = `
+	SELECT device_secret_hash FROM hour_lab_devices WHERE device_uuid = $1 FOR UPDATE`
+
+// labDeviceSecretMintSQL grava o hash do segredo recém-criado. O WHERE do
+// DO UPDATE só deixa gravar sobre linha SEM segredo: se alguém já adotou o
+// dispositivo, nada é devolvido e o chamador responde 401 em vez de sobrescrever
+// o segredo de um PC já adotado.
+const labDeviceSecretMintSQL = `
+	INSERT INTO hour_lab_devices (device_uuid, device_secret_hash, device_secret_set_at)
+	VALUES ($1, $2, now())
+	ON CONFLICT (device_uuid) DO UPDATE SET
+		device_secret_hash = EXCLUDED.device_secret_hash, device_secret_set_at = now()
+	WHERE hour_lab_devices.device_secret_hash IS NULL OR hour_lab_devices.device_secret_hash = ''
+	RETURNING device_secret_hash`
+
+// labDeviceSecretBytes é o tamanho do segredo em bytes (vira o dobro em hex).
+const labDeviceSecretBytes = 32
+
+// upsertLabDeviceHeartbeat autentica o dispositivo, grava/atualiza o heartbeat e
+// devolve os comandos pendentes, zerando unpair_requested/pending_pair_token na
+// mesma transação — assim cada comando é entregue exatamente uma vez.
+// message_id/text não são zerados: o app deduplica localmente pelo id.
+func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string) (*LabDeviceHeartbeatResult, error) {
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op depois do Commit
+	res, err := upsertLabDeviceHeartbeatTx(ctx, tx, deviceUUID, deviceSecret, ip, appVersion, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// authLabDeviceTx resolve a credencial do dispositivo. Devolve o segredo em
+// texto puro APENAS quando acabou de criá-lo (dispositivo novo, ou legado de
+// antes desta coluna existir) — é a única vez que ele trafega; no banco só fica
+// o sha256.
+//
+// A adoção de um device_uuid legado (sem segredo) é aberta de propósito:
+// bloquear esses PCs brickaria o laboratório inteiro no deploy. A janela é de um
+// heartbeat por PC (~30s) e fica visível pro admin em hasSecret na listagem; se
+// um PC nunca adotar, é sinal de que alguém adotou antes dele — o admin resolve
+// com resetLabDeviceSecret.
+func authLabDeviceTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, deviceSecret string) (*string, error) {
+	var storedHash *string
+	err := tx.QueryRow(ctx, labDeviceSecretLookupSQL, deviceUUID).Scan(&storedHash)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		storedHash = nil // dispositivo novo: cai na adoção abaixo
+	case err != nil:
+		return nil, err
+	}
+
+	if storedHash != nil && *storedHash != "" {
+		if deviceSecret == "" ||
+			subtle.ConstantTimeCompare([]byte(sha256Hex(deviceSecret)), []byte(*storedHash)) != 1 {
+			return nil, errLabDeviceUnauthorized
+		}
+		return nil, nil
+	}
+
+	secret := randomToken(labDeviceSecretBytes)
+	var applied *string
+	if err := tx.QueryRow(ctx, labDeviceSecretMintSQL, deviceUUID, sha256Hex(secret)).Scan(&applied); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Outra requisição adotou o dispositivo neste exato instante.
+			return nil, errLabDeviceUnauthorized
+		}
+		return nil, err
+	}
+	return &secret, nil
+}
+
+func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string) (*LabDeviceHeartbeatResult, error) {
+	minted, err := authLabDeviceTx(ctx, tx, deviceUUID, deviceSecret)
+	if err != nil {
+		return nil, err
+	}
+
+	var res LabDeviceHeartbeatResult
+	if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, deviceUUID, ip, appVersion, sessionID).
+		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken); err != nil {
+		return nil, err
+	}
+	if res.UnpairRequested || res.PairToken != nil {
+		if _, err := tx.Exec(ctx, labDeviceHeartbeatClearSQL, deviceUUID); err != nil {
+			return nil, err
+		}
+	}
+	if minted != nil {
+		res.DeviceSecret = minted
+		// Quem acabou de adotar o dispositivo não apresentou credencial nenhuma:
+		// o token de pareamento não sai nesta resposta (foi zerado acima; o
+		// admin repareia). Vale só na adoção, e só neste heartbeat.
+		res.PairToken = nil
 	}
 	return &res, nil
 }
 
+// resetLabDeviceSecret esquece o segredo do PC: o próximo heartbeat vira uma
+// adoção nova. Escotilha de operação pra quando o PC perde o arquivo de config
+// mas mantém o device_uuid — sem isto ele ficaria travado em 401 pra sempre.
+// deleteLabDevice remove o registro do PC (entrada fantasma de teste, ou
+// máquina que saiu de operação). Sessões que ele já rodou não são afetadas.
+func (s *Server) deleteLabDevice(ctx context.Context, id string) error {
+	tag, err := s.db.Exec(ctx, `DELETE FROM hour_lab_devices WHERE id = $1::uuid`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errLabDeviceNotFound
+	}
+	return nil
+}
+
+func (s *Server) resetLabDeviceSecret(ctx context.Context, id string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE hour_lab_devices
+		SET device_secret_hash = NULL, device_secret_set_at = NULL, pending_pair_token = NULL
+		WHERE id = $1::uuid`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errLabDeviceNotFound
+	}
+	return nil
+}
+
 const labDeviceCols = `d.id::text, d.device_uuid, d.name, d.last_seen_at, d.last_ip, d.app_version,
-	d.current_session_id::text, c.name, s.status, d.created_at`
+	d.current_session_id::text, c.name, s.status,
+	(d.device_secret_hash IS NOT NULL AND d.device_secret_hash != '') AS has_secret, d.created_at`
 
 func scanLabDevice(row pgx.Row) (*LabDevice, error) {
 	var d LabDevice
 	err := row.Scan(&d.ID, &d.DeviceUUID, &d.Name, &d.LastSeenAt, &d.LastIP, &d.AppVersion,
-		&d.CurrentSessionID, &d.CurrentClientName, &d.CurrentStatus, &d.CreatedAt)
+		&d.CurrentSessionID, &d.CurrentClientName, &d.CurrentStatus, &d.HasSecret, &d.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -95,29 +256,45 @@ func scanLabDevice(row pgx.Row) (*LabDevice, error) {
 	return &d, nil
 }
 
-// listLabDevices traz todos os PCs já vistos ao menos uma vez, com a sessão
+// Paginação da listagem de PCs: o heartbeat cria uma linha por device_uuid
+// visto, e um device_uuid novo é aceito sem credencial (é assim que um PC se
+// adota) — ou seja, a tabela cresce sem teto natural. Sem LIMIT, um dia a
+// listagem do admin traria a tabela inteira numa resposta só.
+const (
+	labDevicesDefaultLimit = 200
+	labDevicesMaxLimit     = 500
+)
+
+// listLabDevices traz uma página de PCs já vistos ao menos uma vez, com a sessão
 // atual (se houver) — "online/offline" é decidido pelo front a partir de
-// lastSeenAt (o backend não guarda esse estado, só o fato observado).
-func (s *Server) listLabDevices(ctx context.Context) ([]LabDevice, error) {
+// lastSeenAt (o backend não guarda esse estado, só o fato observado). Devolve
+// também o total, pra o admin perceber quando há mais do que cabe na página.
+// A ordenação casa com idx_hour_lab_devices_order.
+func (s *Server) listLabDevices(ctx context.Context, limit, offset int) ([]LabDevice, int64, error) {
+	var total int64
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM hour_lab_devices`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.db.Query(ctx, `
 		SELECT `+labDeviceCols+`
 		FROM hour_lab_devices d
 		LEFT JOIN hour_sessions s ON s.id = d.current_session_id
 		LEFT JOIN hour_clients c ON c.id = s.client_id
-		ORDER BY d.name NULLS LAST, d.device_uuid`)
+		ORDER BY d.name NULLS LAST, d.device_uuid
+		LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	out := []LabDevice{}
 	for rows.Next() {
 		d, err := scanLabDevice(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, *d)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 func (s *Server) renameLabDevice(ctx context.Context, id, name string) (*LabDevice, error) {
@@ -172,30 +349,11 @@ func (s *Server) pairLabDeviceViaQR(ctx context.Context, deviceUUID, clientID st
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.db.Exec(ctx, `
-		UPDATE hour_lab_devices
-		SET pending_pair_token = $2, pending_pair_token_expires_at = now() + make_interval(mins => $3)
-		WHERE device_uuid = $1`,
-		deviceUUID, token, int(pairTokenTTL.Minutes())); err != nil {
+	if _, err := s.db.Exec(ctx, `UPDATE hour_lab_devices SET pending_pair_token = $2 WHERE device_uuid = $1`,
+		deviceUUID, token); err != nil {
 		return nil, err
 	}
 	return h, nil
-}
-
-// deleteLabDevice remove o registro do PC (ex.: entradas fantasma de teste,
-// ou PC que saiu de operação de vez) — não afeta sessões já feitas por ele
-// (current_session_id só é FK do device pro session, não o contrário; a
-// sessão continua existindo/contabilizada normalmente). Se o mesmo PC mandar
-// heartbeat de novo depois, upsertLabDeviceHeartbeat recria a linha do zero.
-func (s *Server) deleteLabDevice(ctx context.Context, id string) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM hour_lab_devices WHERE id = $1::uuid`, id)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return errLabDeviceNotFound
-	}
-	return nil
 }
 
 // sendLabDeviceMessage grava um aviso pro PC mostrar no próximo heartbeat.
