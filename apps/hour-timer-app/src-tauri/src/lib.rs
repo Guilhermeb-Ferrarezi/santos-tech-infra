@@ -13,6 +13,25 @@ const TOAST_LABEL: &str = "toast";
 const TOAST_WIDTH: f64 = 340.0;
 const TOAST_HEIGHT: f64 = 120.0;
 
+// Canto inferior direito da ÁREA ÚTIL do monitor (work_area exclui a barra de
+// tarefas — usar monitor.size() aqui fazia a janela nascer atrás da barra,
+// já que size() é a resolução cheia). work_area já vem em pixels físicos,
+// mesma unidade de scale_factor()/inner_size(), então a mesma conta de
+// escala do resto do cálculo se aplica igual.
+fn bottom_right_in_work_area(app: &AppHandle, width: f64, height: f64, margin: f64) -> (f64, f64) {
+    app.primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| {
+            let scale = m.scale_factor();
+            let area = m.work_area();
+            let right = (area.position.x as f64 + area.size.width as f64) / scale;
+            let bottom = (area.position.y as f64 + area.size.height as f64) / scale;
+            (right - width - margin, bottom - height - margin)
+        })
+        .unwrap_or((900.0, 700.0))
+}
+
 // Janela flutuante com o tempo, canto inferior direito — mostra/esconde ao
 // clicar de novo no item do menu da bandeja. Só é criada na primeira vez.
 fn toggle_overlay(app: &AppHandle) {
@@ -26,18 +45,7 @@ fn toggle_overlay(app: &AppHandle) {
         return;
     }
 
-    let (x, y) = app
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| {
-            let scale = m.scale_factor();
-            let size = m.size();
-            let w = size.width as f64 / scale;
-            let h = size.height as f64 / scale;
-            (w - OVERLAY_WIDTH - 16.0, h - OVERLAY_HEIGHT - 56.0)
-        })
-        .unwrap_or((900.0, 700.0));
+    let (x, y) = bottom_right_in_work_area(app, OVERLAY_WIDTH, OVERLAY_HEIGHT, 16.0);
 
     let _ = WebviewWindowBuilder::new(app, OVERLAY_LABEL, WebviewUrl::App("overlay.html".into()))
         .title("Cronômetro")
@@ -62,18 +70,7 @@ fn ensure_toast_window(app: &AppHandle) {
         return;
     }
 
-    let (x, y) = app
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| {
-            let scale = m.scale_factor();
-            let size = m.size();
-            let w = size.width as f64 / scale;
-            let h = size.height as f64 / scale;
-            (w - TOAST_WIDTH - 16.0, h - TOAST_HEIGHT - 16.0)
-        })
-        .unwrap_or((900.0, 700.0));
+    let (x, y) = bottom_right_in_work_area(app, TOAST_WIDTH, TOAST_HEIGHT, 16.0);
 
     let _ = WebviewWindowBuilder::new(app, TOAST_LABEL, WebviewUrl::App("toast.html".into()))
         .title("Aviso")

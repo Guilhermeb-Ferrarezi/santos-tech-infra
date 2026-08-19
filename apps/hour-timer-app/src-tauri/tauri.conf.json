@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build",
+    "beforeBuildCommand": "cargo build --manifest-path watchdog/Cargo.toml --release && bun run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -36,7 +36,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": ["watchdog.bat"],
+    "resources": {
+      "../watchdog/target/release/watchdog.exe": "watchdog.exe"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
