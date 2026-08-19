@@ -7,6 +7,7 @@ package main
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -78,14 +79,29 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 
 // ── admin ────────────────────────────────────────────────────────────────────
 
-// GET /hour-lab-devices
+// GET /hour-lab-devices?limit=&offset= — paginado (limit default 200, máx 500);
+// `total` deixa o front avisar quando há mais PCs do que a página mostra.
 func (s *Server) handleListLabDevices(w http.ResponseWriter, r *http.Request) {
-	devices, err := s.listLabDevices(r.Context())
+	q := r.URL.Query()
+	limit := labDevicesDefaultLimit
+	if n, err := strconv.Atoi(strings.TrimSpace(q.Get("limit"))); err == nil && n > 0 {
+		limit = min(n, labDevicesMaxLimit)
+	}
+	offset := 0
+	if n, err := strconv.Atoi(strings.TrimSpace(q.Get("offset"))); err == nil && n > 0 {
+		offset = n
+	}
+	devices, total, err := s.listLabDevices(r.Context(), limit, offset)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"devices": devices})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"devices": devices,
+		"total":   total,
+		"limit":   limit,
+		"offset":  offset,
+	})
 }
 
 // PATCH /hour-lab-devices/{id} — {name}

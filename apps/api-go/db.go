@@ -571,6 +571,11 @@ ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS pending_pair_token TEXT;
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS device_secret_hash TEXT;
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS device_secret_set_at TIMESTAMPTZ;
 
+-- Índice do ORDER BY da listagem de PCs (ver listLabDevices): o heartbeat cria
+-- uma linha por device_uuid visto e a tabela só cresce.
+CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_order
+  ON hour_lab_devices(name NULLS LAST, device_uuid);
+
 -- Arquivos (Google Drive): o conteúdo real mora no Drive; aqui só guardamos
 -- metadados de pasta e a ACL de quem enxerga/envia arquivo em cada uma — por
 -- cargo (fixo ou personalizado) E por usuário individual, união dos dois.

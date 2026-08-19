@@ -233,29 +233,45 @@ func scanLabDevice(row pgx.Row) (*LabDevice, error) {
 	return &d, nil
 }
 
-// listLabDevices traz todos os PCs já vistos ao menos uma vez, com a sessão
+// Paginação da listagem de PCs: o heartbeat cria uma linha por device_uuid
+// visto, e um device_uuid novo é aceito sem credencial (é assim que um PC se
+// adota) — ou seja, a tabela cresce sem teto natural. Sem LIMIT, um dia a
+// listagem do admin traria a tabela inteira numa resposta só.
+const (
+	labDevicesDefaultLimit = 200
+	labDevicesMaxLimit     = 500
+)
+
+// listLabDevices traz uma página de PCs já vistos ao menos uma vez, com a sessão
 // atual (se houver) — "online/offline" é decidido pelo front a partir de
-// lastSeenAt (o backend não guarda esse estado, só o fato observado).
-func (s *Server) listLabDevices(ctx context.Context) ([]LabDevice, error) {
+// lastSeenAt (o backend não guarda esse estado, só o fato observado). Devolve
+// também o total, pra o admin perceber quando há mais do que cabe na página.
+// A ordenação casa com idx_hour_lab_devices_order.
+func (s *Server) listLabDevices(ctx context.Context, limit, offset int) ([]LabDevice, int64, error) {
+	var total int64
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM hour_lab_devices`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.db.Query(ctx, `
 		SELECT `+labDeviceCols+`
 		FROM hour_lab_devices d
 		LEFT JOIN hour_sessions s ON s.id = d.current_session_id
 		LEFT JOIN hour_clients c ON c.id = s.client_id
-		ORDER BY d.name NULLS LAST, d.device_uuid`)
+		ORDER BY d.name NULLS LAST, d.device_uuid
+		LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	out := []LabDevice{}
 	for rows.Next() {
 		d, err := scanLabDevice(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, *d)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 func (s *Server) renameLabDevice(ctx context.Context, id, name string) (*LabDevice, error) {
