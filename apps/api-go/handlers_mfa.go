@@ -334,17 +334,17 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	// rejeitar é mais seguro do que deixar passar (OTP de e-mail tem apenas 10⁶ combinações).
 	attemptsCmd := s.rdb.Incr(r.Context(), "api-go:mfa_attempts:"+body.Challenge)
 	if attemptsCmd.Err() != nil {
-		slog.Warn("mfa_attempts: redis error; rejecting to fail closed", "challenge", body.Challenge, "err", attemptsCmd.Err())
+		slog.Warn("mfa_attempts: redis error; rejecting to fail closed", "challenge", maskForLog(body.Challenge), "err", attemptsCmd.Err())
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
 		return
 	}
 	attempts := attemptsCmd.Val()
 	if err := s.rdb.ExpireNX(r.Context(), "api-go:mfa_attempts:"+body.Challenge, 10*time.Minute).Err(); err != nil {
-		slog.Warn("mfa_attempts: ExpireNX falhou; contador pode não expirar", "challenge", body.Challenge, "err", err)
+		slog.Warn("mfa_attempts: ExpireNX falhou; contador pode não expirar", "challenge", maskForLog(body.Challenge), "err", err)
 	}
 	if attempts > 5 {
 		if err := s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "api-go:mfa_attempts:"+body.Challenge).Err(); err != nil {
-			slog.Warn("mfa_verify: falha ao invalidar desafio após excesso de tentativas", "challenge", body.Challenge, "err", err)
+			slog.Warn("mfa_verify: falha ao invalidar desafio após excesso de tentativas", "challenge", maskForLog(body.Challenge), "err", err)
 		}
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Faça login novamente."))
 		return
@@ -353,7 +353,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	if u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret) {
 		alreadyUsed, rdErr := s.checkAndMarkTOTPUsed(r.Context(), uid, code)
 		if rdErr != nil {
-			slog.Warn("mfa_verify: redis error ao verificar replay TOTP; rejeitando (fail-closed)", "challenge", body.Challenge, "err", rdErr)
+			slog.Warn("mfa_verify: redis error ao verificar replay TOTP; rejeitando (fail-closed)", "challenge", maskForLog(body.Challenge), "err", rdErr)
 			writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
 			return
 		}
@@ -382,7 +382,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	// que ainda não foi removido). Padrão consistente com o fail-closed do Incr
 	// acima (linha ~216): Redis instável → rejeitar é mais seguro que deixar passar.
 	if err := s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "api-go:mfa_attempts:"+body.Challenge).Err(); err != nil {
-		slog.Error("mfa_verify: falha ao invalidar desafio após autenticação bem-sucedida", "challenge", body.Challenge, "err", err)
+		slog.Error("mfa_verify: falha ao invalidar desafio após autenticação bem-sucedida", "challenge", maskForLog(body.Challenge), "err", err)
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao finalizar autenticação. Tente novamente."))
 		return
 	}

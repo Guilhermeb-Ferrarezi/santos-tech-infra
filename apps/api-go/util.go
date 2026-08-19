@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 )
 
 // safeGo roda fn numa goroutine fire-and-forget com recover() como primeiro defer,
@@ -22,6 +23,22 @@ func safeGo(name string, fn func()) {
 		}()
 		fn()
 	}()
+}
+
+// maskForLog devolve uma forma reconhecível — mas inútil para quem a lê — de um
+// valor sensível (challenge de MFA, token de reset, código). Mantém os 6
+// primeiros caracteres e o comprimento: o bastante para correlacionar linhas de
+// log sem publicar a credencial inteira no Loki, que os admins consultam pela
+// própria API (/auth/admin/logs). Difere do maskSecret do vault.go, que serve
+// para EXIBIR um segredo no frontend (últimos 4 caracteres).
+func maskForLog(s string) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) <= 6 {
+		return "***"
+	}
+	return s[:6] + "***(" + strconv.Itoa(len(s)) + ")"
 }
 
 func randomToken(nbytes int) string {
