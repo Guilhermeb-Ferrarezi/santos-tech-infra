@@ -131,6 +131,53 @@ func TestExtractBlendThumbnailPNG(t *testing.T) {
 			t.Fatal("esperava ok=false")
 		}
 	})
+
+	// blockLen absurdo estourava payloadOff+int(blockLen) e deixava off
+	// NEGATIVO — a checagem off+bheadSize > len(data) da iteração seguinte não
+	// pegava (negativo não é maior que len) e data[off:off+4] dava panic de
+	// slice bounds. Um .blend forjado num upload derrubava o handler.
+	t.Run("blockLen forjado não causa panic", func(t *testing.T) {
+		for _, blockLen := range []uint64{
+			0x7FFF_FFFF_FFFF_FFFF, // int64 máximo: overflow ao somar
+			0xFFFF_FFFF_FFFF_FFFF, // vira -1 em int64
+			1 << 62,
+			1 << 31,
+		} {
+			var buf bytes.Buffer
+			buf.WriteString("BLENDER17-01v0502")
+			buf.WriteString("REND")
+			buf.Write(make([]byte, 4)) // SDNAnr
+			buf.Write(make([]byte, 8)) // old
+			var le64 [8]byte
+			binary.LittleEndian.PutUint64(le64[:], blockLen)
+			buf.Write(le64[:])          // len forjado
+			buf.Write(make([]byte, 8))  // nr
+			buf.Write(make([]byte, 64)) // payload qualquer
+
+			if _, ok := extractBlendThumbnailPNG(buf.Bytes()); ok {
+				t.Errorf("blockLen=%#x: esperava ok=false", blockLen)
+			}
+		}
+	})
+
+	// Formato legado (len em int32): mesmo tratamento, o bloco não pode ser
+	// maior que o próprio arquivo.
+	t.Run("blockLen legado maior que o arquivo", func(t *testing.T) {
+		var buf bytes.Buffer
+		buf.WriteString("BLENDER-v301")
+		buf.WriteString("REND")
+		var le32 [4]byte
+		binary.LittleEndian.PutUint32(le32[:], 0x7FFF_FFFF)
+		buf.Write(le32[:])
+		buf.Write(make([]byte, 8))
+		buf.Write(make([]byte, 4))
+		buf.Write(make([]byte, 4))
+		buf.Write(make([]byte, 64))
+
+		if _, ok := extractBlendThumbnailPNG(buf.Bytes()); ok {
+			t.Fatal("esperava ok=false")
+		}
+	})
 }
 
 // assertDecodesTo confere o PNG contra wantPix (o buffer bruto do bloco TEST,
