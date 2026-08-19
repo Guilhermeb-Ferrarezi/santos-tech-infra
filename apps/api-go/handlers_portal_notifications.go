@@ -407,7 +407,11 @@ func (s *Server) portalActor(r *http.Request) map[string]any {
 // ── Activity logs ────────────────────────────────────────────────────────────
 
 func (s *Server) handlePortalActivityLogs(w http.ResponseWriter, r *http.Request) {
-	f := portalActivityFiltersFrom(r)
+	f, err := portalActivityFiltersFrom(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	items, total, err := s.portalListActivityLogs(r.Context(), f)
 	if err != nil {
 		writeErr(w, err)

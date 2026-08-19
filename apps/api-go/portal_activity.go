@@ -99,30 +99,56 @@ type portalActivityFilters struct {
 	ActorID    string
 	ActorGroup string // "user" | "staff"
 	Query      string
-	From       string
-	To         string
+	From       *time.Time
+	To         *time.Time
 	Limit      int
 	Offset     int
 }
 
-func portalActivityFiltersFrom(r *http.Request) portalActivityFilters {
+// portalActivityTimeLayouts — formatos aceitos em ?from= / ?to=.
+var portalActivityTimeLayouts = []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"}
+
+// portalParseActivityTime valida a data ANTES de ela virar parâmetro da query.
+// Antes a string crua ia direto pro comparador com l."LogDate", então ?from=ontem
+// virava erro de cast no Postgres → 500 em vez de 400.
+func portalParseActivityTime(field, raw string) (*time.Time, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	for _, layout := range portalActivityTimeLayouts {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return &t, nil
+		}
+	}
+	return nil, validationErr(field + " inválido (use YYYY-MM-DD ou RFC3339)")
+}
+
+func portalActivityFiltersFrom(r *http.Request) (portalActivityFilters, error) {
 	q := r.URL.Query()
 	limit := atoiMin(q.Get("limit"), 200, 1)
 	if limit > 500 {
 		limit = 500
 	}
 	offset := atoiMin(q.Get("offset"), 0, 0)
+	from, err := portalParseActivityTime("from", strings.TrimSpace(q.Get("from")))
+	if err != nil {
+		return portalActivityFilters{}, err
+	}
+	to, err := portalParseActivityTime("to", strings.TrimSpace(q.Get("to")))
+	if err != nil {
+		return portalActivityFilters{}, err
+	}
 	return portalActivityFilters{
 		Action:     strings.TrimSpace(q.Get("action")),
 		EntityType: strings.TrimSpace(q.Get("entityType")),
 		ActorID:    strings.TrimSpace(q.Get("actorId")),
 		ActorGroup: strings.TrimSpace(q.Get("actorGroup")),
 		Query:      strings.TrimSpace(q.Get("q")),
-		From:       strings.TrimSpace(q.Get("from")),
-		To:         strings.TrimSpace(q.Get("to")),
+		From:       from,
+		To:         to,
 		Limit:      limit,
 		Offset:     offset,
-	}
+	}, nil
 }
 
 func (f portalActivityFilters) build() (string, []any) {
@@ -141,11 +167,11 @@ func (f portalActivityFilters) build() (string, []any) {
 	if f.ActorID != "" {
 		add("l.user_id::text = $%d", f.ActorID)
 	}
-	if f.From != "" {
-		add(`l."LogDate" >= $%d`, f.From)
+	if f.From != nil {
+		add(`l."LogDate" >= $%d`, *f.From)
 	}
-	if f.To != "" {
-		add(`l."LogDate" <= $%d`, f.To)
+	if f.To != nil {
+		add(`l."LogDate" <= $%d`, *f.To)
 	}
 	switch f.ActorGroup {
 	case "user":
