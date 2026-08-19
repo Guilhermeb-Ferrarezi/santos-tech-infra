@@ -1,7 +1,13 @@
 import { useState } from "react";
-import { SignOut, User, Warning } from "@phosphor-icons/react";
+import { CaretDown, GoogleLogo, QrCode, SignOut, User, Warning } from "@phosphor-icons/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAuth, type AuthUser } from "../lib/useAuth";
 import { ApiError } from "../lib/api";
+import { QRScanModal } from "./QRScanModal";
+
+// Página que gera o QR/código (usuário já logado no navegador é quem
+// autoriza este app) — ver dashboard/web:/conectar-dispositivo.
+const CONNECT_DEVICE_URL = "https://santos-tech.com/dashboard/conectar-dispositivo";
 
 function Avatar({ user }: { user: AuthUser | null }) {
   if (user?.avatarUrl) {
@@ -25,13 +31,29 @@ function Avatar({ user }: { user: AuthUser | null }) {
 type MfaChallenge = { challenge: string; method: "totp" | "email"; methods: string[] };
 
 function LoginForm({ onDone }: { onDone: () => void }) {
-  const { login, verifyMfa, resendMfaEmail } = useAuth();
+  const { login, verifyMfa, resendMfaEmail, loginWithCode } = useAuth();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [mfa, setMfa] = useState<MfaChallenge | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showOther, setShowOther] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [deviceCode, setDeviceCode] = useState("");
+
+  async function submitCode(value: string) {
+    setError("");
+    setBusy(true);
+    try {
+      await loginWithCode(value.trim());
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Código inválido ou expirado.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submitLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -132,6 +154,66 @@ function LoginForm({ onDone }: { onDone: () => void }) {
       >
         Entrar
       </button>
+
+      <button
+        type="button"
+        onClick={() => setShowOther((v) => !v)}
+        className="flex w-full items-center justify-center gap-1 pt-1 text-xs text-neutral-400 hover:text-white"
+      >
+        Outras opções
+        <CaretDown className={`size-3 transition-transform ${showOther ? "rotate-180" : ""}`} />
+      </button>
+
+      {showOther && (
+        <div className="space-y-2 border-t border-white/10 pt-2">
+          <button
+            type="button"
+            onClick={() => setScanning(true)}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 py-2 text-xs font-medium text-white transition-colors hover:bg-white/5"
+          >
+            <QrCode className="size-4" /> Escanear QR code
+          </button>
+
+          <div className="flex items-center gap-2">
+            <input
+              value={deviceCode}
+              onChange={(e) => setDeviceCode(e.target.value)}
+              placeholder="Código de 6 dígitos"
+              maxLength={6}
+              className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#0DB88F]"
+            />
+            <button
+              type="button"
+              disabled={busy || deviceCode.trim().length < 6}
+              onClick={() => submitCode(deviceCode)}
+              className="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Entrar
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => openUrl(CONNECT_DEVICE_URL)}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 py-2 text-xs font-medium text-white transition-colors hover:bg-white/5"
+          >
+            <GoogleLogo className="size-4" /> Entrar com Google (abre o navegador)
+          </button>
+          <p className="text-center text-[11px] text-neutral-500">
+            Gere o QR/código em santos-tech.com/dashboard/conectar-dispositivo
+          </p>
+        </div>
+      )}
+
+      {scanning && (
+        <QRScanModal
+          onClose={() => setScanning(false)}
+          onResult={(text) => {
+            setScanning(false);
+            submitCode(text);
+          }}
+        />
+      )}
     </form>
   );
 }

@@ -151,6 +151,20 @@ export function useAuth() {
     setUser(me);
   }, [fetchMe]);
 
+  // Login por QR code (payload do QR, 64 chars hex) ou código digitado (6
+  // dígitos) — mesmo endpoint público, mesmo campo, ver
+  // POST /public/qr-login/exchange em handlers_qr_login.go.
+  const loginWithCode = useCallback(async (code: string) => {
+    const body = await apiJSON<{ user: AuthUser; accessToken?: string; refreshToken?: string }>("/public/qr-login/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    await persistSession(body);
+    const me = await fetchMe();
+    setUser(me);
+  }, [fetchMe]);
+
   const resendMfaEmail = useCallback(async (challenge: string) => {
     await apiFetch("/auth/mfa/email", {
       method: "POST",
@@ -169,5 +183,5 @@ export function useAuth() {
     await clearSession();
   }, [clearSession]);
 
-  return { user, loading, login, verifyMfa, resendMfaEmail, logout };
+  return { user, loading, login, verifyMfa, resendMfaEmail, loginWithCode, logout };
 }
