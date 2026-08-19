@@ -77,12 +77,16 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Roteador de chaves de API: cadastro de credenciais reais de provedores
 	// externos, com failover automático em 401/sem-créditos (ver apirouter.go).
 	// Admin-only, sem cargo personalizado (mesmo critério de ip-bans/oauth-clients).
-	// Ler não é sensível; criar/apagar chave manipula credencial real -> sudo.
+	// Listar não expõe segredo (só secretTail); criar/apagar/revelar chave
+	// manipula ou expõe credencial real -> sudo.
 	mux.HandleFunc("GET /auth/admin/api-router/providers", s.adminGuard(s.handleListAPIRouterProviders))
 	mux.HandleFunc("POST /auth/admin/api-router/providers", s.rateLimit(10, min, s.adminGuard(s.handleCreateAPIRouterProvider)))
 	mux.HandleFunc("PATCH /auth/admin/api-router/providers/{id}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateAPIRouterProvider)))
 	mux.HandleFunc("DELETE /auth/admin/api-router/providers/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteAPIRouterProvider)))
 	mux.HandleFunc("GET /auth/admin/api-router/providers/{id}/keys", s.adminGuard(s.handleListAPIRouterKeys))
+	// Revelar o segredo cru de UMA chave: sudo + auditoria. A listagem acima
+	// devolve só secretTail — o valor completo só sai por aqui.
+	mux.HandleFunc("GET /auth/admin/api-router/providers/{id}/keys/{keyId}/reveal", s.rateLimit(10, min, s.adminGuard(s.sudoGuard(s.handleRevealAPIRouterKey))))
 	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/keys", s.rateLimit(10, min, s.adminGuard(s.sudoGuard(s.handleCreateAPIRouterKey))))
 	mux.HandleFunc("PATCH /auth/admin/api-router/providers/{id}/keys/{keyId}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateAPIRouterKey)))
 	mux.HandleFunc("DELETE /auth/admin/api-router/providers/{id}/keys/{keyId}", s.adminGuard(s.sudoGuard(s.handleDeleteAPIRouterKey)))

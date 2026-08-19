@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -56,17 +57,13 @@ func opCapabilitiesJSON(opAdapter string) []string {
 	return []string{}
 }
 
-// apiRouterKeyJSON monta o JSON público da chave. O segredo é decifrado aqui
-// (rota admin-only): é o único ponto em que o valor cru deixa o banco. Se a
-// decifragem falhar, `secret` vem vazio.
+// apiRouterKeyJSON monta o JSON público da chave. O segredo NUNCA sai por
+// aqui: só `secretTail` (últimos 4 caracteres) para a UI identificar a chave.
+// O valor cru só deixa o banco pelo GET .../keys/{keyId}/reveal, que exige
+// sudo e registra auditoria.
 func (s *Server) apiRouterKeyJSON(k *db.ApiRouterKey) map[string]any {
-	secret, err := s.vault.Decrypt(k.SecretEnc)
-	if err != nil {
-		secret = ""
-	}
 	m := map[string]any{
 		"id": k.ID, "providerId": k.ProviderID, "label": k.Label, "secretTail": k.SecretTail,
-		"secret": secret,
 		"status": k.Status, "priority": k.Priority, "failureCount": k.FailureCount,
 		"createdAt": k.CreatedAt.Time, "updatedAt": k.UpdatedAt.Time,
 		"lastUsedAt": nil, "lastErrorAt": nil, "lastErrorCode": nil,
@@ -278,6 +275,44 @@ func (s *Server) handleListAPIRouterKeys(w http.ResponseWriter, r *http.Request)
 		out = append(out, s.apiRouterKeyJSON(&k))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
+}
+
+// GET /auth/admin/api-router/providers/{id}/keys/{keyId}/reveal — ÚNICO ponto
+// em que o segredo cru de uma chave deixa o banco. Exige sudo (adminGuard +
+// sudoGuard em routes.go), devolve UMA chave por vez e registra auditoria
+// (quem, qual chave, de qual IP) antes de responder.
+func (s *Server) handleRevealAPIRouterKey(w http.ResponseWriter, r *http.Request) {
+	if s.apiRouterNotConfigured(w) {
+		return
+	}
+	providerID, err1 := apiRouterPathID(r, "id")
+	keyID, err2 := apiRouterPathID(r, "keyId")
+	if err1 != nil || err2 != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_ID", "id inválido"))
+		return
+	}
+	k, err := s.q.GetAPIRouterKey(r.Context(), db.GetAPIRouterKeyParams{ID: keyID, ProviderID: providerID})
+	if err != nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "chave não encontrada"))
+		return
+	}
+	secret, err := s.vault.Decrypt(k.SecretEnc)
+	if err != nil {
+		writeErr(w, appErr(http.StatusInternalServerError, "DECRYPT_FAILED", "não foi possível decifrar a chave"))
+		return
+	}
+	// Auditoria: revelar credencial de terceiro é a ação mais sensível do
+	// roteador — fica no log estruturado (vai pro Loki/Sentry como os demais).
+	slog.Warn("api_router_key_reveal",
+		"uid", userIDFrom(r),
+		"providerId", providerID,
+		"keyId", keyID,
+		"label", k.Label,
+		"secretTail", k.SecretTail,
+		"ip", clientIP(r))
+	// Nunca cacheia: a resposta carrega o segredo em claro.
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"id": k.ID, "providerId": k.ProviderID, "label": k.Label, "secretTail": k.SecretTail, "secret": secret})
 }
 
 const apiRouterMaxSecretLen = 8 << 10 // 8KB — generoso o bastante pra qualquer token/JWT real
