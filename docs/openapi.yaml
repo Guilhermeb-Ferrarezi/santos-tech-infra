@@ -3746,6 +3746,85 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /drive-folders/{id}/files/{fileId}:
+    patch:
+      tags: [Arquivos]
+      summary: Renomeia um arquivo ou subpasta
+      description: |
+        Exige acesso `write` na pasta raiz `{id}` (não precisa ser Admin —
+        qualquer usuário/cargo com `write` nessa pasta pode renomear). Rate
+        limit 30/min. `fileId` é validado por ancestralidade (IsDescendant)
+        contra a árvore de `{id}` — não dá pra renomear algo fora do escopo
+        autorizado só adivinhando o ID no Drive.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, minLength: 1, maxLength: 255 }
+              required: [name]
+      responses:
+        "200":
+          description: Arquivo renomeado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file: { $ref: "#/components/schemas/DriveFile" }
+                required: [file]
+        "400":
+          description: Nome ausente/vazio ou maior que 255 caracteres.
+        "403":
+          description: Sem acesso de escrita a essa pasta, ou fileId fora da árvore autorizada.
+        "502":
+          description: Falha ao renomear no Drive.
+        "503":
+          description: Google Drive não configurado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [Arquivos]
+      summary: Move um arquivo ou subpasta pra lixeira do Drive
+      description: |
+        Exige acesso `write` na pasta raiz `{id}` (mesma regra do renomear —
+        qualquer usuário/cargo com `write`, não só Admin). Rate limit 30/min.
+        `fileId` validado por ancestralidade, igual ao renomear/download. Move
+        pra lixeira do Google Drive — **não** é exclusão permanente (mesmo
+        comportamento do botão "Remover" da UI do próprio Drive; reversível
+        de lá pelo dono real do arquivo).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Movido pra lixeira.
+        "403":
+          description: Sem acesso de escrita a essa pasta, ou fileId fora da árvore autorizada.
+        "502":
+          description: Falha ao mover pra lixeira no Drive.
+        "503":
+          description: Google Drive não configurado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
 components:
   securitySchemes:
     cookieAuth:

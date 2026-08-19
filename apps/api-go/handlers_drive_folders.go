@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -356,6 +357,21 @@ func (s *Server) handleListDriveFolderFiles(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"files": files})
 }
 
+// ensureFileInFolder garante que fileID está DENTRO da árvore de folder —
+// impede que alguém com escrita/leitura numa pasta baixe/renomeie/apague um
+// arquivo de FORA dela só por adivinhar/saber o ID no Drive (a ACL deste
+// dashboard é por pasta raiz, não por ID individual do Drive).
+func (s *Server) ensureFileInFolder(ctx context.Context, folder *DriveFolder, fileID string) error {
+	ok, err := s.drive.IsDescendant(ctx, fileID, folder.DriveFolderID)
+	if err != nil {
+		return appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar o arquivo")
+	}
+	if !ok {
+		return appErr(http.StatusForbidden, "FORBIDDEN", "arquivo fora do escopo autorizado")
+	}
+	return nil
+}
+
 // GET /drive-folders/{id}/files/{fileId}/download?download=1 — sempre
 // proxeado pelo backend (a service account é quem tem acesso no Drive, não o
 // usuário final). Por padrão abre INLINE (o navegador renderiza imagem/vídeo/
@@ -367,9 +383,22 @@ func (s *Server) handleDownloadDriveFile(w http.ResponseWriter, r *http.Request)
 		writeErr(w, appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED", "Arquivos (Google Drive) não configurado"))
 		return
 	}
+	folder, err := s.getDriveFolder(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if folder == nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "pasta não encontrada"))
+		return
+	}
 	fileID := strings.TrimSpace(r.PathValue("fileId"))
 	if fileID == "" {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido"))
+		return
+	}
+	if err := s.ensureFileInFolder(r.Context(), folder, fileID); err != nil {
+		writeErr(w, err)
 		return
 	}
 	body, filename, contentType, status, rangeHeaders, err := s.drive.StreamDownload(r.Context(), fileID, r.Header.Get("Range"))
@@ -406,9 +435,22 @@ func (s *Server) handleDriveFileThumbnail(w http.ResponseWriter, r *http.Request
 		writeErr(w, appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED", "Arquivos (Google Drive) não configurado"))
 		return
 	}
+	folder, err := s.getDriveFolder(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if folder == nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "pasta não encontrada"))
+		return
+	}
 	fileID := strings.TrimSpace(r.PathValue("fileId"))
 	if fileID == "" {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido"))
+		return
+	}
+	if err := s.ensureFileInFolder(r.Context(), folder, fileID); err != nil {
+		writeErr(w, err)
 		return
 	}
 	data, contentType, ok, err := s.drive.GetThumbnail(r.Context(), fileID)
@@ -514,4 +556,89 @@ func (s *Server) handleUploadDriveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"file": uploaded})
+}
+
+// PATCH /drive-folders/{id}/files/{fileId} — folderAccessGuard("write") já
+// garantiu acesso de escrita à pasta raiz. Renomeia o arquivo/subpasta
+// (ensureFileInFolder impede renomear algo fora da árvore autorizada).
+func (s *Server) handleRenameDriveFile(w http.ResponseWriter, r *http.Request) {
+	if s.drive == nil {
+		writeErr(w, appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED", "Arquivos (Google Drive) não configurado"))
+		return
+	}
+	folder, err := s.getDriveFolder(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if folder == nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "pasta não encontrada"))
+		return
+	}
+	fileID := strings.TrimSpace(r.PathValue("fileId"))
+	if fileID == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido"))
+		return
+	}
+	if err := s.ensureFileInFolder(r.Context(), folder, fileID); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<10)
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" || len(name) > 255 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "nome deve ter entre 1 e 255 caracteres"))
+		return
+	}
+
+	f, err := s.drive.RenameFile(r.Context(), fileID, name)
+	if err != nil {
+		slog.Error("falha ao renomear arquivo no Drive", "fileId", fileID, "err", err)
+		writeErr(w, appErr(http.StatusBadGateway, "RENAME_FAILED", "falha ao renomear o arquivo"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"file": f})
+}
+
+// DELETE /drive-folders/{id}/files/{fileId} — folderAccessGuard("write") já
+// garantiu acesso de escrita à pasta raiz. Move pra lixeira do Drive — NÃO é
+// exclusão permanente (mesmo botão "Remover" da UI do próprio Drive).
+func (s *Server) handleDeleteDriveFile(w http.ResponseWriter, r *http.Request) {
+	if s.drive == nil {
+		writeErr(w, appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED", "Arquivos (Google Drive) não configurado"))
+		return
+	}
+	folder, err := s.getDriveFolder(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if folder == nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "pasta não encontrada"))
+		return
+	}
+	fileID := strings.TrimSpace(r.PathValue("fileId"))
+	if fileID == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido"))
+		return
+	}
+	if err := s.ensureFileInFolder(r.Context(), folder, fileID); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	if err := s.drive.TrashFile(r.Context(), fileID); err != nil {
+		slog.Error("falha ao mover arquivo pra lixeira do Drive", "fileId", fileID, "err", err)
+		writeErr(w, appErr(http.StatusBadGateway, "DELETE_FAILED", "falha ao excluir o arquivo"))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

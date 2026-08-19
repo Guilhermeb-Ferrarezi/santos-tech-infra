@@ -214,3 +214,27 @@ func TestHandleUploadDriveFileDriveDisabled(t *testing.T) {
 		t.Fatalf("code=%d", w.Code)
 	}
 }
+
+func TestHandleRenameDriveFileDriveDisabled(t *testing.T) {
+	s := testServer(Config{}) // s.drive == nil
+	r := httptest.NewRequest("PATCH", "/drive-folders/"+validUUID+"/files/xyz", strings.NewReader(`{"name":"novo.png"}`))
+	r.SetPathValue("id", validUUID)
+	r.SetPathValue("fileId", "xyz")
+	w := httptest.NewRecorder()
+	s.handleRenameDriveFile(w, reqAs(r, 1))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code=%d", w.Code)
+	}
+}
+
+func TestHandleDeleteDriveFileDriveDisabled(t *testing.T) {
+	s := testServer(Config{}) // s.drive == nil
+	r := httptest.NewRequest("DELETE", "/drive-folders/"+validUUID+"/files/xyz", nil)
+	r.SetPathValue("id", validUUID)
+	r.SetPathValue("fileId", "xyz")
+	w := httptest.NewRecorder()
+	s.handleDeleteDriveFile(w, reqAs(r, 1))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code=%d", w.Code)
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -279,14 +280,70 @@ func (d *DriveClient) IsDescendant(ctx context.Context, folderID, rootID string)
 	return false, nil
 }
 
+// RenameFile troca o nome de um arquivo/subpasta no Drive. fileID não é
+// validado contra nenhuma pasta aqui — o chamador (handler HTTP) garante via
+// ensureFileInFolder que o arquivo está dentro da árvore autorizada.
+func (d *DriveClient) RenameFile(ctx context.Context, fileID, name string) (DriveFile, error) {
+	body, err := json.Marshal(map[string]string{"name": name})
+	if err != nil {
+		return DriveFile{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch,
+		"https://www.googleapis.com/drive/v3/files/"+url.PathEscape(fileID)+"?supportsAllDrives=true&fields=id,name,mimeType,size,modifiedTime,iconLink",
+		bytes.NewReader(body))
+	if err != nil {
+		return DriveFile{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := d.http.Do(req)
+	if err != nil {
+		return DriveFile{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return DriveFile{}, driveAPIError(resp)
+	}
+	var f driveFileWire
+	if err := json.NewDecoder(resp.Body).Decode(&f); err != nil {
+		return DriveFile{}, err
+	}
+	return f.toDriveFile(), nil
+}
+
+// TrashFile move um arquivo/subpasta pra lixeira do Drive — NÃO é exclusão
+// permanente (reversível de lá pelo dono real da pasta no Drive), mesmo
+// comportamento do botão "Remover" da UI do próprio Google Drive. fileID não
+// é validado contra nenhuma pasta aqui — mesma nota de RenameFile.
+func (d *DriveClient) TrashFile(ctx context.Context, fileID string) error {
+	body, err := json.Marshal(map[string]bool{"trashed": true})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch,
+		"https://www.googleapis.com/drive/v3/files/"+url.PathEscape(fileID)+"?supportsAllDrives=true",
+		bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := d.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return driveAPIError(resp)
+	}
+	return nil
+}
+
 // StreamDownload devolve o corpo do arquivo (chamador DEVE fechar), nome,
 // content-type, status HTTP (200 ou 206) e os headers de range que devem ser
 // espelhados na resposta (Content-Range/Accept-Ranges/Content-Length, só
 // quando presentes). rangeHeader é repassado direto pro Drive — dá pra
 // dar seek num vídeo sem baixar o arquivo inteiro. fileID não é validado
-// contra driveFolderID aqui — o chamador (handler HTTP) já garantiu, via
-// folderAccessGuard, que o usuário tem acesso à pasta antes de pedir o
-// download de um arquivo listado dessa pasta.
+// contra nenhuma pasta aqui — o chamador (handler HTTP) garante via
+// ensureFileInFolder que o arquivo está dentro da árvore autorizada.
 func (d *DriveClient) StreamDownload(ctx context.Context, fileID, rangeHeader string) (body io.ReadCloser, filename, contentType string, status int, rangeHeaders http.Header, err error) {
 	metaReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"https://www.googleapis.com/drive/v3/files/"+url.PathEscape(fileID)+"?fields=name,mimeType&supportsAllDrives=true", nil)
