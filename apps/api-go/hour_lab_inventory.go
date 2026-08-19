@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -99,7 +100,7 @@ func (s *Server) replaceLabDeviceInventory(ctx context.Context, deviceUUID, devi
 		return err
 	}
 	for _, p := range programs {
-		name := truncRunes(strings.TrimSpace(p.Name), maxInventoryFieldRunes)
+		name := sanitizeInventoryField(p.Name)
 		if name == "" {
 			continue
 		}
@@ -110,8 +111,8 @@ func (s *Server) replaceLabDeviceInventory(ctx context.Context, deviceUUID, devi
 			VALUES ($1::uuid, $2, $3, $4)
 			ON CONFLICT (device_id, name, version) DO NOTHING`,
 			deviceID, name,
-			truncRunes(strings.TrimSpace(p.Version), maxInventoryFieldRunes),
-			truncRunes(strings.TrimSpace(p.Publisher), maxInventoryFieldRunes)); err != nil {
+			sanitizeInventoryField(p.Version),
+			sanitizeInventoryField(p.Publisher)); err != nil {
 			return err
 		}
 	}
@@ -120,6 +121,23 @@ func (s *Server) replaceLabDeviceInventory(ctx context.Context, deviceUUID, devi
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// sanitizeInventoryField limpa um campo vindo do registro do Windows.
+//
+// O NUL não é paranoia: o registro devolve entradas com \x00 no meio do nome
+// ("Roblox Player for guibf\x00" é real), e o Postgres recusa 0x00 em coluna
+// text (SQLSTATE 22021) — uma entrada assim derrubava o inventário INTEIRO da
+// máquina com 500. Os demais caracteres de controle vão junto porque só sujam
+// a tela do admin.
+func sanitizeInventoryField(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r == 0 || unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	return truncRunes(strings.TrimSpace(s), maxInventoryFieldRunes)
 }
 
 func truncRunes(s string, max int) string {

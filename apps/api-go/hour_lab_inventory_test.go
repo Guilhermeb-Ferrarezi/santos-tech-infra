@@ -97,6 +97,21 @@ func TestInventoryRecusaSegredoForaDoTamanho(t *testing.T) {
 	}
 }
 
+// Regressão de produção: o registro do Windows devolve nomes com NUL embutido
+// ("Roblox Player for guibf\x00"), o Postgres recusa 0x00 em coluna text
+// (SQLSTATE 22021) e o inventário INTEIRO da máquina falhava com 500.
+func TestSanitizeInventoryFieldTiraNulEControles(t *testing.T) {
+	if got := sanitizeInventoryField("Roblox Player for guibf\x00"); got != "Roblox Player for guibf" {
+		t.Fatalf("NUL deveria sumir, veio %q", got)
+	}
+	if got := sanitizeInventoryField("  Unity\t6000\n "); got != "Unity6000" {
+		t.Fatalf("controles deveriam sumir e as pontas serem aparadas, veio %q", got)
+	}
+	if got := sanitizeInventoryField("Blender"); got != "Blender" {
+		t.Fatalf("nome normal não deveria mudar, veio %q", got)
+	}
+}
+
 func TestTruncRunesNaoQuebraAcento(t *testing.T) {
 	if got := truncRunes("ãããã", 2); got != "ãã" {
 		t.Fatalf("esperava 2 runas, veio %q", got)

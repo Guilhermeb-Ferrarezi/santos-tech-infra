@@ -208,6 +208,16 @@ pub struct InstalledProgram {
     publisher: String,
 }
 
+// Tira caracteres de controle e espaços das pontas de um valor do registro.
+// O NUL é o que importa: entradas como "Roblox Player for guibf\0" existem de
+// verdade, e o Postgres do outro lado recusa 0x00 em coluna text — uma entrada
+// assim derrubava o inventário inteiro da máquina. O servidor limpa de novo
+// (não confia no cliente); aqui é higiene na origem.
+#[cfg(windows)]
+fn clean_reg_string(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string()
+}
+
 // Lê as três chaves Uninstall do registro: HKLM (64 bits), HKLM\WOW6432Node
 // (programas de 32 bits numa máquina de 64) e HKCU (instalado só pro usuário
 // atual, caso do VS Code e do Unity Hub). É a mesma fonte que o painel do
@@ -240,7 +250,7 @@ fn list_installed_programs() -> Vec<InstalledProgram> {
                 Ok(v) => v,
                 Err(_) => continue, // sem nome exibido = não aparece nem pro usuário
             };
-            let name = name.trim().to_string();
+            let name = clean_reg_string(&name);
             if name.is_empty() {
                 continue;
             }
@@ -264,16 +274,12 @@ fn list_installed_programs() -> Vec<InstalledProgram> {
             }
             out.push(InstalledProgram {
                 name,
-                version: entry
-                    .get_value::<String, _>("DisplayVersion")
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string(),
-                publisher: entry
-                    .get_value::<String, _>("Publisher")
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string(),
+                version: clean_reg_string(
+                    &entry.get_value::<String, _>("DisplayVersion").unwrap_or_default(),
+                ),
+                publisher: clean_reg_string(
+                    &entry.get_value::<String, _>("Publisher").unwrap_or_default(),
+                ),
             });
         }
     }
