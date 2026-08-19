@@ -16,12 +16,15 @@ import (
 // handleCoolifyWebhook recebe eventos de deploy da Coolify e envia WhatsApp
 // conforme o status do evento (falha, sucesso, serviço fora do ar).
 // URL: POST /webhooks/coolify?token=<COOLIFY_WEBHOOK_SECRET>
+//
+// Fail-closed, como o webhook da Evolution: segredo vazio recusa tudo. O
+// payload vira mensagem de WhatsApp para o admin, então aceitar POST anônimo
+// dá a qualquer um um canal direto de notificação.
 func (s *Server) handleCoolifyWebhook(w http.ResponseWriter, r *http.Request) {
-	if secret := s.cfg.CoolifyWebhookSecret; secret != "" {
-		if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(secret)) != 1 {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+	secret := s.cfg.CoolifyWebhookSecret
+	if secret == "" || subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(secret)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 64_000))
