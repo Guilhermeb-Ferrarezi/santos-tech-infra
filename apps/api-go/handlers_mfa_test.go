@@ -4,8 +4,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -432,5 +434,30 @@ func TestHandleMFAEnableRedisDown(t *testing.T) {
 	s.handleMFAEnable(w, r)
 	if w.Code == http.StatusOK {
 		t.Fatal("Redis indisponível não deve permitir ativação de MFA (esperava != 200)")
+	}
+}
+
+// Downgrade de MFA: o 2º fator é escolha da CONTA. Uma conta só-TOTP não pode
+// oferecer "email" como método — é o que o handleMFAEmail passou a exigir
+// antes de disparar o OTP.
+func TestMFAMethodsNaoIncluiEmailSemVerificacao(t *testing.T) {
+	segredo := "JBSWY3DPEHPK3PXP"
+	agora := time.Now()
+
+	soTOTP := &User{TOTPSecret: &segredo}
+	if slices.Contains(mfaMethods(soTOTP), "email") {
+		t.Errorf("conta só-TOTP não pode ter o método email: %v", mfaMethods(soTOTP))
+	}
+	if !slices.Contains(mfaMethods(soTOTP), "totp") {
+		t.Errorf("conta só-TOTP deveria ter o método totp: %v", mfaMethods(soTOTP))
+	}
+
+	comEmail := &User{TOTPSecret: &segredo, EmailVerifiedAt: &agora}
+	if !slices.Contains(mfaMethods(comEmail), "email") {
+		t.Errorf("conta com email verificado deveria ter o método email: %v", mfaMethods(comEmail))
+	}
+
+	if m := mfaMethods(&User{}); len(m) != 0 {
+		t.Errorf("conta sem fator nenhum: %v", m)
 	}
 }
