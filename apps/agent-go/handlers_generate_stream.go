@@ -18,7 +18,7 @@ import (
 // one-shot continua existindo para quem não quer stream.
 func (s *Server) handleGenerateStream(w http.ResponseWriter, r *http.Request) {
 	var req generateRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSONLimit(r, &req, maxGenerateBody); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}

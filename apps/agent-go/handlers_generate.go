@@ -106,7 +106,7 @@ type commandAction struct {
 // cria conversa, não persiste nada. Roda o Claude com ambiente mínimo (só OAuth).
 func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	var req generateRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSONLimit(r, &req, maxGenerateBody); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}

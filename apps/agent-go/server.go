@@ -212,6 +212,25 @@ func userIDFrom(r *http.Request) int64 {
 	return v
 }
 
+// Tetos de corpo das rotas JSON (#9). Sem http.MaxBytesReader, um POST com corpo
+// arbitrariamente grande era lido inteiro para a memória do processo até o OOM —
+// e as rotas de geração ficam atrás de rate limit por minuto, não por bytes.
+const (
+	// maxJSONBody: rotas comuns (login, CRUD de conversa, push token, controles).
+	// Nenhuma precisa de mais que alguns KB.
+	maxJSONBody = 1 << 20 // 1 MB
+	// maxGenerateBody: rotas de geração e compat OpenAI, que carregam imagem em
+	// base64 (8MB brutos ≈ 10,7MB codificados) além do prompt e do envelope.
+	maxGenerateBody = 12 << 20 // 12 MB
+)
+
 func decodeJSON(r *http.Request, v any) error {
+	return decodeJSONLimit(r, v, maxJSONBody)
+}
+
+// decodeJSONLimit decodifica o corpo com um teto explícito de bytes. O w nil em
+// MaxBytesReader é suportado: só desativa o fechamento antecipado da conexão.
+func decodeJSONLimit(r *http.Request, v any, max int64) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, max)
 	return json.NewDecoder(r.Body).Decode(v)
 }
