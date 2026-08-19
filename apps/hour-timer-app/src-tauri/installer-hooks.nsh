@@ -9,8 +9,26 @@
 !macro NSIS_HOOK_POSTINSTALL
   ; watchdog.exe já foi copiado pra $INSTDIR pela seção principal do
   ; instalador (é um "resource" do bundle, ver tauri.conf.json) antes deste
-  ; hook rodar — não precisa de File aqui.
-  nsExec::ExecToLog 'schtasks /create /f /sc minute /mo 5 /tn "SantosTechCronometroWatchdog" /tr "\"$INSTDIR\watchdog.exe\"" /rl limited'
+  ; hook rodar. MAS o Agendador de Tarefas (schtasks /tr) tem um bug clássico
+  ; do Windows: quando o caminho no /tr tem espaço — mesmo entre aspas do
+  ; jeito documentado — ele corta errado no primeiro espaço e guarda um
+  ; Command/Arguments quebrado (confirmado testando isolado: "Santos Tech -
+  ; Cronômetro" tem 2 espaços, falha sempre com 0x80070002/FILE_NOT_FOUND
+  ; mesmo o arquivo existindo). $INSTDIR tem espaço — por isso copiamos o
+  ; watchdog pra um caminho fixo sem espaço em C:\ProgramData (sem elevar:
+  ; ACL padrão de Usuários já permite criar subpasta/gravar) só pra apontar a
+  ; tarefa pra lá. Faz sentido também semanticamente: é infra da máquina
+  ; (watchdog do PC do laboratório), não dado de um usuário específico —
+  ; evita qualquer ACL herdada estranha que a pasta de perfil do usuário
+  ; possa ter acumulado. NSIS não tem uma constante "$COMMONAPPDATA" própria
+  ; — o jeito documentado de apontar pra ProgramData é $APPDATA depois de
+  ; SetShellVarContext all (volta pro contexto "current" no fim do hook, sem
+  ; afetar o resto do instalador).
+  SetShellVarContext all
+  CreateDirectory "$APPDATA\SantosTechWatchdog"
+  CopyFiles /SILENT "$INSTDIR\watchdog.exe" "$APPDATA\SantosTechWatchdog\watchdog.exe"
+  nsExec::ExecToLog 'schtasks /create /f /sc minute /mo 5 /tn "SantosTechCronometroWatchdog" /tr "\"$APPDATA\SantosTechWatchdog\watchdog.exe\"" /rl limited'
+  SetShellVarContext current
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
@@ -19,4 +37,8 @@
 
 !macro NSIS_HOOK_POSTUNINSTALL
   Delete "$INSTDIR\watchdog.exe"
+  SetShellVarContext all
+  Delete "$APPDATA\SantosTechWatchdog\watchdog.exe"
+  RMDir "$APPDATA\SantosTechWatchdog"
+  SetShellVarContext current
 !macroend

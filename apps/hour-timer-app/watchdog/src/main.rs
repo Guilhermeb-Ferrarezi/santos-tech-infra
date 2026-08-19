@@ -14,6 +14,23 @@ use sysinfo::System;
 
 const TARGET_EXE: &str = "hour-timer-app.exe";
 
+// O instalador (ver ../src-tauri/installer-hooks.nsh) copia este binário pra
+// C:\ProgramData\SantosTechWatchdog\ — fora de $INSTDIR — porque o Agendador
+// de Tarefas (schtasks /tr) tem um bug conhecido do Windows que corta o
+// caminho errado quando ele tem espaço, e $INSTDIR ("...\Santos Tech -
+// Cronômetro") tem. Isso significa que watchdog.exe NÃO é mais vizinho de
+// hour-timer-app.exe (current_exe().parent() aponta pro ProgramData, não pro
+// install dir) — por isso resolve via %LOCALAPPDATA%\<productName> direto,
+// hardcoded (é um binário de propósito único pra este app, não genérico).
+fn target_exe_path() -> Option<std::path::PathBuf> {
+    let local_app_data = env::var("LOCALAPPDATA").ok()?;
+    Some(
+        std::path::Path::new(&local_app_data)
+            .join("Santos Tech - Cronômetro")
+            .join(TARGET_EXE),
+    )
+}
+
 fn main() {
     let mut sys = System::new();
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
@@ -25,9 +42,7 @@ fn main() {
         return;
     }
 
-    if let Ok(exe) = env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let _ = Command::new(dir.join(TARGET_EXE)).spawn();
-        }
+    if let Some(target) = target_exe_path() {
+        let _ = Command::new(target).spawn();
     }
 }

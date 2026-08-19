@@ -403,7 +403,8 @@ func (s *Server) transitionHourSession(ctx context.Context, id string, actorID i
 
 // endHourSession encerra a sessão e debita o tempo usado do saldo do cliente
 // — cálculo do decorrido, evento "end", status e débito de saldo na mesma
-// transação. Saldo pode ficar negativo (sem corte automático, por design).
+// transação. Saldo nunca fica negativo (GREATEST trava em 0): se a sessão
+// passou do saldo disponível, o excedente não vira dívida — só zera.
 func (s *Server) endHourSession(ctx context.Context, id string, actorID int64) (*HourSession, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -439,7 +440,7 @@ func (s *Server) endHourSession(ctx context.Context, id string, actorID int64) (
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE hour_clients SET balance_minutes = balance_minutes - $2, updated_at = now()
+		UPDATE hour_clients SET balance_minutes = GREATEST(balance_minutes - $2, 0), updated_at = now()
 		WHERE id = $1::uuid`,
 		clientID, elapsedMinutes); err != nil {
 		return nil, err

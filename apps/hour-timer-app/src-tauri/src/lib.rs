@@ -53,17 +53,19 @@ fn read_overlay_corner(app: &AppHandle) -> String {
         .unwrap_or_else(|| "bottom-right".to_string())
 }
 
-// Janela flutuante com o tempo, no canto configurado (ver set_overlay_position)
-// — mostra/esconde ao clicar de novo no item do menu da bandeja. Só é criada
-// na primeira vez.
-fn toggle_overlay(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
-        let visible = win.is_visible().unwrap_or(false);
-        if visible {
-            let _ = win.hide();
-        } else {
-            let _ = win.show();
-        }
+// Janela flutuante com o tempo, no canto salvo — criada já no boot (escondida,
+// mesmo padrão do ensure_toast_window logo abaixo) e nunca mais recriada.
+// Criar uma WebviewWindow DE DENTRO de um #[tauri::command] (era o que
+// set_overlay_position fazia antes, sob demanda) trava a UI — o comando roda
+// numa thread do runtime async e a criação de janela precisa despachar pra
+// thread principal; nessa combinação específica (primeiro uso, ainda sem
+// janela) o await nunca voltava e o botão "Aplicar" ficava girando pra
+// sempre. Criando no setup() (sem estar dentro de um comando invocado pelo
+// front) esse problema não existe — depois disso, toggle_overlay e
+// set_overlay_position só mostram/escondem/reposicionam uma janela que já
+// existe, nunca criam nada.
+fn ensure_overlay_window(app: &AppHandle) {
+    if app.get_webview_window(OVERLAY_LABEL).is_some() {
         return;
     }
 
@@ -80,7 +82,21 @@ fn toggle_overlay(app: &AppHandle) {
         .resizable(false)
         .shadow(false)
         .transparent(true)
+        .visible(false)
         .build();
+}
+
+// Mostra/esconde ao clicar no item do menu da bandeja — a janela já existe
+// desde o boot (ensure_overlay_window), então é só toggle de visibilidade.
+fn toggle_overlay(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
+        let visible = win.is_visible().unwrap_or(false);
+        if visible {
+            let _ = win.hide();
+        } else {
+            let _ = win.show();
+        }
+    }
 }
 
 // Janela de notificação estilo "aviso de antivírus" — canto inferior direito,
@@ -109,9 +125,10 @@ fn ensure_toast_window(app: &AppHandle) {
         .build();
 }
 
-// Comando chamado pelo botão "Posição na tela" da janela principal — salva a
-// escolha (pra próxima vez que o overlay for criado) e, se ele já estiver
-// aberto agora, reposiciona ao vivo em vez de esperar a próxima abertura.
+// Comando chamado pelo botão "Aplicar" da tela principal — salva a escolha e
+// reposiciona+mostra o overlay (que já existe desde o boot, ver
+// ensure_overlay_window — este comando nunca cria janela, só mexe numa que
+// já existe, por isso não trava).
 #[tauri::command]
 fn set_overlay_position(app: AppHandle, corner: String) {
     if let Ok(store) = app.store("config.json") {
@@ -120,6 +137,7 @@ fn set_overlay_position(app: AppHandle, corner: String) {
     if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
         let (x, y) = corner_position_in_work_area(&app, OVERLAY_WIDTH, OVERLAY_HEIGHT, 16.0, &corner);
         let _ = win.set_position(Position::Logical(LogicalPosition { x, y }));
+        let _ = win.show();
     }
 }
 
@@ -181,6 +199,7 @@ pub fn run() {
                 .build(app)?;
 
             ensure_toast_window(&app.handle());
+            ensure_overlay_window(&app.handle());
 
             Ok(())
         })
