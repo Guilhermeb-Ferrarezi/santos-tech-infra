@@ -31,7 +31,7 @@ func (s *Server) addBotTools(srv *mcp.Server) {
 		Name:        "leads_list",
 		Description: "Lista os leads capturados no atendimento do WhatsApp (nome, telefone, status no funil).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, any, error) {
-		return s.proxyBot(ctx, req, "GET", base+"/api/leads", nil)
+		return s.proxyBotUntrusted(ctx, req, "GET", base+"/api/leads", nil)
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -40,8 +40,8 @@ func (s *Server) addBotTools(srv *mcp.Server) {
 			"Com id: histórico de mensagens dessa conversa.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in conversationsListInput) (*mcp.CallToolResult, any, error) {
 		if in.ID != "" {
-			return s.proxyBot(ctx, req, "GET", base+"/api/conversations/"+url.PathEscape(in.ID)+"/messages", nil)
+			return s.proxyBotUntrusted(ctx, req, "GET", base+"/api/conversations/"+url.PathEscape(in.ID)+"/messages", nil)
 		}
-		return s.proxyBot(ctx, req, "GET", base+"/api/conversations", nil)
+		return s.proxyBotUntrusted(ctx, req, "GET", base+"/api/conversations", nil)
 	})
 }
