@@ -132,6 +132,66 @@ func (s *Server) handleListDriveFoldersAdmin(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{"folders": folders})
 }
 
+// ensureDriveFolderNotNested recusa cadastrar uma pasta que seja ancestral ou
+// descendente de outra JÁ cadastrada (ou a mesma pasta duas vezes).
+//
+// A ACL deste dashboard é por pasta RAIZ e vale para toda a árvore abaixo dela
+// (ver ensureFileInFolder). Então com "Escola/" legível por aluno e
+// "Escola/Financeiro/" restrita a admin, o aluno lê o Financeiro inteiro
+// entrando pelo id da Escola e navegando — a ACL mais restrita da pasta de
+// dentro simplesmente não é consultada nesse caminho. Duas pastas cadastradas
+// só podem coexistir se forem árvores disjuntas.
+//
+// excludeID é a própria pasta na edição (não conflita consigo mesma).
+func (s *Server) ensureDriveFolderNotNested(ctx context.Context, driveFolderID, excludeID string) error {
+	if s.drive == nil {
+		return appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED",
+			"Arquivos (Google Drive) não configurado — sem ele não dá pra verificar se a pasta está dentro de outra já cadastrada")
+	}
+	existing, err := s.listDriveFolders(ctx)
+	if err != nil {
+		return err
+	}
+	return s.checkDriveFolderNesting(ctx, driveFolderID, excludeID, existing)
+}
+
+// checkDriveFolderNesting é a parte pura da checagem (recebe as pastas já
+// cadastradas), separada pra ser testável sem banco.
+func (s *Server) checkDriveFolderNesting(ctx context.Context, driveFolderID, excludeID string, existing []DriveFolder) error {
+	for i := range existing {
+		f := &existing[i]
+		if f.ID == excludeID {
+			continue
+		}
+		if f.DriveFolderID == driveFolderID {
+			return appErr(http.StatusConflict, "DRIVE_FOLDER_DUPLICATE",
+				"essa pasta do Drive já está cadastrada como \""+f.Name+"\"")
+		}
+		inside, err := s.driveIsDescendantCached(ctx, driveFolderID, f.DriveFolderID)
+		if err != nil {
+			slog.Error("falha ao verificar aninhamento de pasta do Drive", "err", err)
+			return appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar a pasta no Drive")
+		}
+		if inside {
+			return appErr(http.StatusConflict, "DRIVE_FOLDER_NESTED",
+				"essa pasta está DENTRO de \""+f.Name+"\", que já está cadastrada — quem tem acesso a \""+f.Name+
+					"\" já enxerga esta aqui, então a permissão separada não teria efeito. Restrinja o acesso em \""+f.Name+
+					"\" ou tire esta pasta de dentro dela no Drive.")
+		}
+		contains, err := s.driveIsDescendantCached(ctx, f.DriveFolderID, driveFolderID)
+		if err != nil {
+			slog.Error("falha ao verificar aninhamento de pasta do Drive", "err", err)
+			return appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar a pasta no Drive")
+		}
+		if contains {
+			return appErr(http.StatusConflict, "DRIVE_FOLDER_NESTED",
+				"essa pasta CONTÉM \""+f.Name+"\", que já está cadastrada — cadastrá-la daria a quem tem acesso aqui o conteúdo de \""+
+					f.Name+"\" também. Cadastre as subpastas separadamente ou remova \""+f.Name+"\".")
+		}
+	}
+	return nil
+}
+
 // POST /auth/admin/drive-folders
 func (s *Server) handleCreateDriveFolder(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
@@ -144,9 +204,13 @@ func (s *Server) handleCreateDriveFolder(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	driveID := extractDriveFolderID(in.DriveFolderID)
+	if err := s.ensureDriveFolderNotNested(r.Context(), driveID, ""); err != nil {
+		writeErr(w, err)
+		return
+	}
 	folder, err := s.insertDriveFolder(r.Context(),
-		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description),
-		extractDriveFolderID(in.DriveFolderID), userIDFrom(r))
+		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description), driveID, userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -171,8 +235,13 @@ func (s *Server) handleUpdateDriveFolder(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	driveID := extractDriveFolderID(in.DriveFolderID)
+	if err := s.ensureDriveFolderNotNested(r.Context(), driveID, id); err != nil {
+		writeErr(w, err)
+		return
+	}
 	folder, err := s.updateDriveFolderRow(r.Context(), id,
-		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description), extractDriveFolderID(in.DriveFolderID))
+		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description), driveID)
 	if err != nil {
 		writeErr(w, err)
 		return
