@@ -97,6 +97,27 @@ func validCPF(digits string) bool {
 	return digits[9] == cpfCheckDigit(digits, 9) && digits[10] == cpfCheckDigit(digits, 10)
 }
 
+// validProviderID: identificador opaco vindo do path (id de relatorio da Efi, por
+// exemplo) que sera concatenado numa URL do gateway e num cabecalho de resposta.
+// Aceita so [A-Za-z0-9._-], ate 64 caracteres: sem barra, sem "..", sem CR/LF.
+// r.PathValue vem DESESCAPADO, entao um id como "..%2F.." chega como "../.." e
+// escaparia do caminho da API da Efi.
+func validProviderID(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // validPhone: vazio (opcional) ou 10–11 dígitos (fixo/celular BR), já normalizado.
 func validPhone(digits string) bool {
 	if digits == "" {
