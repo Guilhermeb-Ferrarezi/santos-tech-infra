@@ -64,8 +64,10 @@ func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *S
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	// Endpoints operacionais PÚBLICOS (sem auth, fora do rate limit): liveness,
-	// readiness e métricas. Necessário para healthcheck/scrape não quebrarem.
+	// Endpoints operacionais fora do rate limit / ip-ban / anti-bot (probes e
+	// scrape são frequentes): liveness, readiness e métricas. /health e /ready
+	// são públicos; /metrics exige `Authorization: Bearer $METRICS_TOKEN`
+	// quando a env está definida (ver metricsHandler).
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
