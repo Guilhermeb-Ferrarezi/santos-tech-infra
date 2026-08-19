@@ -123,11 +123,17 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// authGuardUser autentica qualquer usuário válido (JWT de sessão ou PAT) SEM exigir
-// admin. Usado apenas pelo /claude/generate, que é sandbox (sem tools, --add-dir,
-// MCP, --dangerously-skip-permissions ou tokens de infra) — então não precisa do
-// papel admin que protege as rotas privilegiadas de conversa.
-func (s *Server) authGuardUser(next http.HandlerFunc) http.HandlerFunc {
+// authGuardAdminOrInternal autentica JWT de sessão ou PAT e EXIGE papel admin,
+// preservando o bypass dos serviços internos que apresentam o INTERNAL_SECRET
+// como Bearer (ex: bot-atendimento).
+//
+// SEGURANÇA (#2): antes chamava-se authGuardUser e aceitava QUALQUER usuário
+// válido, sob a premissa de que /claude/generate era um sandbox "sem tools,
+// --dangerously-skip-permissions ou tokens de infra". A premissa é falsa: o
+// caminho de imagem anexada passa --dangerously-skip-permissions e o Claude ter
+// ferramentas é decisão de produto. Sem checagem de papel, qualquer usuário
+// (inclusive aluno, role 1) com JWT ou PAT executava o CLI no servidor.
+func (s *Server) authGuardAdminOrInternal(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := bearerToken(r)
 		if token == "" {
@@ -145,6 +151,13 @@ func (s *Server) authGuardUser(next http.HandlerFunc) http.HandlerFunc {
 		uid, err := s.resolveToken(r.Context(), token)
 		if err != nil {
 			writeErr(w, err)
+			return
+		}
+		// Fail-closed: erro ao consultar o papel nega o acesso (não assume aluno
+		// nem admin). userRole devolve 0 quando o usuário não existe mais.
+		role, err := s.userRole(r.Context(), uid)
+		if err != nil || role != RoleAdmin {
+			writeErr(w, appErr(http.StatusForbidden, "FORBIDDEN", "Acesso restrito a administradores"))
 			return
 		}
 		golog.SetUserID(r.Context(), uid)
@@ -199,6 +212,25 @@ func userIDFrom(r *http.Request) int64 {
 	return v
 }
 
+// Tetos de corpo das rotas JSON (#9). Sem http.MaxBytesReader, um POST com corpo
+// arbitrariamente grande era lido inteiro para a memória do processo até o OOM —
+// e as rotas de geração ficam atrás de rate limit por minuto, não por bytes.
+const (
+	// maxJSONBody: rotas comuns (login, CRUD de conversa, push token, controles).
+	// Nenhuma precisa de mais que alguns KB.
+	maxJSONBody = 1 << 20 // 1 MB
+	// maxGenerateBody: rotas de geração e compat OpenAI, que carregam imagem em
+	// base64 (8MB brutos ≈ 10,7MB codificados) além do prompt e do envelope.
+	maxGenerateBody = 12 << 20 // 12 MB
+)
+
 func decodeJSON(r *http.Request, v any) error {
+	return decodeJSONLimit(r, v, maxJSONBody)
+}
+
+// decodeJSONLimit decodifica o corpo com um teto explícito de bytes. O w nil em
+// MaxBytesReader é suportado: só desativa o fechamento antecipado da conexão.
+func decodeJSONLimit(r *http.Request, v any, max int64) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, max)
 	return json.NewDecoder(r.Body).Decode(v)
 }

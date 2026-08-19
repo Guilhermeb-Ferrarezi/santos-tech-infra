@@ -95,3 +95,27 @@ func TestGitHubAppJWT(t *testing.T) {
 		t.Errorf("issuer=%q", iss)
 	}
 }
+
+func TestRepoAllowed(t *testing.T) {
+	cfg := Config{AllowedRepos: []string{"santos-tech/infra", "santos-tech/bot-go"}}
+	ok := []string{
+		"santos-tech/infra",
+		"Santos-Tech/Infra",
+		"https://github.com/santos-tech/bot-go.git",
+		"git@github.com:santos-tech/bot-go.git",
+	}
+	for _, s := range ok {
+		if !cfg.repoAllowed(s) {
+			t.Errorf("repoAllowed(%q) deveria ser true", s)
+		}
+	}
+	bad := []string{"", "atacante/exfil", "https://github.com/atacante/exfil.git", "santos-tech/infra-evil"}
+	for _, s := range bad {
+		if cfg.repoAllowed(s) {
+			t.Errorf("repoAllowed(%q) deveria ser false", s)
+		}
+	}
+	if (Config{}).repoAllowed("santos-tech/infra") {
+		t.Error("allow-list vazia deve negar tudo (fail-closed)")
+	}
+}

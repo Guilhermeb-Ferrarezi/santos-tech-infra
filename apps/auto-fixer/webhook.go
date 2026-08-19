@@ -23,11 +23,14 @@ type WebhookHandler struct {
 }
 
 func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.cfg.WebhookSecret != "" {
-		if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(h.cfg.WebhookSecret)) != 1 {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+	// Fail-closed: sem segredo configurado, NINGUÉM entra. Antes a validação era
+	// condicionada a `WebhookSecret != ""` e COOLIFY_WEBHOOK_SECRET não constava
+	// dos obrigatórios do loadConfig — bastava a env sumir para o webhook virar
+	// anônimo e qualquer POST disparar clone + Claude + push na branch de deploy.
+	if h.cfg.WebhookSecret == "" ||
+		subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(h.cfg.WebhookSecret)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 64_000))
