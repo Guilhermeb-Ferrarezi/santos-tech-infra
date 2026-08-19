@@ -198,6 +198,13 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// /public/downloads (o app não pede autenticação nenhuma).
 	s.registerDownloadsRoutes(mux)
 
+	// Login por QR code / código curto (estilo WhatsApp Web, mas invertido: quem
+	// gera precisa estar logado, quem troca não). /auth/qr-login/start exige
+	// sessão (é ela que autoriza o dispositivo novo); /public/qr-login/exchange
+	// é público — o próprio token/código é a credencial, uso único, 2min de vida.
+	mux.HandleFunc("POST /auth/qr-login/start", s.rateLimit(20, min, s.authGuard(s.handleQRLoginStart)))
+	mux.HandleFunc("POST /public/qr-login/exchange", s.rateLimit(20, min, s.handleQRLoginExchange))
+
 	// Automação de resposta a comentário do Instagram (private reply,
 	// substitui o ManyChat) — webhook público autenticado por assinatura
 	// Meta (não cookie/PAT) + CRUD admin do mapeamento post -> link.

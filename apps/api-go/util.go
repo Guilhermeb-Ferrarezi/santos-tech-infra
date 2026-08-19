@@ -32,6 +32,21 @@ func randomToken(nbytes int) string {
 	return hex.EncodeToString(b)
 }
 
+// randomDigits gera um código numérico de n dígitos (crypto/rand, sem viés) —
+// pro código curto do QR login (digitável à mão, ao contrário do token hex).
+func randomDigits(n int) string {
+	const digits = "0123456789"
+	out := make([]byte, n)
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
+	for i, v := range b {
+		out[i] = digits[int(v)%len(digits)]
+	}
+	return string(out)
+}
+
 // isValidChallenge reports whether s is a well-formed MFA challenge token —
 // the exact output of randomToken(24): 48 lowercase hex characters.
 // Validates input before it reaches Redis key construction.
