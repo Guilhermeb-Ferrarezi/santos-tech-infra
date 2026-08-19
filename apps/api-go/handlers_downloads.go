@@ -22,7 +22,8 @@ const maxDownloadPresignBytes = 2 << 30
 // não há sniff de magic-bytes aqui (ao contrário de avatar/model3d): o upload
 // é sempre presigned (bytes vão direto pro R2, nunca passam pelo backend) e a
 // rota é admin-only, então confiamos na extensão declarada, como já se faz em
-// handleVideoPresign.
+// handleVideoPresign. O Content-Type daqui é assinado na URL presigned, então o
+// cliente não consegue trocá-lo por text/html na hora do PUT.
 var downloadExtContentType = map[string]string{
 	"exe":      "application/vnd.microsoft.portable-executable",
 	"msi":      "application/x-msi",
@@ -76,7 +77,9 @@ func (s *Server) handleDownloadsPresign(w http.ResponseWriter, r *http.Request) 
 
 	key := "downloads/" + randomToken(12) + "." + ext
 	writeJSON(w, http.StatusOK, map[string]any{
-		"uploadUrl":   s.r2.PresignPut(key, 30*time.Minute),
+		// contentType é fixado pelo servidor e vai assinado na URL: o PUT precisa
+		// mandar exatamente este valor, senão o R2 devolve 403.
+		"uploadUrl":   s.r2.PresignPut(key, contentType, 30*time.Minute),
 		"objectKey":   key,
 		"contentType": contentType,
 	})

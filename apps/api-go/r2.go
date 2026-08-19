@@ -178,16 +178,23 @@ func (r *R2) Delete(ctx context.Context, key string) error {
 // PresignPut gera uma URL PUT pré-assinada (SigV4 via query string) pra key,
 // válida por `expiry`: o cliente sobe o arquivo direto pro R2 com um PUT nessa URL,
 // sem os bytes passarem pelo backend — usado pra arquivos grandes demais pra
-// bufferizar em memória numa request normal (ex.: vídeo). Só assina o header
-// "host": o Content-Type do PUT real fica livre pro cliente escolher.
+// bufferizar em memória numa request normal (ex.: vídeo).
+//
+// O `contentType` é FIXADO PELO SERVIDOR e entra na assinatura (SignedHeaders
+// "content-type;host"): o PUT real só é aceito pelo R2 se mandar exatamente esse
+// Content-Type. Sem isso o cliente escolheria o tipo livremente e conseguiria
+// hospedar text/html no domínio público do bucket (cdn.santos-tech.com) — que é
+// same-site com os cookies de .santos-tech.com, virando XSS/phishing sob o
+// domínio real. Quem chama deve validar o contentType contra uma allow-list.
 //
 // ponytail: validação de tamanho aqui é só o que o cliente declara na hora de pedir
 // a URL (ver handleVideoPresign) — não há enforcement server-side dos bytes
 // efetivamente enviados ao R2. Upgrade se abuso virar problema: presigned POST com
 // policy de content-length-range, que o R2 também suporta.
-func (r *R2) PresignPut(key string, expiry time.Duration) string {
+func (r *R2) PresignPut(key, contentType string, expiry time.Duration) string {
 	host := r.accountID + ".r2.cloudflarestorage.com"
 	canonURI := "/" + r.bucket + "/" + key
+	contentType = strings.TrimSpace(contentType)
 
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
@@ -199,11 +206,12 @@ func (r *R2) PresignPut(key string, expiry time.Duration) string {
 	q.Set("X-Amz-Credential", r.accessKey+"/"+scope)
 	q.Set("X-Amz-Date", amzDate)
 	q.Set("X-Amz-Expires", strconv.Itoa(int(expiry.Seconds())))
-	q.Set("X-Amz-SignedHeaders", "host")
+	q.Set("X-Amz-SignedHeaders", "content-type;host")
 	canonicalQuery := q.Encode()
 
-	canonicalHeaders := "host:" + host + "\n"
-	signedHeaders := "host"
+	// Ordem alfabética dos headers assinados, nome em minúsculas.
+	canonicalHeaders := "content-type:" + contentType + "\n" + "host:" + host + "\n"
+	signedHeaders := "content-type;host"
 
 	canonicalRequest := strings.Join([]string{
 		http.MethodPut, canonURI, canonicalQuery, canonicalHeaders, signedHeaders, "UNSIGNED-PAYLOAD",

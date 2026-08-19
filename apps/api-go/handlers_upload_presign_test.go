@@ -113,7 +113,7 @@ func TestR2PresignPut(t *testing.T) {
 		R2Bucket:    "bucket",
 		R2PublicURL: "https://cdn.santos-tech.com",
 	})
-	got := r.PresignPut("uploads/1/abc.mp4", 15*time.Minute)
+	got := r.PresignPut("uploads/1/abc.mp4", "video/mp4", 15*time.Minute)
 	u, err := url.Parse(got)
 	if err != nil {
 		t.Fatalf("URL inválida: %v", err)
@@ -133,5 +133,62 @@ func TestR2PresignPut(t *testing.T) {
 	}
 	if len(q.Get("X-Amz-Signature")) != 64 {
 		t.Errorf("assinatura com tamanho inesperado: %d", len(q.Get("X-Amz-Signature")))
+	}
+	// O content-type PRECISA estar entre os headers assinados: sem isso o cliente
+	// escolhe o Content-Type no PUT real e consegue publicar text/html no domínio
+	// público do bucket (same-site com os cookies de .santos-tech.com).
+	if q.Get("X-Amz-SignedHeaders") != "content-type;host" {
+		t.Errorf("X-Amz-SignedHeaders = %q, quer \"content-type;host\"", q.Get("X-Amz-SignedHeaders"))
+	}
+}
+
+// TestR2PresignPutContentTypeAssinado prova que o Content-Type entra na assinatura:
+// duas URLs pra mesma key com content-types diferentes têm assinaturas diferentes.
+// Se as assinaturas batessem, o header não estaria sendo coberto pelo SigV4 e o
+// cliente poderia subir text/html declarando video/mp4 no pedido.
+func TestR2PresignPutContentTypeAssinado(t *testing.T) {
+	r := newR2(Config{
+		R2AccountID: "acc123",
+		R2AccessKey: "key123",
+		R2SecretKey: "secret123",
+		R2Bucket:    "bucket",
+		R2PublicURL: "https://cdn.santos-tech.com",
+	})
+	sigFor := func(ct string) string {
+		u, err := url.Parse(r.PresignPut("uploads/1/abc.mp4", ct, 15*time.Minute))
+		if err != nil {
+			t.Fatalf("URL inválida: %v", err)
+		}
+		return u.Query().Get("X-Amz-Signature")
+	}
+	if a, b := sigFor("video/mp4"), sigFor("text/html"); a == b {
+		t.Fatalf("assinatura idêntica pra content-types diferentes (%s) — header não assinado", a)
+	}
+}
+
+// TestHandleVideoPresignContentTypeFixado garante que o handler devolve o
+// content-type canônico da allow-list (e não a string crua do cliente) e que a URL
+// assina esse header.
+func TestHandleVideoPresignContentTypeFixado(t *testing.T) {
+	w := presignReq(t, presignUploadRequest{Filename: "aula.mp4", ContentType: "  VIDEO/MP4; codecs=avc1  ", Size: 10 << 20})
+	if w.Code != 200 {
+		t.Fatalf("esperava 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		UploadURL   string `json:"uploadUrl"`
+		ContentType string `json:"contentType"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode resposta: %v", err)
+	}
+	if resp.ContentType != "video/mp4" {
+		t.Errorf("contentType = %q, quer \"video/mp4\"", resp.ContentType)
+	}
+	u, err := url.Parse(resp.UploadURL)
+	if err != nil {
+		t.Fatalf("uploadUrl inválida: %v", err)
+	}
+	if u.Query().Get("X-Amz-SignedHeaders") != "content-type;host" {
+		t.Errorf("SignedHeaders inesperado: %q", u.Query().Get("X-Amz-SignedHeaders"))
 	}
 }
