@@ -64,11 +64,9 @@ func (s *Server) generateStream(ctx context.Context, task, prompt string, w http
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(prompt)
 
-	env := os.Environ()
-	if tok, terr := s.oauthToken(ctx); terr == nil && tok != "" {
-		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
-	}
-	cmd.Env = env
+	// Mesmo ambiente mínimo do generateOnce (allow-list explícita, sem segredos
+	// de infra). Ver claudeEnv em session.go.
+	cmd.Env = s.claudeEnv(ctx, nil)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

@@ -218,12 +218,11 @@ func (s *Server) generateOnce(ctx context.Context, task, prompt, imageB64, image
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(prompt)
 
-	// Ambiente mínimo: só o token OAuth da assinatura.
-	env := os.Environ()
-	if tok, terr := s.oauthToken(ctx); terr == nil && tok != "" {
-		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
-	}
-	cmd.Env = env
+	// Ambiente mínimo e EXPLÍCITO (allow-list de claudeEnv): runtime essencial +
+	// token OAuth da assinatura. conv=nil => sem repo clonado => sem GITHUB_TOKEN.
+	// Antes isto era os.Environ(), que vazava JWT_SECRET/DATABASE_URL/tokens de
+	// infra para dentro do processo Claude (exfiltráveis via prompt injection).
+	cmd.Env = s.claudeEnv(ctx, nil)
 
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -281,11 +280,9 @@ func (s *Server) generateOnceWithTrace(ctx context.Context, task, prompt, model 
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(prompt)
 
-	env := os.Environ()
-	if tok, terr := s.oauthToken(ctx); terr == nil && tok != "" {
-		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
-	}
-	cmd.Env = env
+	// Mesmo ambiente mínimo do generateOnce (allow-list explícita, sem segredos
+	// de infra). Ver claudeEnv em session.go.
+	cmd.Env = s.claudeEnv(ctx, nil)
 
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
