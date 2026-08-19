@@ -110,19 +110,24 @@ function useProvideAuth() {
 
   // fetchMe tenta com o access token guardado; se der 401, tenta renovar uma
   // vez antes de desistir (mesmo padrão de qualquer client com refresh token).
+  // GET /auth/me devolve {"user": {...}} — envelopado, igual /auth/login e
+  // /auth/mfa/verify (ver handleMe em handlers_auth.go) — nunca o objeto do
+  // usuário direto no corpo.
   const fetchMe = useCallback(async (): Promise<AuthUser | null> => {
     const store = await getStore();
     let accessToken = await store.get<string>(ACCESS_KEY);
     if (!accessToken) return null;
     try {
-      return await apiJSON<AuthUser>("/auth/me", { headers: { Authorization: `Bearer ${accessToken}` } });
+      const body = await apiJSON<{ user: AuthUser }>("/auth/me", { headers: { Authorization: `Bearer ${accessToken}` } });
+      return body.user;
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         const refreshed = await doRefresh();
         if (!refreshed) return null;
         accessToken = refreshed.accessToken;
         try {
-          return await apiJSON<AuthUser>("/auth/me", { headers: { Authorization: `Bearer ${accessToken}` } });
+          const body = await apiJSON<{ user: AuthUser }>("/auth/me", { headers: { Authorization: `Bearer ${accessToken}` } });
+          return body.user;
         } catch {
           return null;
         }
