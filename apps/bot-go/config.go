@@ -46,6 +46,10 @@ type Config struct {
 	// Notificações admin
 	AdminWhatsAppNumber string // E.164, ex: 5516991445664
 
+	// Pool de processamento em background dos webhooks (paralelismo + shutdown).
+	BGPoolSlots       int
+	BGShutdownTimeout time.Duration
+
 	// Worker
 	OutboxBatchSize      int
 	OutboxIdleIntervalMs int
@@ -133,6 +137,9 @@ func LoadConfig() Config {
 		EvolutionInstance:      getEnv("EVOLUTION_INSTANCE", ""),
 
 		AdminWhatsAppNumber: getEnv("ADMIN_WHATSAPP_NUMBER", ""),
+
+		BGPoolSlots:       envInt("BG_POOL_SLOTS", 32),
+		BGShutdownTimeout: time.Duration(envInt("BG_SHUTDOWN_TIMEOUT_SEC", 20)) * time.Second,
 
 		OutboxBatchSize:      envInt("OUTBOX_BATCH_SIZE", 50),
 		OutboxIdleIntervalMs: envInt("OUTBOX_IDLE_INTERVAL_MS", 500),

@@ -215,6 +215,15 @@ func main() {
 		logger.Info("servidor HTTP encerrado com sucesso")
 	}
 
+	// O Shutdown acima só espera os HANDLERS; o processamento dos webhooks roda
+	// no pool de background (captura de lead, notificações, escrita no Postgres).
+	// Sem esta espera, todo deploy descartava o que estava em voo.
+	if server.bg.Shutdown(cfg.BGShutdownTimeout) {
+		logger.Info("tarefas de background encerradas com sucesso")
+	} else {
+		logger.Warn("timeout aguardando tarefas de background", "timeout", cfg.BGShutdownTimeout)
+	}
+
 	// Aguarda o worker (consumer do Redis Stream + loops) drenar antes que os
 	// defers fechem Postgres/Redis — evita uso-após-fechar no XACK/queries.
 	select {

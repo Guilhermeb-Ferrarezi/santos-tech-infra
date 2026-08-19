@@ -31,6 +31,16 @@ var (
 		},
 		[]string{"method", "path"},
 	)
+
+	// bgPoolRejected conta tarefas de webhook descartadas por falta de slot no
+	// pool de background — sinal de que BG_POOL_SLOTS está apertado demais.
+	bgPoolRejected = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bot_bg_pool_rejected_total",
+			Help: "Tarefas de background descartadas por falta de slot no pool.",
+		},
+		[]string{"task"},
+	)
 )
 
 // metricsMiddleware mede cada requisição e alimenta os coletores. Usa o padrão de

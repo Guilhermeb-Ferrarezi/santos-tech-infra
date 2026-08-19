@@ -46,7 +46,9 @@ func (s *Server) handleCoolifyWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go s.sendCoolifyNotif(status, payload)
+	s.bg.Go("coolify_notif", func(ctx context.Context) {
+		s.sendCoolifyNotif(ctx, status, payload)
+	})
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -174,8 +176,8 @@ func statusHeading(status string) string {
 	}
 }
 
-func (s *Server) sendCoolifyNotif(status string, payload map[string]any) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func (s *Server) sendCoolifyNotif(parent context.Context, status string, payload map[string]any) {
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 
 	var phone, instance string

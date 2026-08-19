@@ -147,6 +147,9 @@ type Server struct {
 	tenantCache *TenantCache
 	// session valida a sessão do painel (cookie access_token) no auth central.
 	session *SessionAuth
+	// bg roda o processamento dos webhooks fora do handler, com paralelismo
+	// limitado e esperado no shutdown (ver bgpool.go).
+	bg *bgPool
 }
 
 // NewServer cria um Server com as dependências fornecidas.
@@ -173,6 +176,7 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		retryStream: NewRetryStream(rdb, cfg.RetryStreamKey, cfg.RetryStreamGroup, cfg.RetryStreamConsumer, logger),
 		tenantCache: NewTenantCache(rdb, cfg.DebounceCacheTTL, logger),
 		session:     NewSessionAuth(cfg.AuthMeURL, cfg.AuthTimeout, cfg.AuthCacheTTL),
+		bg:          newBGPool(cfg.BGPoolSlots, logger),
 	}
 }
 
@@ -318,13 +322,14 @@ func (s *Server) handleInbound(w http.ResponseWriter, r *http.Request) {
 	// 3. ACK imediato para a Meta (< 20 s)
 	w.WriteHeader(http.StatusOK)
 
-	// 4. Processa em background
-	go s.processInbound(body)
+	// 4. Processa no pool de background (esperado no shutdown)
+	s.bg.Go("meta_inbound", func(ctx context.Context) {
+		s.processInbound(ctx, body)
+	})
 }
 
 // processInbound parseia o payload e dispara o engine para cada mensagem.
-func (s *Server) processInbound(body []byte) {
-	ctx := context.Background()
+func (s *Server) processInbound(ctx context.Context, body []byte) {
 
 	msgs, err := ParseMetaWebhook(body, s.cfg.MetaPhoneNumberID)
 	if err != nil {
@@ -632,18 +637,18 @@ func (s *Server) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request) 
 	// respondem no MESMO chat (em grupo, o ...@g.us). Tratado ANTES da captura de
 	// lead — inclusive em grupos, que a captura ignora. Se o comando for tratado,
 	// NÃO segue para o fluxo normal (lead/IA).
-	go func() {
-		if s.dispatchEvolutionCommand(ev) {
+	s.bg.Go("evolution_inbound", func(ctx context.Context) {
+		if s.dispatchEvolutionCommand(ctx, ev) {
 			return
 		}
-		s.captureEvolutionLead(ev)
-	}()
+		s.captureEvolutionLead(ctx, ev)
+	})
 }
 
 // dispatchEvolutionCommand extrai remetente/chat/texto de um evento da Evolution e
 // delega ao handleAdminCommand. Retorna true se a mensagem foi consumida como
 // comando (e portanto NÃO deve seguir para captura de lead / IA).
-func (s *Server) dispatchEvolutionCommand(ev evolutionWebhook) bool {
+func (s *Server) dispatchEvolutionCommand(ctx context.Context, ev evolutionWebhook) bool {
 	if !strings.Contains(strings.ToLower(ev.Event), "upsert") || ev.Data.Key.FromMe {
 		return false
 	}
@@ -670,9 +675,9 @@ func (s *Server) dispatchEvolutionCommand(ev evolutionWebhook) bool {
 		from = chatJid
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	handled, err := s.handleAdminCommand(ctx, from, chatJid, ev.Instance, text)
+	handled, err := s.handleAdminCommand(cmdCtx, from, chatJid, ev.Instance, text)
 	if err != nil {
 		s.logger.Error("evolution: comando admin falhou", "err", err)
 	}
@@ -681,7 +686,7 @@ func (s *Server) dispatchEvolutionCommand(ev evolutionWebhook) bool {
 
 // captureEvolutionLead cria/atualiza um lead a partir de uma mensagem recebida na
 // Evolution. Ignora grupos, status e mensagens próprias. Não responde nada.
-func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
+func (s *Server) captureEvolutionLead(ctx context.Context, ev evolutionWebhook) {
 	if !strings.Contains(strings.ToLower(ev.Event), "upsert") || ev.Data.Key.FromMe {
 		return
 	}
@@ -696,8 +701,6 @@ func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
 	if phone == "" {
 		return
 	}
-
-	ctx := context.Background()
 
 	// Captação por número: se a instância que recebeu a mensagem estiver desligada,
 	// ignora por completo (não cria lead nem deixa o bot responder).
