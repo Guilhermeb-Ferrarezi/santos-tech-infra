@@ -29,6 +29,31 @@ func TestHostAllowed(t *testing.T) {
 		}
 	}
 
+	// Sufixo escrito SEM o ponto inicial (a forma natural de configurar a env)
+	// tem que se comportar igual: casar o domínio e seus subdomínios, e nada
+	// que só termine com a mesma string. Antes, "santos-tech.com" deixava
+	// "evilsantos-tech.com" passar — e todo dispatch leva o CRON_SERVICE_PAT.
+	semPonto := []string{"santos-tech.com"}
+	semPontoCases := map[string]bool{
+		"santos-tech.com":          true,
+		"payments.santos-tech.com": true,
+		"evilsantos-tech.com":      false,
+		"xsantos-tech.com":         false,
+		"santos-tech.com.evil.com": false,
+	}
+	for host, want := range semPontoCases {
+		if got := hostAllowed(host, semPonto); got != want {
+			t.Errorf("hostAllowed(%q, %v)=%v, queria %v", host, semPonto, got, want)
+		}
+	}
+	// A forma com ponto continua igualmente estrita.
+	if hostAllowed("evilsantos-tech.com", allow) {
+		t.Error("allowlist com ponto não deveria casar evilsantos-tech.com")
+	}
+	if !hostAllowed("santos-tech.com", allow) {
+		t.Error("allowlist \".santos-tech.com\" deveria cobrir o domínio raiz")
+	}
+
 	// IPs privados/loopback/link-local na allowlist devem continuar bloqueados
 	// — o guard anti-SSRF é incondicional e não pode ser desabilitado pela allowlist.
 	ssrfCases := []struct {
