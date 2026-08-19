@@ -1,9 +1,12 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, LogicalPosition, Manager, Position, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_store::StoreExt;
+
+const OVERLAY_CORNER_KEY: &str = "overlayCorner";
 
 const OVERLAY_LABEL: &str = "overlay";
 const OVERLAY_WIDTH: f64 = 220.0;
@@ -13,27 +16,46 @@ const TOAST_LABEL: &str = "toast";
 const TOAST_WIDTH: f64 = 340.0;
 const TOAST_HEIGHT: f64 = 120.0;
 
-// Canto inferior direito da ÁREA ÚTIL do monitor (work_area exclui a barra de
+// Posição num CANTO da ÁREA ÚTIL do monitor (work_area exclui a barra de
 // tarefas — usar monitor.size() aqui fazia a janela nascer atrás da barra,
 // já que size() é a resolução cheia). work_area já vem em pixels físicos,
 // mesma unidade de scale_factor()/inner_size(), então a mesma conta de
-// escala do resto do cálculo se aplica igual.
-fn bottom_right_in_work_area(app: &AppHandle, width: f64, height: f64, margin: f64) -> (f64, f64) {
+// escala do resto do cálculo se aplica igual. corner: "top-left" |
+// "top-right" | "bottom-left" | "bottom-right" (default se não reconhecido).
+fn corner_position_in_work_area(app: &AppHandle, width: f64, height: f64, margin: f64, corner: &str) -> (f64, f64) {
     app.primary_monitor()
         .ok()
         .flatten()
         .map(|m| {
             let scale = m.scale_factor();
             let area = m.work_area();
-            let right = (area.position.x as f64 + area.size.width as f64) / scale;
-            let bottom = (area.position.y as f64 + area.size.height as f64) / scale;
-            (right - width - margin, bottom - height - margin)
+            let left = area.position.x as f64 / scale;
+            let top = area.position.y as f64 / scale;
+            let right = left + area.size.width as f64 / scale;
+            let bottom = top + area.size.height as f64 / scale;
+            match corner {
+                "top-left" => (left + margin, top + margin),
+                "top-right" => (right - width - margin, top + margin),
+                "bottom-left" => (left + margin, bottom - height - margin),
+                _ => (right - width - margin, bottom - height - margin),
+            }
         })
         .unwrap_or((900.0, 700.0))
 }
 
-// Janela flutuante com o tempo, canto inferior direito — mostra/esconde ao
-// clicar de novo no item do menu da bandeja. Só é criada na primeira vez.
+// Canto salvo pelo usuário (ver comando set_overlay_position) — "bottom-right"
+// se nunca configurado.
+fn read_overlay_corner(app: &AppHandle) -> String {
+    app.store("config.json")
+        .ok()
+        .and_then(|s| s.get(OVERLAY_CORNER_KEY))
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| "bottom-right".to_string())
+}
+
+// Janela flutuante com o tempo, no canto configurado (ver set_overlay_position)
+// — mostra/esconde ao clicar de novo no item do menu da bandeja. Só é criada
+// na primeira vez.
 fn toggle_overlay(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
         let visible = win.is_visible().unwrap_or(false);
@@ -45,7 +67,8 @@ fn toggle_overlay(app: &AppHandle) {
         return;
     }
 
-    let (x, y) = bottom_right_in_work_area(app, OVERLAY_WIDTH, OVERLAY_HEIGHT, 16.0);
+    let corner = read_overlay_corner(app);
+    let (x, y) = corner_position_in_work_area(app, OVERLAY_WIDTH, OVERLAY_HEIGHT, 16.0, &corner);
 
     let _ = WebviewWindowBuilder::new(app, OVERLAY_LABEL, WebviewUrl::App("overlay.html".into()))
         .title("Cronômetro")
@@ -70,7 +93,7 @@ fn ensure_toast_window(app: &AppHandle) {
         return;
     }
 
-    let (x, y) = bottom_right_in_work_area(app, TOAST_WIDTH, TOAST_HEIGHT, 16.0);
+    let (x, y) = corner_position_in_work_area(app, TOAST_WIDTH, TOAST_HEIGHT, 16.0, "bottom-right");
 
     let _ = WebviewWindowBuilder::new(app, TOAST_LABEL, WebviewUrl::App("toast.html".into()))
         .title("Aviso")
@@ -84,6 +107,20 @@ fn ensure_toast_window(app: &AppHandle) {
         .transparent(true)
         .visible(false)
         .build();
+}
+
+// Comando chamado pelo botão "Posição na tela" da janela principal — salva a
+// escolha (pra próxima vez que o overlay for criado) e, se ele já estiver
+// aberto agora, reposiciona ao vivo em vez de esperar a próxima abertura.
+#[tauri::command]
+fn set_overlay_position(app: AppHandle, corner: String) {
+    if let Ok(store) = app.store("config.json") {
+        store.set(OVERLAY_CORNER_KEY, corner.clone());
+    }
+    if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
+        let (x, y) = corner_position_in_work_area(&app, OVERLAY_WIDTH, OVERLAY_HEIGHT, 16.0, &corner);
+        let _ = win.set_position(Position::Logical(LogicalPosition { x, y }));
+    }
 }
 
 fn show_main(app: &AppHandle) {
@@ -158,6 +195,7 @@ pub fn run() {
                 }
             }
         })
+        .invoke_handler(tauri::generate_handler![set_overlay_position])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

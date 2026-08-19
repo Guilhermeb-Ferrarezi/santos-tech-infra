@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Clock, HandPalm, ArrowCounterClockwise } from "@phosphor-icons/react";
+import { Clock, ArrowCounterClockwise } from "@phosphor-icons/react";
 import { QRCodeSVG } from "qrcode.react";
 import { useStoredToken } from "./lib/useStoredToken";
 import { useTickingSeconds } from "./lib/useTickingSeconds";
 import { useLowBalanceNotifier } from "./lib/useLowBalanceNotifier";
 import { useDeviceHeartbeat } from "./lib/useDeviceHeartbeat";
 import { Titlebar } from "./components/Titlebar";
+import { OverlayPositionButton } from "./components/OverlayPositionButton";
 
 const API_ORIGIN = "https://api.santos-tech.com";
 const DASHBOARD_ORIGIN = "https://santos-tech.com/dashboard";
@@ -131,7 +132,6 @@ function PairScreen({ deviceId, onConfirm }: { deviceId: string | null; onConfir
 function TimerScreen({ token, onChangeSession }: { token: string; onChangeSession: () => void }) {
   const [data, setData] = useState<PublicHourSession | null>(null);
   const [error, setError] = useState(false);
-  const [requesting, setRequesting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -160,15 +160,6 @@ function TimerScreen({ token, onChangeSession }: { token: string; onChangeSessio
   const tickedMinutes = Math.floor(displaySeconds / 60) - Math.floor((data?.elapsedSeconds ?? 0) / 60);
   const remainingMinutes = (data?.remainingMinutes ?? 0) - tickedMinutes;
   useLowBalanceNotifier(data ? remainingMinutes : null, data?.status === "active");
-
-  async function requestPause() {
-    setRequesting(true);
-    try {
-      await fetch(`${API_ORIGIN}/public/hour-sessions/${token}/request-pause`, { method: "POST" });
-    } finally {
-      setRequesting(false);
-    }
-  }
 
   return (
     <div className="flex flex-1 flex-col justify-between bg-[#04325A] px-4 py-6 text-white">
@@ -207,15 +198,7 @@ function TimerScreen({ token, onChangeSession }: { token: string; onChangeSessio
         )}
       </div>
 
-      <button
-        type="button"
-        disabled={!data || data.status !== "active" || data.pauseRequested || requesting}
-        onClick={requestPause}
-        className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#0DB88F] py-3 text-sm font-semibold text-white transition-colors hover:bg-[#0DB88F]/90 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        <HandPalm className="size-5" />
-        {data?.pauseRequested ? "Pedido de pausa enviado — aguarde" : "Pedir pausa"}
-      </button>
+      <OverlayPositionButton />
     </div>
   );
 }
