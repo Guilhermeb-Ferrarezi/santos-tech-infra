@@ -4,10 +4,28 @@ import { ArrowClockwise, WarningCircle } from "@phosphor-icons/react";
 import { useAuth } from "../lib/useAuth";
 
 interface QRData {
+  /**
+   * SEGREDO DE POLLING (device_code do RFC 8628). É ele que troca por
+   * accessToken+refreshToken em /public/qr-login/poll, então NUNCA pode ser
+   * renderizado na tela — nem no QR, nem em texto. Fica só na memória deste
+   * componente.
+   */
   token: string;
+  /**
+   * Código PÚBLICO de 6 dígitos (user_code do RFC 8628). É o que vai no QR e
+   * na tela: sozinho ele não devolve sessão nenhuma — só serve pra quem JÁ
+   * está logado apontar qual pedido de login está autorizando.
+   */
   code: string;
   expiresAt: string;
 }
+
+// Payload do QR: a página de confirmação com o código PÚBLICO na query.
+// Duas razões: (1) segurança — quem fotografar a tela leva só o user_code,
+// que não polla nada; (2) usabilidade — a câmera do celular abre a página
+// direto, coisa que um token opaco de 64 hex não permitia.
+const CONNECT_DEVICE_URL = "https://santos-tech.com/dashboard/conectar-dispositivo";
+const qrPayload = (code: string) => `${CONNECT_DEVICE_URL}?code=${encodeURIComponent(code)}`;
 
 function useCountdown(expiresAt: string | null) {
   const [secondsLeft, setSecondsLeft] = useState(0);
@@ -69,6 +87,13 @@ export function QRLoginPanel({ onDone }: { onDone: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // O poll de 2s só parava em sucesso/unmount: quando o código expirava, o app
+  // continuava batendo em /public/qr-login/poll pra sempre (o registro no Redis
+  // já morreu — resposta é sempre {ready:false}). Para junto com o contador.
+  useEffect(() => {
+    if (expired) stopPolling();
+  }, [expired]);
+
   const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0");
   const ss = String(secondsLeft % 60).padStart(2, "0");
 
@@ -93,7 +118,8 @@ export function QRLoginPanel({ onDone }: { onDone: () => void }) {
       {data && (
         <>
           <div className="relative rounded-lg bg-white p-2.5">
-            <QRCodeSVG value={data.token} size={140} />
+            {/* value = user_code público, NUNCA data.token (ver QRData). */}
+            <QRCodeSVG value={qrPayload(data.code)} size={140} />
             {expired && (
               <div className="absolute inset-0 grid place-items-center rounded-lg bg-white/90">
                 <button
