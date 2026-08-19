@@ -870,3 +870,121 @@ func TestHandlePayViaLink_CupomDevolvidoQuandoPagamentoFalha(t *testing.T) {
 		t.Fatalf("usedCount deveria voltar a 0, veio %d", used)
 	}
 }
+
+// linkComCupons cria um link cuja lista de cupons é restritiva.
+func linkComCupons(t *testing.T, st *fakeLinkStore, amount *int64, cupons []string) string {
+	t.Helper()
+	l := &PaymentLink{
+		PublicToken: newPublicToken(),
+		AmountCents: amount,
+		ProductIDs:  []int{},
+		Methods:     []string{"pix"},
+		Coupons:     cupons,
+	}
+	if err := st.CreatePaymentLink(context.Background(), l); err != nil {
+		t.Fatalf("linkComCupons: %v", err)
+	}
+	return l.PublicToken
+}
+
+// TestHandlePayViaLink_CupomForaDaListaDoLink: quando o link declara seus cupons,
+// a lista é filtro. Antes, qualquer cupom ativo valia em qualquer link — um cupom de
+// 90% valia num link de valor livre de R$ 10.000.
+func TestHandlePayViaLink_CupomForaDaListaDoLink(t *testing.T) {
+	lSt := newFakeLinkStore()
+	amount := int64(10000)
+	token := linkComCupons(t, lSt, &amount, []string{"DESTE_LINK"})
+
+	cSt := newFakeCouponStore()
+	coup := couponFixture(t, cSt, "DE_OUTRO", "percent", 90, -1)
+
+	s := &Server{links: lSt, coupons: cSt, linkPayRateLimiter: unlimitedLimiter{}, provider: &fakePixProvider{}}
+	body := `{"method":"pix","coupon":"DE_OUTRO","customer":{"name":"Ana","taxId":"12345678909"}}`
+	req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	s.handlePayViaLink(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("cupom fora da lista do link deveria dar 400, veio %d: %s", w.Code, w.Body.String())
+	}
+	// E não pode ter queimado um uso do cupom.
+	cSt.mu.Lock()
+	used := cSt.byID[coup.ID].UsedCount
+	cSt.mu.Unlock()
+	if used != 0 {
+		t.Fatalf("cupom recusado não deveria consumir uso, usedCount=%d", used)
+	}
+}
+
+// TestHandlePayViaLink_CupomDaListaDoLinkPassa: o filtro é case-insensitive e não
+// atrapalha o cupom legítimo.
+func TestHandlePayViaLink_CupomDaListaDoLinkPassa(t *testing.T) {
+	lSt := newFakeLinkStore()
+	amount := int64(10000)
+	token := linkComCupons(t, lSt, &amount, []string{" deste_link "})
+
+	cSt := newFakeCouponStore()
+	couponFixture(t, cSt, "DESTE_LINK", "fixed", 2000, -1)
+
+	s := &Server{links: lSt, coupons: cSt, linkPayRateLimiter: unlimitedLimiter{}, provider: &fakePixProvider{}}
+	body := `{"method":"pix","coupon":"DESTE_LINK","customer":{"name":"Ana","taxId":"12345678909"}}`
+	req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	s.handlePayViaLink(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("cupom da lista do link deveria passar, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out Charge
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out.AmountCents != 8000 {
+		t.Fatalf("esperado 8000 com desconto, veio %d", out.AmountCents)
+	}
+}
+
+// TestCouponDiscount_TetoAbsoluto: o teto limita o desconto de um percentual grande
+// sobre um valor grande, e o mesmo número precisa valer no preview e na cobrança.
+func TestCouponDiscount_TetoAbsoluto(t *testing.T) {
+	c := Coupon{DiscountType: "percent", DiscountValue: 90}
+	if got := couponDiscount(c, 1_000_000, 100_000); got != 100_000 {
+		t.Fatalf("90%% de R$ 10.000 deveria ser limitado ao teto de R$ 1.000, veio %d", got)
+	}
+	if got := couponDiscount(c, 1_000_000, 0); got != 900_000 {
+		t.Fatalf("teto 0 desliga o limite, esperado 900000, veio %d", got)
+	}
+	// Cupom fixo maior que o teto também é limitado.
+	if got := couponDiscount(Coupon{DiscountType: "fixed", DiscountValue: 500_000}, 1_000_000, 100_000); got != 100_000 {
+		t.Fatalf("cupom fixo deveria respeitar o teto, veio %d", got)
+	}
+	// O desconto nunca passa do valor da cobrança.
+	if got := couponDiscount(Coupon{DiscountType: "fixed", DiscountValue: 900}, 500, 100_000); got != 500 {
+		t.Fatalf("desconto não pode passar do valor cobrado, veio %d", got)
+	}
+}
+
+// TestApplyCoupon_RespeitaTeto: o preview público mostra o MESMO desconto que será
+// cobrado — senão o cliente vê um valor e paga outro.
+func TestApplyCoupon_RespeitaTeto(t *testing.T) {
+	cSt := newFakeCouponStore()
+	couponFixture(t, cSt, "META90", "percent", 90, -1)
+	s := &Server{coupons: cSt, cfg: Config{CouponMaxDiscountCents: 100_000}}
+
+	body := `{"code":"META90","amountCents":1000000}`
+	req := httptest.NewRequest("POST", "/coupons/apply", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handleApplyCoupon(w, req)
+
+	var out applyCouponResult
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if !out.Valid {
+		t.Fatalf("cupom deveria ser válido: %s", w.Body.String())
+	}
+	if out.DiscountCents != 100_000 || out.FinalCents != 900_000 {
+		t.Fatalf("preview deveria respeitar o teto (desconto 100000, final 900000), veio %d/%d", out.DiscountCents, out.FinalCents)
+	}
+}

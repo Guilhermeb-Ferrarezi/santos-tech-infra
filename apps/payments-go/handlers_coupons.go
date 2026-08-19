@@ -218,7 +218,7 @@ func (s *Server) handleApplyCoupon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	discountCents := couponDiscount(c, in.AmountCents)
+	discountCents := s.couponDiscountFor(c, in.AmountCents)
 	finalCents := in.AmountCents - discountCents
 	if finalCents < 0 {
 		finalCents = 0
@@ -237,8 +237,12 @@ func (s *Server) handleApplyCoupon(w http.ResponseWriter, r *http.Request) {
 // couponDiscount calcula o desconto de um cupom sobre um valor, em centavos.
 // Fonte única para o checkout do carrinho, o link de pagamento e /coupons/apply —
 // antes as três cópias podiam divergir e mostrar um valor diferente do cobrado.
-// Nunca passa do valor da cobrança (desconto máximo = o próprio valor).
-func couponDiscount(c Coupon, amountCents int64) int64 {
+//
+// Limites: nunca passa do valor da cobrança, e nunca passa de maxDiscountCents
+// (teto absoluto; 0 ou negativo desliga). O teto existe porque um cupom percentual
+// aplicado a um link de valor livre não tem limite natural — 90% de R$ 10.000 são
+// R$ 9.000 de desconto.
+func couponDiscount(c Coupon, amountCents, maxDiscountCents int64) int64 {
 	if amountCents <= 0 {
 		return 0
 	}
@@ -249,6 +253,9 @@ func couponDiscount(c Coupon, amountCents int64) int64 {
 		// percent: arredonda para o centavo mais próximo.
 		d = (amountCents*c.DiscountValue + 50) / 100
 	}
+	if maxDiscountCents > 0 && d > maxDiscountCents {
+		d = maxDiscountCents
+	}
 	if d > amountCents {
 		d = amountCents
 	}
@@ -256,6 +263,28 @@ func couponDiscount(c Coupon, amountCents int64) int64 {
 		d = 0
 	}
 	return d
+}
+
+// couponDiscountFor aplica couponDiscount com o teto configurado no servidor.
+func (s *Server) couponDiscountFor(c Coupon, amountCents int64) int64 {
+	return couponDiscount(c, amountCents, s.cfg.CouponMaxDiscountCents)
+}
+
+// couponAllowedOnLink diz se o cupom pode ser usado neste link. Quando o link declara
+// uma lista de cupons, ela é um FILTRO, não uma sugestão visual: aceitar qualquer
+// cupom ativo fazia um cupom de 90% valer num link de valor livre de R$ 10.000.
+// Lista vazia = link sem restrição (comportamento antigo, preservado).
+func couponAllowedOnLink(l *PaymentLink, code string) bool {
+	if l == nil || len(l.Coupons) == 0 {
+		return true
+	}
+	code = strings.ToLower(strings.TrimSpace(code))
+	for _, allowed := range l.Coupons {
+		if strings.ToLower(strings.TrimSpace(allowed)) == code {
+			return true
+		}
+	}
+	return false
 }
 
 // releaseCoupon devolve, best-effort, o uso reservado por RedeemCoupon quando o

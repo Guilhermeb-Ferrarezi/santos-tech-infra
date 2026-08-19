@@ -389,12 +389,20 @@ func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inválido")
 			return
 		}
+		// A lista de cupons do link é FILTRO, não sugestão visual. Antes qualquer
+		// cupom ativo valia em qualquer link — um cupom de 90% criado para um curso
+		// barato valia num link de valor livre de R$ 10.000. Checado ANTES do resgate
+		// para não queimar um uso do cupom à toa.
+		if !couponAllowedOnLink(l, in.Coupon) {
+			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inválido ou esgotado")
+			return
+		}
 		coup, err := cst.RedeemCoupon(r.Context(), in.Coupon)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inválido ou esgotado")
 			return
 		}
-		amountCents -= couponDiscount(coup, amountCents)
+		amountCents -= s.couponDiscountFor(coup, amountCents)
 		if amountCents < 0 {
 			amountCents = 0
 		}

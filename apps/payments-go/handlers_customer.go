@@ -258,7 +258,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inválido ou esgotado")
 			return
 		}
-		total -= couponDiscount(coup, total)
+		total -= s.couponDiscountFor(coup, total)
 		if total < 0 {
 			total = 0
 		}
