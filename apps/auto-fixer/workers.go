@@ -124,6 +124,13 @@ func (w *Workers) HandleFixRun(ctx context.Context, t *asynq.Task) error {
 		return w.fail(ctx, in, "não consegui resolver o repositório/branch do app")
 	}
 
+	// Allow-list (#5): o repo vem do payload do webhook / da API da Coolify. Sem
+	// esta checagem, quem controlasse esse valor fazia o auto-fixer clonar
+	// qualquer repositório usando o token da organização.
+	if !w.cfg.repoAllowed(in.Repo) {
+		return w.fail(ctx, in, "repositório fora da allow-list (ALLOWED_REPOS): "+in.Repo)
+	}
+
 	token := w.repoToken(ctx, in.Repo)
 	cloneURL := repoCloneURL(in.Repo) // Coolify devolve "owner/repo" → URL https
 	workdir := workdirFor(w.cfg.WorkspaceRoot, in.App, in.ID)
