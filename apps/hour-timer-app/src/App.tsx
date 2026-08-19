@@ -162,10 +162,12 @@ function PairScreen({
 function TimerScreen({
   token,
   onChangeSession,
+  onSessionEnded,
   heartbeatOk,
 }: {
   token: string;
   onChangeSession: () => void;
+  onSessionEnded: () => void;
   heartbeatOk: boolean;
 }) {
   const [data, setData] = useState<PublicHourSession | null>(null);
@@ -193,6 +195,14 @@ function TimerScreen({
       clearInterval(id);
     };
   }, [token]);
+
+  // Sessão encerrada: tira o token do disco na hora. Ele fica em claro no
+  // config.json e este PC atende vários clientes por dia — não pode continuar
+  // ali esperando o próximo turno. A tela segue mostrando "Sessão encerrada"
+  // porque o valor continua em memória (ver purgeStoredToken).
+  useEffect(() => {
+    if (data?.status === "ended") onSessionEnded();
+  }, [data?.status, onSessionEnded]);
 
   const displaySeconds = useTickingSeconds(data?.elapsedSeconds ?? 0, data?.status === "active");
   const tickedMinutes = Math.floor(displaySeconds / 60) - Math.floor((data?.elapsedSeconds ?? 0) / 60);
@@ -244,7 +254,7 @@ function TimerScreen({
 }
 
 export default function App() {
-  const { token, loading, setToken, clearToken } = useStoredToken();
+  const { token, loading, setToken, clearToken, purgeStoredToken } = useStoredToken();
   const { deviceName, deviceId, heartbeatOk } = useDeviceHeartbeat(token, clearToken, setToken);
 
   return (
@@ -255,7 +265,12 @@ export default function App() {
       )}
       {!loading && !token && <PairScreen deviceId={deviceId} heartbeatOk={heartbeatOk} onConfirm={setToken} />}
       {!loading && token && (
-        <TimerScreen token={token} onChangeSession={clearToken} heartbeatOk={heartbeatOk} />
+        <TimerScreen
+          token={token}
+          onChangeSession={clearToken}
+          onSessionEnded={purgeStoredToken}
+          heartbeatOk={heartbeatOk}
+        />
       )}
     </div>
   );
