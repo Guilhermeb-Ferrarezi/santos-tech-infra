@@ -263,9 +263,12 @@ func (s *Server) handlePresets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePresetByID(w http.ResponseWriter, r *http.Request) {
+	// Formato fechado (24 hex, o que newPresetID gera): o id vai para a URL do
+	// Elasticsearch, e um id arbitrário injetaria query string ou outro caminho
+	// da API do cluster compartilhado. Ver validPresetID em presets.go.
 	id := r.PathValue("id")
-	if id == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "id do preset é obrigatório")
+	if !validPresetID(id) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "id do preset inválido")
 		return
 	}
 	switch r.Method {
