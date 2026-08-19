@@ -371,7 +371,7 @@ func (s *Server) handleListDriveFolderFiles(w http.ResponseWriter, r *http.Reque
 
 	target := folder.DriveFolderID
 	if parent := strings.TrimSpace(r.URL.Query().Get("parent")); parent != "" && parent != folder.DriveFolderID {
-		ok, err := s.drive.IsDescendant(r.Context(), parent, folder.DriveFolderID)
+		ok, err := s.driveIsDescendantCached(r.Context(), parent, folder.DriveFolderID)
 		if err != nil {
 			slog.Error("falha ao validar ancestralidade de subpasta do Drive", "folder", folder.ID, "err", err)
 			writeErr(w, appErr(http.StatusBadGateway, "LIST_FAILED", "falha ao verificar a subpasta"))
@@ -431,8 +431,10 @@ func (s *Server) ensureFileInFolder(ctx context.Context, folder *DriveFolder, fi
 var errDriveNotDescendant = errors.New("drive: item fora da árvore autorizada")
 
 // driveIsDescendantCached é o caminho ÚNICO de checagem de ancestralidade:
-// cache-aside sobre IsDescendant, que custa até maxDriveAncestryDepth idas
-// sequenciais ao Google por chamada.
+// cache-aside sobre IsDescendant, que custa até maxDriveAncestryDepth (12) idas
+// SEQUENCIAIS ao Google por chamada. Chamar IsDescendant direto (como faziam a
+// listagem, o upload e a checagem de ciclo do move) significava até 12
+// round-trips por clique, contra a mesma cota da service account.
 func (s *Server) driveIsDescendantCached(ctx context.Context, fileID, rootID string) (bool, error) {
 	ok, err := getOrSetJSON(ctx, s.rdb, cacheDriveDescendantKey(fileID, rootID), cacheDriveDescendantTTL,
 		func(ctx context.Context) (bool, error) {
@@ -688,7 +690,11 @@ func (s *Server) handleMoveDriveFile(w http.ResponseWriter, r *http.Request) {
 	// O Drive não valida ciclo sozinho — sem essa checagem dava pra mover uma
 	// pasta pra dentro de uma subpasta dela mesma (destino é descendente da
 	// própria pasta sendo movida), quebrando a árvore.
-	cyclic, err := s.drive.IsDescendant(r.Context(), toParent, fileID)
+	//
+	// Cacheado como o resto: como só o positivo vai pro cache, a staleness de
+	// 5min só pode recusar um move legítimo (fail-closed) — nunca deixar passar
+	// um ciclo.
+	cyclic, err := s.driveIsDescendantCached(r.Context(), toParent, fileID)
 	if err != nil {
 		writeErr(w, appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar o destino"))
 		return
@@ -730,7 +736,7 @@ func (s *Server) handleUploadDriveFile(w http.ResponseWriter, r *http.Request) {
 
 	target := folder.DriveFolderID
 	if parent := strings.TrimSpace(r.URL.Query().Get("parent")); parent != "" && parent != folder.DriveFolderID {
-		ok, err := s.drive.IsDescendant(r.Context(), parent, folder.DriveFolderID)
+		ok, err := s.driveIsDescendantCached(r.Context(), parent, folder.DriveFolderID)
 		if err != nil {
 			slog.Error("falha ao validar ancestralidade de subpasta do Drive", "folder", folder.ID, "err", err)
 			writeErr(w, appErr(http.StatusBadGateway, "UPLOAD_FAILED", "falha ao verificar a subpasta"))
