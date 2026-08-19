@@ -260,12 +260,30 @@ func (s *Server) handleMFAEmail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
 		return
 	}
+	// Cooldown por challenge (SetNX, atômico): impede burst de emails enviados para
+	// a mesma vítima quando o atacante detém um challenge válido e usa múltiplos IPs
+	// para contornar o rate-limit por IP da rota. Mesmo padrão de handleEmailVerifySend
+	// e handleMFAEmailCode. A chave expira junto com o challenge (10min); 60s de
+	// cooldown é suficiente para evitar flooding enquanto ainda permite reenvio legítimo.
+	cdKey := "api-go:mfa_email_resend_cd:" + body.Challenge
+	acquired, errCD := s.rdb.SetNX(r.Context(), cdKey, "1", 60*time.Second).Result()
+	if errCD != nil {
+		slog.Warn("mfa_email: redis error ao verificar cooldown de reenvio", "err", errCD)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+		return
+	}
+	if !acquired {
+		writeErr(w, appErr(http.StatusTooManyRequests, "RATE_LIMITED", "Aguarde um pouco antes de reenviar"))
+		return
+	}
 	u, err := s.userByID(r.Context(), uid)
 	if err != nil || u == nil {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido"))
 		return
 	}
 	if err := s.sendChallengeEmailCode(r.Context(), body.Challenge, u.Email); err != nil {
+		// Desfaz o cooldown para que o usuário possa retentar imediatamente.
+		_ = s.rdb.Del(r.Context(), cdKey)
 		writeErr(w, err)
 		return
 	}
