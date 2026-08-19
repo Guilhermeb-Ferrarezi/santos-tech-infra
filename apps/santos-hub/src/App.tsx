@@ -11,7 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { Titlebar } from "./components/Titlebar";
 import { AccountMenu } from "./components/AccountMenu";
-import { apiJSON } from "./lib/api";
+import { apiJSON, hubHeaders } from "./lib/api";
 
 interface DownloadItem {
   id: number;
@@ -131,7 +131,9 @@ export default function App() {
   async function load() {
     setLoading(true);
     try {
-      const json = await apiJSON<{ items: DownloadItem[] }>("/public/downloads");
+      const json = await apiJSON<{ items: DownloadItem[] }>("/public/downloads", {
+        headers: hubHeaders(),
+      });
       setItems(json.items);
       setError(false);
     } catch {
