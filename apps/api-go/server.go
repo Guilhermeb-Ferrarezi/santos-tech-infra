@@ -79,7 +79,91 @@ func (s *Server) Routes() http.Handler {
 	// padrão de rota casado (r.Pattern) e evitar explosão de cardinalidade.
 	// antiBotCheck fica DEPOIS do ipBanCheck (um IP já banido nem chega aqui) e
 	// ANTES do globalRateLimit (ver antibot.go).
-	return golog.RequestLogger(s.cors(s.ipBanCheck(s.antiBotCheck(s.globalRateLimit(metricsMiddleware(mux))))))
+	return golog.RequestLogger(securityHeaders(s.cors(s.ipBanCheck(s.antiBotCheck(s.globalRateLimit(metricsMiddleware(mux)))))))
+}
+
+// ── Cabeçalhos de segurança ──────────────────────────────────────────────────
+
+// securityHeaders adiciona cabeçalhos de segurança HTTP a todas as respostas
+// (portado de dashboard/api/internal/httpapi/middleware.go). Fica FORA do cors
+// para cobrir também o 204 do preflight.
+//
+// Os headers neutros vão sempre. Já `X-Frame-Options: DENY` e a CSP restritiva
+// só são aplicados quando a resposta NÃO é um arquivo servido inline (imagem,
+// vídeo, áudio, PDF de /drive-folders/{id}/files/{fileId}/download): nesses
+// casos eles quebrariam o preview no navegador. A proteção contra XSS
+// armazenado nesse caminho continua sendo a allowlist de tipos inline
+// (isInlineSafeContentType) + nosniff + fallback para attachment.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		h.Set("X-Permitted-Cross-Domain-Policies", "none")
+		h.Set("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+		sw := &securityHeadersWriter{ResponseWriter: w}
+		next.ServeHTTP(sw, r)
+		// Handler que não escreveu nada: o net/http ainda vai emitir 200 —
+		// aplica os headers restantes agora.
+		sw.applyFramingHeaders()
+	})
+}
+
+// securityHeadersWriter aplica os headers dependentes do Content-Type no
+// momento em que o status é escrito (depois disso o mapa de headers é ignorado).
+type securityHeadersWriter struct {
+	http.ResponseWriter
+	applied bool
+}
+
+// Unwrap permite que http.ResponseController alcance o writer original
+// (Flush/Hijack/SetWriteDeadline continuam funcionando para SSE e streaming).
+func (w *securityHeadersWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *securityHeadersWriter) applyFramingHeaders() {
+	if w.applied {
+		return
+	}
+	w.applied = true
+	if isInlineFileContentType(w.Header().Get("Content-Type")) {
+		return
+	}
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+}
+
+func (w *securityHeadersWriter) WriteHeader(code int) {
+	w.applyFramingHeaders()
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *securityHeadersWriter) Write(b []byte) (int, error) {
+	w.applyFramingHeaders()
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *securityHeadersWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// isInlineFileContentType reporta se ct é um tipo de arquivo que o navegador
+// renderiza direto (e que, portanto, pode ser embutido num preview) — nele não
+// entram X-Frame-Options nem a CSP `default-src 'none'`.
+func isInlineFileContentType(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	switch {
+	case strings.HasPrefix(ct, "image/"), strings.HasPrefix(ct, "video/"), strings.HasPrefix(ct, "audio/"):
+		return true
+	case ct == "application/pdf", ct == "application/octet-stream":
+		return true
+	}
+	return false
 }
 
 // ── CORS (com credenciais, igual ao Fastify) ─────────────────────────────────
