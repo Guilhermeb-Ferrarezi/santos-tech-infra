@@ -3,6 +3,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 const OVERLAY_LABEL: &str = "overlay";
 const OVERLAY_WIDTH: f64 = 220.0;
@@ -101,7 +102,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .setup(|app| {
+            // PC de laboratório: o app precisa estar sempre rodando sem
+            // depender de alguém ir fisicamente em cada máquina religar depois
+            // de reiniciar o Windows. `enable()` é idempotente — chamar de
+            // novo a cada boot não duplica o registro de autostart.
+            let _ = app.autolaunch().enable();
+
             let show_item = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let overlay_item =
                 MenuItem::with_id(app, "overlay", "Mostrar tempo no canto", true, None::<&str>)?;
