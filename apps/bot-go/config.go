@@ -56,8 +56,8 @@ type Config struct {
 	OutboxMaxAttempts    int
 	// OutboxClaimLease: por quanto tempo um evento drenado fica reservado para a
 	// réplica que o pegou. Vencido, volta à fila (cobre réplica morta no meio).
-	OutboxClaimLease time.Duration
-	FollowUpConcurrency  int
+	OutboxClaimLease    time.Duration
+	FollowUpConcurrency int
 
 	// Redis Stream de retries de webhook (reprocesso quase em tempo real).
 	// O polling do Postgres continua como safety net, mas com intervalo maior
