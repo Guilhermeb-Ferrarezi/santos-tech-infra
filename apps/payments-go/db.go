@@ -251,6 +251,17 @@ ALTER TABLE pay_withdrawals ADD COLUMN IF NOT EXISTS efi_id_envio TEXT;
 ALTER TABLE pay_withdrawals ADD COLUMN IF NOT EXISTS e2e_id       TEXT;
 CREATE INDEX IF NOT EXISTS idx_pay_withdrawals_efi_id_envio ON pay_withdrawals(efi_id_envio);
 CREATE INDEX IF NOT EXISTS idx_pay_withdrawals_e2e_id       ON pay_withdrawals(e2e_id);
+-- Índices dos caminhos QUENTES: webhook (o pagamento chega por aqui e não pode
+-- depender de seq scan), listagem do cliente e casamento das recorrências.
+-- Sem eles, cada notificação da Efí varria pay_charges inteira.
+CREATE INDEX IF NOT EXISTS idx_pay_charges_provider_charge_id
+  ON pay_charges(provider_charge_id) WHERE provider_charge_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pay_charges_customer   ON pay_charges(customer_id) WHERE customer_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pay_charges_recurrence ON pay_charges(recurrence_id) WHERE recurrence_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pay_recurrences_efi_id_rec ON pay_recurrences(efi_id_rec) WHERE efi_id_rec IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pay_recurrences_payer_tax_id ON pay_recurrences(payer_tax_id);
+CREATE INDEX IF NOT EXISTS idx_pay_recurrences_customer ON pay_recurrences(customer_id) WHERE customer_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pay_customers_tax_id ON pay_customers(tax_id);
 -- Webhook em duas fases: 'pending' = reivindicado, efeito AINDA NÃO aplicado;
 -- 'done' = efeito aplicado (reentrega vira no-op). O DEFAULT é 'done' de propósito:
 -- as linhas que já existem foram gravadas pelo esquema antigo, que só inseria depois
