@@ -22,7 +22,7 @@ var tinyPNG = []byte{
 func TestUploadImageEnviaMultipart(t *testing.T) {
 	var gotAuth, gotContentType string
 	var gotFile []byte
-	fakeAuth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fakeAuth := httptest.NewServer(authMeOK(3, func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		gotContentType = r.Header.Get("Content-Type")
 		if r.URL.Path != "/auth/upload" || r.Method != "POST" {
@@ -108,7 +108,7 @@ func TestUploadImageBase64Invalido(t *testing.T) {
 func TestUploadImagePorURL(t *testing.T) {
 	// Servidor que faz os dois papéis: serve a imagem e recebe o upload.
 	var gotFile []byte
-	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fake := httptest.NewServer(authMeOK(3, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/imagem.png":
 			w.Header().Set("Content-Type", "image/png")
