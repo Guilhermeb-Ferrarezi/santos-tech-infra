@@ -523,6 +523,42 @@ func (s *Server) deleteSocialPlatformOwner(ctx context.Context, platform string)
 	return err
 }
 
+// SocialSettings é a configuração fixa (não por post) do publicador universal —
+// hoje só localização automática (ver social_publish.go). Linha única na tabela
+// social_settings (seed garantida pela migração), por isso não tem ID de verdade.
+type SocialSettings struct {
+	InstagramLocationID string    `json:"instagramLocationId"`
+	FacebookPlaceID     string    `json:"facebookPlaceId"`
+	UpdatedByID         *int64    `json:"updatedById"`
+	UpdatedByName       string    `json:"updatedByName"`
+	UpdatedAt           time.Time `json:"updatedAt"`
+}
+
+// getSocialSettings sempre acha a linha (a migração garante o seed) — erro aqui
+// é de verdade erro de banco, não "sem configuração ainda".
+func (s *Server) getSocialSettings(ctx context.Context) (*SocialSettings, error) {
+	var st SocialSettings
+	err := s.db.QueryRow(ctx, `
+		SELECT st.instagram_location_id, st.facebook_place_id, st.updated_by,
+		       COALESCE((SELECT name FROM users WHERE id = st.updated_by), ''), st.updated_at
+		FROM social_settings st WHERE st.id = true`).
+		Scan(&st.InstagramLocationID, &st.FacebookPlaceID, &st.UpdatedByID, &st.UpdatedByName, &st.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
+
+func (s *Server) updateSocialSettings(ctx context.Context, instagramLocationID, facebookPlaceID string, updatedBy int64) (*SocialSettings, error) {
+	if _, err := s.db.Exec(ctx, `
+		UPDATE social_settings SET instagram_location_id = $1, facebook_place_id = $2, updated_by = $3, updated_at = now()
+		WHERE id = true`,
+		instagramLocationID, facebookPlaceID, updatedBy); err != nil {
+		return nil, err
+	}
+	return s.getSocialSettings(ctx)
+}
+
 // checkPublishConfirmationsComplete impõe a trava: só permite a transição pra
 // "publicado" se toda plataforma de plataformasDestino já tiver confirmação
 // registrada. Sem plataformas de destino definidas, não há o que checar.

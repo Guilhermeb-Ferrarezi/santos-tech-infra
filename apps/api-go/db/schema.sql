@@ -141,6 +141,17 @@ CREATE TABLE IF NOT EXISTS social_posts (
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Configuração fixa (não por post) de localização automática do publicador
+-- universal — linha única (o truque "id BOOLEAN PRIMARY KEY CHECK(id)"
+-- garante isso). Ver social_publish.go / GET,PUT /social/settings.
+CREATE TABLE IF NOT EXISTS social_settings (
+  id                    BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+  instagram_location_id TEXT NOT NULL DEFAULT '',
+  facebook_place_id     TEXT NOT NULL DEFAULT '',
+  updated_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS social_post_notes (
   id         BIGSERIAL PRIMARY KEY,
   post_id    UUID NOT NULL REFERENCES social_posts(id) ON DELETE CASCADE,

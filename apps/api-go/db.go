@@ -643,6 +643,20 @@ ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_cover_file_id TEXT NOT N
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_cover_file_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS alt_text TEXT NOT NULL DEFAULT '';
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS carousel_items JSONB NOT NULL DEFAULT '[]';
+
+-- Configuração fixa (não por post) de localização automática do publicador
+-- universal — marcada em TODA publicação, ver social_publish.go. Linha única
+-- (o truque "id BOOLEAN PRIMARY KEY CHECK(id)" garante isso: só o valor
+-- true é uma PK válida). Editável via GET/PUT /social/settings, tela
+-- Configurações do Calendário Editorial (admin-only) — não é mais env var.
+CREATE TABLE IF NOT EXISTS social_settings (
+  id                    BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+  instagram_location_id TEXT NOT NULL DEFAULT '',
+  facebook_place_id     TEXT NOT NULL DEFAULT '',
+  updated_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO social_settings (id) VALUES (true) ON CONFLICT (id) DO NOTHING;
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

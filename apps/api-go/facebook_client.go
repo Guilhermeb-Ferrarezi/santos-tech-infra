@@ -20,7 +20,6 @@ type facebookClient struct {
 	baseURL string // ex: https://graph.facebook.com/v21.0
 	pageID  string
 	token   string
-	placeID string // ver Config.FacebookPlaceID — vazio = não marca local
 	client  *http.Client
 }
 
@@ -29,7 +28,6 @@ func newFacebookClient(cfg Config) *facebookClient {
 		baseURL: "https://graph.facebook.com/v21.0",
 		pageID:  cfg.FacebookPageID,
 		token:   cfg.FacebookAccessToken,
-		placeID: cfg.FacebookPlaceID,
 		client:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -58,8 +56,8 @@ func (c *facebookClient) publishMedia(ctx context.Context, mediaURL, caption str
 		if opts.altText != "" {
 			form.Set("alt_text_custom", opts.altText)
 		}
-		if c.placeID != "" {
-			form.Set("place", c.placeID)
+		if opts.placeID != "" {
+			form.Set("place", opts.placeID)
 		}
 	}
 	return c.postForm(ctx, fmt.Sprintf("%s/%s", c.pageID, edge), form)

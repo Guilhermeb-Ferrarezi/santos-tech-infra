@@ -531,3 +531,41 @@ func (s *Server) handleDeleteSocialPlatformOwner(w http.ResponseWriter, r *http.
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"owners": owners})
 }
+
+// GET /social/settings
+func (s *Server) handleGetSocialSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.getSocialSettings(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+// PUT /social/settings — configura a localização automática marcada em toda
+// publicação (ver social_publish.go). Ambos os campos são opcionais (string
+// vazia = não marca local naquela rede); só o formato/teto de tamanho é
+// validado aqui — não dá pra confirmar que o ID é válido de verdade sem
+// chamar a Graph API, isso só se descobre na hora de publicar.
+func (s *Server) handleUpdateSocialSettings(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		InstagramLocationID string `json:"instagramLocationId"`
+		FacebookPlaceID     string `json:"facebookPlaceId"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	in.InstagramLocationID = strings.TrimSpace(in.InstagramLocationID)
+	in.FacebookPlaceID = strings.TrimSpace(in.FacebookPlaceID)
+	if len(in.InstagramLocationID) > 100 || len(in.FacebookPlaceID) > 100 {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "ID grande demais (máx 100 caracteres)"))
+		return
+	}
+	settings, err := s.updateSocialSettings(r.Context(), in.InstagramLocationID, in.FacebookPlaceID, userIDFrom(r))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}

@@ -68,12 +68,6 @@ type Config struct {
 	InstagramUserID             string // ID numérico da conta IG business
 	InstagramWebhookVerifyToken string // hub.verify_token do handshake de assinatura do webhook
 
-	// Localização marcada automaticamente em toda publicação do Instagram
-	// (location_id da Graph API — precisa ser o ID de uma Page com
-	// latitude/longitude, não um endereço solto). Vazio = não marca local
-	// nenhum (comportamento anterior a este campo existir).
-	InstagramLocationID string
-
 	// Publicação automática na Página do Facebook (ver social_publish.go).
 	// FacebookAccessToken é um Page Access Token (não expira sozinho, só se
 	// revogado — obtido trocando um User Token de longa duração via
@@ -81,10 +75,12 @@ type Config struct {
 	// desabilitado, plataforma cai de volta pro checklist manual.
 	FacebookAccessToken string
 	FacebookPageID      string
-	// Local marcado em toda FOTO publicada na Página (Graph API "place" —
-	// ID de uma Page com localização; vídeos da Página não suportam esse
-	// parâmetro). Vazio = não marca local nenhum.
-	FacebookPlaceID string
+
+	// Localização automática (Instagram location_id / Facebook place) NÃO é
+	// env var — é config fixa no banco (social_settings), editável pelo
+	// admin em Configurações do Calendário Editorial (GET/PUT /social/settings,
+	// ver social.go/handlers_social.go). Cresceria sem redeploy toda vez que
+	// alguém quisesse trocar o local, então não faz sentido como env.
 
 	// Roteador de chaves de API (failover automático em 401/sem-créditos de
 	// provedores externos). Deriva a chave AES-256 que cifra as chaves antes de
@@ -155,11 +151,9 @@ func LoadConfig() Config {
 		InstagramAccessToken:        getEnv("INSTAGRAM_ACCESS_TOKEN", ""),
 		InstagramUserID:             getEnv("INSTAGRAM_USER_ID", ""),
 		InstagramWebhookVerifyToken: getEnv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN", ""),
-		InstagramLocationID:         getEnv("INSTAGRAM_LOCATION_ID", ""),
 
 		FacebookAccessToken: getEnv("FACEBOOK_ACCESS_TOKEN", ""),
 		FacebookPageID:      getEnv("FACEBOOK_PAGE_ID", ""),
-		FacebookPlaceID:     getEnv("FACEBOOK_PLACE_ID", ""),
 
 		VaultSecret: getEnv("API_VAULT_SECRET", ""),
 

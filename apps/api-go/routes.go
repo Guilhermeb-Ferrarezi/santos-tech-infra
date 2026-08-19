@@ -259,6 +259,8 @@ func (s *Server) registerSocialRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /social/platform-owners", s.permGuard("social", "read", false, s.handleListSocialPlatformOwners))
 	mux.HandleFunc("PUT /social/platform-owners/{platform}", s.rateLimit(30, min, s.adminGuard(s.handleSetSocialPlatformOwner)))
 	mux.HandleFunc("DELETE /social/platform-owners/{platform}", s.adminGuard(s.handleDeleteSocialPlatformOwner))
+	mux.HandleFunc("GET /social/settings", s.permGuard("social", "read", false, s.handleGetSocialSettings))
+	mux.HandleFunc("PUT /social/settings", s.rateLimit(30, min, s.adminGuard(s.handleUpdateSocialSettings)))
 	mux.HandleFunc("GET /tasks", s.permGuard("tarefas", "read", true, s.handleListTasks))
 	mux.HandleFunc("GET /tasks/{id}", s.permGuard("tarefas", "read", true, s.handleGetTask))
 	mux.HandleFunc("POST /tasks", s.rateLimit(30, min, s.permGuard("tarefas", "write", true, s.handleCreateTask)))

@@ -20,9 +20,14 @@ const maxSocialPublishMediaSize = 100 << 20 // 100MB
 // precisar mudar a assinatura de publishMedia toda vez que a Meta libera um
 // parâmetro novo. coverURL só é usado em vídeo (capa custom do Reel);
 // altText só em imagem estática (texto alternativo de acessibilidade).
+// locationID/placeID vêm de social_settings (config fixa, não por post — ver
+// GET/PUT /social/settings), cada client decide sozinho se/quando aplica
+// (locationID no Instagram; placeID só em foto do Facebook, não vídeo).
 type publishOptions struct {
-	coverURL string
-	altText  string
+	coverURL   string
+	altText    string
+	locationID string
+	placeID    string
 }
 
 // socialPublisher publica a mídia de UM post em UMA plataforma e devolve o ID
@@ -219,7 +224,11 @@ func (s *Server) PublishSocialPost(ctx context.Context, postID string, actingUse
 	}
 	defer cleanup()
 
-	opts := publishOptions{altText: post.AltText}
+	settings, err := s.getSocialSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	opts := publishOptions{altText: post.AltText, locationID: settings.InstagramLocationID, placeID: settings.FacebookPlaceID}
 	if isVideo {
 		coverURL, coverCleanup, err := s.resolveSocialPostCoverURL(ctx, post)
 		if err != nil {

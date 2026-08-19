@@ -558,11 +558,13 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
   `INSTAGRAM_USER_ID` e/ou `FACEBOOK_ACCESS_TOKEN`/`FACEBOOK_PAGE_ID` (Page Access Token de
   longa duração, não expira sozinho — ver `facebook_client.go`); adaptador sem env
   configurada cai pro checklist manual, nunca erro. Feature de 18/08/2026.
-  - **Localização automática** (opcional): env `INSTAGRAM_LOCATION_ID` marca local em toda
-    publicação do Instagram (image/video/reel); `FACEBOOK_PLACE_ID` marca local em toda FOTO
-    da Página (vídeo da Página não suporta `place` nesse endpoint). Ambos vazios por padrão —
-    sem env, não marca local nenhum. Precisam ser o ID de uma Page da Meta com
-    latitude/longitude, não um endereço solto.
+  - **Localização automática** (opcional): `instagramLocationId` (`GET/PUT /social/settings`,
+    ver abaixo) marca local em toda publicação do Instagram (image/video/reel);
+    `facebookPlaceId` marca local em toda FOTO da Página (vídeo da Página não suporta
+    `place` nesse endpoint). Ambos vazios por padrão — sem configurar, não marca local
+    nenhum. Precisam ser o ID de uma Page da Meta com latitude/longitude, não um endereço
+    solto. Config fixa (não por post, não é env var — editável em Configurações do
+    Calendário Editorial, admin-only). Feature de 19/08/2026.
   - **Capa de Reel** (opcional): `driveCoverFolderId`/`driveCoverFileId`/`driveCoverFileName`
     no post — mesmo trio de `driveFolderId`/`driveFileId`/`driveFileName`, só que aponta pra
     outro arquivo (a imagem de capa). Se preenchido, vira `cover_url` na Graph API do
@@ -600,6 +602,13 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
   de publicação (`POST`/`DELETE .../publish-confirmations/{platform}` → 403 `NOT_PLATFORM_OWNER`
   pra qualquer outro usuário). Sem dono configurado, comportamento de 13/08 (qualquer um com
   `social:execute` confirma). Feature de 17/08/2026.
+- `GET /social/settings` — config fixa do publicador (hoje só localização automática, ver
+  acima). → `{settings: SocialSettings}`. Sempre existe uma linha (seed pela migração).
+- `PUT /social/settings {instagramLocationId?, facebookPlaceId?}` — atualiza (ambos os
+  campos juntos, string vazia = desliga aquela rede). **Admin-only**. Só valida tamanho
+  (máx 100 chars cada) — não confirma que o ID é válido na Meta, isso só se descobre na
+  hora de publicar. → `{settings: SocialSettings}` · corpo inválido/ID grande demais → 400.
+  Feature de 19/08/2026.
 
 **SocialPost** (campos do briefing): `title` (interno), `caption` (legenda),
 `platform`, `pilar` (educacional|institucional|captacao|prova_social|bastidores|tech_mundo_real),
@@ -634,6 +643,9 @@ populado em `GET /social/posts/{id}` (post único), vazio em `GET /social/posts`
 
 **SocialPlatformOwner**: `{platform, userId, userName, updatedAt}` — mapeamento global
 (não por post) de quem pode confirmar aquele canal.
+
+**SocialSettings**: `{instagramLocationId, facebookPlaceId, updatedById, updatedByName,
+updatedAt}` — config fixa (não por post) do publicador, ver `GET/PUT /social/settings`.
 
 ## Tarefas — `api.santos-tech.com/tasks`
 

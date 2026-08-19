@@ -19,20 +19,18 @@ import (
 // para a própria conta business — só a permissão instagram_manage_comments
 // (leitura) parecia exigir escopo à parte; o envio funcionou direto.
 type instagramClient struct {
-	baseURL    string // ex: https://graph.instagram.com/v21.0
-	userID     string
-	token      string
-	locationID string // ver Config.InstagramLocationID — vazio = não marca local
-	client     *http.Client
+	baseURL string // ex: https://graph.instagram.com/v21.0
+	userID  string
+	token   string
+	client  *http.Client
 }
 
 func newInstagramClient(cfg Config) *instagramClient {
 	return &instagramClient{
-		baseURL:    "https://graph.instagram.com/v21.0",
-		userID:     cfg.InstagramUserID,
-		token:      cfg.InstagramAccessToken,
-		locationID: cfg.InstagramLocationID,
-		client:     &http.Client{Timeout: 15 * time.Second},
+		baseURL: "https://graph.instagram.com/v21.0",
+		userID:  cfg.InstagramUserID,
+		token:   cfg.InstagramAccessToken,
+		client:  &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
@@ -156,8 +154,8 @@ func (c *instagramClient) publishMedia(ctx context.Context, mediaURL, caption st
 			form.Set("alt_text", opts.altText)
 		}
 	}
-	if c.locationID != "" {
-		form.Set("location_id", c.locationID)
+	if opts.locationID != "" {
+		form.Set("location_id", opts.locationID)
 	}
 	creationID, err := c.postForm(ctx, fmt.Sprintf("%s/media", c.userID), form)
 	if err != nil {
