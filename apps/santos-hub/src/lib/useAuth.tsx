@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { load, type Store } from "@tauri-apps/plugin-store";
 import { apiFetch, apiJSON, ApiError } from "./api";
 
@@ -49,7 +49,26 @@ async function persistSession(body: { user: AuthUser; accessToken?: string; refr
 // Central de identificação (avatar/nome no canto do app) — NÃO é gate de
 // acesso: o catálogo (/public/downloads) continua público sem login nenhum,
 // isso aqui é só personalização opcional.
+//
+// Context, não hook solto: AccountMenu, LoginForm e QRLoginPanel precisam
+// enxergar o MESMO estado — com um hook comum cada `useAuth()` teria seu
+// próprio `user` isolado, e o login por QR (que atualiza a instância de
+// dentro do QRLoginPanel) nunca apareceria no avatar do AccountMenu.
+type AuthContextValue = ReturnType<typeof useProvideAuth>;
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const value = useProvideAuth();
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
 export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth() precisa estar dentro de <AuthProvider>");
+  return ctx;
+}
+
+function useProvideAuth() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const refreshing = useRef<Promise<Tokens | null> | null>(null);
