@@ -192,14 +192,21 @@ BEGIN
     CHECK (method IN ('pix','boleto','card'));
 EXCEPTION WHEN duplicate_object THEN NULL;
 END$$;
--- Estorno: alarga o CHECK de status para incluir 'refunded'.
+-- Estorno: 'refunding' é o estado INTERMEDIÁRIO que reserva a cobrança antes de
+-- chamar o gateway. Sem ele, o check-then-act do handler permitia dois estornos
+-- simultâneos passarem pela mesma verificação e estornarem duas vezes.
+-- 'creating' reserva a cobrança antes de existir na Efí (ver createAndPersistCharge).
 DO $$
 BEGIN
   ALTER TABLE pay_charges DROP CONSTRAINT IF EXISTS pay_charges_status_check;
   ALTER TABLE pay_charges ADD CONSTRAINT pay_charges_status_check
-    CHECK (status IN ('pending','paid','expired','canceled','refunded'));
+    CHECK (status IN ('creating','pending','paid','expired','canceled','refunding','refunded'));
 EXCEPTION WHEN duplicate_object THEN NULL;
 END$$;
+-- refunded_cents acumula o total estornado. Estorno PARCIAL soma aqui e devolve a
+-- cobrança para 'paid'; só quando o acumulado alcança amount_cents o status vira
+-- 'refunded'. Antes um estorno de R$ 1 marcava a cobrança inteira como estornada.
+ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS refunded_cents BIGINT NOT NULL DEFAULT 0;
 -- Links de pagamento reutilizáveis.
 CREATE TABLE IF NOT EXISTS pay_payment_links (
   id           BIGSERIAL PRIMARY KEY,

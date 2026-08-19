@@ -658,6 +658,7 @@ func (s *Store) GetCharge(ctx context.Context, id int64) (*Charge, error) {
 		QRCode:           r.QrCode,
 		PDFURL:           r.PdfUrl,
 		Barcode:          r.Barcode,
+		RefundedCents:    r.RefundedCents,
 		PaidAt:           tsToTimePtr(r.PaidAt),
 		CreatedAt:        tsToTime(r.CreatedAt),
 	}, nil
@@ -671,15 +672,45 @@ func (s *Store) MarkChargeExpired(ctx context.Context, correlationID string) err
 	return s.q.MarkChargeExpired(ctx, correlationID)
 }
 
-// MarkChargeRefunded marca a cobrança como estornada (status='refunded') pelo
-// correlationID. Fecha a janela de double-refund: uma 2ª chamada de RefundCard
-// é bloqueada antes de chegar ao gateway (o handler verifica c.Status == "refunded").
-// O status 'refunded' não está no CHECK atual de pay_charges — adicionamos via migration.
-func (s *Store) MarkChargeRefunded(ctx context.Context, correlationID string) error {
+// BeginChargeRefund RESERVA a cobrança para estorno: 'paid' → 'refunding', numa única
+// instrução. Devolve false se outra requisição já reservou (ou se a cobrança não está
+// paga) — é o que fecha o double-refund de verdade.
+//
+// O check-then-act anterior (handler lê status='paid' → chama o gateway → marca
+// 'refunded') deixava duas requisições simultâneas passarem pela MESMA verificação e
+// estornarem duas vezes no gateway. O comentário antigo aqui afirmava o contrário.
+func (s *Store) BeginChargeRefund(ctx context.Context, correlationID string) (bool, error) {
+	tag, err := s.db.Exec(ctx,
+		`UPDATE pay_charges SET status='refunding' WHERE correlation_id=$1 AND status='paid'`,
+		correlationID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// RollbackChargeRefund desfaz a reserva ('refunding' → 'paid') quando o gateway recusa
+// o estorno. Sem isso a cobrança ficaria travada num estado intermediário para sempre.
+func (s *Store) RollbackChargeRefund(ctx context.Context, correlationID string) error {
 	_, err := s.db.Exec(ctx,
-		`UPDATE pay_charges SET status='refunded' WHERE correlation_id=$1 AND status='paid'`,
+		`UPDATE pay_charges SET status='paid' WHERE correlation_id=$1 AND status='refunding'`,
 		correlationID)
 	return err
+}
+
+// FinishChargeRefund registra o valor estornado e resolve o status final: enquanto o
+// acumulado não alcança amount_cents a cobrança VOLTA para 'paid' (estorno parcial);
+// quando alcança, vira 'refunded'. Devolve o status resultante.
+func (s *Store) FinishChargeRefund(ctx context.Context, correlationID string, refundedCents int64) (string, error) {
+	var status string
+	err := s.db.QueryRow(ctx, `
+		UPDATE pay_charges
+		SET refunded_cents = LEAST(refunded_cents + $2, amount_cents),
+		    status = CASE WHEN refunded_cents + $2 >= amount_cents THEN 'refunded' ELSE 'paid' END
+		WHERE correlation_id = $1 AND status = 'refunding'
+		RETURNING status`,
+		correlationID, refundedCents).Scan(&status)
+	return status, err
 }
 
 // ExpireOverdueCharges marca como expiradas as cobranças PIX pendentes vencidas (job

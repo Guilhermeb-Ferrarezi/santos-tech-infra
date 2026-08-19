@@ -59,7 +59,7 @@ const getCharge = `-- name: GetCharge :one
 SELECT id, kind, subscription_id, student_id, amount_cents, due_date::text, reference_month,
        status, provider, COALESCE(provider_charge_id, ''), correlation_id,
        method, COALESCE(br_code, ''), COALESCE(qr_code, ''),
-       COALESCE(pdf_url, ''), COALESCE(barcode, ''), paid_at, created_at
+       COALESCE(pdf_url, ''), COALESCE(barcode, ''), refunded_cents, paid_at, created_at
 FROM pay_charges
 WHERE id = $1
 `
@@ -81,6 +81,7 @@ type GetChargeRow struct {
 	QrCode           string
 	PdfUrl           string
 	Barcode          string
+	RefundedCents    int64
 	PaidAt           pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 }
@@ -105,6 +106,7 @@ func (q *Queries) GetCharge(ctx context.Context, id int64) (GetChargeRow, error)
 		&i.QrCode,
 		&i.PdfUrl,
 		&i.Barcode,
+		&i.RefundedCents,
 		&i.PaidAt,
 		&i.CreatedAt,
 	)

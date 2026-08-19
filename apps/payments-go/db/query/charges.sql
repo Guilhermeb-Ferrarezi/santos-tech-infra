@@ -21,7 +21,7 @@ RETURNING id, status, created_at;
 SELECT id, kind, subscription_id, student_id, amount_cents, due_date::text, reference_month,
        status, provider, COALESCE(provider_charge_id, ''), correlation_id,
        method, COALESCE(br_code, ''), COALESCE(qr_code, ''),
-       COALESCE(pdf_url, ''), COALESCE(barcode, ''), paid_at, created_at
+       COALESCE(pdf_url, ''), COALESCE(barcode, ''), refunded_cents, paid_at, created_at
 FROM pay_charges
 WHERE id = $1;
 
