@@ -104,16 +104,18 @@ func (s *Server) handleGetCart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "redis_error", "Falha no carrinho")
 		return
 	}
-	// enriquece com dados do produto
+	// Enriquece com dados do produto. PublicProduct (não Product): o carrinho é
+	// pré-pagamento — qualquer usuário logado poderia colocar o produto no carrinho
+	// e ler o fileUrl sem pagar.
 	type cartLine struct {
-		Product  Product `json:"product"`
-		Quantity int     `json:"quantity"`
+		Product  PublicProduct `json:"product"`
+		Quantity int           `json:"quantity"`
 	}
 	out := []cartLine{}
 	for _, it := range items {
 		p, err := s.store.GetProductByID(r.Context(), it.ProductID)
 		if err == nil {
-			out = append(out, cartLine{Product: *p, Quantity: it.Quantity})
+			out = append(out, cartLine{Product: publicProduct(*p), Quantity: it.Quantity})
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

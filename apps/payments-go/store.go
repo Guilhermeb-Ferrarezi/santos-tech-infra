@@ -1673,3 +1673,9 @@ func (s *Store) InsertChargeWithLink(ctx context.Context, c *Charge, linkID int6
 		nullStrPtr(c.PDFURL), nullStrPtr(c.Barcode), linkID,
 	).Scan(&c.ID, &c.Status, &c.CreatedAt)
 }
+
+// UserOwnsProduct diz se o usuário tem cobrança PAGA que inclua este produto (compra
+// avulsa ou ciclo de assinatura). Portão do entregável — ver handleGetMeProductFile.
+func (s *Store) UserOwnsProduct(ctx context.Context, userID, productID int64) (bool, error) {
+	return s.q.UserOwnsProduct(ctx, paydb.UserOwnsProductParams{UserID: userID, ProductID: &productID})
+}

@@ -190,7 +190,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /products/{id}", s.requireAdmin(s.handleGetProduct))
 	mux.HandleFunc("PUT /products/{id}", s.requireAdmin(s.handleUpdateProduct))
 	mux.HandleFunc("DELETE /products/{id}", s.requireAdmin(s.handleDeleteProduct))
-	mux.HandleFunc("GET /products/by-slug/{slug}", s.handleGetProductBySlug) // público
+	// Público: DTO reduzido, SEM fileUrl (o entregável).
+	mux.HandleFunc("GET /products/by-slug/{slug}", s.handleGetProductBySlug)
+	// Entregável do produto: só para quem tem cobrança paga dele.
+	mux.HandleFunc("GET /me/products/{id}/file", s.authGuard(s.handleGetMeProductFile))
 
 	mux.HandleFunc("GET /me/customer", s.authGuard(s.handleGetMeCustomer))
 	mux.HandleFunc("PUT /me/customer", s.authGuard(s.handlePutMeCustomer))
