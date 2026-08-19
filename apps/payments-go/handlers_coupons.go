@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -217,17 +218,7 @@ func (s *Server) handleApplyCoupon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Calcula o desconto.
-	var discountCents int64
-	if c.DiscountType == "fixed" {
-		discountCents = c.DiscountValue
-		if discountCents > in.AmountCents {
-			discountCents = in.AmountCents
-		}
-	} else {
-		// percent: arredonda para o centavo mais próximo.
-		discountCents = (in.AmountCents*c.DiscountValue + 50) / 100
-	}
+	discountCents := couponDiscount(c, in.AmountCents)
 	finalCents := in.AmountCents - discountCents
 	if finalCents < 0 {
 		finalCents = 0
@@ -241,4 +232,46 @@ func (s *Server) handleApplyCoupon(w http.ResponseWriter, r *http.Request) {
 		DiscountCents: discountCents,
 		FinalCents:    finalCents,
 	})
+}
+
+// couponDiscount calcula o desconto de um cupom sobre um valor, em centavos.
+// Fonte única para o checkout do carrinho, o link de pagamento e /coupons/apply —
+// antes as três cópias podiam divergir e mostrar um valor diferente do cobrado.
+// Nunca passa do valor da cobrança (desconto máximo = o próprio valor).
+func couponDiscount(c Coupon, amountCents int64) int64 {
+	if amountCents <= 0 {
+		return 0
+	}
+	var d int64
+	if c.DiscountType == "fixed" {
+		d = c.DiscountValue
+	} else {
+		// percent: arredonda para o centavo mais próximo.
+		d = (amountCents*c.DiscountValue + 50) / 100
+	}
+	if d > amountCents {
+		d = amountCents
+	}
+	if d < 0 {
+		d = 0
+	}
+	return d
+}
+
+// releaseCoupon devolve, best-effort, o uso reservado por RedeemCoupon quando o
+// pagamento não se concretiza. Usa um contexto sem cancelamento: o request pode já
+// ter sido abortado pelo cliente, e a devolução precisa acontecer mesmo assim.
+func (s *Server) releaseCoupon(ctx context.Context, couponID int64) {
+	if couponID <= 0 {
+		return
+	}
+	cst := s.couponStoreOf()
+	if cst == nil {
+		return
+	}
+	if err := cst.ReleaseCouponUse(context.WithoutCancel(ctx), couponID); err != nil {
+		// Não perdemos o pagamento por isso, mas o cupom fica com um uso a menos
+		// disponível — precisa ser visível.
+		slog.Error("falha ao devolver o uso do cupom", "coupon_id", couponID, "err", err)
+	}
 }

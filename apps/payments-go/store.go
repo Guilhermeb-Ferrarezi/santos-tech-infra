@@ -1648,10 +1648,37 @@ func (s *Store) SetCouponActive(ctx context.Context, id int64, active bool) erro
 	return nil
 }
 
-// IncrementCouponUse incrementa used_count do cupom pelo ID.
-func (s *Store) IncrementCouponUse(ctx context.Context, id int64) error {
+// RedeemCoupon reserva UM uso do cupom em uma única instrução atômica: só devolve o
+// cupom se ele estava ativo e ainda tinha uso disponível, e o incremento acontece no
+// mesmo UPDATE que checa o limite.
+//
+// Isto substitui o par SELECT-max_uses / IncrementCouponUse, que ficava separado por
+// uma chamada HTTP ao gateway: N pagadores simultâneos liam used_count antes de
+// qualquer incremento e todos furavam o limite. O erro do incremento ainda era
+// descartado com `_ =`, então nem dava para perceber.
+//
+// pgx.ErrNoRows = cupom inexistente, inativo ou esgotado (não distinguimos de
+// propósito — a rota pública não deve virar oráculo de cupom).
+func (s *Store) RedeemCoupon(ctx context.Context, code string) (Coupon, error) {
+	var c Coupon
+	err := s.db.QueryRow(ctx, `
+		UPDATE pay_coupons
+		SET used_count = used_count + 1
+		WHERE LOWER(code) = LOWER($1)
+		  AND active
+		  AND (max_uses = -1 OR used_count < max_uses)
+		RETURNING id, code, discount_type, discount_value, max_uses, used_count, active, created_at`,
+		code).
+		Scan(&c.ID, &c.Code, &c.DiscountType, &c.DiscountValue,
+			&c.MaxUses, &c.UsedCount, &c.Active, &c.CreatedAt)
+	return c, err
+}
+
+// ReleaseCouponUse devolve o uso reservado por RedeemCoupon quando o pagamento não
+// vinga (gateway recusou, INSERT falhou). Nunca deixa used_count negativo.
+func (s *Store) ReleaseCouponUse(ctx context.Context, id int64) error {
 	_, err := s.db.Exec(ctx,
-		`UPDATE pay_coupons SET used_count = used_count + 1 WHERE id=$1`, id)
+		`UPDATE pay_coupons SET used_count = used_count - 1 WHERE id=$1 AND used_count > 0`, id)
 	return err
 }
 

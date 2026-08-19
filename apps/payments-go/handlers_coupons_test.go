@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,12 +20,17 @@ import (
 
 // fakeCouponStore é um stub em memória de couponStore para testes sem DB.
 type fakeCouponStore struct {
+	// mu protege os mapas: RedeemCoupon precisa ser atômico de verdade para que o
+	// teste de concorrência exercite o mesmo contrato do UPDATE ... RETURNING.
+	mu     sync.Mutex
 	byID   map[int64]*Coupon
 	byCode map[string]*Coupon // indexado por UPPER(code)
 	nextID atomic.Int64
 	failOn string // se não vazio, métodos retornam erro
-	// Contador de chamadas a IncrementCouponUse (verificação em testes de pagamento).
+	// Contador de resgates efetivados (verificação em testes de pagamento).
 	incrementCalls atomic.Int64
+	// Contador de devoluções (pagamento que não vingou).
+	releaseCalls atomic.Int64
 }
 
 func newFakeCouponStore() *fakeCouponStore {
@@ -91,13 +97,51 @@ func (f *fakeCouponStore) SetCouponActive(_ context.Context, id int64, active bo
 	return nil
 }
 
+// IncrementCouponUse não faz parte de couponStore — é só um utilitário dos testes
+// para esgotar um cupom antes do cenário.
 func (f *fakeCouponStore) IncrementCouponUse(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.incrementCalls.Add(1)
 	c, ok := f.byID[id]
 	if !ok {
 		return pgx.ErrNoRows
 	}
 	c.UsedCount++
+	return nil
+}
+
+// RedeemCoupon reproduz o UPDATE ... WHERE active AND used_count < max_uses RETURNING:
+// checagem de limite e incremento sob o mesmo lock, sem janela entre os dois.
+func (f *fakeCouponStore) RedeemCoupon(_ context.Context, code string) (Coupon, error) {
+	if f.failOn == "get" {
+		return Coupon{}, errors.New("db error fake")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.byCode[strings.ToUpper(strings.TrimSpace(code))]
+	if !ok || !c.Active {
+		return Coupon{}, pgx.ErrNoRows
+	}
+	if c.MaxUses != -1 && c.UsedCount >= c.MaxUses {
+		return Coupon{}, pgx.ErrNoRows
+	}
+	c.UsedCount++
+	f.incrementCalls.Add(1)
+	return *c, nil
+}
+
+func (f *fakeCouponStore) ReleaseCouponUse(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releaseCalls.Add(1)
+	c, ok := f.byID[id]
+	if !ok {
+		return pgx.ErrNoRows
+	}
+	if c.UsedCount > 0 {
+		c.UsedCount--
+	}
 	return nil
 }
 
@@ -712,6 +756,117 @@ func (f *fakeDupCouponStore) SetCouponActive(ctx context.Context, id int64, acti
 	return f.inner.SetCouponActive(ctx, id, active)
 }
 
-func (f *fakeDupCouponStore) IncrementCouponUse(ctx context.Context, id int64) error {
-	return f.inner.IncrementCouponUse(ctx, id)
+func (f *fakeDupCouponStore) RedeemCoupon(ctx context.Context, code string) (Coupon, error) {
+	return f.inner.RedeemCoupon(ctx, code)
+}
+
+func (f *fakeDupCouponStore) ReleaseCouponUse(ctx context.Context, id int64) error {
+	return f.inner.ReleaseCouponUse(ctx, id)
+}
+
+// TestHandlePayViaLink_CupomLimitadoSobConcorrencia é o teste do TOCTOU do cupom.
+// Com max_uses=1 e 20 pagadores simultâneos, exatamente UM pode ganhar o desconto.
+// Antes, o SELECT de max_uses e o incremento ficavam separados por uma chamada HTTP
+// ao gateway e todos liam used_count=0 — o cupom era honrado 20 vezes.
+func TestHandlePayViaLink_CupomLimitadoSobConcorrencia(t *testing.T) {
+	lSt := newFakeLinkStore()
+	amount := int64(10000) // R$ 100
+	token := linkFixture(t, lSt, &amount, []string{"pix"})
+
+	cSt := newFakeCouponStore()
+	coup := couponFixture(t, cSt, "SO1", "fixed", 2000, 1) // R$ 20, UM único uso
+
+	s := &Server{
+		links:              lSt,
+		coupons:            cSt,
+		linkPayRateLimiter: unlimitedLimiter{},
+		provider:           &fakePixProvider{},
+	}
+
+	const n = 20
+	var comDesconto, semDesconto, recusados atomic.Int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // largada simultânea, para maximizar a janela do TOCTOU
+			body := `{"method":"pix","coupon":"SO1","customer":{"name":"Ana","taxId":"12345678909"}}`
+			req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.SetPathValue("token", token)
+			w := httptest.NewRecorder()
+			s.handlePayViaLink(w, req)
+			switch w.Code {
+			case http.StatusCreated:
+				var out Charge
+				json.Unmarshal(w.Body.Bytes(), &out)
+				if out.AmountCents == 8000 {
+					comDesconto.Add(1)
+				} else {
+					semDesconto.Add(1)
+				}
+			case http.StatusBadRequest:
+				recusados.Add(1)
+			default:
+				t.Errorf("status inesperado %d: %s", w.Code, w.Body.String())
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := comDesconto.Load(); got != 1 {
+		t.Fatalf("cupom de uso único foi honrado %d vezes (esperado exatamente 1)", got)
+	}
+	if got := recusados.Load(); got != n-1 {
+		t.Fatalf("esperado %d pagamentos recusados por cupom esgotado, veio %d", n-1, got)
+	}
+	cSt.mu.Lock()
+	used := cSt.byID[coup.ID].UsedCount
+	cSt.mu.Unlock()
+	if used != 1 {
+		t.Fatalf("usedCount deveria ficar em 1, veio %d", used)
+	}
+}
+
+// TestHandlePayViaLink_CupomDevolvidoQuandoPagamentoFalha: o uso é reservado ANTES do
+// gateway, então uma falha depois disso precisa devolvê-lo — senão o cupom se esgota
+// sozinho a cada tentativa que não vira cobrança.
+func TestHandlePayViaLink_CupomDevolvidoQuandoPagamentoFalha(t *testing.T) {
+	lSt := newFakeLinkStore()
+	amount := int64(10000)
+	token := linkFixture(t, lSt, &amount, []string{"pix"})
+	lSt.failOn = "insert_charge" // a cobrança não chega a ser gravada
+
+	cSt := newFakeCouponStore()
+	coup := couponFixture(t, cSt, "VOLTA", "fixed", 2000, 1)
+
+	s := &Server{
+		links:              lSt,
+		coupons:            cSt,
+		linkPayRateLimiter: unlimitedLimiter{},
+		provider:           &fakePixProvider{},
+	}
+
+	body := `{"method":"pix","coupon":"VOLTA","customer":{"name":"Ana","taxId":"12345678909"}}`
+	req := httptest.NewRequest("POST", "/link/"+token+"/pay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	s.handlePayViaLink(w, req)
+
+	if w.Code < 400 {
+		t.Fatalf("esperado erro quando a cobrança não é gravada, veio %d", w.Code)
+	}
+	if cSt.releaseCalls.Load() != 1 {
+		t.Fatalf("o uso reservado deveria ter sido devolvido 1x, veio %d", cSt.releaseCalls.Load())
+	}
+	cSt.mu.Lock()
+	used := cSt.byID[coup.ID].UsedCount
+	cSt.mu.Unlock()
+	if used != 0 {
+		t.Fatalf("usedCount deveria voltar a 0, veio %d", used)
+	}
 }

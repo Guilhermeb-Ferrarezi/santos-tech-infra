@@ -54,7 +54,12 @@ type couponStore interface {
 	ListCoupons(ctx context.Context) ([]Coupon, error)
 	GetCouponByCode(ctx context.Context, code string) (Coupon, error)
 	SetCouponActive(ctx context.Context, id int64, active bool) error
-	IncrementCouponUse(ctx context.Context, id int64) error
+	// RedeemCoupon reserva um uso de forma ATÔMICA (checa limite e incrementa no
+	// mesmo UPDATE). Nunca volte ao par "consulta max_uses" + "incrementa depois":
+	// entre os dois cabe uma chamada HTTP ao gateway, e o limite do cupom fura.
+	RedeemCoupon(ctx context.Context, code string) (Coupon, error)
+	// ReleaseCouponUse devolve o uso reservado quando o pagamento não se concretiza.
+	ReleaseCouponUse(ctx context.Context, id int64) error
 }
 
 // checkoutStore isola o acesso ao banco usado pelo checkout do carrinho (POST

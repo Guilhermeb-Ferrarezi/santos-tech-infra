@@ -378,44 +378,33 @@ func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Cupom (opcional) ─────────────────────────────────────────────────────
-	// Decisão de design: aceitamos qualquer cupom ativo (não restringimos à lista
-	// l.Coupons do link) para máxima flexibilidade. O campo l.Coupons serve como
-	// sugestão visual no checkout, mas não como filtro de validação.
+	// O uso é RESERVADO aqui, atomicamente, ANTES de falar com a Efí. Antes o código
+	// lia max_uses, ia ao gateway e só então incrementava (com o erro descartado):
+	// pagadores simultâneos furavam o limite do cupom.
 	var appliedCouponID int64
+	couponCommitted := false
 	if in.Coupon != "" {
 		cst := s.couponStoreOf()
 		if cst == nil {
 			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inválido")
 			return
 		}
-		coup, err := cst.GetCouponByCode(r.Context(), in.Coupon)
+		coup, err := cst.RedeemCoupon(r.Context(), in.Coupon)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom não encontrado")
+			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inválido ou esgotado")
 			return
 		}
-		if !coup.Active {
-			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inativo")
-			return
-		}
-		if coup.MaxUses != -1 && coup.UsedCount >= coup.MaxUses {
-			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom esgotado")
-			return
-		}
-		// Aplica o desconto.
-		var discountCents int64
-		if coup.DiscountType == "fixed" {
-			discountCents = coup.DiscountValue
-			if discountCents > amountCents {
-				discountCents = amountCents
-			}
-		} else {
-			discountCents = (amountCents*coup.DiscountValue + 50) / 100
-		}
-		amountCents -= discountCents
+		amountCents -= couponDiscount(coup, amountCents)
 		if amountCents < 0 {
 			amountCents = 0
 		}
 		appliedCouponID = coup.ID
+		// Pagamento que não vinga devolve o uso reservado.
+		defer func() {
+			if !couponCommitted {
+				s.releaseCoupon(r.Context(), appliedCouponID)
+			}
+		}()
 	}
 
 	// Método card: requer payment_token.
@@ -469,11 +458,7 @@ func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar a cobrança")
 			return
 		}
-		if appliedCouponID > 0 {
-			if cst := s.couponStoreOf(); cst != nil {
-				_ = cst.IncrementCouponUse(r.Context(), appliedCouponID)
-			}
-		}
+		couponCommitted = true // cobrança criada: o uso reservado do cupom fica de pé
 		if result.Status == "paid" {
 			_ = st.MarkChargePaid(r.Context(), c.CorrelationID)
 		}
@@ -556,11 +541,7 @@ func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar o boleto")
 			return
 		}
-		if appliedCouponID > 0 {
-			if cst := s.couponStoreOf(); cst != nil {
-				_ = cst.IncrementCouponUse(r.Context(), appliedCouponID)
-			}
-		}
+		couponCommitted = true // cobrança criada: o uso reservado do cupom fica de pé
 
 		c.Status = res.Status
 		c.PayerName = in.Customer.Name
@@ -625,11 +606,7 @@ func (s *Server) handlePayViaLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar o PIX")
 		return
 	}
-	if appliedCouponID > 0 {
-		if cst := s.couponStoreOf(); cst != nil {
-			_ = cst.IncrementCouponUse(r.Context(), appliedCouponID)
-		}
-	}
+	couponCommitted = true // cobrança criada: o uso reservado do cupom fica de pé
 
 	if c.QRCode == "" {
 		c.QRCode = qrPNGDataURI(c.BRCode)

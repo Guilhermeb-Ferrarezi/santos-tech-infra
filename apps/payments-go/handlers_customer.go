@@ -241,7 +241,11 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Cupom (opcional) ─────────────────────────────────────────────────────
+	// O uso é RESERVADO aqui, de forma atômica, ANTES de falar com a Efí. Antes o
+	// código lia max_uses, ia ao gateway e só então incrementava (com o erro
+	// descartado): compradores simultâneos furavam o limite do cupom.
 	var appliedCouponID int64
+	couponCommitted := false
 	in.Coupon = strings.TrimSpace(in.Coupon)
 	if in.Coupon != "" {
 		cst := s.couponStoreOf()
@@ -249,33 +253,22 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inválido")
 			return
 		}
-		coup, err := cst.GetCouponByCode(r.Context(), in.Coupon)
+		coup, err := cst.RedeemCoupon(r.Context(), in.Coupon)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom não encontrado")
+			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inválido ou esgotado")
 			return
 		}
-		if !coup.Active {
-			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inativo")
-			return
-		}
-		if coup.MaxUses != -1 && coup.UsedCount >= coup.MaxUses {
-			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom esgotado")
-			return
-		}
-		var discountCents int64
-		if coup.DiscountType == "fixed" {
-			discountCents = coup.DiscountValue
-			if discountCents > total {
-				discountCents = total
-			}
-		} else {
-			discountCents = (total*coup.DiscountValue + 50) / 100
-		}
-		total -= discountCents
+		total -= couponDiscount(coup, total)
 		if total < 0 {
 			total = 0
 		}
 		appliedCouponID = coup.ID
+		// Pagamento que não vinga devolve o uso reservado.
+		defer func() {
+			if !couponCommitted {
+				s.releaseCoupon(r.Context(), appliedCouponID)
+			}
+		}()
 	}
 
 	cid := cust.ID
@@ -304,11 +297,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("falha ao gravar itens da cobrança", "charge_id", c.ID, "err", err)
 	}
 	_ = s.cart.Clear(r.Context(), uid)
-	if appliedCouponID > 0 {
-		if cst := s.couponStoreOf(); cst != nil {
-			_ = cst.IncrementCouponUse(r.Context(), appliedCouponID)
-		}
-	}
+	couponCommitted = true // cobrança criada: o uso reservado do cupom fica de pé
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token": c.PublicToken, "brCode": c.BRCode, "qrCode": c.QRCode, "amountCents": total,
 	})
