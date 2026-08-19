@@ -184,17 +184,23 @@ func (s *Server) portalBatchUpdateAnswers(ctx context.Context, ids []int64, patc
 
 // ── Visões "quem respondeu" ──────────────────────────────────────────────────
 
-func (s *Server) portalExerciseAnswerStudents(ctx context.Context, exerciseID int64) ([]portalAnswerStudentSummaryDTO, error) {
+func (s *Server) portalExerciseAnswerStudents(ctx context.Context, exerciseID int64, p portalPagination) ([]portalAnswerStudentSummaryDTO, int64, error) {
+	var total int64
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(DISTINCT user_id) FROM answer WHERE exercise_id = $1`, exerciseID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COUNT(*), MAX(a.answered_at)
 		FROM answer a JOIN "user" u ON u.id = a.user_id
 		WHERE a.exercise_id = $1
 		GROUP BY u.id, u.name
-		ORDER BY COALESCE(u.name,'') ASC`, exerciseID)
+		ORDER BY COALESCE(u.name,'') ASC, u.id ASC
+		LIMIT $2 OFFSET $3`, exerciseID, p.Limit, p.Offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
-	return scanAnswerStudentSummaries(rows)
+	items, err := scanAnswerStudentSummaries(rows)
+	return items, total, err
 }
 
 func (s *Server) portalAnswerStudents(ctx context.Context, q string, p portalPagination) ([]portalAnswerStudentSummaryDTO, int64, error) {
@@ -274,14 +280,19 @@ func (s *Server) portalStudentAnsweredExercises(ctx context.Context, studentID i
 
 // ── Progresso ────────────────────────────────────────────────────────────────
 
-func (s *Server) portalPhaseProgress(ctx context.Context, phaseID int64) ([]portalProgressDTO, error) {
+func (s *Server) portalPhaseProgress(ctx context.Context, phaseID int64, p portalPagination) ([]portalProgressDTO, int64, error) {
+	var total int64
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM progress_student_phase WHERE phase_id = $1`, phaseID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''),
 		psp.status, COALESCE(psp.progress, 0), psp.unlocked_at, psp.completed_at
 		FROM progress_student_phase psp JOIN "user" u ON u.id = psp.user_id
 		WHERE psp.phase_id = $1
-		ORDER BY COALESCE(u.name,'') ASC, u.id ASC`, phaseID)
+		ORDER BY COALESCE(u.name,'') ASC, u.id ASC
+		LIMIT $2 OFFSET $3`, phaseID, p.Limit, p.Offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	items := []portalProgressDTO{}
@@ -290,30 +301,37 @@ func (s *Server) portalPhaseProgress(ctx context.Context, phaseID int64) ([]port
 		var dto portalProgressDTO
 		var status *int
 		if err := rows.Scan(&dto.StudentID, &dto.Name, &status, &dto.Progress, &dto.UnlockedAt, &dto.CompletedAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		dto.PhaseID = phaseStr
 		dto.Status, dto.StatusLabel = portalProgressStatus(status, dto.UnlockedAt)
 		items = append(items, dto)
 	}
-	return items, rows.Err()
+	return items, total, rows.Err()
 }
 
 // portalClassProgress devolve o progresso de cada aluno matriculado em cada fase
 // do módulo atual da turma (linhas aluno×fase; sem registro de progresso conta
-// como não iniciado).
-func (s *Server) portalClassProgress(ctx context.Context, classID int64) ([]portalProgressDTO, error) {
-	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''),
-		p.id::text, COALESCE(p.name,''), psp.status, COALESCE(psp.progress, 0), psp.unlocked_at, psp.completed_at
-		FROM class c
+// como não iniciado). É um PRODUTO: 40 alunos × 30 fases já são 1200 linhas por
+// chamada, então a query é paginada como todas as outras.
+func (s *Server) portalClassProgress(ctx context.Context, classID int64, p portalPagination) ([]portalProgressDTO, int64, error) {
+	const from = `FROM class c
 		JOIN (SELECT DISTINCT user_id FROM enrollment WHERE class_id = $1) en ON true
 		JOIN "user" u ON u.id = en.user_id
 		JOIN phase p ON p.module_id = c.current_module_id
 		LEFT JOIN progress_student_phase psp ON psp.user_id = u.id AND psp.phase_id = p.id
-		WHERE c.id = $1
-		ORDER BY COALESCE(u.name,'') ASC, u.id ASC, p.index_order ASC, p.id ASC`, classID)
+		WHERE c.id = $1`
+	var total int64
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) `+from, classID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''),
+		p.id::text, COALESCE(p.name,''), psp.status, COALESCE(psp.progress, 0), psp.unlocked_at, psp.completed_at
+		`+from+`
+		ORDER BY COALESCE(u.name,'') ASC, u.id ASC, p.index_order ASC, p.id ASC
+		LIMIT $2 OFFSET $3`, classID, p.Limit, p.Offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	items := []portalProgressDTO{}
@@ -322,11 +340,11 @@ func (s *Server) portalClassProgress(ctx context.Context, classID int64) ([]port
 		var status *int
 		var phaseName string
 		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.PhaseID, &phaseName, &status, &dto.Progress, &dto.UnlockedAt, &dto.CompletedAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		dto.PhaseName = &phaseName
 		dto.Status, dto.StatusLabel = portalProgressStatus(status, dto.UnlockedAt)
 		items = append(items, dto)
 	}
-	return items, rows.Err()
+	return items, total, rows.Err()
 }

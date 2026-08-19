@@ -56,12 +56,16 @@ func (s *Server) handlePortalGetClass(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	students, err := s.portalListClassStudents(r.Context(), id)
+	p := portalPaginationFrom(r)
+	students, total, err := s.portalListClassStudents(r.Context(), id, p)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"class": class, "students": students})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"class": class, "students": students, "total": total,
+		"pagination": newPortalPage(students, total, p).Pagination,
+	})
 }
 
 func (s *Server) handlePortalUpdateClass(w http.ResponseWriter, r *http.Request) {
@@ -112,12 +116,16 @@ func (s *Server) handlePortalListClassStudents(w http.ResponseWriter, r *http.Re
 		writeErr(w, err)
 		return
 	}
-	students, err := s.portalListClassStudents(r.Context(), id)
+	p := portalPaginationFrom(r)
+	students, total, err := s.portalListClassStudents(r.Context(), id, p)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"students": students})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"students": students, "total": total,
+		"pagination": newPortalPage(students, total, p).Pagination,
+	})
 }
 
 func (s *Server) handlePortalAddClassStudents(w http.ResponseWriter, r *http.Request) {
@@ -177,7 +185,8 @@ func (s *Server) handlePortalClassCronograma(w http.ResponseWriter, r *http.Requ
 		writeErr(w, err)
 		return
 	}
-	class, cronograma, err := s.portalClassCronograma(r.Context(), id)
+	p := portalPaginationFrom(r)
+	class, cronograma, total, err := s.portalClassCronograma(r.Context(), id, p)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeErr(w, notFoundErr("Turma"))
 		return
@@ -186,7 +195,10 @@ func (s *Server) handlePortalClassCronograma(w http.ResponseWriter, r *http.Requ
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"class": class, "cronograma": cronograma})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"class": class, "cronograma": cronograma, "total": total,
+		"pagination": newPortalPage[portalCronogramaPhase](nil, total, p).Pagination,
+	})
 }
 
 func (s *Server) handlePortalIniciarFases(w http.ResponseWriter, r *http.Request) {

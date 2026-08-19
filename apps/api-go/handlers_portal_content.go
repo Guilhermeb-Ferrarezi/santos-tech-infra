@@ -141,12 +141,13 @@ func (s *Server) handlePortalListContainers(w http.ResponseWriter, r *http.Reque
 		writeErr(w, err)
 		return
 	}
-	items, err := s.portalListContainers(r.Context(), phaseID)
+	p := portalPaginationFrom(r)
+	items, total, err := s.portalListContainers(r.Context(), phaseID, p)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, newPortalPage(items, total, p))
 }
 
 func (s *Server) handlePortalExerciseContainer(w http.ResponseWriter, r *http.Request) {

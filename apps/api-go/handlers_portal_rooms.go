@@ -15,12 +15,13 @@ func (s *Server) handlePortalListClassRooms(w http.ResponseWriter, r *http.Reque
 		writeErr(w, err)
 		return
 	}
-	items, err := s.portalListClassRooms(r.Context(), classID)
+	p := portalPaginationFrom(r)
+	items, total, err := s.portalListClassRooms(r.Context(), classID, p)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, newPortalPage(items, total, p))
 }
 
 func (s *Server) handlePortalCreateClassRoom(w http.ResponseWriter, r *http.Request) {

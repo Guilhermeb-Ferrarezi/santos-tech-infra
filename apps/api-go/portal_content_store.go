@@ -335,15 +335,20 @@ func (s *Server) portalDeleteExercise(ctx context.Context, id int64) error {
 
 // ── Containers ───────────────────────────────────────────────────────────────
 
-func (s *Server) portalListContainers(ctx context.Context, phaseID int64) ([]portalContainerGroupDTO, error) {
+func (s *Server) portalListContainers(ctx context.Context, phaseID int64, p portalPagination) ([]portalContainerGroupDTO, int64, error) {
+	var total int64
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM container_tasks WHERE phase_id=$1`, phaseID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.portalDB.Query(ctx, `SELECT ct.id::text, ct.exercise_id::text, COALESCE(ct.name,''),
 		COALESCE(ct.is_daily_task,false), ct.container_date_target_int,
 		COALESCE(e.title,''), COALESCE(e.description,''), COALESCE(e.index_order,1)
 		FROM container_tasks ct JOIN exercise e ON e.id = ct.exercise_id
 		WHERE ct.phase_id=$1
-		ORDER BY ct.container_date_target_int ASC NULLS LAST, ct.name ASC, e.index_order ASC, ct.id ASC`, phaseID)
+		ORDER BY ct.container_date_target_int ASC NULLS LAST, ct.name ASC, e.index_order ASC, ct.id ASC
+		LIMIT $2 OFFSET $3`, phaseID, p.Limit, p.Offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -355,7 +360,7 @@ func (s *Server) portalListContainers(ctx context.Context, phaseID int64) ([]por
 		var dateTarget *int
 		var indexOrder int
 		if err := rows.Scan(&ctID, &exID, &name, &isDaily, &dateTarget, &title, &desc, &indexOrder); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		key := portalContainerKey(name, isDaily, dateTarget)
 		pos, ok := idx[key]
@@ -371,7 +376,7 @@ func (s *Server) portalListContainers(ctx context.Context, phaseID int64) ([]por
 			ContainerTaskID: ctID, ExerciseID: exID, Title: title, Description: desc, IndexOrder: indexOrder,
 		})
 	}
-	return groups, rows.Err()
+	return groups, total, rows.Err()
 }
 
 func portalContainerKey(name string, isDaily bool, dateTarget *int) string {

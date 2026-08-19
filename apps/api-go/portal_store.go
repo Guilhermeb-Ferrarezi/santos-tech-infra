@@ -499,23 +499,30 @@ func (s *Server) portalDeleteClass(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (s *Server) portalListClassStudents(ctx context.Context, classID int64) ([]portalStudentDTO, error) {
+// portalListClassStudents — paginada: uma turma grande devolvia a lista inteira
+// numa resposta só, e a mesma query alimenta GET /portal/classes/{id}.
+func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p portalPagination) ([]portalStudentDTO, int64, error) {
+	var total int64
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM enrollment WHERE class_id=$1`, classID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role
 		FROM enrollment e JOIN "user" u ON u.id = e.user_id
-		WHERE e.class_id=$1 ORDER BY COALESCE(u.name,'') ASC, u.id ASC`, classID)
+		WHERE e.class_id=$1 ORDER BY COALESCE(u.name,'') ASC, u.id ASC
+		LIMIT $2 OFFSET $3`, classID, p.Limit, p.Offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	items := []portalStudentDTO{}
 	for rows.Next() {
 		var dto portalStudentDTO
 		if err := rows.Scan(&dto.ID, &dto.Email, &dto.Name, &dto.Role); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		items = append(items, dto)
 	}
-	return items, rows.Err()
+	return items, total, rows.Err()
 }
 
 // portalAddClassStudents matricula os usuários na turma, ignorando duplicatas.
@@ -550,23 +557,28 @@ func (s *Server) portalRemoveClassStudent(ctx context.Context, classID, studentI
 
 const portalRoomCols = `id::text, class_id::text, COALESCE(name,''), created_at, is_authorized, target_limited`
 
-func (s *Server) portalListClassRooms(ctx context.Context, classID int64) ([]portalRoomDTO, error) {
+func (s *Server) portalListClassRooms(ctx context.Context, classID int64, p portalPagination) ([]portalRoomDTO, int64, error) {
+	var total int64
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM class_rooms WHERE class_id=$1`, classID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.portalDB.Query(ctx, `SELECT `+portalRoomCols+`
-		FROM class_rooms WHERE class_id=$1 ORDER BY created_at DESC`, classID)
+		FROM class_rooms WHERE class_id=$1 ORDER BY created_at DESC, id DESC
+		LIMIT $2 OFFSET $3`, classID, p.Limit, p.Offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	items := []portalRoomDTO{}
 	for rows.Next() {
 		var dto portalRoomDTO
 		if err := rows.Scan(&dto.ID, &dto.ClassID, &dto.Name, &dto.CreatedAt, &dto.IsAuthorized, &dto.TargetLimited); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		dto.Status = portalRoomStatus(dto.IsAuthorized, dto.TargetLimited)
 		items = append(items, dto)
 	}
-	return items, rows.Err()
+	return items, total, rows.Err()
 }
 
 // portalRoomStatus deriva o estado da sala: fechada se a data-limite passou,
@@ -716,24 +728,29 @@ func (s *Server) portalReorder(ctx context.Context, table, scopeCol, entity stri
 
 // portalClassCronograma deriva o cronograma da turma a partir das fases do módulo
 // atual, agrupadas por week_number. Não existe tabela de cronograma no schema.
-func (s *Server) portalClassCronograma(ctx context.Context, classID int64) (*portalClassDTO, map[string][]portalCronogramaPhase, error) {
+func (s *Server) portalClassCronograma(ctx context.Context, classID int64, p portalPagination) (*portalClassDTO, map[string][]portalCronogramaPhase, int64, error) {
 	class, err := s.portalGetClass(ctx, classID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if class.CurrentModuleID == "" {
-		return class, map[string][]portalCronogramaPhase{}, nil
+		return class, map[string][]portalCronogramaPhase{}, 0, nil
 	}
 	moduleID, err := strconv.ParseInt(class.CurrentModuleID, 10, 64)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ID de módulo inválido %q: %w", class.CurrentModuleID, err)
+		return nil, nil, 0, fmt.Errorf("ID de módulo inválido %q: %w", class.CurrentModuleID, err)
+	}
+	var total int64
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM phase WHERE module_id=$1`, moduleID).Scan(&total); err != nil {
+		return nil, nil, 0, err
 	}
 	rows, err := s.portalDB.Query(ctx, `SELECT p.id::text, COALESCE(p.name,''), COALESCE(m.name,''), p.week_number
 		FROM phase p JOIN module m ON m.id = p.module_id
 		WHERE p.module_id=$1
-		ORDER BY p.week_number ASC, p.index_order ASC, p.id ASC`, moduleID)
+		ORDER BY p.week_number ASC, p.index_order ASC, p.id ASC
+		LIMIT $2 OFFSET $3`, moduleID, p.Limit, p.Offset)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	defer rows.Close()
 	grouped := map[string][]portalCronogramaPhase{}
@@ -741,7 +758,7 @@ func (s *Server) portalClassCronograma(ctx context.Context, classID int64) (*por
 		var ph portalCronogramaPhase
 		var week int
 		if err := rows.Scan(&ph.ID, &ph.Name, &ph.Module, &week); err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		if ph.Name == "" {
 			ph.Name = "Fase " + ph.ID
@@ -749,7 +766,7 @@ func (s *Server) portalClassCronograma(ctx context.Context, classID int64) (*por
 		key := strconv.Itoa(week)
 		grouped[key] = append(grouped[key], ph)
 	}
-	return class, grouped, rows.Err()
+	return class, grouped, total, rows.Err()
 }
 
 // portalIniciarFases inicializa o progresso dos alunos nas fases do módulo atual

@@ -45,12 +45,13 @@ func (s *Server) handlePortalExerciseAnswerStudents(w http.ResponseWriter, r *ht
 		writeErr(w, err)
 		return
 	}
-	items, err := s.portalExerciseAnswerStudents(r.Context(), exerciseID)
+	p := portalPaginationFrom(r)
+	items, total, err := s.portalExerciseAnswerStudents(r.Context(), exerciseID, p)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, newPortalPage(items, total, p))
 }
 
 func (s *Server) handlePortalAnswerStudents(w http.ResponseWriter, r *http.Request) {
@@ -158,12 +159,13 @@ func (s *Server) handlePortalPhaseProgress(w http.ResponseWriter, r *http.Reques
 		writeErr(w, err)
 		return
 	}
-	items, err := s.portalPhaseProgress(r.Context(), phaseID)
+	p := portalPaginationFrom(r)
+	items, total, err := s.portalPhaseProgress(r.Context(), phaseID, p)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, newPortalPage(items, total, p))
 }
 
 func (s *Server) handlePortalClassProgress(w http.ResponseWriter, r *http.Request) {
@@ -176,12 +178,13 @@ func (s *Server) handlePortalClassProgress(w http.ResponseWriter, r *http.Reques
 		writeErr(w, err)
 		return
 	}
-	items, err := s.portalClassProgress(r.Context(), classID)
+	p := portalPaginationFrom(r)
+	items, total, err := s.portalClassProgress(r.Context(), classID, p)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, newPortalPage(items, total, p))
 }
 
 // portalPrevPreviousSampleMax limita quantos valores anteriores de is_correct
