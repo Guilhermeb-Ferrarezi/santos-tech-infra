@@ -53,7 +53,7 @@ function DownloadCard({ item }: { item: DownloadItem }) {
 
   return (
     <div className="flex flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
-      <div className="relative flex aspect-video items-center justify-center bg-white/5">
+      <div className="relative flex aspect-[3/4] items-center justify-center bg-white/5">
         {item.imageUrl ? (
           <img src={item.imageUrl} alt="" className="size-full object-cover" />
         ) : (
