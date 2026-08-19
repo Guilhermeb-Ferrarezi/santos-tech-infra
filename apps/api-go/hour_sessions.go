@@ -153,11 +153,48 @@ func scanHourSession(row pgx.Row) (*HourSession, error) {
 // de uma IP só, então o risco não escala muito ao alongar a janela.
 const shortCodeTTL = 24 * time.Hour
 
+// releaseStaleShortCodes devolve ao espaço UNIQUE os códigos curtos que já não
+// servem pra nada: expirados, ou de sessões encerradas. Sem isto todo código
+// já emitido ocupava um dos 1M valores pra sempre — com o tempo, colisão no
+// INSERT viraria 500 na cara do admin. Roda antes de sortear um código novo;
+// é um UPDATE indexado (idx_hour_sessions_short_code_stale) e a rota é
+// admin-only, então o custo é irrelevante.
+func (s *Server) releaseStaleShortCodes(ctx context.Context) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE hour_sessions SET short_code = NULL, short_code_expires_at = NULL
+		WHERE short_code IS NOT NULL AND (short_code_expires_at <= now() OR status = 'ended')`)
+	return err
+}
+
+// startHourSessionAttempts: o código curto é sorteado (randomDigits) e tem
+// UNIQUE no banco, então uma colisão é possível. Sem retry ela virava 500;
+// com o espaço já liberado por releaseStaleShortCodes, 3 tentativas cobrem
+// qualquer cenário realista.
+const startHourSessionAttempts = 3
+
 // startHourSession cria a sessão + evento "start" numa transação e devolve o
 // token em texto puro e o código curto (só existem neste retorno — o banco
 // guarda o hash do token e o próprio código, mas o código é zerado no
 // primeiro pareamento, ver pairHourSessionByCode).
 func (s *Server) startHourSession(ctx context.Context, clientID string, createdBy int64) (*HourSession, string, string, error) {
+	if err := s.releaseStaleShortCodes(ctx); err != nil {
+		return nil, "", "", err
+	}
+	var lastErr error
+	for i := 0; i < startHourSessionAttempts; i++ {
+		h, token, shortCode, err := s.startHourSessionOnce(ctx, clientID, createdBy)
+		if err == nil {
+			return h, token, shortCode, nil
+		}
+		if !isUniqueViolation(err) {
+			return nil, "", "", err
+		}
+		lastErr = err // colisão de short_code: sorteia outro
+	}
+	return nil, "", "", lastErr
+}
+
+func (s *Server) startHourSessionOnce(ctx context.Context, clientID string, createdBy int64) (*HourSession, string, string, error) {
 	token := randomToken(32)
 	tokenHash := sha256Hex(token)
 	shortCode := randomDigits(6)
@@ -428,8 +465,13 @@ func (s *Server) endHourSession(ctx context.Context, id string, actorID int64) (
 		return nil, err
 	}
 	elapsedMinutes := int(elapsed / 60)
+	// short_code volta pro espaço UNIQUE junto com o encerramento: sessão
+	// encerrada não pode mais ser pareada, então guardar o código só gastaria
+	// um dos 1M valores pra sempre.
 	if _, err := tx.Exec(ctx, `
-		UPDATE hour_sessions SET status = 'ended', updated_at = now() WHERE id = $1::uuid`,
+		UPDATE hour_sessions
+		SET status = 'ended', short_code = NULL, short_code_expires_at = NULL, updated_at = now()
+		WHERE id = $1::uuid`,
 		id); err != nil {
 		return nil, err
 	}

@@ -516,9 +516,17 @@ CREATE INDEX IF NOT EXISTS idx_hour_sessions_status ON hour_sessions(status) WHE
 -- do laboratório: mesmo token por baixo, só um jeito mais fácil de digitar.
 -- Uso único — zerado no primeiro pareamento bem-sucedido (ver
 -- pairHourSessionByCode) — e com validade curta, pra limitar a janela de
--- força-bruta sobre um espaço tão pequeno (1M combinações).
+-- força-bruta sobre um espaço tão pequeno (1M combinações). Também é zerado ao
+-- encerrar a sessão e quando expira (ver releaseStaleShortCodes): senão cada
+-- código já emitido ocuparia um dos 1M valores do UNIQUE pra sempre.
 ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code TEXT UNIQUE;
 ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code_expires_at TIMESTAMPTZ;
+
+-- Índice do UPDATE que devolve códigos curtos expirados/encerrados ao espaço
+-- UNIQUE (ver releaseStaleShortCodes) — parcial, porque a esmagadora maioria
+-- das linhas tem short_code NULL.
+CREATE INDEX IF NOT EXISTS idx_hour_sessions_short_code_stale
+  ON hour_sessions(short_code_expires_at) WHERE short_code IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS hour_session_events (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
