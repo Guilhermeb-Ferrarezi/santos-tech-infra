@@ -113,7 +113,7 @@ func LoadConfig() Config {
 		RedisURL:    mustEnv("REDIS_URL"),
 		TenantID:    mustEnv("TENANT_ID"),
 
-		MetaAppSecret:          getEnv("META_APP_SECRET", ""),
+		MetaAppSecret:          mustEnv("META_APP_SECRET"),
 		MetaWebhookVerifyToken: mustEnv("META_WEBHOOK_VERIFY_TOKEN"),
 		MetaPhoneNumberID:      getEnv("META_PHONE_NUMBER_ID", ""),
 		MetaAccessToken:        getEnv("META_ACCESS_TOKEN", ""),

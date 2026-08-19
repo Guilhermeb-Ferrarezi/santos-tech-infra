@@ -12,6 +12,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -143,8 +144,16 @@ func (s *WhatsAppSender) post(ctx context.Context, body map[string]any) (string,
 	return result.Messages[0].ID, nil
 }
 
+// mediaIDPattern — o media id da Meta é numérico. Validar antes de concatenar
+// na URL impede que um payload com mediaID tipo "@evil.com/x" troque o host e
+// leve o Authorization: Bearer <META_ACCESS_TOKEN> para um servidor de fora.
+var mediaIDPattern = regexp.MustCompile(`^[0-9]+$`)
+
 // DownloadMedia baixa o conteúdo de uma mídia do WhatsApp pelo media id (lookup→bytes).
 func (s *WhatsAppSender) DownloadMedia(ctx context.Context, mediaID string) ([]byte, string, error) {
+	if !mediaIDPattern.MatchString(mediaID) {
+		return nil, "", fmt.Errorf("whatsapp: media id inválido")
+	}
 	return s.downloadMediaFrom(ctx, fmt.Sprintf("https://graph.facebook.com/v21.0/%s", mediaID))
 }
 
@@ -500,10 +509,13 @@ func ParseMetaWebhook(body []byte, phoneNumberID string) ([]InboundMessage, erro
 
 // ValidateMetaHMAC verifica a assinatura HMAC-SHA256 do webhook da Meta.
 // signature deve vir do header X-Hub-Signature-256 no formato "sha256=<hex>".
-// Se appSecret estiver vazio (modo dev/sem credenciais), a validação é pulada.
+//
+// Fail-closed: sem appSecret não há como distinguir um payload da Meta de um
+// forjado — e o payload define quem é o remetente, inclusive se a conversa
+// entra em modo admin. META_APP_SECRET é obrigatório (mustEnv).
 func ValidateMetaHMAC(body []byte, signature, appSecret string) bool {
 	if appSecret == "" {
-		return true
+		return false
 	}
 	const prefix = "sha256="
 	if !strings.HasPrefix(signature, prefix) {
