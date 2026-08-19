@@ -23,6 +23,19 @@ CREATE TABLE IF NOT EXISTS portal_point (
 );
 CREATE INDEX IF NOT EXISTS idx_portal_point_user ON portal_point(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_point_user_reason ON portal_point(user_id, reason);
+
+-- class_teacher: vínculo professor ↔ turma. A tabela class não tem dono no
+-- schema legado, então até aqui não existia como escopar "as minhas turmas".
+-- Criada vazia e SEM efeito enquanto PORTAL_CLASS_SCOPE estiver desligada
+-- (ver portal_class_scope.go): ligar a flag antes de popular esta tabela
+-- trancaria todo professor fora das próprias turmas.
+CREATE TABLE IF NOT EXISTS class_teacher (
+	class_id INTEGER NOT NULL,
+	user_id INTEGER NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	PRIMARY KEY (class_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_class_teacher_user ON class_teacher(user_id);
 `
 
 func migratePortal(ctx context.Context, pool *pgxpool.Pool) error {

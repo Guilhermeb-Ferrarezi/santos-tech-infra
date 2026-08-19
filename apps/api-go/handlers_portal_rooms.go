@@ -8,6 +8,10 @@ func (s *Server) handlePortalListClassRooms(w http.ResponseWriter, r *http.Reque
 		writeErr(w, err)
 		return
 	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), classID); err != nil {
+		writeErr(w, err)
+		return
+	}
 	items, err := s.portalListClassRooms(r.Context(), classID)
 	if err != nil {
 		writeErr(w, err)
@@ -19,6 +23,10 @@ func (s *Server) handlePortalListClassRooms(w http.ResponseWriter, r *http.Reque
 func (s *Server) handlePortalCreateClassRoom(w http.ResponseWriter, r *http.Request) {
 	classID, err := portalPathID(r, "classId")
 	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), classID); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -45,6 +53,10 @@ func (s *Server) handlePortalUpdateClassRoom(w http.ResponseWriter, r *http.Requ
 		writeErr(w, err)
 		return
 	}
+	if err := s.portalCanAccessRoom(r.Context(), userIDFrom(r), roomID); err != nil {
+		writeErr(w, err)
+		return
+	}
 	var in portalRoomInput
 	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
@@ -61,6 +73,10 @@ func (s *Server) handlePortalUpdateClassRoom(w http.ResponseWriter, r *http.Requ
 func (s *Server) handlePortalUpdateClassRoomStatus(w http.ResponseWriter, r *http.Request) {
 	roomID, err := portalPathID(r, "roomId")
 	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalCanAccessRoom(r.Context(), userIDFrom(r), roomID); err != nil {
 		writeErr(w, err)
 		return
 	}

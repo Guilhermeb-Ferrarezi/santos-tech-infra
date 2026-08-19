@@ -68,6 +68,10 @@ func (s *Server) handlePortalStudentAnsweredExercises(w http.ResponseWriter, r *
 		writeErr(w, err)
 		return
 	}
+	if err := s.portalCanAccessStudent(r.Context(), userIDFrom(r), studentID); err != nil {
+		writeErr(w, err)
+		return
+	}
 	p := portalPaginationFrom(r)
 	items, total, err := s.portalStudentAnsweredExercises(r.Context(), studentID, p.Query, p)
 	if err != nil {
@@ -89,6 +93,10 @@ func (s *Server) handlePortalUpdateAnswer(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := patch.validate(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalCanAccessAnswers(r.Context(), userIDFrom(r), []int64{id}); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -114,6 +122,10 @@ func (s *Server) handlePortalBatchUpdateAnswers(w http.ResponseWriter, r *http.R
 		writeErr(w, err)
 		return
 	}
+	if err := s.portalCanAccessAnswers(r.Context(), userIDFrom(r), in.AnswerIDs); err != nil {
+		writeErr(w, err)
+		return
+	}
 	updated, notFound, err := s.portalBatchUpdateAnswers(r.Context(), in.AnswerIDs, in.Patch)
 	if err != nil {
 		writeErr(w, err)
@@ -133,6 +145,10 @@ func (s *Server) handlePortalPhaseProgress(w http.ResponseWriter, r *http.Reques
 		writeErr(w, err)
 		return
 	}
+	if err := s.portalCanAccessPhase(r.Context(), userIDFrom(r), phaseID); err != nil {
+		writeErr(w, err)
+		return
+	}
 	items, err := s.portalPhaseProgress(r.Context(), phaseID)
 	if err != nil {
 		writeErr(w, err)
@@ -144,6 +160,10 @@ func (s *Server) handlePortalPhaseProgress(w http.ResponseWriter, r *http.Reques
 func (s *Server) handlePortalClassProgress(w http.ResponseWriter, r *http.Request) {
 	classID, err := portalPathID(r, "classId")
 	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), classID); err != nil {
 		writeErr(w, err)
 		return
 	}

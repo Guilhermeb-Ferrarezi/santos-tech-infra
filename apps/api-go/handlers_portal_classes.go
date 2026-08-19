@@ -41,6 +41,10 @@ func (s *Server) handlePortalGetClass(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), id); err != nil {
+		writeErr(w, err)
+		return
+	}
 	class, err := s.portalGetClass(r.Context(), id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeErr(w, notFoundErr("Turma"))
@@ -61,6 +65,10 @@ func (s *Server) handlePortalGetClass(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePortalUpdateClass(w http.ResponseWriter, r *http.Request) {
 	id, err := portalPathID(r, "classId")
 	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), id); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -96,6 +104,10 @@ func (s *Server) handlePortalListClassStudents(w http.ResponseWriter, r *http.Re
 		writeErr(w, err)
 		return
 	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), id); err != nil {
+		writeErr(w, err)
+		return
+	}
 	students, err := s.portalListClassStudents(r.Context(), id)
 	if err != nil {
 		writeErr(w, err)
@@ -107,6 +119,10 @@ func (s *Server) handlePortalListClassStudents(w http.ResponseWriter, r *http.Re
 func (s *Server) handlePortalAddClassStudents(w http.ResponseWriter, r *http.Request) {
 	id, err := portalPathID(r, "classId")
 	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), id); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -151,6 +167,10 @@ func (s *Server) handlePortalClassCronograma(w http.ResponseWriter, r *http.Requ
 		writeErr(w, err)
 		return
 	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), id); err != nil {
+		writeErr(w, err)
+		return
+	}
 	class, cronograma, err := s.portalClassCronograma(r.Context(), id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeErr(w, notFoundErr("Turma"))
@@ -166,6 +186,10 @@ func (s *Server) handlePortalClassCronograma(w http.ResponseWriter, r *http.Requ
 func (s *Server) handlePortalIniciarFases(w http.ResponseWriter, r *http.Request) {
 	id, err := portalPathID(r, "classId")
 	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), id); err != nil {
 		writeErr(w, err)
 		return
 	}
