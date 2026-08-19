@@ -79,6 +79,16 @@ para "log cru" se o JSON não casar, então degrada com graça.
   workspace por volume, rede opcionalmente restrita (`CLAUDE_DOCKER_NETWORK`). Exige o socket
   Docker montado (ver `docker-compose.yml`). Vazio = exec direto. **A execução real (imagem,
   volume, socket) é validada no e2e.**
+- **Webhook fail-closed**: `COOLIFY_WEBHOOK_SECRET` é obrigatório no boot e o handler
+  nega quando ele está vazio (antes, sem a env, o webhook virava anônimo).
+- **Allow-list de repositórios**: `ALLOWED_REPOS` (CSV `org/repo`, obrigatório) limita o
+  que o fixer pode clonar com o token da organização. Vazio = nega tudo.
+- **Teto do fix**: o commit automático é abortado se tocar caminho protegido
+  (`.github/workflows/**`, `**/Dockerfile*`, `infra/**`, `.git/**`) ou passar de 20
+  arquivos / 800 linhas alteradas — o push vai direto na branch de deploy, sem review.
+- **Workdir**: nome do app e id do incidente são validados (`^[A-Za-z0-9._-]+$`, sem
+  `.`/`..`/hífen inicial) e o destino precisa ficar sob o `WORKSPACE_ROOT`. O clone é
+  removido ao fim de cada run.
 - O `docker-compose.yml` **não** referencia a rede da Coolify de propósito.
 
 ## Estrutura
