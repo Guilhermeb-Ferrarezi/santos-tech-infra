@@ -34,13 +34,16 @@ var downloadExtContentType = map[string]string{
 	"deb":      "application/vnd.debian.binary-package",
 	"rpm":      "application/x-rpm",
 	"appimage": "application/x-executable",
-	"sh":       "application/x-sh",
-	"ps1":      "text/plain",
-	"bat":      "text/plain",
-	"cmd":      "text/plain",
-	"tar":      "application/x-tar",
-	"gz":       "application/gzip",
-	"apk":      "application/vnd.android.package-archive",
+	// ps1/bat/cmd como application/octet-stream (não text/plain): o navegador
+	// renderiza text/plain inline na aba em vez de baixar — o objetivo aqui é
+	// sempre o download do arquivo, nunca mostrar o script na tela.
+	"sh":  "application/x-sh",
+	"ps1": "application/octet-stream",
+	"bat": "application/octet-stream",
+	"cmd": "application/octet-stream",
+	"tar": "application/x-tar",
+	"gz":  "application/gzip",
+	"apk": "application/vnd.android.package-archive",
 }
 
 type downloadPresignRequest struct {
