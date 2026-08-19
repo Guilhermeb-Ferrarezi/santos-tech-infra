@@ -376,8 +376,16 @@ SELECT id, kind, amount_cents, due_date::text, status,
        COALESCE(br_code, ''), correlation_id, paid_at, created_at
 FROM pay_charges
 WHERE customer_id = $1
-ORDER BY created_at DESC
+  AND ($2 = 0 OR id < $2)
+ORDER BY created_at DESC, id DESC
+LIMIT $3
 `
+
+type ListChargesByCustomerParams struct {
+	CustomerID *int64
+	BeforeID   int64
+	Limit      int32
+}
 
 type ListChargesByCustomerRow struct {
 	ID            int64
@@ -391,8 +399,8 @@ type ListChargesByCustomerRow struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
-func (q *Queries) ListChargesByCustomer(ctx context.Context, customerID *int64) ([]ListChargesByCustomerRow, error) {
-	rows, err := q.db.Query(ctx, listChargesByCustomer, customerID)
+func (q *Queries) ListChargesByCustomer(ctx context.Context, arg ListChargesByCustomerParams) ([]ListChargesByCustomerRow, error) {
+	rows, err := q.db.Query(ctx, listChargesByCustomer, arg.CustomerID, arg.BeforeID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -426,8 +434,16 @@ SELECT id, kind, amount_cents, due_date::text, reference_month, status,
        COALESCE(br_code, ''), correlation_id, paid_at, created_at
 FROM pay_charges
 WHERE recurrence_id = $1
-ORDER BY created_at DESC
+  AND ($2 = 0 OR id < $2)
+ORDER BY created_at DESC, id DESC
+LIMIT $3
 `
+
+type ListChargesByRecurrenceParams struct {
+	RecurrenceID *int64
+	BeforeID     int64
+	Limit        int32
+}
 
 type ListChargesByRecurrenceRow struct {
 	ID             int64
@@ -443,8 +459,8 @@ type ListChargesByRecurrenceRow struct {
 }
 
 // Ciclos (cobranças) de uma recorrência de PIX Automático, mais recentes primeiro.
-func (q *Queries) ListChargesByRecurrence(ctx context.Context, recurrenceID *int64) ([]ListChargesByRecurrenceRow, error) {
-	rows, err := q.db.Query(ctx, listChargesByRecurrence, recurrenceID)
+func (q *Queries) ListChargesByRecurrence(ctx context.Context, arg ListChargesByRecurrenceParams) ([]ListChargesByRecurrenceRow, error) {
+	rows, err := q.db.Query(ctx, listChargesByRecurrence, arg.RecurrenceID, arg.BeforeID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

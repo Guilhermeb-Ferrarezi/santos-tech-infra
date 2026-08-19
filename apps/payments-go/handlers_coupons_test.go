@@ -63,7 +63,7 @@ func (f *fakeCouponStore) CreateCoupon(_ context.Context, c Coupon) (Coupon, err
 	return cp, nil
 }
 
-func (f *fakeCouponStore) ListCoupons(_ context.Context) ([]Coupon, error) {
+func (f *fakeCouponStore) ListCoupons(_ context.Context, _ listPage) ([]Coupon, error) {
 	if f.failOn == "list" {
 		return nil, errors.New("db error fake")
 	}
@@ -749,8 +749,8 @@ func (f *fakeDupCouponStore) CreateCoupon(_ context.Context, _ Coupon) (Coupon, 
 	return Coupon{}, &pgconn.PgError{Code: "23505"}
 }
 
-func (f *fakeDupCouponStore) ListCoupons(ctx context.Context) ([]Coupon, error) {
-	return f.inner.ListCoupons(ctx)
+func (f *fakeDupCouponStore) ListCoupons(ctx context.Context, page listPage) ([]Coupon, error) {
+	return f.inner.ListCoupons(ctx, page)
 }
 
 func (f *fakeDupCouponStore) GetCouponByCode(ctx context.Context, code string) (Coupon, error) {

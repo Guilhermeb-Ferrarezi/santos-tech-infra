@@ -72,7 +72,7 @@ func (f *fakeLinkStore) GetPaymentLink(_ context.Context, id int64) (*PaymentLin
 	return &cp, nil
 }
 
-func (f *fakeLinkStore) ListPaymentLinks(_ context.Context) ([]PaymentLink, error) {
+func (f *fakeLinkStore) ListPaymentLinks(_ context.Context, _ listPage) ([]PaymentLink, error) {
 	if f.failOn == "list" {
 		return nil, errors.New("db error fake")
 	}

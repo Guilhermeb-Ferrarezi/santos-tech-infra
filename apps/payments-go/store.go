@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -339,8 +340,8 @@ func (s *Store) GetRecurrenceByEfiID(ctx context.Context, efiIDRec string) (*Rec
 	}, nil
 }
 
-func (s *Store) ListRecurrences(ctx context.Context) ([]Recurrence, error) {
-	rows, err := s.q.ListRecurrences(ctx)
+func (s *Store) ListRecurrences(ctx context.Context, page listPage) ([]Recurrence, error) {
+	rows, err := s.q.ListRecurrences(ctx, paydb.ListRecurrencesParams{BeforeID: page.BeforeID, Limit: page.Limit})
 	if err != nil {
 		return nil, err
 	}
@@ -373,8 +374,10 @@ func (s *Store) ListRecurrences(ctx context.Context) ([]Recurrence, error) {
 // ListRecurrencesByUserID lista as recorrências (PIX Automático) do usuário logado,
 // amarradas pelo customer_id. Filtrar por CPF (ListRecurrencesByTaxID) NÃO serve aqui:
 // o CPF não prova posse da conta e vazava assinaturas de terceiros.
-func (s *Store) ListRecurrencesByUserID(ctx context.Context, userID int64) ([]Recurrence, error) {
-	rows, err := s.q.ListRecurrencesByUserID(ctx, userID)
+func (s *Store) ListRecurrencesByUserID(ctx context.Context, userID int64, page listPage) ([]Recurrence, error) {
+	rows, err := s.q.ListRecurrencesByUserID(ctx, paydb.ListRecurrencesByUserIDParams{
+		UserID: userID, BeforeID: page.BeforeID, Limit: page.Limit,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -405,8 +408,10 @@ func (s *Store) ListRecurrencesByUserID(ctx context.Context, userID int64) ([]Re
 }
 
 // ListRecurrencesByTaxID lista as recorrências (PIX Automático) de um cliente pelo CPF.
-func (s *Store) ListRecurrencesByTaxID(ctx context.Context, taxID string) ([]Recurrence, error) {
-	rows, err := s.q.ListRecurrencesByTaxID(ctx, taxID)
+func (s *Store) ListRecurrencesByTaxID(ctx context.Context, taxID string, page listPage) ([]Recurrence, error) {
+	rows, err := s.q.ListRecurrencesByTaxID(ctx, paydb.ListRecurrencesByTaxIDParams{
+		PayerTaxID: taxID, BeforeID: page.BeforeID, Limit: page.Limit,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -591,7 +596,7 @@ func (s *Store) InsertCharge(ctx context.Context, c *Charge) error {
 // ListCharges filtra opcionalmente por status e studentID.
 // Não migrada para sqlc: usa SQL com filtros condicionais inline ($1=” e $2=0
 // significam "sem filtro"), o que não é suportado estaticamente pelo sqlc.
-func (s *Store) ListCharges(ctx context.Context, status string, studentID int64) ([]Charge, error) {
+func (s *Store) ListCharges(ctx context.Context, status string, studentID int64, page listPage) ([]Charge, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT c.id, c.kind, c.subscription_id, c.student_id, c.amount_cents, c.due_date::text, c.reference_month,
 		       c.status, c.provider, COALESCE(c.provider_charge_id,''), c.correlation_id, c.method,
@@ -602,7 +607,9 @@ func (s *Store) ListCharges(ctx context.Context, status string, studentID int64)
 		LEFT JOIN pay_students st ON st.id = c.student_id
 		LEFT JOIN pay_customers cu ON cu.id = c.customer_id
 		WHERE ($1='' OR c.status=$1) AND ($2=0 OR c.student_id=$2)
-		ORDER BY c.created_at DESC`, status, studentID)
+		  AND ($3=0 OR c.id < $3)
+		ORDER BY c.created_at DESC, c.id DESC
+		LIMIT $4`, status, studentID, page.BeforeID, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -981,8 +988,8 @@ func (s *Store) GetCustomerByTaxID(ctx context.Context, taxID string) (*Customer
 }
 
 // ListCustomersWithStats lista os clientes com agregados das compras (admin).
-func (s *Store) ListCustomersWithStats(ctx context.Context) ([]CustomerWithStats, error) {
-	rows, err := s.q.ListCustomersWithStats(ctx)
+func (s *Store) ListCustomersWithStats(ctx context.Context, page listPage) ([]CustomerWithStats, error) {
+	rows, err := s.q.ListCustomersWithStats(ctx, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1049,7 +1056,7 @@ func (s *Store) GetCustomerDetail(ctx context.Context, id int64) (*CustomerDetai
 		}
 	}
 	// Assinaturas (PIX Automático) do cliente, consolidadas pelo mesmo CPF das compras.
-	recs, err := s.ListRecurrencesByTaxID(ctx, cu.TaxID)
+	recs, err := s.ListRecurrencesByTaxID(ctx, cu.TaxID, defaultPage())
 	if err != nil {
 		return nil, err
 	}
@@ -1116,8 +1123,10 @@ func (s *Store) PayerEmailByCharge(ctx context.Context, chargeID int64) (name, e
 	return r.Name, r.Email, nil
 }
 
-func (s *Store) ListChargesByCustomer(ctx context.Context, customerID int64) ([]Charge, error) {
-	rows, err := s.q.ListChargesByCustomer(ctx, &customerID)
+func (s *Store) ListChargesByCustomer(ctx context.Context, customerID int64, page listPage) ([]Charge, error) {
+	rows, err := s.q.ListChargesByCustomer(ctx, paydb.ListChargesByCustomerParams{
+		CustomerID: &customerID, BeforeID: page.BeforeID, Limit: page.Limit,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1139,8 +1148,10 @@ func (s *Store) ListChargesByCustomer(ctx context.Context, customerID int64) ([]
 }
 
 // ListChargesByRecurrence lista os ciclos (cobranças) de uma recorrência de PIX Automático.
-func (s *Store) ListChargesByRecurrence(ctx context.Context, recurrenceID int64) ([]Charge, error) {
-	rows, err := s.q.ListChargesByRecurrence(ctx, &recurrenceID)
+func (s *Store) ListChargesByRecurrence(ctx context.Context, recurrenceID int64, page listPage) ([]Charge, error) {
+	rows, err := s.q.ListChargesByRecurrence(ctx, paydb.ListChargesByRecurrenceParams{
+		RecurrenceID: &recurrenceID, BeforeID: page.BeforeID, Limit: page.Limit,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1380,12 +1391,14 @@ func (s *Store) GetPaymentLink(ctx context.Context, id int64) (*PaymentLink, err
 }
 
 // ListPaymentLinks lista todos os links de pagamento, mais recentes primeiro.
-func (s *Store) ListPaymentLinks(ctx context.Context) ([]PaymentLink, error) {
+func (s *Store) ListPaymentLinks(ctx context.Context, page listPage) ([]PaymentLink, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id, public_token, amount_cents, product_ids, methods, coupons,
 		       finish_url, return_url, status, created_at
 		FROM pay_payment_links
-		ORDER BY created_at DESC`)
+		WHERE ($1=0 OR id < $1)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $2`, page.BeforeID, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1490,11 +1503,13 @@ func (s *Store) GetWithdrawalByIdempotencyKey(ctx context.Context, key string) (
 }
 
 // ListWithdrawals lista todos os saques, mais recentes primeiro.
-func (s *Store) ListWithdrawals(ctx context.Context) ([]Withdrawal, error) {
+func (s *Store) ListWithdrawals(ctx context.Context, page listPage) ([]Withdrawal, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id, amount_cents, status, public_token, efi_id_envio, e2e_id, created_at
 		FROM pay_withdrawals
-		ORDER BY created_at DESC`)
+		WHERE ($1=0 OR id < $1)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $2`, page.BeforeID, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1525,7 +1540,10 @@ func (s *Store) ListWithdrawals(ctx context.Context) ([]Withdrawal, error) {
 //   - Saques registrados (direction="out", type="payout"): usando created_at como data.
 //
 // Não persiste SQL em handlers: toda a agregação fica aqui no store.
-func (s *Store) ListMovements(ctx context.Context, from, to time.Time) ([]Movement, error) {
+func (s *Store) ListMovements(ctx context.Context, from, to time.Time, page listPage) ([]Movement, error) {
+	// Cada ramo (cobranças e saques) traz no máximo `limit` linhas; depois de juntar e
+	// ordenar, cortamos em `limit`. Sem teto, uma janela larga carregava a tabela toda
+	// na memória do processo antes de virar JSON.
 	// 1. Cobranças pagas no intervalo.
 	chargeRows, err := s.db.Query(ctx, `
 		SELECT
@@ -1541,7 +1559,8 @@ func (s *Store) ListMovements(ctx context.Context, from, to time.Time) ([]Moveme
 		WHERE c.status = 'paid'
 		  AND c.paid_at >= $1
 		  AND c.paid_at < $2
-		ORDER BY c.paid_at DESC`, from, to)
+		ORDER BY c.paid_at DESC, c.id DESC
+		LIMIT $3`, from, to, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1585,7 +1604,8 @@ func (s *Store) ListMovements(ctx context.Context, from, to time.Time) ([]Moveme
 		FROM pay_withdrawals
 		WHERE created_at >= $1
 		  AND created_at < $2
-		ORDER BY created_at DESC`, from, to)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $3`, from, to, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1613,19 +1633,23 @@ func (s *Store) ListMovements(ctx context.Context, from, to time.Time) ([]Moveme
 		return nil, err
 	}
 
-	// Ordena todos os movimentos por data decrescente (combina cobranças + saques).
+	// Ordena todos os movimentos por data decrescente (combina cobranças + saques) e
+	// aplica o teto sobre a lista já combinada.
 	sortMovements(out)
+	if page.Limit > 0 && len(out) > int(page.Limit) {
+		out = out[:page.Limit]
+	}
 	return out, nil
 }
 
-// sortMovements ordena os movimentos por data decrescente sem dependência externa.
+// sortMovements ordena os movimentos por data decrescente.
+//
+// Era um insertion sort "porque o número de movimentos por janela é pequeno" — que é
+// exatamente a premissa que deixa de valer com o tempo: O(n²) numa janela larga de
+// extrato trava o handler. sort.SliceStable é O(n log n) e preserva a ordem relativa
+// dos movimentos com a mesma data (cobranças antes de saques, como já vinha do SQL).
 func sortMovements(mvs []Movement) {
-	// Insertion sort simples — o número de movimentos por janela é pequeno.
-	for i := 1; i < len(mvs); i++ {
-		for j := i; j > 0 && mvs[j].Date.After(mvs[j-1].Date); j-- {
-			mvs[j], mvs[j-1] = mvs[j-1], mvs[j]
-		}
-	}
+	sort.SliceStable(mvs, func(i, j int) bool { return mvs[i].Date.After(mvs[j].Date) })
 }
 
 // ── Coupons ───────────────────────────────────────────────────────────────────
@@ -1643,11 +1667,13 @@ func (s *Store) CreateCoupon(ctx context.Context, c Coupon) (Coupon, error) {
 }
 
 // ListCoupons lista todos os cupons, mais recentes primeiro.
-func (s *Store) ListCoupons(ctx context.Context) ([]Coupon, error) {
+func (s *Store) ListCoupons(ctx context.Context, page listPage) ([]Coupon, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id, code, discount_type, discount_value, max_uses, used_count, active, created_at
 		FROM pay_coupons
-		ORDER BY created_at DESC`)
+		WHERE ($1=0 OR id < $1)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $2`, page.BeforeID, page.Limit)
 	if err != nil {
 		return nil, err
 	}

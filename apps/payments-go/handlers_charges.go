@@ -521,7 +521,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListCharges(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	studentID, _ := strconv.ParseInt(r.URL.Query().Get("student_id"), 10, 64)
-	list, err := s.store.ListCharges(r.Context(), status, studentID)
+	list, err := s.store.ListCharges(r.Context(), status, studentID, pageFromRequest(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar")
 		return
@@ -541,7 +541,7 @@ func (s *Server) handleGetCharge(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStudentCharges(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	list, err := s.store.ListCharges(r.Context(), "", id)
+	list, err := s.store.ListCharges(r.Context(), "", id, pageFromRequest(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar")
 		return

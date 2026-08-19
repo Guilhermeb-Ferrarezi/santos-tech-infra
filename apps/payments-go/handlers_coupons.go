@@ -106,7 +106,7 @@ func (s *Server) handleListCoupons(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []Coupon{})
 		return
 	}
-	list, err := st.ListCoupons(r.Context())
+	list, err := st.ListCoupons(r.Context(), pageFromRequest(r))
 	if err != nil {
 		slog.Warn("coupons: falha ao listar", "err", err)
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar cupons")

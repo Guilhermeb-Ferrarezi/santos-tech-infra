@@ -85,7 +85,9 @@ SELECT id, kind, amount_cents, due_date::text, status,
        COALESCE(br_code, ''), correlation_id, paid_at, created_at
 FROM pay_charges
 WHERE customer_id = $1
-ORDER BY created_at DESC;
+  AND ($2 = 0 OR id < $2)
+ORDER BY created_at DESC, id DESC
+LIMIT $3;
 
 -- name: ListChargeItemsByCustomer :many
 -- Itens de todas as cobranças de um cliente (para montar o detalhe das compras).
@@ -101,7 +103,9 @@ SELECT id, kind, amount_cents, due_date::text, reference_month, status,
        COALESCE(br_code, ''), correlation_id, paid_at, created_at
 FROM pay_charges
 WHERE recurrence_id = $1
-ORDER BY created_at DESC;
+  AND ($2 = 0 OR id < $2)
+ORDER BY created_at DESC, id DESC
+LIMIT $3;
 
 -- name: ListChargesByTaxID :many
 -- Cobranças de TODAS as contas com um mesmo CPF (detalhe consolidado por pessoa).

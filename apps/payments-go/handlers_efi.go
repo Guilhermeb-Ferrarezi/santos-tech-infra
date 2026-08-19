@@ -26,7 +26,7 @@ type EfiBalance struct {
 // withdrawalStore isola as operações de persistência de saques.
 type withdrawalStore interface {
 	CreateWithdrawal(ctx context.Context, w *Withdrawal) error
-	ListWithdrawals(ctx context.Context) ([]Withdrawal, error)
+	ListWithdrawals(ctx context.Context, page listPage) ([]Withdrawal, error)
 	// GetWithdrawalByIdempotencyKey devolve o withdrawal existente com aquela chave,
 	// ou nil (sem erro) se não existir. Usado para dedupe de saques.
 	GetWithdrawalByIdempotencyKey(ctx context.Context, key string) (*Withdrawal, error)
@@ -111,7 +111,7 @@ func (s *Server) handleListWithdrawals(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "db_unavailable", "Banco de dados não disponível")
 		return
 	}
-	list, err := ws.ListWithdrawals(r.Context())
+	list, err := ws.ListWithdrawals(r.Context(), pageFromRequest(r))
 	if err != nil {
 		slog.Warn("withdrawals: falha ao listar", "err", err)
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar saques")

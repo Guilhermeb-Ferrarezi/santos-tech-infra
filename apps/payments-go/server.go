@@ -51,7 +51,7 @@ type productStore interface {
 // Extraída como interface para facilitar testes sem DB.
 type couponStore interface {
 	CreateCoupon(ctx context.Context, c Coupon) (Coupon, error)
-	ListCoupons(ctx context.Context) ([]Coupon, error)
+	ListCoupons(ctx context.Context, page listPage) ([]Coupon, error)
 	GetCouponByCode(ctx context.Context, code string) (Coupon, error)
 	SetCouponActive(ctx context.Context, id int64, active bool) error
 	// RedeemCoupon reserva um uso de forma ATÔMICA (checa limite e incrementa no
@@ -78,7 +78,7 @@ type paymentLinkStore interface {
 	CreatePaymentLink(ctx context.Context, l *PaymentLink) error
 	GetPaymentLinkByToken(ctx context.Context, token string) (*PaymentLink, error)
 	GetPaymentLink(ctx context.Context, id int64) (*PaymentLink, error)
-	ListPaymentLinks(ctx context.Context) ([]PaymentLink, error)
+	ListPaymentLinks(ctx context.Context, page listPage) ([]PaymentLink, error)
 	SetPaymentLinkStatus(ctx context.Context, id int64, status string) error
 	InsertChargeWithLink(ctx context.Context, c *Charge, linkID int64) error
 	// MarkChargePaid é necessário para marcar cobrança paga após cartão sincronamente.

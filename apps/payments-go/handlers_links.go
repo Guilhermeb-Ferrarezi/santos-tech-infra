@@ -104,7 +104,7 @@ func (s *Server) handleListPaymentLinks(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, []PaymentLink{})
 		return
 	}
-	list, err := st.ListPaymentLinks(r.Context())
+	list, err := st.ListPaymentLinks(r.Context(), pageFromRequest(r))
 	if err != nil {
 		slog.Warn("payment links: falha ao listar", "err", err)
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar links")

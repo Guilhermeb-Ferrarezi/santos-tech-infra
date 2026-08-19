@@ -113,6 +113,7 @@ FROM pay_customers cu
 LEFT JOIN pay_charges c ON c.customer_id = cu.id
 GROUP BY cu.tax_id
 ORDER BY MAX(c.created_at) DESC NULLS LAST, MIN(cu.created_at) DESC
+LIMIT $1
 `
 
 type ListCustomersWithStatsRow struct {
@@ -133,8 +134,8 @@ type ListCustomersWithStatsRow struct {
 // contas diferentes): dados do registro mais recente + agregados de TODAS as compras
 // daquele CPF. LEFT JOIN para incluir clientes ainda sem cobrança. O id devolvido é o
 // do registro mais recente (usado para abrir o detalhe, que consolida por CPF).
-func (q *Queries) ListCustomersWithStats(ctx context.Context) ([]ListCustomersWithStatsRow, error) {
-	rows, err := q.db.Query(ctx, listCustomersWithStats)
+func (q *Queries) ListCustomersWithStats(ctx context.Context, limit int32) ([]ListCustomersWithStatsRow, error) {
+	rows, err := q.db.Query(ctx, listCustomersWithStats, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -26,7 +26,7 @@ func (s *Server) checkoutStoreOf() checkoutStore {
 
 // handleListCustomers (admin) lista os clientes com agregados das compras.
 func (s *Server) handleListCustomers(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.ListCustomersWithStats(r.Context())
+	list, err := s.store.ListCustomersWithStats(r.Context(), pageFromRequest(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar clientes")
 		return
@@ -314,7 +314,7 @@ func (s *Server) handleMeCharges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha")
 		return
 	}
-	list, err := s.store.ListChargesByCustomer(r.Context(), cust.ID)
+	list, err := s.store.ListChargesByCustomer(r.Context(), cust.ID, pageFromRequest(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar")
 		return
@@ -330,7 +330,7 @@ func (s *Server) handleMeCharges(w http.ResponseWriter, r *http.Request) {
 // copia-e-cola e publicToken das assinaturas alheias. Não volte a filtrar por CPF.
 // Sem assinatura → lista vazia (200).
 func (s *Server) handleMeRecurrences(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.ListRecurrencesByUserID(r.Context(), s.uid(r))
+	list, err := s.store.ListRecurrencesByUserID(r.Context(), s.uid(r), pageFromRequest(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar")
 		return

@@ -234,7 +234,9 @@ SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
        status, created_at
 FROM pay_recurrences
-ORDER BY created_at DESC
+WHERE ($1 = 0 OR id < $1)
+ORDER BY created_at DESC, id DESC
+LIMIT $2
 `
 
 type ListRecurrencesRow struct {
@@ -258,8 +260,13 @@ type ListRecurrencesRow struct {
 	CreatedAt      pgtype.Timestamptz
 }
 
-func (q *Queries) ListRecurrences(ctx context.Context) ([]ListRecurrencesRow, error) {
-	rows, err := q.db.Query(ctx, listRecurrences)
+type ListRecurrencesParams struct {
+	BeforeID int64
+	Limit    int32
+}
+
+func (q *Queries) ListRecurrences(ctx context.Context, arg ListRecurrencesParams) ([]ListRecurrencesRow, error) {
+	rows, err := q.db.Query(ctx, listRecurrences, arg.BeforeID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +312,9 @@ SELECT r.id, r.subscription_id, r.product_id, r.customer_id, r.payer_tax_id, r.p
 FROM pay_recurrences r
 JOIN pay_customers cu ON cu.id = r.customer_id
 WHERE cu.user_id = $1
-ORDER BY r.created_at DESC
+  AND ($2 = 0 OR r.id < $2)
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT $3
 `
 
 type ListRecurrencesByUserIDRow struct {
@@ -332,8 +341,14 @@ type ListRecurrencesByUserIDRow struct {
 // Recorrências do usuário logado, amarradas pelo customer_id (JOIN em pay_customers).
 // NUNCA filtrar só por payer_tax_id aqui: o CPF não é segredo e não prova posse da
 // conta — quem soubesse um CPF lia as assinaturas alheias (valor, copia-e-cola, token).
-func (q *Queries) ListRecurrencesByUserID(ctx context.Context, userID int64) ([]ListRecurrencesByUserIDRow, error) {
-	rows, err := q.db.Query(ctx, listRecurrencesByUserID, userID)
+type ListRecurrencesByUserIDParams struct {
+	UserID   int64
+	BeforeID int64
+	Limit    int32
+}
+
+func (q *Queries) ListRecurrencesByUserID(ctx context.Context, arg ListRecurrencesByUserIDParams) ([]ListRecurrencesByUserIDRow, error) {
+	rows, err := q.db.Query(ctx, listRecurrencesByUserID, arg.UserID, arg.BeforeID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -378,7 +393,9 @@ SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        status, created_at
 FROM pay_recurrences
 WHERE payer_tax_id = $1
-ORDER BY created_at DESC
+  AND ($2 = 0 OR id < $2)
+ORDER BY created_at DESC, id DESC
+LIMIT $3
 `
 
 type ListRecurrencesByTaxIDRow struct {
@@ -403,8 +420,14 @@ type ListRecurrencesByTaxIDRow struct {
 }
 
 // Recorrências de um cliente, consolidadas pelo CPF (igual ao histórico de compras).
-func (q *Queries) ListRecurrencesByTaxID(ctx context.Context, payerTaxID string) ([]ListRecurrencesByTaxIDRow, error) {
-	rows, err := q.db.Query(ctx, listRecurrencesByTaxID, payerTaxID)
+type ListRecurrencesByTaxIDParams struct {
+	PayerTaxID string
+	BeforeID   int64
+	Limit      int32
+}
+
+func (q *Queries) ListRecurrencesByTaxID(ctx context.Context, arg ListRecurrencesByTaxIDParams) ([]ListRecurrencesByTaxIDRow, error) {
+	rows, err := q.db.Query(ctx, listRecurrencesByTaxID, arg.PayerTaxID, arg.BeforeID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

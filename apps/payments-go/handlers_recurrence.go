@@ -17,10 +17,10 @@ import (
 type recurrenceStore interface {
 	CreateRecurrence(ctx context.Context, r *Recurrence) error
 	GetRecurrence(ctx context.Context, id int64) (*Recurrence, error)
-	ListRecurrences(ctx context.Context) ([]Recurrence, error)
+	ListRecurrences(ctx context.Context, page listPage) ([]Recurrence, error)
 	SetRecurrenceStatus(ctx context.Context, id int64, status string) error
 	UpdateRecurrenceAuth(ctx context.Context, id int64, efiIDRec, brCode, qrCode, status string) error
-	ListChargesByRecurrence(ctx context.Context, recurrenceID int64) ([]Charge, error)
+	ListChargesByRecurrence(ctx context.Context, recurrenceID int64, page listPage) ([]Charge, error)
 	GetRecurrenceByPublicToken(ctx context.Context, token string) (*Recurrence, error)
 }
 
@@ -147,7 +147,7 @@ func (s *Server) handleCreateRecurrence(w http.ResponseWriter, r *http.Request) 
 
 // handleListRecurrences (admin) lista os contratos de recorrência.
 func (s *Server) handleListRecurrences(w http.ResponseWriter, r *http.Request) {
-	list, err := s.recs.ListRecurrences(r.Context())
+	list, err := s.recs.ListRecurrences(r.Context(), pageFromRequest(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar recorrências")
 		return
@@ -171,7 +171,7 @@ func (s *Server) handleGetRecurrence(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao carregar recorrência")
 		return
 	}
-	cycles, err := s.recs.ListChargesByRecurrence(r.Context(), id)
+	cycles, err := s.recs.ListChargesByRecurrence(r.Context(), id, pageFromRequest(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao carregar ciclos")
 		return
