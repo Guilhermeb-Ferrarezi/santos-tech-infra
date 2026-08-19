@@ -241,7 +241,7 @@ func (s *Server) addAdminTools(srv *mcp.Server) {
 		}
 		setIf(qs, "before", in.Before)
 		setIf(qs, "after", in.After)
-		return s.proxy(ctx, req, "GET", withQuery(s.cfg.AuthBaseURL+"/logs", qs), nil)
+		return s.proxyUntrusted(ctx, req, "GET", withQuery(s.cfg.AuthBaseURL+"/logs", qs), nil)
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -260,7 +260,7 @@ func (s *Server) addAdminTools(srv *mcp.Server) {
 		if in.Limit != 0 {
 			qs.Set("limit", strconv.Itoa(in.Limit))
 		}
-		return s.proxy(ctx, req, "GET", withQuery(s.cfg.AuthBaseURL+"/logs/top-ips", qs), nil)
+		return s.proxyUntrusted(ctx, req, "GET", withQuery(s.cfg.AuthBaseURL+"/logs/top-ips", qs), nil)
 	})
 
 	// ── sentry ─────────────────────────────────────────────────────────────
@@ -271,7 +271,7 @@ func (s *Server) addAdminTools(srv *mcp.Server) {
 			"Com id: detalha uma issue — metadados, stacktrace do evento mais recente e tags (GET /sentry/issues/{id}).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in sentryIssueGetInput) (*mcp.CallToolResult, any, error) {
 		if in.ID != "" {
-			return s.proxy(ctx, req, "GET", s.cfg.AuthBaseURL+"/sentry/issues/"+url.PathEscape(in.ID), nil)
+			return s.proxyUntrusted(ctx, req, "GET", s.cfg.AuthBaseURL+"/sentry/issues/"+url.PathEscape(in.ID), nil)
 		}
 		qs := url.Values{}
 		setIf(qs, "project", in.Project)
@@ -281,7 +281,7 @@ func (s *Server) addAdminTools(srv *mcp.Server) {
 		if in.Limit != 0 {
 			qs.Set("limit", strconv.Itoa(in.Limit))
 		}
-		return s.proxy(ctx, req, "GET", withQuery(s.cfg.AuthBaseURL+"/sentry/issues", qs), nil)
+		return s.proxyUntrusted(ctx, req, "GET", withQuery(s.cfg.AuthBaseURL+"/sentry/issues", qs), nil)
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{

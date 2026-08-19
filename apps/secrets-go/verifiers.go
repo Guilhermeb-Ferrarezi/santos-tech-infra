@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -455,8 +456,15 @@ func (g *GenericVerifier) pagarme(ctx context.Context, key string) (bool, bool) 
 // telegram: GET /bot{token}/getMe — o token vai na URL, não em header. A API
 // do Telegram bota o resultado de verdade no corpo ({"ok": true/false}),
 // igual ao padrão do Slack, então checamos o JSON, não só o status HTTP.
+//
+// url.PathEscape no token (e QueryEscape nas chaves que vão em query param,
+// gemini/firebase): o valor vem de um regex cujo charset inclui "/", "." e
+// "+", então um valor plantado num repositório público conseguia manipular o
+// path/query da chamada que ESTE serviço faz — o atacante escolhe o alvo
+// dentro do host do provedor. Escapando, o valor nunca sai de um único
+// segmento.
 func (g *GenericVerifier) telegram(ctx context.Context, token string) (bool, bool) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.telegram.org/bot"+token+"/getMe", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.telegram.org/bot"+url.PathEscape(token)+"/getMe", nil)
 	if err != nil {
 		return false, false
 	}
@@ -479,7 +487,7 @@ func (g *GenericVerifier) telegram(ctx context.Context, token string) (bool, boo
 // header), convenção da Google pras APIs "generativelanguage". 200=válida,
 // 400="API key not valid" documentado.
 func (g *GenericVerifier) gemini(ctx context.Context, key string) (bool, bool) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://generativelanguage.googleapis.com/v1beta/models?key="+key, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://generativelanguage.googleapis.com/v1beta/models?key="+url.QueryEscape(key), nil)
 	if err != nil {
 		return false, false
 	}
@@ -549,7 +557,7 @@ func (g *GenericVerifier) railway(ctx context.Context, token string) (bool, bool
 // endpoint só-leitura (não cria conta nem gasta cota), usado exatamente pra
 // validar API key. 200=válida, 400="API key not valid" documentado.
 func (g *GenericVerifier) firebase(ctx context.Context, key string) (bool, bool) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/identitytoolkit/v3/relyingparty/getRecaptchaParam?key="+key, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/identitytoolkit/v3/relyingparty/getRecaptchaParam?key="+url.QueryEscape(key), nil)
 	if err != nil {
 		return false, false
 	}
