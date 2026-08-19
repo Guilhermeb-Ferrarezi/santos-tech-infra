@@ -561,6 +561,16 @@ CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_last_seen ON hour_lab_devices(la
 -- na mão, só que automático.
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS pending_pair_token TEXT;
 
+-- device_secret_hash: o heartbeat é público (o PC não faz login), então o
+-- device_uuid era a identidade inteira — e ele fica visível num QR na tela do
+-- próprio PC, o que deixava qualquer um pedir o heartbeat e receber o
+-- pending_pair_token em texto puro. Agora o servidor gera um segredo no
+-- primeiro heartbeat de um device_uuid, devolve UMA vez, e exige nos seguintes;
+-- aqui fica só o sha256. Coluna nula = PC ainda não adotado (o admin vê isso em
+-- hasSecret na listagem e pode forçar nova adoção zerando a coluna).
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS device_secret_hash TEXT;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS device_secret_set_at TIMESTAMPTZ;
+
 -- Arquivos (Google Drive): o conteúdo real mora no Drive; aqui só guardamos
 -- metadados de pasta e a ACL de quem enxerga/envia arquivo em cada uma — por
 -- cargo (fixo ou personalizado) E por usuário individual, união dos dois.

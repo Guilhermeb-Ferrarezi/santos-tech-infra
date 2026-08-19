@@ -1,9 +1,9 @@
 package main
 
-// PCs do laboratório — handlers HTTP. Heartbeat é público (o PC não faz
-// login; device_uuid gerado localmente é a única identidade), o resto
-// (listar/renomear/despairar/mandar aviso) é admin-only, mesmo domínio de
-// handlers_hour_sessions.go.
+// PCs do laboratório — handlers HTTP. Heartbeat é público (o PC não faz login;
+// a credencial é o segredo de dispositivo emitido pelo servidor no primeiro
+// heartbeat), o resto (listar/renomear/despairar/mandar aviso/resetar segredo)
+// é admin-only, mesmo domínio de handlers_hour_sessions.go.
 
 import (
 	"net/http"
@@ -12,18 +12,32 @@ import (
 
 // ── público (sem auth) ───────────────────────────────────────────────────────
 
-// POST /public/lab-devices/heartbeat — {deviceId, token?, appVersion?}
+// POST /public/lab-devices/heartbeat — {deviceId, deviceSecret?, token?, appVersion?}
+//
+// O PC não faz login: a credencial é o deviceSecret, gerado pelo servidor no
+// primeiro heartbeat de um deviceId e devolvido UMA única vez (campo
+// deviceSecret da resposta) — o app grava em disco e manda em todo heartbeat
+// seguinte, senão leva 401. Sem isso, saber o deviceId (que o próprio PC exibe
+// num QR na tela) bastava pra receber o pairToken em texto puro.
+//
 // token é o mesmo token de sessão de horas que o app já guarda pareado (se
 // houver); resolve pra current_session_id só se ainda for um token válido.
 func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	var in struct {
-		DeviceID   string  `json:"deviceId"`
-		Token      *string `json:"token"`
-		AppVersion string  `json:"appVersion"`
+		DeviceID     string  `json:"deviceId"`
+		DeviceSecret string  `json:"deviceSecret"`
+		Token        *string `json:"token"`
+		AppVersion   string  `json:"appVersion"`
 	}
 	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.DeviceID) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "deviceId inválido"))
+		return
+	}
+	// Segredo é hex de labDeviceSecretBytes bytes; qualquer coisa fora disso é
+	// descartada antes de tocar o banco (evita comparar strings arbitrárias).
+	if len(in.DeviceSecret) > 2*labDeviceSecretBytes {
+		writeErr(w, errLabDeviceUnauthorized)
 		return
 	}
 	if len(in.AppVersion) > 50 {
@@ -40,7 +54,7 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 			sessionID = &h.ID
 		}
 	}
-	res, err := s.upsertLabDeviceHeartbeat(r.Context(), in.DeviceID, clientIP(r), in.AppVersion, sessionID)
+	res, err := s.upsertLabDeviceHeartbeat(r.Context(), in.DeviceID, in.DeviceSecret, clientIP(r), in.AppVersion, sessionID)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -54,6 +68,10 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 	}
 	if res.PairToken != nil {
 		resp["pairToken"] = *res.PairToken
+	}
+	if res.DeviceSecret != nil {
+		// Única vez que o segredo trafega — o app PRECISA persistir agora.
+		resp["deviceSecret"] = *res.DeviceSecret
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -138,6 +156,23 @@ func (s *Server) handleUnpairLabDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.requestLabDeviceUnpair(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /hour-lab-devices/{id}/reset-secret — esquece o segredo do PC: o próximo
+// heartbeat vira uma adoção nova (e devolve um segredo novo). Escotilha pra
+// quando o PC perde a config mas mantém o device_uuid, ou quando o admin
+// desconfia que outra máquina adotou o dispositivo antes dele.
+func (s *Server) handleResetLabDeviceSecret(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errLabDeviceNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.resetLabDeviceSecret(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}
