@@ -135,8 +135,8 @@ func (s *Server) handlePortalAddClassStudents(w http.ResponseWriter, r *http.Req
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
-	if len(in.StudentIDs) == 0 {
-		writeErr(w, validationErr("studentIds obrigatório"))
+	if err := in.validate(); err != nil {
+		writeErr(w, err)
 		return
 	}
 	added, err := s.portalAddClassStudents(r.Context(), id, in.StudentIDs)
@@ -204,8 +204,8 @@ func (s *Server) handlePortalIniciarFases(w http.ResponseWriter, r *http.Request
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
-	if len(in.StudentIDs) == 0 {
-		writeErr(w, validationErr("studentIds obrigatório"))
+	if err := in.validate(); err != nil {
+		writeErr(w, err)
 		return
 	}
 	phase, count, err := s.portalIniciarFases(r.Context(), id, in.StudentIDs)

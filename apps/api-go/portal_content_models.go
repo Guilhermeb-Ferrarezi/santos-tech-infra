@@ -187,10 +187,7 @@ func (in *portalContainerInput) validate() error {
 	if in.PhaseID <= 0 {
 		return validationErr("phaseId obrigatório")
 	}
-	if len(in.ExerciseIDs) == 0 {
-		return validationErr("exerciseIds obrigatório")
-	}
-	return nil
+	return portalValidateIDs("exerciseIds", in.ExerciseIDs)
 }
 
 type portalContainerGroupRef struct {
@@ -227,10 +224,7 @@ func (in *portalAddContainerInput) validate() error {
 	if in.PhaseID <= 0 {
 		return validationErr("phaseId obrigatório")
 	}
-	if len(in.ExerciseIDs) == 0 {
-		return validationErr("exerciseIds obrigatório")
-	}
-	return nil
+	return portalValidateIDs("exerciseIds", in.ExerciseIDs)
 }
 
 func (in *portalAddContainerInput) ref() portalContainerGroupRef {

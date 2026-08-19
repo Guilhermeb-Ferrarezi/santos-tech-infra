@@ -233,6 +233,31 @@ type portalAddStudentsInput struct {
 	StudentIDs []int64 `json:"studentIds"`
 }
 
+// portalMaxIDsPerRequest — teto de ids numa lista de entrada. Sem teto, o
+// limite efetivo era o corpo de 64 KiB, que comporta ~6 mil ids — cada um
+// virando uma linha (e, antes, um round-trip) no banco.
+const portalMaxIDsPerRequest = 500
+
+// portalValidateIDs recusa lista vazia, ids não positivos e lote acima do teto.
+func portalValidateIDs(field string, ids []int64) error {
+	if len(ids) == 0 {
+		return validationErr(field + " obrigatório")
+	}
+	if len(ids) > portalMaxIDsPerRequest {
+		return validationErr(fmt.Sprintf("no máximo %d ids por requisição (recebidos %d)", portalMaxIDsPerRequest, len(ids)))
+	}
+	for _, id := range ids {
+		if id <= 0 {
+			return validationErr(field + " contém id inválido")
+		}
+	}
+	return nil
+}
+
+func (in *portalAddStudentsInput) validate() error {
+	return portalValidateIDs("studentIds", in.StudentIDs)
+}
+
 // portalParseDate aceita "YYYY-MM-DD"; vazio → hoje (UTC, à meia-noite).
 func portalParseDate(raw string) (time.Time, error) {
 	raw = strings.TrimSpace(raw)

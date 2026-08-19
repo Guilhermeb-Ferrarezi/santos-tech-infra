@@ -519,29 +519,20 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64) ([]
 }
 
 // portalAddClassStudents matricula os usuários na turma, ignorando duplicatas.
-// Devolve quantos foram efetivamente inseridos.
+// Devolve quantos foram efetivamente inseridos. Um INSERT só (unnest sobre o
+// array de ids) — antes era um INSERT por aluno dentro de uma transação, sem
+// teto de tamanho.
 func (s *Server) portalAddClassStudents(ctx context.Context, classID int64, ids []int64) (int, error) {
-	tx, err := s.portalDB.Begin(ctx)
+	tag, err := s.portalDB.Exec(ctx, `INSERT INTO enrollment (user_id, class_id, created_at)
+		SELECT DISTINCT u.id, $2, NOW()
+		FROM unnest($1::bigint[]) AS u(id)
+		WHERE NOT EXISTS (
+			SELECT 1 FROM enrollment e WHERE e.user_id = u.id AND e.class_id = $2
+		)`, ids, classID)
 	if err != nil {
-		return 0, err
+		return 0, portalDBErr(err)
 	}
-	defer tx.Rollback(ctx)
-	added := 0
-	for _, uid := range ids {
-		tag, err := tx.Exec(ctx, `INSERT INTO enrollment (user_id, class_id, created_at)
-			SELECT $1, $2, NOW()
-			WHERE NOT EXISTS (
-			  SELECT 1 FROM enrollment WHERE user_id=$1 AND class_id=$2
-			)`, uid, classID)
-		if err != nil {
-			return 0, portalDBErr(err)
-		}
-		added += int(tag.RowsAffected())
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return added, nil
+	return int(tag.RowsAffected()), nil
 }
 
 func (s *Server) portalRemoveClassStudent(ctx context.Context, classID, studentID int64) error {
@@ -820,14 +811,15 @@ func (s *Server) portalIniciarFases(ctx context.Context, classID int64, studentI
 		return nil, 0, validationErr("nenhum aluno inscrito na turma")
 	}
 
-	// cria progresso (0/0) para todas as fases do módulo, sem duplicar
-	for _, uid := range valid {
-		if _, err := tx.Exec(ctx, `INSERT INTO progress_student_phase (user_id, phase_id, progress, status, created_at)
-			SELECT $1, p.id, 0, 0, NOW() FROM phase p
-			WHERE p.module_id=$2
-			AND NOT EXISTS (SELECT 1 FROM progress_student_phase psp WHERE psp.user_id=$1 AND psp.phase_id=p.id)`, uid, moduleID); err != nil {
-			return nil, 0, err
-		}
+	// cria progresso (0/0) para todas as fases do módulo, sem duplicar — um
+	// INSERT só para o produto alunos × fases (antes: um por aluno).
+	if _, err := tx.Exec(ctx, `INSERT INTO progress_student_phase (user_id, phase_id, progress, status, created_at)
+		SELECT u.id, p.id, 0, 0, NOW()
+		FROM unnest($1::bigint[]) AS u(id)
+		CROSS JOIN phase p
+		WHERE p.module_id = $2
+		AND NOT EXISTS (SELECT 1 FROM progress_student_phase psp WHERE psp.user_id = u.id AND psp.phase_id = p.id)`, valid, moduleID); err != nil {
+		return nil, 0, err
 	}
 
 	// desbloqueia a primeira fase (status 1 = em progresso; mantém 2 = concluído)
