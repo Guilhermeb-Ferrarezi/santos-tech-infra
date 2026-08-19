@@ -218,7 +218,7 @@ func (s *Server) handleDashMessages(w http.ResponseWriter, r *http.Request) {
 		FROM outbound_message
 		WHERE tenant_id = $1 AND conversation_id = $2::uuid AND status = 'sent'
 
-		ORDER BY ts ASC
+		ORDER BY ts DESC
 		LIMIT 200
 	`, tenantID, convID)
 	if err != nil {
@@ -246,7 +246,33 @@ func (s *Server) handleDashMessages(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// A query pega as 200 MAIS RECENTES (ts DESC) — antes era ts ASC, e numa
+	// conversa longa o operador via só as 200 primeiras mensagens, nunca a
+	// atual. Inverte aqui para devolver em ordem cronológica, mesmo padrão de
+	// MessageRepo.GetRecentTurns (repos.go).
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
 	jsonOK(w, msgs)
+}
+
+// queryInt lê um inteiro da query string com default e faixa [min, max].
+func queryInt(r *http.Request, name string, def, min, max int) int {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return def
+	}
+	if n < min {
+		return min
+	}
+	if n > max {
+		return max
+	}
+	return n
 }
 
 // ── PATCH /api/conversations/{id} ───────────────────────────────────────────
@@ -677,9 +703,15 @@ var leadFunnelStatuses = map[string]bool{
 }
 
 // GET /api/leads — lista o funil de leads do WhatsApp.
+//
+// Paginado: a query tem dois LATERAL por linha, então sem LIMIT ela cresce
+// linearmente com a base de leads. Aceita ?limit= e ?offset=; o formato da
+// resposta segue sendo um array, como nas outras listagens do painel.
 func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tenantID := TenantID(s.cfg.TenantID)
+	limit := queryInt(r, "limit", 200, 1, 500)
+	offset := queryInt(r, "offset", 0, 0, 1_000_000)
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT l.id::text, COALESCE(ct.display_name, ''), COALESCE(ci.external_id, ''),
@@ -697,8 +729,9 @@ func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
 			ORDER BY last_inbound_at DESC NULLS LAST LIMIT 1
 		) cv ON true
 		WHERE l.tenant_id = $1
-		ORDER BY cv.last_inbound_at DESC NULLS LAST, l.created_at DESC
-	`, tenantID)
+		ORDER BY cv.last_inbound_at DESC NULLS LAST, l.created_at DESC, l.id DESC
+		LIMIT $2 OFFSET $3
+	`, tenantID, limit, offset)
 	if err != nil {
 		s.logger.Error("dash: list leads", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)
@@ -1008,29 +1041,42 @@ func toDashLog(e ProcessingLogEntry) dashProcessingLog {
 }
 
 // ── GET /api/ws ───────────────────────────────────────────────────────────────
-// Upgrade para WebSocket. Auth via sub-protocol "dash, <key>" (browser JS não
-// suporta headers customizados em WebSocket); cai no query param ?key= como
-// fallback de transição.
+// Upgrade para WebSocket. Auth por (a) cookie de sessão de admin — o browser
+// manda cookies no handshake automaticamente, é o caminho do painel — ou
+// (b) DASH_API_KEY via sub-protocol "dash, <key>" (browser JS não suporta
+// headers customizados em WebSocket), para integrações server-to-server.
+//
+// NÃO aceita ?key=: query string vaza para o log de acesso, para o Traefik e
+// para o histórico do browser, e o golog não redige a chave "key".
 
 func (s *Server) handleDashWS(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.DashAPIKey == "" || s.hub == nil {
+	if s.hub == nil {
 		http.NotFound(w, r)
 		return
 	}
-	key := r.URL.Query().Get("key")
-	if key == "" {
+	if !s.dashWSAuthorized(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	s.hub.Upgrade(w, r)
+}
+
+// dashWSAuthorized replica dashAuthorized, mas lendo a DASH_API_KEY do
+// sub-protocol/query em vez do header (limitação da API WebSocket do browser).
+func (s *Server) dashWSAuthorized(r *http.Request) bool {
+	if s.cfg.DashAPIKey != "" {
 		// Browser manda a chave como sub-protocol: "dash, <key>".
+		var key string
 		for _, p := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
 			if p = strings.TrimSpace(p); p != "" && p != "dash" {
 				key = p
 			}
 		}
+		if key != "" && subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) == 1 {
+			return true
+		}
 	}
-	if subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) != 1 {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-	s.hub.Upgrade(w, r)
+	return s.session.Authorized(r)
 }
 
 // Garante que context é usado (lint).

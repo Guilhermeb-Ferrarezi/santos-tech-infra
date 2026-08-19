@@ -54,7 +54,7 @@ export async function runTurn(
   const events: TurnEvent[] = []
   // Memória auto-aprendida: fatos respondidos pelo dono relevantes à mensagem
   // entram como nota interna — o agente responde direto, sem re-escalar.
-  const facts = rankFacts(text, await listFacts().catch(() => []))
+  const facts = rankFacts(text, await listFacts(jid).catch(() => []))
   let prompt = factsNote(facts) + text
   if (isFirst) {
     // Seed: persona + config real do agente (pra assinatura/citações não serem chute).
