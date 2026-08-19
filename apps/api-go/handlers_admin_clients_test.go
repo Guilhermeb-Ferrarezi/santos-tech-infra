@@ -60,3 +60,29 @@ func TestDeleteOAuthClientBadID(t *testing.T) {
 		t.Fatalf("code=%d, esperado 400", w.Code)
 	}
 }
+
+func TestApproveOAuthClientIDInvalido(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/auth/admin/oauth-clients/nao-e-uuid/approve", nil)
+	r.SetPathValue("id", "nao-e-uuid")
+	s.handleApproveOAuthClient(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d (queria 400)", w.Code)
+	}
+}
+
+// Guarda de regressão da migração do item "DCR público cria client ativo":
+// se alguém remover essas linhas, clients registrados anonimamente voltam a
+// nascer/permanecer ativos.
+func TestMigracaoDesativaClientsDCRPendentes(t *testing.T) {
+	for _, frag := range []string{
+		"ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;",
+		"UPDATE oauth_clients SET is_active = false",
+		`WHERE approved_at IS NULL AND is_active AND client_id LIKE 'dcr\_%';`,
+	} {
+		if !strings.Contains(migration, frag) {
+			t.Errorf("migração perdeu o trecho:\n%s", frag)
+		}
+	}
+}

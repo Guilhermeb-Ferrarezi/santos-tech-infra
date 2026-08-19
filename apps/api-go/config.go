@@ -32,6 +32,14 @@ type Config struct {
 	SocialAlertEmail   string // email para notificar quando post vai para revisão
 	Production         bool
 
+	// OAuthAudEnforce (OAUTH_AUD_ENFORCE=1): recusa, nas rotas de sessão do
+	// painel (authGuard e derivados), access tokens emitidos pelo /oauth/token —
+	// reconhecidos pelo claim aud=<client_id>. Default DESLIGADO: os tokens já
+	// saem marcados, mas ligar a recusa quebra clients OAuth e o app mobile que
+	// hoje usam o token do /oauth/token como sessão completa. Ligue só depois de
+	// migrar todos eles pro /oauth/userinfo.
+	OAuthAudEnforce bool
+
 	// Gateway de notificações do portal do aluno (templates/dispatches). Vazio =
 	// rotas de template/dispatch respondem 502 "gateway não configurado".
 	NotificationsGatewayURL   string // ex: https://portal.santos-tech.com (base, sem barra final)
@@ -86,6 +94,10 @@ type Config struct {
 	// provedores externos). Deriva a chave AES-256 que cifra as chaves antes de
 	// persistir. Vazio = feature desabilitada, endpoints respondem 503.
 	VaultSecret string
+	// VaultSalt: salt do HKDF que deriva a chave do cofre (API_VAULT_SALT).
+	// Vazio cai num default fixo. ATENÇÃO: trocar o salt depois de cadastrar
+	// chaves torna ilegível tudo que foi cifrado no formato v2.
+	VaultSalt string
 
 	// Web Push (notificações do navegador — nova tarefa, novo email). Par de
 	// chaves VAPID (gerado uma vez, ex. `npx web-push generate-vapid-keys`).
@@ -130,6 +142,7 @@ func LoadConfig() Config {
 		SocialAlertEmail:   getEnv("SOCIAL_ALERT_EMAIL", ""),
 		EmailAPIKey:        mustEnv("EMAIL_API_KEY"),
 		Production:         getEnv("NODE_ENV", "development") == "production",
+		OAuthAudEnforce:    getEnv("OAUTH_AUD_ENFORCE", "") == "1",
 
 		NotificationsGatewayURL:   strings.TrimRight(getEnv("NOTIFICATIONS_PORTAL_API_URL", ""), "/"),
 		NotificationsSharedSecret: getEnv("NOTIFICATIONS_SHARED_SECRET", ""),
@@ -156,6 +169,7 @@ func LoadConfig() Config {
 		FacebookPageID:      getEnv("FACEBOOK_PAGE_ID", ""),
 
 		VaultSecret: getEnv("API_VAULT_SECRET", ""),
+		VaultSalt:   getEnv("API_VAULT_SALT", ""),
 
 		VAPIDPublicKey:  getEnv("VAPID_PUBLIC_KEY", ""),
 		VAPIDPrivateKey: getEnv("VAPID_PRIVATE_KEY", ""),

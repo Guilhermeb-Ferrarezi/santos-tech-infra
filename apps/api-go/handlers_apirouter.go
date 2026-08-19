@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -56,17 +57,13 @@ func opCapabilitiesJSON(opAdapter string) []string {
 	return []string{}
 }
 
-// apiRouterKeyJSON monta o JSON público da chave. O segredo é decifrado aqui
-// (rota admin-only): é o único ponto em que o valor cru deixa o banco. Se a
-// decifragem falhar, `secret` vem vazio.
+// apiRouterKeyJSON monta o JSON público da chave. O segredo NUNCA sai por
+// aqui: só `secretTail` (últimos 4 caracteres) para a UI identificar a chave.
+// O valor cru só deixa o banco pelo GET .../keys/{keyId}/reveal, que exige
+// sudo e registra auditoria.
 func (s *Server) apiRouterKeyJSON(k *db.ApiRouterKey) map[string]any {
-	secret, err := s.vault.Decrypt(k.SecretEnc)
-	if err != nil {
-		secret = ""
-	}
 	m := map[string]any{
 		"id": k.ID, "providerId": k.ProviderID, "label": k.Label, "secretTail": k.SecretTail,
-		"secret": secret,
 		"status": k.Status, "priority": k.Priority, "failureCount": k.FailureCount,
 		"createdAt": k.CreatedAt.Time, "updatedAt": k.UpdatedAt.Time,
 		"lastUsedAt": nil, "lastErrorAt": nil, "lastErrorCode": nil,
@@ -173,6 +170,12 @@ func (s *Server) handleCreateAPIRouterProvider(w http.ResponseWriter, r *http.Re
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "opAdapter inválido"))
 		return
 	}
+	// testPath/chatPath também viram URL com a chave decifrada junto — mesma
+	// regra do /proxy, barrada já no cadastro.
+	if !apiRouterValidPath(body.TestPath) || !apiRouterValidPath(body.ChatPath) {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_PATH", "testPath/chatPath precisam começar com / e não podem trocar o host do provider"))
+		return
+	}
 	body = body.defaults()
 
 	p, err := s.q.InsertAPIRouterProvider(r.Context(), db.InsertAPIRouterProviderParams{
@@ -214,6 +217,12 @@ func (s *Server) handleUpdateAPIRouterProvider(w http.ResponseWriter, r *http.Re
 	}
 	if body.OpAdapter != "" && !validOpAdapters[body.OpAdapter] {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "opAdapter inválido"))
+		return
+	}
+	// testPath/chatPath também viram URL com a chave decifrada junto — mesma
+	// regra do /proxy, barrada já no cadastro.
+	if !apiRouterValidPath(body.TestPath) || !apiRouterValidPath(body.ChatPath) {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_PATH", "testPath/chatPath precisam começar com / e não podem trocar o host do provider"))
 		return
 	}
 	body = body.defaults()
@@ -280,6 +289,44 @@ func (s *Server) handleListAPIRouterKeys(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 }
 
+// GET /auth/admin/api-router/providers/{id}/keys/{keyId}/reveal — ÚNICO ponto
+// em que o segredo cru de uma chave deixa o banco. Exige sudo (adminGuard +
+// sudoGuard em routes.go), devolve UMA chave por vez e registra auditoria
+// (quem, qual chave, de qual IP) antes de responder.
+func (s *Server) handleRevealAPIRouterKey(w http.ResponseWriter, r *http.Request) {
+	if s.apiRouterNotConfigured(w) {
+		return
+	}
+	providerID, err1 := apiRouterPathID(r, "id")
+	keyID, err2 := apiRouterPathID(r, "keyId")
+	if err1 != nil || err2 != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_ID", "id inválido"))
+		return
+	}
+	k, err := s.q.GetAPIRouterKey(r.Context(), db.GetAPIRouterKeyParams{ID: keyID, ProviderID: providerID})
+	if err != nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "chave não encontrada"))
+		return
+	}
+	secret, err := s.decryptAPIRouterKeySecret(r.Context(), k)
+	if err != nil {
+		writeErr(w, appErr(http.StatusInternalServerError, "DECRYPT_FAILED", "não foi possível decifrar a chave"))
+		return
+	}
+	// Auditoria: revelar credencial de terceiro é a ação mais sensível do
+	// roteador — fica no log estruturado (vai pro Loki/Sentry como os demais).
+	slog.Warn("api_router_key_reveal",
+		"uid", userIDFrom(r),
+		"providerId", providerID,
+		"keyId", keyID,
+		"label", k.Label,
+		"secretTail", k.SecretTail,
+		"ip", clientIP(r))
+	// Nunca cacheia: a resposta carrega o segredo em claro.
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"id": k.ID, "providerId": k.ProviderID, "label": k.Label, "secretTail": k.SecretTail, "secret": secret})
+}
+
 const apiRouterMaxSecretLen = 8 << 10 // 8KB — generoso o bastante pra qualquer token/JWT real
 
 // POST /auth/admin/api-router/providers/{id}/keys
@@ -315,13 +362,14 @@ func (s *Server) handleCreateAPIRouterKey(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	enc, err := s.vault.Encrypt(body.Secret)
+	tail := maskSecret(body.Secret)
+	enc, err := s.vault.EncryptKeySecret(body.Secret, providerID, tail)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	k, err := s.q.InsertAPIRouterKey(r.Context(), db.InsertAPIRouterKeyParams{
-		ProviderID: providerID, Label: body.Label, SecretEnc: enc, SecretTail: maskSecret(body.Secret), Priority: body.Priority,
+		ProviderID: providerID, Label: body.Label, SecretEnc: enc, SecretTail: tail, Priority: body.Priority,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -482,6 +530,14 @@ func (s *Server) handleAPIRouterProxy(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "path é obrigatório (ex.: /v1/chat/completions)"))
 		return
 	}
+	// O path do chamador vira URL junto com a base_url do provider E leva a
+	// chave decifrada no header de auth: se ele puder trocar o host (ex.
+	// "@evil.com/v1/models"), a credencial vaza pro atacante. Ver
+	// apiRouterValidPath/apiRouterRequestURL em apirouter.go.
+	if !apiRouterValidPath(body.Path) {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_PATH", "path precisa começar com / e não pode trocar o host do provider"))
+		return
+	}
 	method := body.Method
 	if method == "" {
 		method = http.MethodPost
@@ -508,6 +564,8 @@ func (s *Server) handleAPIRouterProxy(w http.ResponseWriter, r *http.Request) {
 	outcome, err := s.executeAPIRouterRequest(r.Context(), provider, method, body.Path, payload, "", headers)
 	if err != nil {
 		switch {
+		case errors.Is(err, errAPIRouterInvalidPath):
+			writeErr(w, appErr(http.StatusBadRequest, "INVALID_PATH", "path inválido para este provider"))
 		case errors.Is(err, errAPIRouterNoActiveKeys):
 			writeErr(w, appErr(http.StatusServiceUnavailable, "NO_ACTIVE_KEYS", "provider sem chaves ativas"))
 		case errors.Is(err, errAPIRouterAllKeysExhausted):
@@ -582,6 +640,8 @@ func (s *Server) handleAPIRouterChat(w http.ResponseWriter, r *http.Request) {
 	outcome, err := s.executeAPIRouterRequest(r.Context(), provider, http.MethodPost, path, reqBody, "", headers)
 	if err != nil {
 		switch {
+		case errors.Is(err, errAPIRouterInvalidPath):
+			writeErr(w, appErr(http.StatusBadRequest, "INVALID_PATH", "path inválido para este provider"))
 		case errors.Is(err, errAPIRouterNoActiveKeys):
 			writeErr(w, appErr(http.StatusServiceUnavailable, "NO_ACTIVE_KEYS", "provider sem chaves ativas"))
 		case errors.Is(err, errAPIRouterAllKeysExhausted):
@@ -711,6 +771,8 @@ func (s *Server) handleAPIRouterOp(w http.ResponseWriter, r *http.Request) {
 // HTTP com o mesmo vocabulário do /chat.
 func (s *Server) apiRouterWriteExecuteErr(w http.ResponseWriter, code string, err error) {
 	switch {
+	case errors.Is(err, errAPIRouterInvalidPath):
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_PATH", "path inválido para este provider"))
 	case errors.Is(err, errAPIRouterNoActiveKeys):
 		writeErr(w, appErr(http.StatusServiceUnavailable, "NO_ACTIVE_KEYS", "provider sem chaves ativas"))
 	case errors.Is(err, errAPIRouterAllKeysExhausted):

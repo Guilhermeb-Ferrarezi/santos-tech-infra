@@ -46,7 +46,7 @@ type Server struct {
 }
 
 func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), instagram: newInstagramClient(cfg), facebook: newFacebookClient(cfg), vault: newVault(cfg.VaultSecret)}
+	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), instagram: newInstagramClient(cfg), facebook: newFacebookClient(cfg), vault: newVault(cfg.VaultSecret, cfg.VaultSalt)}
 	if s.portalDB == nil {
 		s.portalDB = authDB
 	}
@@ -136,6 +136,15 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 		}
 		if token == "" {
 			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
+			return
+		}
+		// Token do /oauth/token não é sessão do painel: ele sai com
+		// aud=<client_id> (ver oauthprovider.go). Atrás da flag
+		// OAUTH_AUD_ENFORCE porque hoje clients e app mobile ainda usam esse
+		// token nas rotas normais; o /oauth/userinfo continua aceitando (chama
+		// resolveToken direto, sem passar por aqui).
+		if s.cfg.OAuthAudEnforce && tokenAudience(token, s.cfg.JWTSecret) != "" {
+			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado"))
 			return
 		}
 		uid, u, err := s.resolveToken(r.Context(), token)

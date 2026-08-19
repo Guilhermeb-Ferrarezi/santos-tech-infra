@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -263,6 +264,17 @@ func (s *Server) handleMFAEmail(w http.ResponseWriter, r *http.Request) {
 	u, err := s.userByID(r.Context(), uid)
 	if err != nil || u == nil {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido"))
+		return
+	}
+	// O 2º fator é escolha da CONTA, não de quem está tentando entrar. Sem esta
+	// checagem, uma conta protegida só por TOTP era rebaixada para OTP por email
+	// só porque o atacante (de posse da senha) pediu — bastava ter o email
+	// verificado em algum momento. Erro genérico de propósito: não revela quais
+	// fatores a conta tem.
+	if !slices.Contains(mfaMethods(u), "email") {
+		slog.Warn("mfa_email: pedido de OTP por email numa conta sem esse fator",
+			"uid", uid, "methods", mfaMethods(u), "ip", clientIP(r))
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
 		return
 	}
 	if err := s.sendChallengeEmailCode(r.Context(), body.Challenge, u.Email); err != nil {

@@ -107,3 +107,34 @@ func TestDCRValidation(t *testing.T) {
 		}
 	}
 }
+
+// O discovery não pode prometer OIDC que não existe: não há id_token em lugar
+// nenhum do fluxo e o JWKS é vazio (HS256). Anunciar jwks_uri,
+// id_token_signing_alg_values_supported ou scopes_supported=[openid,...] faz
+// um cliente OIDC estrito montar um fluxo que só quebra mais adiante.
+func TestOIDCDiscoveryNaoPrometeOIDC(t *testing.T) {
+	s := testServer(Config{PublicOrigin: "https://api.example.com"})
+	w := httptest.NewRecorder()
+	s.handleOIDCDiscovery(w, httptest.NewRequest("GET", "/.well-known/openid-configuration", nil))
+
+	var m map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"jwks_uri", "id_token_signing_alg_values_supported", "scopes_supported"} {
+		if _, ok := m[k]; ok {
+			t.Errorf("discovery não pode anunciar %q: %v", k, m[k])
+		}
+	}
+	// O que realmente existe continua anunciado.
+	for k, want := range map[string]string{
+		"issuer":                 "https://api.example.com",
+		"authorization_endpoint": "https://api.example.com/oauth/authorize",
+		"token_endpoint":         "https://api.example.com/oauth/token",
+		"userinfo_endpoint":      "https://api.example.com/oauth/userinfo",
+	} {
+		if m[k] != want {
+			t.Errorf("%s = %v, esperava %s", k, m[k], want)
+		}
+	}
+}
