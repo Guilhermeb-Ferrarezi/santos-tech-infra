@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -219,9 +220,42 @@ type apiRouterOutcome struct {
 // decryptAPIRouterKeySecret decifra o segredo de uma chave do roteador. Aceita
 // tanto o formato v2 (HKDF + AAD amarrado ao provider/tail) quanto o legado
 // v1 que já está gravado no banco — ver vault.go.
+//
+// Migração preguiçosa: quando o valor vem em v1 e a decifragem deu certo, ele
+// é reescrito em v2 na mesma linha. O plaintext já está em mãos, então a
+// reescrita não pode perder dado: se o UPDATE falhar, a linha continua em v1 e
+// legível, e a próxima leitura tenta de novo. Nunca reescrevemos sem ter
+// decifrado antes — é isso que impede o cofre de ficar irrecuperável.
 func (s *Server) decryptAPIRouterKeySecret(ctx context.Context, k db.ApiRouterKey) (string, error) {
-	secret, _, err := s.vault.DecryptKeySecret(k.SecretEnc, k.ProviderID, k.SecretTail)
-	return secret, err
+	secret, legacy, err := s.vault.DecryptKeySecret(k.SecretEnc, k.ProviderID, k.SecretTail)
+	if err != nil {
+		return "", err
+	}
+	if legacy {
+		s.rewriteAPIRouterKeySecret(ctx, k, secret)
+	}
+	return secret, nil
+}
+
+// rewriteAPIRouterKeySecret regrava em v2 uma chave que ainda estava em v1.
+// Best-effort: qualquer falha só é logada — a linha segue legível em v1.
+func (s *Server) rewriteAPIRouterKeySecret(ctx context.Context, k db.ApiRouterKey, secret string) {
+	enc, err := s.vault.EncryptKeySecret(secret, k.ProviderID, k.SecretTail)
+	if err != nil {
+		slog.Warn("apirouter: falha ao recifrar chave legada (segue em v1)", "keyId", k.ID, "err", err)
+		return
+	}
+	// Confere que o que vamos gravar volta a decifrar no MESMO valor antes de
+	// tocar no banco. Paranoia barata contra transformar o cofre em lixo.
+	if back, _, err := s.vault.DecryptKeySecret(enc, k.ProviderID, k.SecretTail); err != nil || back != secret {
+		slog.Error("apirouter: recifragem não fecha o round-trip; abortando reescrita", "keyId", k.ID, "err", err)
+		return
+	}
+	if err := s.q.SetAPIRouterKeySecret(ctx, db.SetAPIRouterKeySecretParams{ID: k.ID, SecretEnc: enc}); err != nil {
+		slog.Warn("apirouter: falha ao gravar chave recifrada (segue em v1)", "keyId", k.ID, "err", err)
+		return
+	}
+	slog.Info("apirouter: chave migrada do cofre v1 para v2", "keyId", k.ID, "providerId", k.ProviderID)
 }
 
 // executeAPIRouterRequest tenta a requisição com cada chave ativa do provider,

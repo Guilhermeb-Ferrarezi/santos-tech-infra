@@ -376,6 +376,21 @@ func (q *Queries) RecordAPIRouterKeySuccess(ctx context.Context, id int64) error
 	return err
 }
 
+const setAPIRouterKeySecret = `-- name: SetAPIRouterKeySecret :exec
+UPDATE api_router_keys SET secret_enc = $2, updated_at = now()
+WHERE id = $1
+`
+
+type SetAPIRouterKeySecretParams struct {
+	ID        int64
+	SecretEnc string
+}
+
+func (q *Queries) SetAPIRouterKeySecret(ctx context.Context, arg SetAPIRouterKeySecretParams) error {
+	_, err := q.db.Exec(ctx, setAPIRouterKeySecret, arg.ID, arg.SecretEnc)
+	return err
+}
+
 const setAPIRouterKeyStatus = `-- name: SetAPIRouterKeyStatus :one
 UPDATE api_router_keys SET
   status = $3,
