@@ -389,6 +389,7 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /hour-lab-devices", s.adminGuard(s.handleListLabDevices))
 	mux.HandleFunc("POST /hour-lab-devices/pair", s.rateLimit(30, min, s.adminGuard(s.handlePairLabDevice)))
 	mux.HandleFunc("PATCH /hour-lab-devices/{id}", s.rateLimit(30, min, s.adminGuard(s.handleRenameLabDevice)))
+	mux.HandleFunc("DELETE /hour-lab-devices/{id}", s.rateLimit(30, min, s.adminGuard(s.handleDeleteLabDevice)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/unpair", s.rateLimit(30, min, s.adminGuard(s.handleUnpairLabDevice)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/message", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceMessage)))
 

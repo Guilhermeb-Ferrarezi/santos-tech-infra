@@ -382,8 +382,13 @@ Admin:
   admin escaneia com o celular (rota `/admin/horas/parear/:deviceUuid` do
   dashboard/web) e chama isto — inicia sessão (mesma lógica de
   `POST /hour-sessions`) e deixa o token pronto pra entrega automática no
-  próximo heartbeat (`pairToken`), sem digitar nada no PC.
+  próximo heartbeat (`pairToken`), sem digitar nada no PC. Token expira em
+  10min se não for entregue (evita reabrir sozinho uma sessão velha — cada
+  sessão é de uso único por design).
 - `PATCH /hour-lab-devices/{id} {name}` → `{device}` · rate limit 30/min
+- `DELETE /hour-lab-devices/{id}` → 204 · rate limit 30/min — remove o
+  registro do PC (não afeta sessões que ele já rodou); reaparece do zero se
+  mandar heartbeat de novo
 - `POST /hour-lab-devices/{id}/unpair` → 204 · rate limit 30/min — não afeta a
   sessão em si (isso é `/hour-sessions/{id}/...`), só solta o pareamento local
   do PC; entregue no heartbeat seguinte (até ~30s de atraso)

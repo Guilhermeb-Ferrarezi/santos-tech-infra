@@ -144,6 +144,22 @@ func (s *Server) handleUnpairLabDevice(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// DELETE /hour-lab-devices/{id} — remove o registro do PC (entrada fantasma
+// de teste, ou máquina que saiu de operação). Sessões que ele já rodou não
+// são afetadas.
+func (s *Server) handleDeleteLabDevice(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errLabDeviceNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.deleteLabDevice(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // POST /hour-lab-devices/{id}/message — {text} — aviso mostrado uma vez na
 // tela do PC no próximo heartbeat.
 func (s *Server) handleSendLabDeviceMessage(w http.ResponseWriter, r *http.Request) {

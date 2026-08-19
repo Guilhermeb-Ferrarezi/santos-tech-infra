@@ -40,11 +40,22 @@ type LabDeviceHeartbeatResult struct {
 
 var errLabDeviceNotFound = appErr(http.StatusNotFound, "LAB_DEVICE_NOT_FOUND", "Dispositivo não encontrado")
 
+// pairTokenTTL é a validade do token deixado pendente pelo pareamento via QR
+// (pairLabDeviceViaQR). Pareamento por QR é uma ação ao vivo — admin escaneia
+// e confirma na hora — então 10min é folgado pro caso comum e ainda fecha a
+// janela pra um token nunca entregue (app ficou off, rede caiu, etc.)
+// reaparecer do nada horas/dias depois e reabrir uma sessão que já devia ter
+// ficado pra trás. Cada sessão é de uso único por design (ver hour_sessions):
+// um token velho ressuscitando uma sessão antiga quebra essa regra.
+const pairTokenTTL = 10 * time.Minute
+
 // upsertLabDeviceHeartbeat grava/atualiza o dispositivo e devolve, na mesma
 // query, os comandos pendentes ANTES de zerar unpair_requested/pending_pair_token
 // — assim cada comando é entregue exatamente uma vez (a query seguinte já não
 // os vê mais). message_id/text não são zerados: o app deduplica localmente
-// pelo id.
+// pelo id. pending_pair_token só é devolvido se ainda não expirou (CASE
+// abaixo) — mas é zerado de qualquer jeito (expirado ou não) pra não deixar
+// lixo na tabela.
 func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, ip, appVersion string, sessionID *string) (*LabDeviceHeartbeatResult, error) {
 	var res LabDeviceHeartbeatResult
 	err := s.db.QueryRow(ctx, `
@@ -53,9 +64,10 @@ func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, ip, a
 			VALUES ($1, now(), $2, $3, $4::uuid)
 			ON CONFLICT (device_uuid) DO UPDATE SET
 				last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid
-			RETURNING name, unpair_requested, message_id::text, message_text, pending_pair_token
+			RETURNING name, unpair_requested, message_id::text, message_text,
+				CASE WHEN pending_pair_token_expires_at > now() THEN pending_pair_token ELSE NULL END AS pending_pair_token
 		), cleared AS (
-			UPDATE hour_lab_devices SET unpair_requested = false, pending_pair_token = NULL
+			UPDATE hour_lab_devices SET unpair_requested = false, pending_pair_token = NULL, pending_pair_token_expires_at = NULL
 			WHERE device_uuid = $1 AND (unpair_requested = true OR pending_pair_token IS NOT NULL)
 		)
 		SELECT name, unpair_requested, message_id, message_text, pending_pair_token FROM upserted`,
@@ -160,11 +172,30 @@ func (s *Server) pairLabDeviceViaQR(ctx context.Context, deviceUUID, clientID st
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE hour_lab_devices SET pending_pair_token = $2 WHERE device_uuid = $1`,
-		deviceUUID, token); err != nil {
+	if _, err := s.db.Exec(ctx, `
+		UPDATE hour_lab_devices
+		SET pending_pair_token = $2, pending_pair_token_expires_at = now() + make_interval(mins => $3)
+		WHERE device_uuid = $1`,
+		deviceUUID, token, int(pairTokenTTL.Minutes())); err != nil {
 		return nil, err
 	}
 	return h, nil
+}
+
+// deleteLabDevice remove o registro do PC (ex.: entradas fantasma de teste,
+// ou PC que saiu de operação de vez) — não afeta sessões já feitas por ele
+// (current_session_id só é FK do device pro session, não o contrário; a
+// sessão continua existindo/contabilizada normalmente). Se o mesmo PC mandar
+// heartbeat de novo depois, upsertLabDeviceHeartbeat recria a linha do zero.
+func (s *Server) deleteLabDevice(ctx context.Context, id string) error {
+	tag, err := s.db.Exec(ctx, `DELETE FROM hour_lab_devices WHERE id = $1::uuid`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errLabDeviceNotFound
+	}
+	return nil
 }
 
 // sendLabDeviceMessage grava um aviso pro PC mostrar no próximo heartbeat.

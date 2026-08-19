@@ -559,6 +559,7 @@ CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_last_seen ON hour_lab_devices(la
 -- upsertLabDeviceHeartbeat) — mesma janela de exposição de digitar o token
 -- na mão, só que automático.
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS pending_pair_token TEXT;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS pending_pair_token_expires_at TIMESTAMPTZ;
 
 -- Arquivos (Google Drive): o conteúdo real mora no Drive; aqui só guardamos
 -- metadados de pasta e a ACL de quem enxerga/envia arquivo em cada uma — por

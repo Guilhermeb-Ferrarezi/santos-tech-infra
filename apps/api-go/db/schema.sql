@@ -345,7 +345,8 @@ CREATE TABLE IF NOT EXISTS hour_lab_devices (
   message_text        TEXT,
   message_sent_at     TIMESTAMPTZ,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-  pending_pair_token  TEXT
+  pending_pair_token  TEXT,
+  pending_pair_token_expires_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_last_seen ON hour_lab_devices(last_seen_at);
 

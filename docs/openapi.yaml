@@ -3781,6 +3781,25 @@ paths:
           description: Dispositivo não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [Horas]
+      summary: Remove o registro de um PC do laboratório
+      description: |
+        Admin-only. Remove a linha (nome, histórico de heartbeat) — não afeta
+        nenhuma sessão que o PC já rodou. Se o mesmo PC mandar heartbeat de
+        novo depois, a linha é recriada do zero. Rate limit 30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Dispositivo removido.
+        "404":
+          description: Dispositivo não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /hour-lab-devices/{id}/unpair:
     post:
