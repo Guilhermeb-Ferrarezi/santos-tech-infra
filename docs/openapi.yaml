@@ -256,46 +256,44 @@ paths:
             Set-Cookie:
               $ref: "#/components/headers/ClearAuthCookies"
 
-  /auth/qr-login/start:
+  /public/qr-login/create:
     post:
       tags: [Auth]
-      summary: Gerar par token (QR)/código (login por QR code)
+      summary: Criar um pedido de login por QR code/código
       description: |
-        Login por QR code estilo WhatsApp Web, mas invertido: quem GERA precisa
-        estar logado (é essa sessão que autoriza o dispositivo novo); quem TROCA
-        (`POST /public/qr-login/exchange`) não precisa de sessão nenhuma — é
-        assim que um app recém-aberto sem sessão (ex.: Santos Hub) consegue
-        logar. `token` (64 chars hex) vai no payload do QR, pra leitura por
-        câmera; `code` (6 dígitos) é o fallback digitável à mão. Os dois
-        resgatam a MESMA sessão — usar um invalida o outro. Expira em 2min.
-        Rate limit: 20 req/min por IP.
+        Login por QR code estilo WhatsApp Web (igual ao pareamento dos PCs do
+        laboratório): o Santos Hub — sem sessão nenhuma ao abrir — chama esta
+        rota e MOSTRA o QR (payload = `token`) e o `code` de 6 dígitos como
+        fallback digitável. Quem já está logado (celular escaneando com a
+        câmera, ou outra aba) confirma em `POST /auth/qr-login/confirm`; o Hub
+        fica com poll em `GET /public/qr-login/poll` até aprovar. Público —
+        quem cria não tem sessão. Expira em 5min. Rate limit: 20 req/min por IP.
+      security: []
       responses:
         "200":
-          description: Par gerado
+          description: Pedido criado
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  token: { type: string, description: "64 chars hex — payload do QR." }
-                  code: { type: string, description: "6 dígitos — fallback digitável." }
+                  token: { type: string, description: "64 chars hex — payload do QR e o que o Hub usa pro poll." }
+                  code: { type: string, description: "6 dígitos — fallback digitável em /conectar-dispositivo." }
                   expiresAt: { type: string, format: date-time }
                 required: [token, code, expiresAt]
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/RateLimited"
 
-  /public/qr-login/exchange:
+  /auth/qr-login/confirm:
     post:
       tags: [Auth]
-      summary: Trocar token/código de QR login por uma sessão
+      summary: Confirmar um pedido de login do Santos Hub
       description: |
-        Público — o próprio `code` (token de 64 chars OU código de 6 dígitos,
-        mesmo campo) é a credencial, uso único. Sempre trata como cliente nativo
-        (o Hub nunca manda `Origin`): devolve `accessToken`/`refreshToken` no
-        corpo, igual ao login normal sem MFA. Rate limit: 20 req/min por IP.
-      security: []
+        Chamado pela sessão que JÁ está logada (o celular que escaneou o QR,
+        ou outra aba autenticada) — é essa sessão que empresta a identidade
+        pro dispositivo novo. `code` aceita tanto o token (64 chars, vindo do
+        QR) quanto o código de 6 dígitos digitado. Requer sessão. Rate limit:
+        20 req/min por IP.
       requestBody:
         required: true
         content:
@@ -307,18 +305,58 @@ paths:
               required: [code]
       responses:
         "200":
-          description: Sessão emitida
+          description: Confirmado
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/SessionResponse" }
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
         "400":
           $ref: "#/components/responses/ValidationError"
         "401":
-          description: Token/código expirado, já usado, ou conta suspensa/desabilitada
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Token/código expirado ou inválido
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { code: QR_LOGIN_INVALID, message: "código expirado ou já usado" }
+              example: { code: QR_LOGIN_NOT_FOUND, message: "código expirado ou inválido" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /public/qr-login/poll:
+    get:
+      tags: [Auth]
+      summary: Consultar se um pedido de login foi aprovado
+      description: |
+        O Santos Hub chama isso a cada ~2s com o `token` que recebeu de
+        `/public/qr-login/create`, até `ready: true` aparecer. Uso único —
+        assim que devolve a sessão, apaga o registro (uma segunda chamada com
+        o mesmo token dá `ready: false` mesmo tendo sido aprovado antes).
+        Sempre trata como cliente nativo (o Hub nunca manda `Origin`): quando
+        pronto, devolve `accessToken`/`refreshToken` no corpo. Público. Rate
+        limit: 60 req/min por IP.
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Estado do pedido
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties: { ready: { type: boolean, enum: [false] } }
+                  - allOf:
+                      - $ref: "#/components/schemas/SessionResponse"
+                      - type: object
+                        properties: { ready: { type: boolean, enum: [true] } }
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "429":
           $ref: "#/components/responses/RateLimited"
 
@@ -3388,8 +3426,11 @@ paths:
       tags: [Horas]
       summary: Inicia sessão para um cliente
       description: |
-        Admin-only. Gera o token do link público (devolvido em texto puro só nesta
-        resposta — o banco guarda apenas o hash). Rate limit 30/min.
+        Admin-only. Gera o token do link público E um código curto de 6 dígitos
+        (alternativa a colar o link no PC — expira em 15min, uso único; ver
+        `POST /public/hour-sessions/pair-by-code`). Ambos devolvidos em texto
+        puro só nesta resposta — o banco guarda apenas o hash do token (e o
+        próprio código, zerado no primeiro pareamento). Rate limit 30/min.
       requestBody:
         required: true
         content:
@@ -3410,7 +3451,8 @@ paths:
                   session: { $ref: "#/components/schemas/HourSession" }
                   token: { type: string, description: "64 chars hex — só aparece nesta resposta." }
                   publicUrl: { type: string }
-                required: [session, token, publicUrl]
+                  shortCode: { type: string, description: "6 dígitos — só aparece nesta resposta. Expira em 15min, uso único." }
+                required: [session, token, publicUrl, shortCode]
         "400":
           description: clientId inválido.
         "404":
@@ -3604,6 +3646,41 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /public/hour-sessions/pair-by-code:
+    post:
+      tags: [Horas]
+      summary: Troca um código curto por um token de sessão (sem autenticação)
+      description: |
+        Alternativa a colar o link de 64 chars no PC do laboratório: digita-se
+        só os 6 dígitos. Devolve um token REEMITIDO (nunca o token original,
+        que não fica guardado em texto puro) e zera o código — uso único,
+        mesmo que ainda não tivesse expirado (15min). Rate limit 15/min por IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code: { type: string, description: "6 dígitos" }
+              required: [code]
+      responses:
+        "200":
+          description: Token emitido.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  publicUrl: { type: string }
+                required: [token, publicUrl]
+        "404":
+          description: Código inválido ou expirado.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /hour-lab-devices:
     get:
       tags: [Horas]
@@ -3621,6 +3698,45 @@ paths:
                 type: object
                 properties:
                   devices: { type: array, items: { $ref: "#/components/schemas/LabDevice" } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/pair:
+    post:
+      tags: [Horas]
+      summary: Pareia um PC via QR — inicia sessão e entrega o token no heartbeat seguinte
+      description: |
+        Admin-only. Fluxo do QR: o PC (ainda sem sessão) mostra um QR com o
+        próprio `deviceUuid`; o admin escaneia com o celular (já autenticado),
+        abre `/admin/horas/parear/:deviceUuid` no dashboard e escolhe o
+        cliente — chamando este endpoint. Inicia a sessão (mesma lógica de
+        `POST /hour-sessions`) e deixa o token pronto pra entrega automática
+        no próximo heartbeat do PC (`pending_pair_token`, mesmo padrão de
+        entrega única de `unpairRequested`/`message`) — nada é digitado no
+        PC. Rate limit 30/min.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceUuid: { type: string, format: uuid }
+                clientId: { type: string, format: uuid }
+              required: [deviceUuid, clientId]
+      responses:
+        "200":
+          description: Sessão criada e token preparado pro dispositivo.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: "#/components/schemas/HourSession" }
+        "400":
+          description: deviceUuid/clientId inválido.
+        "404":
+          description: Cliente ou dispositivo não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -3722,8 +3838,8 @@ paths:
         Sem login — `deviceId` (UUID gerado e persistido localmente no primeiro
         boot do app) é a própria identidade. Enviado a cada ~30s pelo
         hour-timer-app; devolve o nome atribuído pelo admin e os comandos
-        pendentes (despairar / aviso), entregues exatamente uma vez. Rate limit
-        120/min por IP.
+        pendentes (despairar / aviso / token de pareamento via QR), entregues
+        exatamente uma vez. Rate limit 120/min por IP.
       security: []
       requestBody:
         required: true
@@ -3752,6 +3868,7 @@ paths:
                     properties:
                       id: { type: string, format: uuid }
                       text: { type: string }
+                  pairToken: { type: string, description: "Token pronto pra uso (pareamento via QR concluído pelo admin) — entregue uma única vez." }
                 required: [name, unpairRequested]
         "400":
           description: deviceId inválido.

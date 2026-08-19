@@ -10,42 +10,53 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const qrLoginTTL = 2 * time.Minute
+const qrLoginTTL = 5 * time.Minute
 
-// qrLoginPayload é o que fica gravado no Redis, sob DUAS chaves (token e code)
-// apontando pro mesmo valor — permite resgatar tanto pelo token completo
-// (payload do QR, lido pela câmera) quanto pelo código curto (digitado à mão),
-// e ao consumir apaga as duas de uma vez (uso único, independente de qual
-// caminho foi usado pra resgatar).
-type qrLoginPayload struct {
-	UserID int64  `json:"userID"`
-	Token  string `json:"token"`
-	Code   string `json:"code"`
+// qrLoginRecord é o que fica gravado no Redis sob a chave do token — o código
+// curto é só um PONTEIRO pro token (qrLoginCodeKey), pra resolver as duas
+// formas de referenciar o mesmo pedido de login.
+//
+// Fluxo (igual ao pareamento por QR do hour-timer-app, só que pra sessão de
+// usuário em vez de sessão de cliente): o SANTOS HUB gera o pedido (sem
+// sessão nenhuma — é ele quem PRECISA logar) e mostra o QR/código na tela;
+// alguém com uma sessão de verdade (celular ou outro PC já logado) escaneia
+// com a CÂMERA DO CELULAR ou digita o código em
+// dashboard/web:/conectar-dispositivo e confirma; o Hub só fica dando poll
+// até aparecer aprovado.
+type qrLoginRecord struct {
+	Token    string `json:"token"`
+	Code     string `json:"code"`
+	Approved bool   `json:"approved"`
+	UserID   int64  `json:"userID,omitempty"`
 }
 
 func qrLoginTokenKey(token string) string { return "qr_login:token:" + token }
 func qrLoginCodeKey(code string) string   { return "qr_login:code:" + code }
 
-// POST /auth/qr-login/start — gera o par token (QR)/código (digitável), válido
-// por 2min. Login por QR reusa a MESMA sessão web já autenticada de quem gera
-// (é essa sessão que autoriza o novo dispositivo) — sem passo de aprovação
-// separado, ao contrário do WhatsApp Web.
-func (s *Server) handleQRLoginStart(w http.ResponseWriter, r *http.Request) {
-	uid := userIDFrom(r)
-	token := randomToken(32)
-	code := randomDigits(6)
-	payload := qrLoginPayload{UserID: int64(uid), Token: token, Code: code}
-	data, err := json.Marshal(payload)
+func (s *Server) saveQRLoginRecord(w http.ResponseWriter, r *http.Request, rec qrLoginRecord) bool {
+	data, err := json.Marshal(rec)
 	if err != nil {
 		writeErr(w, err)
-		return
+		return false
 	}
-	if err := s.rdb.Set(r.Context(), qrLoginTokenKey(token), data, qrLoginTTL).Err(); err != nil {
+	if err := s.rdb.Set(r.Context(), qrLoginTokenKey(rec.Token), data, qrLoginTTL).Err(); err != nil {
+		writeErr(w, err)
+		return false
+	}
+	return true
+}
+
+// POST /public/qr-login/create — o Santos Hub (sem sessão) chama isso ao
+// abrir "Outras opções" e mostra o QR (payload = token) + o código de 6
+// dígitos como alternativa digitável. Público: quem cria não está logado.
+func (s *Server) handleQRLoginCreate(w http.ResponseWriter, r *http.Request) {
+	token := randomToken(32)
+	code := randomDigits(6)
+	if err := s.rdb.Set(r.Context(), qrLoginCodeKey(code), token, qrLoginTTL).Err(); err != nil {
 		writeErr(w, err)
 		return
 	}
-	if err := s.rdb.Set(r.Context(), qrLoginCodeKey(code), data, qrLoginTTL).Err(); err != nil {
-		writeErr(w, err)
+	if !s.saveQRLoginRecord(w, r, qrLoginRecord{Token: token, Code: code}) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -55,12 +66,25 @@ func (s *Server) handleQRLoginStart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// POST /public/qr-login/exchange {code} — troca o token (QR) ou código (digitado)
-// por uma sessão de verdade. Público: o próprio valor é a credencial (uso único,
-// vida curta) — é assim que um dispositivo sem sessão nenhuma (o Hub, recém-aberto)
-// consegue logar.
-func (s *Server) handleQRLoginExchange(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+// resolveQRLoginToken aceita tanto o token cru (payload do QR) quanto o
+// código de 6 dígitos (digitado) e devolve o token canônico.
+func (s *Server) resolveQRLoginToken(r *http.Request, value string) (string, error) {
+	if len(value) == 64 {
+		return value, nil
+	}
+	token, err := s.rdb.Get(r.Context(), qrLoginCodeKey(value)).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", nil
+	}
+	return token, err
+}
+
+// POST /auth/qr-login/confirm {code} — chamado pela sessão que JÁ está
+// logada (o celular que escaneou, ou outra aba já autenticada) pra autorizar
+// o Santos Hub a entrar. `code` aceita o token (64 chars, vindo do QR) ou o
+// código de 6 dígitos digitado. Requer sessão — é ela quem empresta a
+// identidade pro dispositivo novo.
+func (s *Server) handleQRLoginConfirm(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	var body struct {
 		Code string `json:"code"`
@@ -74,51 +98,88 @@ func (s *Server) handleQRLoginExchange(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "código inválido"))
 		return
 	}
-
-	// O token (hex, 64 chars) e o código curto (6 dígitos) usam namespaces
-	// diferentes no Redis — tenta os dois, sem precisar o cliente informar qual é.
-	data, err := s.rdb.Get(r.Context(), qrLoginTokenKey(value)).Bytes()
-	if errors.Is(err, redis.Nil) {
-		data, err = s.rdb.Get(r.Context(), qrLoginCodeKey(value)).Bytes()
+	token, err := s.resolveQRLoginToken(r, value)
+	if err != nil {
+		writeErr(w, err)
+		return
 	}
+	if token == "" {
+		writeErr(w, appErr(http.StatusNotFound, "QR_LOGIN_NOT_FOUND", "código expirado ou inválido"))
+		return
+	}
+	data, err := s.rdb.Get(r.Context(), qrLoginTokenKey(token)).Bytes()
 	if errors.Is(err, redis.Nil) {
-		writeErr(w, appErr(http.StatusUnauthorized, "QR_LOGIN_INVALID", "código expirado ou já usado"))
+		writeErr(w, appErr(http.StatusNotFound, "QR_LOGIN_NOT_FOUND", "código expirado ou inválido"))
 		return
 	}
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-
-	var payload qrLoginPayload
-	if err := json.Unmarshal(data, &payload); err != nil {
+	var rec qrLoginRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
 		writeErr(w, err)
 		return
 	}
-	// Uso único: apaga as duas chaves (token + code) já na troca, antes de
-	// qualquer outra coisa — uma segunda tentativa concorrente com o mesmo
-	// valor não encontra mais a chave e cai no ramo QR_LOGIN_INVALID acima.
-	if err := s.rdb.Del(r.Context(), qrLoginTokenKey(payload.Token), qrLoginCodeKey(payload.Code)).Err(); err != nil {
+	rec.Approved = true
+	rec.UserID = int64(userIDFrom(r))
+	if !s.saveQRLoginRecord(w, r, rec) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// GET /public/qr-login/poll?token=... — o Santos Hub fica chamando isso a
+// cada ~2s (o token nunca é digitado por gente, então é seguro usá-lo direto
+// aqui, sem passar pelo resolve de código). Público. Uso único: assim que
+// devolve a sessão, apaga o registro.
+func (s *Server) handleQRLoginPoll(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if len(token) != 64 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "token inválido"))
+		return
+	}
+	data, err := s.rdb.Get(r.Context(), qrLoginTokenKey(token)).Bytes()
+	if errors.Is(err, redis.Nil) {
+		writeJSON(w, http.StatusOK, map[string]any{"ready": false})
+		return
+	}
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	var rec qrLoginRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if !rec.Approved {
+		writeJSON(w, http.StatusOK, map[string]any{"ready": false})
+		return
+	}
 
-	u, err := s.userByID(r.Context(), payload.UserID)
+	// Uso único: apaga token + código antes de emitir a sessão.
+	if err := s.rdb.Del(r.Context(), qrLoginTokenKey(rec.Token), qrLoginCodeKey(rec.Code)).Err(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	u, err := s.userByID(r.Context(), rec.UserID)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	if u == nil || u.LoginDisabled || u.SuspendedAt != nil {
-		writeErr(w, appErr(http.StatusUnauthorized, "QR_LOGIN_INVALID", "código expirado ou já usado"))
+		writeJSON(w, http.StatusOK, map[string]any{"ready": false})
 		return
 	}
-
 	access, refresh, err := s.issueSession(r.Context(), w, r, u)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"ready":        true,
 		"user":         s.buildProfile(r.Context(), u),
 		"accessToken":  access,
 		"refreshToken": refresh,

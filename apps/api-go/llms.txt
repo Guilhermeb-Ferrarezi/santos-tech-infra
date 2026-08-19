@@ -99,22 +99,27 @@ navegador. Não requer `access_token` — basta o cookie `accounts`.
   `SESSION_EXPIRED` | 403 `ACCOUNT_SUSPENDED` (rate 20/min)
   — rotaciona a sessão escolhida e seta os cookies `access_token` + `refresh_token`
 
-### QR login (estilo WhatsApp Web, invertido) — dashboard/web gera, Santos Hub troca
+### QR login (estilo WhatsApp Web) — Santos Hub mostra, alguém logado confirma
 
-Pensado pro Santos Hub (app Tauri sem sessão nenhuma ao abrir): quem GERA
-precisa estar logado (é essa sessão que autoriza); quem TROCA não precisa —
-o próprio token/código já é a credencial, uso único, 2min de vida. Redis puro
-(`qr_login:token:<token>` e `qr_login:code:<code>`, mesmo payload nas duas
-chaves, TTL 2min) — sem tabela no Postgres.
+Mesmo padrão do pareamento dos PCs do laboratório (`/hour-lab-devices/pair`),
+aplicado a login de usuário: o Santos Hub (app Tauri sem sessão nenhuma ao
+abrir) GERA e MOSTRA o QR/código; quem já está logado (celular escaneando com
+a câmera, ou outra aba) CONFIRMA; o Hub só fica com poll até aprovar. Redis
+puro (`qr_login:token:<token>` com o registro completo, `qr_login:code:<code>`
+como ponteiro pro token) — sem tabela no Postgres. Uso único, 5min de vida.
 
-- `POST /auth/qr-login/start` (sessão) → `{token, code, expiresAt}` · rate
-  20/min. `token` (64 chars hex) vira o payload do QR (leitura por câmera);
-  `code` (6 dígitos) é o fallback digitável.
-- `POST /public/qr-login/exchange {code}` (público — mesmo campo aceita token
-  OU code) → mesma resposta do login sem MFA, sempre com `accessToken`/
-  `refreshToken` no corpo (trata como cliente nativo incondicionalmente,
-  já que quem chama isso nunca tem sessão/cookie ainda) · rate 20/min ·
-  401 `QR_LOGIN_INVALID` se expirado/já usado/conta suspensa.
+- `POST /public/qr-login/create` (público — quem cria não tem sessão) →
+  `{token, code, expiresAt}` · rate 20/min. `token` (64 chars hex) vira o
+  payload do QR mostrado na tela do Hub; `code` (6 dígitos) é o fallback
+  digitável em `dashboard/web:/conectar-dispositivo`.
+- `POST /auth/qr-login/confirm {code}` (sessão — mesmo campo aceita token OU
+  code) → `{ok:true}` · rate 20/min · 404 `QR_LOGIN_NOT_FOUND` se
+  expirado/inválido. É essa sessão que autoriza o Hub a entrar.
+- `GET /public/qr-login/poll?token=` (público) → `{ready:false}` enquanto
+  pendente; uma vez aprovado, `{ready:true, user, accessToken, refreshToken}`
+  (trata como cliente nativo incondicionalmente — quem chama nunca tem
+  sessão/cookie) e apaga o registro (poll seguinte com o mesmo token dá
+  `ready:false` de novo) · rate 60/min (Hub faz poll a cada ~2s).
 
 ### OAuth provider ("Entrar com Santos Tech") — authorization code + PKCE S256
 
@@ -342,8 +347,10 @@ Admin (role admin, sem cargo personalizado):
 - `POST /hour-clients {name, phone?}` → 201 `{client}`
 - `POST /hour-clients/{id}/purchases {minutesAdded, note?}` → credita o saldo → `{client}`
 - `GET /hour-sessions` — sessões não encerradas, com `elapsedSeconds` calculado → `{sessions:[HourSession]}`
-- `POST /hour-sessions {clientId}` → cria e devolve o token em texto puro (só
-  aqui — o banco guarda o hash) → 201 `{session, token, publicUrl}`
+- `POST /hour-sessions {clientId}` → cria e devolve o token E um código curto
+  de 6 dígitos em texto puro (só aqui — o banco guarda o hash de cada um) →
+  201 `{session, token, publicUrl, shortCode}`. `shortCode` expira em 15min e
+  é de uso único — alternativa a colar o link de 64 chars no PC do laboratório.
 - `POST /hour-sessions/{id}/pause` — só de `active` → `paused`; limpa pedido de pausa pendente
 - `POST /hour-sessions/{id}/resume` — só de `paused` → `active`
 - `POST /hour-sessions/{id}/end` — debita o tempo decorrido do saldo do cliente → `ended`
@@ -355,6 +362,9 @@ Público (sem auth — token da URL é a credencial, não cookie/sessão; consum
 pela rota `/sessao/:token` do dashboard/web, com polling):
 - `GET /public/hour-sessions/{token}` — `{clientName, status, elapsedSeconds, remainingMinutes, pauseRequested}` · rate limit 120/min
 - `POST /public/hour-sessions/{token}/request-pause` → 204 · rate limit 5/min (evita virar canal de spam pro admin) · 409 se já não está `active` ou já tem pedido pendente
+- `POST /public/hour-sessions/pair-by-code {code}` → `{token, publicUrl}` ·
+  rate limit 15/min · 404 se código inválido/expirado. Troca por um token
+  REEMITIDO (nunca o original) e zera o código — uso único.
 
 ### PCs do laboratório — `/hour-lab-devices` e `/public/lab-devices/heartbeat`
 
@@ -367,6 +377,12 @@ considerar offline acima de ~90s sem heartbeat).
 
 Admin:
 - `GET /hour-lab-devices` — `{devices:[LabDevice]}`
+- `POST /hour-lab-devices/pair {deviceUuid, clientId}` → `{session}` · rate
+  limit 30/min · fluxo do QR: o PC mostra um QR com o próprio deviceUuid, o
+  admin escaneia com o celular (rota `/admin/horas/parear/:deviceUuid` do
+  dashboard/web) e chama isto — inicia sessão (mesma lógica de
+  `POST /hour-sessions`) e deixa o token pronto pra entrega automática no
+  próximo heartbeat (`pairToken`), sem digitar nada no PC.
 - `PATCH /hour-lab-devices/{id} {name}` → `{device}` · rate limit 30/min
 - `POST /hour-lab-devices/{id}/unpair` → 204 · rate limit 30/min — não afeta a
   sessão em si (isso é `/hour-sessions/{id}/...`), só solta o pareamento local
@@ -377,11 +393,12 @@ Admin:
 
 Público (sem auth — `deviceId` é a identidade):
 - `POST /public/lab-devices/heartbeat {deviceId, token?, appVersion?}` →
-  `{name, unpairRequested, message?}` · rate limit 120/min. `token` é o token
-  da sessão de horas pareada localmente, se houver (resolve pra
+  `{name, unpairRequested, message?, pairToken?}` · rate limit 120/min. `token`
+  é o token da sessão de horas pareada localmente, se houver (resolve pra
   `currentSessionId`/`currentClientName` na listagem admin). Comandos
-  (`unpairRequested`, `message`) são entregues exatamente uma vez — a query
-  seguinte já não os vê mais (exceto `message`, que o app deduplica pelo id).
+  (`unpairRequested`, `message`, `pairToken`) são entregues exatamente uma vez
+  — a query seguinte já não os vê mais (exceto `message`, que o app deduplica
+  pelo id).
 
 ## Catálogo de downloads (Santos Hub) — `api.santos-tech.com/auth/admin/downloads` e `/public/downloads`
 
