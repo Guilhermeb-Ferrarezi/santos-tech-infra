@@ -151,18 +151,25 @@ export function useAuth() {
     setUser(me);
   }, [fetchMe]);
 
-  // Login por QR code (payload do QR, 64 chars hex) ou código digitado (6
-  // dígitos) — mesmo endpoint público, mesmo campo, ver
-  // POST /public/qr-login/exchange em handlers_qr_login.go.
-  const loginWithCode = useCallback(async (code: string) => {
-    const body = await apiJSON<{ user: AuthUser; accessToken?: string; refreshToken?: string }>("/public/qr-login/exchange", {
+  // Login por QR code (estilo WhatsApp Web): o Hub GERA e MOSTRA o QR/código
+  // (createQRLogin) e fica com poll (pollQRLogin) até alguém já logado
+  // confirmar em dashboard/web:/conectar-dispositivo — ver handlers_qr_login.go.
+  const createQRLogin = useCallback(async () => {
+    return apiJSON<{ token: string; code: string; expiresAt: string }>("/public/qr-login/create", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
     });
-    await persistSession(body);
+  }, []);
+
+  // Devolve true quando a sessão chegou (já persistida e setUser já chamado).
+  const pollQRLogin = useCallback(async (token: string): Promise<boolean> => {
+    const body = await apiJSON<{ ready: boolean; user?: AuthUser; accessToken?: string; refreshToken?: string }>(
+      `/public/qr-login/poll?token=${encodeURIComponent(token)}`,
+    );
+    if (!body.ready) return false;
+    await persistSession(body as { user: AuthUser; accessToken: string; refreshToken: string });
     const me = await fetchMe();
     setUser(me);
+    return true;
   }, [fetchMe]);
 
   const resendMfaEmail = useCallback(async (challenge: string) => {
@@ -183,5 +190,5 @@ export function useAuth() {
     await clearSession();
   }, [clearSession]);
 
-  return { user, loading, login, verifyMfa, resendMfaEmail, loginWithCode, logout };
+  return { user, loading, login, verifyMfa, resendMfaEmail, createQRLogin, pollQRLogin, logout };
 }
