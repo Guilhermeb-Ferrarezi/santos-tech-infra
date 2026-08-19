@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 // maxSocialPublishMediaSize limita quanto bufferizamos em memória ao levar um
@@ -86,6 +87,22 @@ func resolvePublishTargets(destino, requested []string) ([]string, error) {
 	return requested, nil
 }
 
+// captionWithHashtags monta o texto que de fato vai pra rede: a legenda
+// (bloco "Legenda + hashtags" do editorial) com as hashtags coladas no fim,
+// separadas por uma linha em branco — hashtags moram em coluna própria
+// (social_posts.hashtags) e nunca eram enviadas junto na publicação
+// automática antes desta função existir.
+func captionWithHashtags(caption string, hashtags []string) string {
+	if len(hashtags) == 0 {
+		return caption
+	}
+	tags := strings.Join(hashtags, " ")
+	if caption == "" {
+		return tags
+	}
+	return caption + "\n\n" + tags
+}
+
 // PublishSocialPost dispara a publicação automática do post nas plataformas
 // resolvidas por resolvePublishTargets que já têm adaptador plugado.
 // Publicação com sucesso já confirma a plataforma no checklist (mesma tabela
@@ -122,6 +139,7 @@ func (s *Server) PublishSocialPost(ctx context.Context, postID string, actingUse
 	}
 
 	isVideo, supported := socialPostIsVideo(post.Formato)
+	caption := captionWithHashtags(post.Caption, post.Hashtags)
 
 	mediaURL, cleanup, err := s.resolveSocialPostMediaURL(ctx, post)
 	if err != nil {
@@ -141,7 +159,7 @@ func (s *Server) PublishSocialPost(ctx context.Context, postID string, actingUse
 				Error: fmt.Sprintf("formato %q ainda não tem publicação automática (carrossel/story) — confirme manualmente", post.Formato)})
 			continue
 		}
-		externalID, err := adapter.publishMedia(ctx, mediaURL, post.Caption, isVideo)
+		externalID, err := adapter.publishMedia(ctx, mediaURL, caption, isVideo)
 		if err != nil {
 			slog.Error("social publish: falha ao publicar", "post_id", postID, "platform", platform, "err", err)
 			results = append(results, SocialPublishResult{Platform: platform, Status: "failed", Error: err.Error()})

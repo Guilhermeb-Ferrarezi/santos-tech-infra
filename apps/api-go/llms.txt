@@ -312,7 +312,7 @@ com concorrência otimista via `sceneVersion`.
   usuário por email (email inexistente OU sem papel de staff → mesmo 404)
 - `DELETE /boards/{id}/members/{userId}` → 204
 
-## Controle de horas de clientes — `api.santos-tech.com/hour-clients` e `/hour-sessions`
+## Controle de horas de clientes — `api.santos-tech.com/hour-clients`, `/hour-sessions` e `/hour-lab-devices`
 
 Lan house/escola: cliente compra pacote de horas, admin inicia/pausa/retoma/
 encerra a sessão, um link público (token) mostra o cronômetro pro cliente.
@@ -338,6 +338,33 @@ Público (sem auth — token da URL é a credencial, não cookie/sessão; consum
 pela rota `/sessao/:token` do dashboard/web, com polling):
 - `GET /public/hour-sessions/{token}` — `{clientName, status, elapsedSeconds, remainingMinutes, pauseRequested}` · rate limit 120/min
 - `POST /public/hour-sessions/{token}/request-pause` → 204 · rate limit 5/min (evita virar canal de spam pro admin) · 409 se já não está `active` ou já tem pedido pendente
+
+### PCs do laboratório — `/hour-lab-devices` e `/public/lab-devices/heartbeat`
+
+App desktop (hour-timer-app) rodando em cada PC. `deviceId` é um UUID gerado e
+persistido localmente no primeiro boot do app — é a identidade, sem login.
+Nome é **sempre** atribuído pelo admin (nunca pelo próprio PC/app), pra não
+bagunçar com quem estiver sentado na máquina. "Online/offline" não é campo —
+decida no cliente por `lastSeenAt` (heartbeat a cada ~30s do app; recomendado
+considerar offline acima de ~90s sem heartbeat).
+
+Admin:
+- `GET /hour-lab-devices` — `{devices:[LabDevice]}`
+- `PATCH /hour-lab-devices/{id} {name}` → `{device}` · rate limit 30/min
+- `POST /hour-lab-devices/{id}/unpair` → 204 · rate limit 30/min — não afeta a
+  sessão em si (isso é `/hour-sessions/{id}/...`), só solta o pareamento local
+  do PC; entregue no heartbeat seguinte (até ~30s de atraso)
+- `POST /hour-lab-devices/{id}/message {text}` → 204 · rate limit 30/min —
+  aviso mostrado uma vez na tela do PC; `message.id` novo a cada envio, então
+  reenviar o mesmo texto exibe de novo (o app deduplica pelo id, não pelo texto)
+
+Público (sem auth — `deviceId` é a identidade):
+- `POST /public/lab-devices/heartbeat {deviceId, token?, appVersion?}` →
+  `{name, unpairRequested, message?}` · rate limit 120/min. `token` é o token
+  da sessão de horas pareada localmente, se houver (resolve pra
+  `currentSessionId`/`currentClientName` na listagem admin). Comandos
+  (`unpairRequested`, `message`) são entregues exatamente uma vez — a query
+  seguinte já não os vê mais (exceto `message`, que o app deduplica pelo id).
 
 ## Arquivos (Google Drive) — `api.santos-tech.com/auth/admin/drive-folders` e `/drive-folders`
 
@@ -431,7 +458,8 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
   `platforms`, restringe a esse subconjunto — usado pelo diálogo de revisão do front pra
   deixar de fora uma plataforma JÁ confirmada (publicar de novo não edita, sempre CRIA um
   post novo na rede — reenviar duplicaria). `platforms` com algo fora de
-  `plataformasDestino` → 400 `PLATFORM_NOT_TARGET`. Mídia vem de `driveFileId` (baixa via
+  `plataformasDestino` → 400 `PLATFORM_NOT_TARGET`. O texto enviado à rede é `caption` +
+  `hashtags[]` colado no fim (separado por linha em branco). Mídia vem de `driveFileId` (baixa via
   service account do Drive, sobe temporário pro R2 público, usa essa URL na Graph API) ou,
   sem arquivo do Drive, de `mediaUrl` direto. Carrossel e story ainda não são suportados
   (`status: "unsupported"`, confirme manualmente). Publicação com sucesso já confirma a

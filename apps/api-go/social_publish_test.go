@@ -35,6 +35,25 @@ func TestSocialPublishAdaptersEmptyWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestCaptionWithHashtags(t *testing.T) {
+	cases := []struct {
+		caption  string
+		hashtags []string
+		want     string
+	}{
+		{"Legenda normal", nil, "Legenda normal"},
+		{"Legenda normal", []string{"#santostech", "#educacao"}, "Legenda normal\n\n#santostech #educacao"},
+		{"", []string{"#santostech"}, "#santostech"},
+		{"", nil, ""},
+	}
+	for _, c := range cases {
+		got := captionWithHashtags(c.caption, c.hashtags)
+		if got != c.want {
+			t.Errorf("captionWithHashtags(%q, %v) = %q, want %q", c.caption, c.hashtags, got, c.want)
+		}
+	}
+}
+
 func TestResolvePublishTargets(t *testing.T) {
 	destino := []string{"instagram", "facebook", "tiktok"}
 
