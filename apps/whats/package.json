@@ -14,7 +14,7 @@
     "baileys": "7.0.0-rc14",
     "ioredis": "^5.4.0",
     "jsonwebtoken": "^9.0.2",
-    "pg": "^8.22.0",
+    "pg": "^8.23.0",
     "pino": "^10.3.1",
     "qrcode": "^1.5.4",
     "ws": "^8.21.2"
@@ -23,7 +23,7 @@
     "@types/bun": "^1.2.0",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^26.1.2",
-    "@types/pg": "^8.20.4",
+    "@types/pg": "^8.21.0",
     "@types/qrcode": "^1.5.5",
     "@types/ws": "^8.5.13",
     "typescript": "7.0.2"
