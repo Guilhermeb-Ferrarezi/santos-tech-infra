@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowClockwise, DownloadSimple, LinkSimple, MagnifyingGlass, PushPin, WarningCircle } from "@phosphor-icons/react";
 import { Titlebar } from "./components/Titlebar";
-
-const API_ORIGIN = "https://api.santos-tech.com";
+import { AccountMenu } from "./components/AccountMenu";
+import { apiJSON } from "./lib/api";
 
 interface DownloadItem {
   id: number;
@@ -83,9 +83,7 @@ export default function App() {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch(`${API_ORIGIN}/public/downloads`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json: { items: DownloadItem[] } = await res.json();
+      const json = await apiJSON<{ items: DownloadItem[] }>("/public/downloads");
       setItems(json.items);
       setError(false);
     } catch {
@@ -119,7 +117,7 @@ export default function App() {
   }, [filtered]);
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-[#04325A]">
+    <div className="flex h-screen flex-col overflow-hidden bg-neutral-950">
       <Titlebar />
 
       <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
@@ -140,6 +138,7 @@ export default function App() {
         >
           <ArrowClockwise className={`size-4 ${loading ? "animate-spin" : ""}`} />
         </button>
+        <AccountMenu />
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">
