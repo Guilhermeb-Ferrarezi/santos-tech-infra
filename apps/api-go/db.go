@@ -639,6 +639,19 @@ ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_cover_file_id TEXT NOT N
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_cover_file_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS alt_text TEXT NOT NULL DEFAULT '';
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS carousel_items JSONB NOT NULL DEFAULT '[]';
+
+-- OAuth clients: aprovação explícita. O POST /oauth/register (DCR, RFC 7591)
+-- é anônimo e criava client is_active=true, com client_name livre já visível
+-- na tela de consentimento. Agora ele nasce inativo e depende de um admin.
+ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+-- Clients criados pelo painel (qualquer um que não veio do DCR) já estavam em
+-- uso: marca como aprovados para não derrubar ninguém.
+UPDATE oauth_clients SET approved_at = created_at
+ WHERE approved_at IS NULL AND client_id NOT LIKE 'dcr\_%';
+-- Clients de DCR anônimo que ninguém nunca aprovou: desativa. Rodar de novo é
+-- no-op (ou já estão inativos, ou ganharam approved_at ao serem aprovados).
+UPDATE oauth_clients SET is_active = false
+ WHERE approved_at IS NULL AND is_active AND client_id LIKE 'dcr\_%';
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
@@ -1109,13 +1122,17 @@ type OAuthClient struct {
 	RedirectURIs []string  `json:"redirectUris"`
 	IsActive     bool      `json:"isActive"`
 	CreatedAt    time.Time `json:"createdAt"`
+	// ApprovedAt: quando um admin liberou o client. Clients criados pelo painel
+	// nascem aprovados; os do DCR anônimo (POST /oauth/register) nascem inativos
+	// e sem aprovação até alguém apertar o botão. Nil = nunca aprovado.
+	ApprovedAt *time.Time `json:"approvedAt"`
 }
 
-const oauthClientCols = `id::text, client_id, name, redirect_uris, is_active, created_at`
+const oauthClientCols = `id::text, client_id, name, redirect_uris, is_active, created_at, approved_at`
 
 func scanOAuthClient(row pgx.Row) (*OAuthClient, error) {
 	var c OAuthClient
-	err := row.Scan(&c.ID, &c.ClientID, &c.Name, &c.RedirectURIs, &c.IsActive, &c.CreatedAt)
+	err := row.Scan(&c.ID, &c.ClientID, &c.Name, &c.RedirectURIs, &c.IsActive, &c.CreatedAt, &c.ApprovedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -1148,10 +1165,32 @@ func (s *Server) listOAuthClients(ctx context.Context) ([]OAuthClient, error) {
 	return out, rows.Err()
 }
 
+// insertOAuthClient cria um client já APROVADO e ativo — caminho do painel,
+// onde um admin está do outro lado. O DCR anônimo usa insertPendingOAuthClient.
 func (s *Server) insertOAuthClient(ctx context.Context, clientID, name string, uris []string) (*OAuthClient, error) {
 	return scanOAuthClient(s.db.QueryRow(ctx,
-		`INSERT INTO oauth_clients (client_id, name, redirect_uris) VALUES ($1,$2,$3)
+		`INSERT INTO oauth_clients (client_id, name, redirect_uris, is_active, approved_at)
+		 VALUES ($1,$2,$3,true,now())
 		 RETURNING `+oauthClientCols, clientID, name, uris))
+}
+
+// insertPendingOAuthClient cria um client INATIVO e sem aprovação: é o que o
+// POST /oauth/register (RFC 7591, anônimo) produz. Registrar deixa de ser o
+// bastante para aparecer na tela de consentimento com um client_name escolhido
+// pelo próprio registrante — o /oauth/authorize recusa client inativo.
+func (s *Server) insertPendingOAuthClient(ctx context.Context, clientID, name string, uris []string) (*OAuthClient, error) {
+	return scanOAuthClient(s.db.QueryRow(ctx,
+		`INSERT INTO oauth_clients (client_id, name, redirect_uris, is_active)
+		 VALUES ($1,$2,$3,false)
+		 RETURNING `+oauthClientCols, clientID, name, uris))
+}
+
+// approveOAuthClient libera um client pendente (ativa + carimba approved_at).
+// Idempotente: reaprovar mantém o approved_at original.
+func (s *Server) approveOAuthClient(ctx context.Context, id string) (*OAuthClient, error) {
+	return scanOAuthClient(s.db.QueryRow(ctx,
+		`UPDATE oauth_clients SET is_active = true, approved_at = COALESCE(approved_at, now())
+		 WHERE id = $1::uuid RETURNING `+oauthClientCols, id))
 }
 
 // updateOAuthClient atualiza campos não-nil (COALESCE, padrão updateUserAdmin).
@@ -1160,7 +1199,10 @@ func (s *Server) updateOAuthClient(ctx context.Context, id string, name *string,
 		`UPDATE oauth_clients SET
 		   name = COALESCE($2, name),
 		   redirect_uris = COALESCE($3, redirect_uris),
-		   is_active = COALESCE($4, is_active)
+		   is_active = COALESCE($4, is_active),
+		   -- ativar pelo PATCH também conta como aprovação (senão a migração
+		   -- de desativação de clients DCR pendentes voltaria a derrubá-lo).
+		   approved_at = CASE WHEN $4 IS TRUE THEN COALESCE(approved_at, now()) ELSE approved_at END
 		 WHERE id = $1::uuid RETURNING `+oauthClientCols,
 		id, name, uris, active))
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"net/http"
 )
 
@@ -94,8 +95,14 @@ func dcrError(w http.ResponseWriter, code, desc string) {
 }
 
 // POST /oauth/register — Dynamic Client Registration (RFC 7591), público com
-// rate limit. Só clients públicos (PKCE, sem secret): registrar um client não
-// dá acesso a nada — o usuário ainda precisa autorizar no chooser.
+// rate limit. Só clients públicos (PKCE, sem secret).
+//
+// O client nasce INATIVO: registrar não dá acesso a nada e nem sequer permite
+// chegar na tela de consentimento (o /oauth/authorize recusa client inativo).
+// Sem isso, qualquer um registrava anonimamente um client com client_name
+// livre — o texto que o usuário lê na hora de autorizar — e só dependia de
+// convencer alguém a clicar. Liberar é ato de admin:
+// POST /auth/admin/oauth-clients/{id}/approve.
 func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
@@ -119,11 +126,13 @@ func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "App registrado dinamicamente"
 	}
-	c, err := s.insertOAuthClient(r.Context(), clientID, name, body.RedirectURIs)
+	c, err := s.insertPendingOAuthClient(r.Context(), clientID, name, body.RedirectURIs)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	slog.Info("oauth_dcr_register: client criado PENDENTE de aprovação",
+		"clientId", c.ClientID, "name", c.Name, "redirectUris", c.RedirectURIs, "ip", clientIP(r))
 	writePublicJSON(w, http.StatusCreated, map[string]any{
 		"client_id":                  c.ClientID,
 		"client_id_issued_at":        c.CreatedAt.Unix(),

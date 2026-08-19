@@ -61,6 +61,8 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /auth/admin/oauth-clients", s.adminGuard(s.handleListOAuthClients))
 	mux.HandleFunc("POST /auth/admin/oauth-clients", s.rateLimit(10, min, s.adminGuard(s.handleCreateOAuthClient)))
 	mux.HandleFunc("PATCH /auth/admin/oauth-clients/{id}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateOAuthClient)))
+	// Libera um client pendente (DCR anônimo nasce inativo — ver handlers_oauth_discovery.go).
+	mux.HandleFunc("POST /auth/admin/oauth-clients/{id}/approve", s.rateLimit(20, min, s.adminGuard(s.sudoGuard(s.handleApproveOAuthClient))))
 	mux.HandleFunc("DELETE /auth/admin/oauth-clients/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteOAuthClient)))
 
 	// Gestão admin de IPs banidos

@@ -74,7 +74,10 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
   name          TEXT NOT NULL,
   redirect_uris TEXT[] NOT NULL,
   is_active     BOOLEAN NOT NULL DEFAULT true,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Quando um admin liberou o client. Clients do painel nascem aprovados; os do
+  -- DCR anônimo (POST /oauth/register) nascem is_active=false e sem aprovação.
+  approved_at   TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS boards (
