@@ -245,3 +245,36 @@ func TestHandleLogoutGet(t *testing.T) {
 		t.Errorf("redirect proibido deveria cair no fallback, Location=%q", loc)
 	}
 }
+
+// OAUTH_AUD_ENFORCE: token emitido pelo /oauth/token (com aud) não vale como
+// sessão do painel quando a flag está ligada — e continua valendo quando não
+// está (default, retrocompatível).
+func TestAuthGuardOAuthAudEnforce(t *testing.T) {
+	oauthAccess, _, err := generateOAuthTokens("s-access", "s-refresh", 77, "a@b.com", "", "dcr_app")
+	if err != nil {
+		t.Fatalf("generateOAuthTokens: %v", err)
+	}
+	sessionAccess, _, _ := generateTokens("s-access", "s-refresh", 77, "a@b.com", "")
+
+	call := func(s *Server, token string) int {
+		h := s.authGuard(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+		r := httptest.NewRequest("GET", "/x", nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		h(w, r)
+		return w.Code
+	}
+
+	off := testServer(Config{JWTSecret: "s-access", JWTRefreshSecret: "s-refresh"})
+	if code := call(off, oauthAccess); code != http.StatusOK {
+		t.Errorf("flag desligada: token OAuth deveria continuar valendo, code=%d", code)
+	}
+
+	on := testServer(Config{JWTSecret: "s-access", JWTRefreshSecret: "s-refresh", OAuthAudEnforce: true})
+	if code := call(on, oauthAccess); code != http.StatusUnauthorized {
+		t.Errorf("flag ligada: token OAuth deveria ser recusado, code=%d", code)
+	}
+	if code := call(on, sessionAccess); code != http.StatusOK {
+		t.Errorf("flag ligada: sessão do painel deveria continuar valendo, code=%d", code)
+	}
+}

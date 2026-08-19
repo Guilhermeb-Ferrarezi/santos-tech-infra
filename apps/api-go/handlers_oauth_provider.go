@@ -205,7 +205,7 @@ func (s *Server) oauthTokenCode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta indisponível"))
 		return
 	}
-	s.writeTokenResponse(w, r, u)
+	s.writeTokenResponse(w, r, u, ac.ClientID)
 }
 
 func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +218,10 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_GRANT", "refresh_token inválido"))
 		return
 	}
+	// O refresh carrega o aud do client que o recebeu — sem isso a rotação
+	// devolveria um token sem aud (= sessão do painel) e desfaria a marcação.
+	// Vazio para refresh tokens emitidos antes desta mudança.
+	clientID := tokenAudience(refresh, s.cfg.JWTRefreshSecret)
 	sid, uid, expires, err := s.sessionByHash(r.Context(), hashRefreshToken(refresh))
 	if err != nil || expires.Before(time.Now()) {
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_GRANT", "Sessão expirada"))
@@ -240,7 +244,7 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao renovar sessão"))
 		return
 	}
-	s.writeTokenResponse(w, r, u)
+	s.writeTokenResponse(w, r, u, clientID)
 }
 
 // GET /oauth/userinfo — OIDC UserInfo endpoint (OpenID Connect Core §5.3).
@@ -277,8 +281,11 @@ func (s *Server) handleOAuthUserinfo(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeTokenResponse emite tokens + sessão e responde no formato OAuth.
-func (s *Server) writeTokenResponse(w http.ResponseWriter, r *http.Request, u *User) {
-	access, refresh, err := generateTokens(s.cfg.JWTSecret, s.cfg.JWTRefreshSecret, u.ID, u.Email, u.Name)
+// clientID marca o token com aud/scope (ver generateOAuthTokens em
+// oauthprovider.go); vazio só acontece com refresh de token antigo, emitido
+// antes desta mudança — nesse caso o par novo sai sem aud, como antes.
+func (s *Server) writeTokenResponse(w http.ResponseWriter, r *http.Request, u *User, clientID string) {
+	access, refresh, err := generateOAuthTokens(s.cfg.JWTSecret, s.cfg.JWTRefreshSecret, u.ID, u.Email, u.Name, clientID)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -291,6 +298,7 @@ func (s *Server) writeTokenResponse(w http.ResponseWriter, r *http.Request, u *U
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token": access, "refresh_token": refresh,
 		"token_type": "Bearer", "expires_in": int(accessTTL.Seconds()),
+		"scope": oauthTokenScope,
 	})
 }
 

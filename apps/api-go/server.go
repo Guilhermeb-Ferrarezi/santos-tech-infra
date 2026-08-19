@@ -138,6 +138,15 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
 			return
 		}
+		// Token do /oauth/token não é sessão do painel: ele sai com
+		// aud=<client_id> (ver oauthprovider.go). Atrás da flag
+		// OAUTH_AUD_ENFORCE porque hoje clients e app mobile ainda usam esse
+		// token nas rotas normais; o /oauth/userinfo continua aceitando (chama
+		// resolveToken direto, sem passar por aqui).
+		if s.cfg.OAuthAudEnforce && tokenAudience(token, s.cfg.JWTSecret) != "" {
+			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado"))
+			return
+		}
 		uid, u, err := s.resolveToken(r.Context(), token)
 		if err != nil {
 			writeErr(w, err)

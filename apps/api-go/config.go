@@ -32,6 +32,14 @@ type Config struct {
 	SocialAlertEmail   string // email para notificar quando post vai para revisão
 	Production         bool
 
+	// OAuthAudEnforce (OAUTH_AUD_ENFORCE=1): recusa, nas rotas de sessão do
+	// painel (authGuard e derivados), access tokens emitidos pelo /oauth/token —
+	// reconhecidos pelo claim aud=<client_id>. Default DESLIGADO: os tokens já
+	// saem marcados, mas ligar a recusa quebra clients OAuth e o app mobile que
+	// hoje usam o token do /oauth/token como sessão completa. Ligue só depois de
+	// migrar todos eles pro /oauth/userinfo.
+	OAuthAudEnforce bool
+
 	// Gateway de notificações do portal do aluno (templates/dispatches). Vazio =
 	// rotas de template/dispatch respondem 502 "gateway não configurado".
 	NotificationsGatewayURL   string // ex: https://portal.santos-tech.com (base, sem barra final)
@@ -134,6 +142,7 @@ func LoadConfig() Config {
 		SocialAlertEmail:   getEnv("SOCIAL_ALERT_EMAIL", ""),
 		EmailAPIKey:        mustEnv("EMAIL_API_KEY"),
 		Production:         getEnv("NODE_ENV", "development") == "production",
+		OAuthAudEnforce:    getEnv("OAUTH_AUD_ENFORCE", "") == "1",
 
 		NotificationsGatewayURL:   strings.TrimRight(getEnv("NOTIFICATIONS_PORTAL_API_URL", ""), "/"),
 		NotificationsSharedSecret: getEnv("NOTIFICATIONS_SHARED_SECRET", ""),
