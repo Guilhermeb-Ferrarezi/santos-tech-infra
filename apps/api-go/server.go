@@ -331,6 +331,25 @@ func (s *Server) clearAuthCookies(w http.ResponseWriter) {
 	s.setCookie(w, "refresh_token", "", -1)
 }
 
+// maxJSONBody é o teto padrão do corpo JSON aceito por decodeJSON.
+const maxJSONBody = 1 << 20 // 1 MB
+
+// decodeJSON decodifica o corpo JSON da requisição com um teto EMBUTIDO de 1 MB.
+// O limite é padrão, e não opt-in: antes, quem esquecesse o http.MaxBytesReader
+// antes da chamada ficava exposto a DoS de memória (corpo ilimitado). Handlers
+// que já limitam o corpo por conta própria continuam valendo — os MaxBytesReader
+// aninham e o MENOR dos limites prevalece. Quem precisa de mais que 1 MB usa
+// decodeJSONLimit.
 func decodeJSON(r *http.Request, v any) error {
+	return decodeJSONLimit(r, v, maxJSONBody)
+}
+
+// decodeJSONLimit é a variante explícita, para corpos legitimamente maiores que
+// o padrão (cena do board, payloads de áudio em base64 do roteador de APIs).
+// O w é nil de propósito: sem ele o net/http só deixa de marcar a conexão como
+// "requisição grande demais", e o erro de leitura (*http.MaxBytesError) chega
+// igual ao decoder.
+func decodeJSONLimit(r *http.Request, v any, max int64) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, max)
 	return json.NewDecoder(r.Body).Decode(v)
 }

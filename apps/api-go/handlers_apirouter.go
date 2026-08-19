@@ -691,7 +691,8 @@ func (s *Server) handleAPIRouterOp(w http.ResponseWriter, r *http.Request) {
 	op := r.PathValue("op")
 	r.Body = http.MaxBytesReader(w, r.Body, apiRouterMaxOpBodyLen)
 	var in apiRouterOpInput
-	if err := decodeJSON(r, &in); err != nil {
+	// > 1 MB: precisa da variante explícita (decodeJSON teto padrão de 1 MB).
+	if err := decodeJSONLimit(r, &in, apiRouterMaxOpBodyLen); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "corpo inválido"))
 		return
 	}
