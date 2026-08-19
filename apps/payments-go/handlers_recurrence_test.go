@@ -39,7 +39,7 @@ func (f *fakeRecStore) CreateRecurrence(_ context.Context, r *Recurrence) error 
 func (f *fakeRecStore) GetRecurrence(_ context.Context, _ int64) (*Recurrence, error) {
 	return f.get, f.getErr
 }
-func (f *fakeRecStore) ListRecurrences(_ context.Context) ([]Recurrence, error) {
+func (f *fakeRecStore) ListRecurrences(_ context.Context, _ listPage) ([]Recurrence, error) {
 	return f.list, f.listErr
 }
 func (f *fakeRecStore) SetRecurrenceStatus(_ context.Context, _ int64, status string) error {
@@ -50,7 +50,7 @@ func (f *fakeRecStore) UpdateRecurrenceAuth(_ context.Context, _ int64, _, _, _,
 	f.authCalled = true
 	return nil
 }
-func (f *fakeRecStore) ListChargesByRecurrence(_ context.Context, _ int64) ([]Charge, error) {
+func (f *fakeRecStore) ListChargesByRecurrence(_ context.Context, _ int64, _ listPage) ([]Charge, error) {
 	return f.cycles, nil
 }
 func (f *fakeRecStore) GetRecurrenceByPublicToken(_ context.Context, _ string) (*Recurrence, error) {

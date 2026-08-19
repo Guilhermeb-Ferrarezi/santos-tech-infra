@@ -1,9 +1,12 @@
 -- name: InsertCharge :one
+-- status é explícito: o fluxo PIX/boleto insere 'creating' ANTES de chamar a Efí e
+-- promove a 'pending' depois (ver ActivateCharge). Sem isso, uma falha no INSERT
+-- deixava um QR pagável na Efí sem cobrança nenhuma do nosso lado.
 INSERT INTO pay_charges
   (kind, subscription_id, student_id, customer_id, amount_cents, due_date, reference_month,
    provider, provider_charge_id, correlation_id, public_token, payer_tax_id, method,
-   br_code, qr_code, pdf_url, barcode)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+   br_code, qr_code, pdf_url, barcode, status)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 RETURNING id, status, created_at;
 
 -- name: InsertRecurrenceCharge :one
@@ -21,7 +24,7 @@ RETURNING id, status, created_at;
 SELECT id, kind, subscription_id, student_id, amount_cents, due_date::text, reference_month,
        status, provider, COALESCE(provider_charge_id, ''), correlation_id,
        method, COALESCE(br_code, ''), COALESCE(qr_code, ''),
-       COALESCE(pdf_url, ''), COALESCE(barcode, ''), paid_at, created_at
+       COALESCE(pdf_url, ''), COALESCE(barcode, ''), refunded_cents, paid_at, created_at
 FROM pay_charges
 WHERE id = $1;
 
@@ -38,16 +41,21 @@ FROM pay_charges
 WHERE public_token = $1;
 
 -- name: MarkChargePaid :exec
+-- Aceita 'expired' além de 'pending': o pagamento vem CONFIRMADO pelo gateway, e uma
+-- cobrança que o job de expiração já fechou (ou que foi paga no limite da janela) não
+-- pode ficar sem baixa — o dinheiro está na Efí de qualquer jeito.
 UPDATE pay_charges
 SET status = 'paid', paid_at = now()
-WHERE correlation_id = $1 AND status = 'pending';
+WHERE correlation_id = $1 AND status IN ('pending', 'expired');
 
 -- name: MarkChargePaidByProviderID :execrows
 -- Boleto (API Cobranças): a notificação casa pelo charge_id do Efí (provider_charge_id),
 -- não pelo correlation_id. Devolve nº de linhas afetadas (>0 = realmente marcou paga agora).
+-- Aceita 'expired' pelo mesmo motivo de MarkChargePaid: boleto liquida em D+1 e o
+-- gateway já confirmou o pagamento.
 UPDATE pay_charges
 SET status = 'paid', paid_at = now()
-WHERE provider_charge_id = $1 AND status = 'pending';
+WHERE provider_charge_id = $1 AND status IN ('pending', 'expired');
 
 -- name: PublicTokenByProviderID :one
 SELECT public_token
@@ -77,7 +85,9 @@ SELECT id, kind, amount_cents, due_date::text, status,
        COALESCE(br_code, ''), correlation_id, paid_at, created_at
 FROM pay_charges
 WHERE customer_id = $1
-ORDER BY created_at DESC;
+  AND ($2 = 0 OR id < $2)
+ORDER BY created_at DESC, id DESC
+LIMIT $3;
 
 -- name: ListChargeItemsByCustomer :many
 -- Itens de todas as cobranças de um cliente (para montar o detalhe das compras).
@@ -93,7 +103,9 @@ SELECT id, kind, amount_cents, due_date::text, reference_month, status,
        COALESCE(br_code, ''), correlation_id, paid_at, created_at
 FROM pay_charges
 WHERE recurrence_id = $1
-ORDER BY created_at DESC;
+  AND ($2 = 0 OR id < $2)
+ORDER BY created_at DESC, id DESC
+LIMIT $3;
 
 -- name: ListChargesByTaxID :many
 -- Cobranças de TODAS as contas com um mesmo CPF (detalhe consolidado por pessoa).
@@ -114,11 +126,18 @@ WHERE cu.tax_id = $1
 ORDER BY ci.charge_id;
 
 -- name: ExpireOverdueCharges :execrows
--- Marca como expiradas as cobranças pendentes cujo QR já passou da validade
+-- Marca como expiradas as cobranças PIX pendentes cujo QR já passou da validade
 -- (vencimento + 23h, igual à expiração enviada à Efí em createAndPersistCharge).
+--
+-- O filtro method = 'pix' é obrigatório: a janela de 23h é a do QR do PIX e não vale
+-- para os outros meios. Sem ele, cartão (que nasce com due_date = hoje) expirava em
+-- ~23h e boleto liquidado em D+1 já chegava expirado — e como MarkChargePaidByProviderID
+-- não casava com 'expired', a confirmação virava no-op: dinheiro na Efí, cobrança
+-- expirada no banco.
 UPDATE pay_charges
 SET status = 'expired'
 WHERE status = 'pending'
+  AND method = 'pix'
   AND (due_date + interval '23 hours') < now();
 
 -- name: CancelChargeByToken :one

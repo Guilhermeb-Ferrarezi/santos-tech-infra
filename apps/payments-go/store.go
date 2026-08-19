@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -339,8 +340,44 @@ func (s *Store) GetRecurrenceByEfiID(ctx context.Context, efiIDRec string) (*Rec
 	}, nil
 }
 
-func (s *Store) ListRecurrences(ctx context.Context) ([]Recurrence, error) {
-	rows, err := s.q.ListRecurrences(ctx)
+func (s *Store) ListRecurrences(ctx context.Context, page listPage) ([]Recurrence, error) {
+	rows, err := s.q.ListRecurrences(ctx, paydb.ListRecurrencesParams{BeforeID: page.BeforeID, Limit: page.Limit})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Recurrence, len(rows))
+	for i, r := range rows {
+		out[i] = Recurrence{
+			ID:             r.ID,
+			SubscriptionID: r.SubscriptionID,
+			ProductID:      r.ProductID,
+			CustomerID:     r.CustomerID,
+			PayerTaxID:     r.PayerTaxID,
+			PayerName:      r.PayerName,
+			AmountCents:    r.AmountCents,
+			Periodicity:    r.Periodicity,
+			DueDay:         intPtrFromInt32(r.DueDay),
+			StartDate:      r.StartDate,
+			EndDate:        r.EndDate,
+			Journey:        int(r.Journey),
+			EfiIDRec:       r.EfiIDRec,
+			BRCode:         r.BrCode,
+			QRCode:         r.QrCode,
+			Status:         r.Status,
+			PublicToken:    r.PublicToken,
+			CreatedAt:      tsToTime(r.CreatedAt),
+		}
+	}
+	return out, nil
+}
+
+// ListRecurrencesByUserID lista as recorrências (PIX Automático) do usuário logado,
+// amarradas pelo customer_id. Filtrar por CPF (ListRecurrencesByTaxID) NÃO serve aqui:
+// o CPF não prova posse da conta e vazava assinaturas de terceiros.
+func (s *Store) ListRecurrencesByUserID(ctx context.Context, userID int64, page listPage) ([]Recurrence, error) {
+	rows, err := s.q.ListRecurrencesByUserID(ctx, paydb.ListRecurrencesByUserIDParams{
+		UserID: userID, BeforeID: page.BeforeID, Limit: page.Limit,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -371,8 +408,10 @@ func (s *Store) ListRecurrences(ctx context.Context) ([]Recurrence, error) {
 }
 
 // ListRecurrencesByTaxID lista as recorrências (PIX Automático) de um cliente pelo CPF.
-func (s *Store) ListRecurrencesByTaxID(ctx context.Context, taxID string) ([]Recurrence, error) {
-	rows, err := s.q.ListRecurrencesByTaxID(ctx, taxID)
+func (s *Store) ListRecurrencesByTaxID(ctx context.Context, taxID string, page listPage) ([]Recurrence, error) {
+	rows, err := s.q.ListRecurrencesByTaxID(ctx, paydb.ListRecurrencesByTaxIDParams{
+		PayerTaxID: taxID, BeforeID: page.BeforeID, Limit: page.Limit,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -516,8 +555,17 @@ func methodOrPix(m string) string {
 	return m
 }
 
+// InsertCharge grava a cobrança. O status vem de c.Status: o fluxo PIX/boleto usa
+// 'creating' (linha reservada ANTES da Efí, promovida a 'pending' por ActivateCharge);
+// quem já tem a cobrança confirmada no gateway passa 'pending' — que é também o
+// default quando c.Status vem vazio.
 func (s *Store) InsertCharge(ctx context.Context, c *Charge) error {
+	status := c.Status
+	if status == "" {
+		status = "pending"
+	}
 	row, err := s.q.InsertCharge(ctx, paydb.InsertChargeParams{
+		Status:           status,
 		Kind:             c.Kind,
 		SubscriptionID:   c.SubscriptionID,
 		StudentID:        c.StudentID,
@@ -548,7 +596,7 @@ func (s *Store) InsertCharge(ctx context.Context, c *Charge) error {
 // ListCharges filtra opcionalmente por status e studentID.
 // Não migrada para sqlc: usa SQL com filtros condicionais inline ($1=” e $2=0
 // significam "sem filtro"), o que não é suportado estaticamente pelo sqlc.
-func (s *Store) ListCharges(ctx context.Context, status string, studentID int64) ([]Charge, error) {
+func (s *Store) ListCharges(ctx context.Context, status string, studentID int64, page listPage) ([]Charge, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT c.id, c.kind, c.subscription_id, c.student_id, c.amount_cents, c.due_date::text, c.reference_month,
 		       c.status, c.provider, COALESCE(c.provider_charge_id,''), c.correlation_id, c.method,
@@ -559,7 +607,9 @@ func (s *Store) ListCharges(ctx context.Context, status string, studentID int64)
 		LEFT JOIN pay_students st ON st.id = c.student_id
 		LEFT JOIN pay_customers cu ON cu.id = c.customer_id
 		WHERE ($1='' OR c.status=$1) AND ($2=0 OR c.student_id=$2)
-		ORDER BY c.created_at DESC`, status, studentID)
+		  AND ($3=0 OR c.id < $3)
+		ORDER BY c.created_at DESC, c.id DESC
+		LIMIT $4`, status, studentID, page.BeforeID, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -624,6 +674,7 @@ func (s *Store) GetCharge(ctx context.Context, id int64) (*Charge, error) {
 		QRCode:           r.QrCode,
 		PDFURL:           r.PdfUrl,
 		Barcode:          r.Barcode,
+		RefundedCents:    r.RefundedCents,
 		PaidAt:           tsToTimePtr(r.PaidAt),
 		CreatedAt:        tsToTime(r.CreatedAt),
 	}, nil
@@ -637,19 +688,50 @@ func (s *Store) MarkChargeExpired(ctx context.Context, correlationID string) err
 	return s.q.MarkChargeExpired(ctx, correlationID)
 }
 
-// MarkChargeRefunded marca a cobrança como estornada (status='refunded') pelo
-// correlationID. Fecha a janela de double-refund: uma 2ª chamada de RefundCard
-// é bloqueada antes de chegar ao gateway (o handler verifica c.Status == "refunded").
-// O status 'refunded' não está no CHECK atual de pay_charges — adicionamos via migration.
-func (s *Store) MarkChargeRefunded(ctx context.Context, correlationID string) error {
+// BeginChargeRefund RESERVA a cobrança para estorno: 'paid' → 'refunding', numa única
+// instrução. Devolve false se outra requisição já reservou (ou se a cobrança não está
+// paga) — é o que fecha o double-refund de verdade.
+//
+// O check-then-act anterior (handler lê status='paid' → chama o gateway → marca
+// 'refunded') deixava duas requisições simultâneas passarem pela MESMA verificação e
+// estornarem duas vezes no gateway. O comentário antigo aqui afirmava o contrário.
+func (s *Store) BeginChargeRefund(ctx context.Context, correlationID string) (bool, error) {
+	tag, err := s.db.Exec(ctx,
+		`UPDATE pay_charges SET status='refunding' WHERE correlation_id=$1 AND status='paid'`,
+		correlationID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// RollbackChargeRefund desfaz a reserva ('refunding' → 'paid') quando o gateway recusa
+// o estorno. Sem isso a cobrança ficaria travada num estado intermediário para sempre.
+func (s *Store) RollbackChargeRefund(ctx context.Context, correlationID string) error {
 	_, err := s.db.Exec(ctx,
-		`UPDATE pay_charges SET status='refunded' WHERE correlation_id=$1 AND status='paid'`,
+		`UPDATE pay_charges SET status='paid' WHERE correlation_id=$1 AND status='refunding'`,
 		correlationID)
 	return err
 }
 
-// ExpireOverdueCharges marca como expiradas as cobranças pendentes vencidas (job
-// periódico). Devolve quantas foram expiradas.
+// FinishChargeRefund registra o valor estornado e resolve o status final: enquanto o
+// acumulado não alcança amount_cents a cobrança VOLTA para 'paid' (estorno parcial);
+// quando alcança, vira 'refunded'. Devolve o status resultante.
+func (s *Store) FinishChargeRefund(ctx context.Context, correlationID string, refundedCents int64) (string, error) {
+	var status string
+	err := s.db.QueryRow(ctx, `
+		UPDATE pay_charges
+		SET refunded_cents = LEAST(refunded_cents + $2, amount_cents),
+		    status = CASE WHEN refunded_cents + $2 >= amount_cents THEN 'refunded' ELSE 'paid' END
+		WHERE correlation_id = $1 AND status = 'refunding'
+		RETURNING status`,
+		correlationID, refundedCents).Scan(&status)
+	return status, err
+}
+
+// ExpireOverdueCharges marca como expiradas as cobranças PIX pendentes vencidas (job
+// periódico). Devolve quantas foram expiradas. Só PIX: a janela de 23h é a do QR, e
+// aplicá-la a cartão/boleto expirava cobranças que ainda seriam pagas.
 func (s *Store) ExpireOverdueCharges(ctx context.Context) (int64, error) {
 	return s.q.ExpireOverdueCharges(ctx)
 }
@@ -685,9 +767,14 @@ func (s *Store) PublicTokenByProviderID(ctx context.Context, providerChargeID st
 
 // ── Webhook idempotência ──────────────────────────────────────────────────
 
-// MarkWebhookSeen retorna true se é a 1ª vez que vemos este evento (deve processar).
-func (s *Store) MarkWebhookSeen(ctx context.Context, id, typ string, payload []byte) (bool, error) {
-	n, err := s.q.MarkWebhookSeen(ctx, paydb.MarkWebhookSeenParams{
+// ClaimWebhookEvent reivindica o evento (fase 1) e devolve true se este processo
+// deve aplicar o efeito. O evento fica 'pending' — só MarkWebhookDone o encerra.
+//
+// NÃO substitua isto por um "marcar visto" antes do efeito: era exatamente esse o
+// bug — um timeout da Efí ou erro de banco no meio do caminho descartava o
+// pagamento para sempre, porque a reentrega caía no "já visto".
+func (s *Store) ClaimWebhookEvent(ctx context.Context, id, typ string, payload []byte) (bool, error) {
+	n, err := s.q.ClaimWebhookEvent(ctx, paydb.ClaimWebhookEventParams{
 		ID:      id,
 		Type:    typ,
 		Payload: payload,
@@ -696,6 +783,11 @@ func (s *Store) MarkWebhookSeen(ctx context.Context, id, typ string, payload []b
 		return false, err
 	}
 	return n == 1, nil
+}
+
+// MarkWebhookDone encerra o evento (fase 2), depois do efeito aplicado.
+func (s *Store) MarkWebhookDone(ctx context.Context, id string) error {
+	return s.q.MarkWebhookDone(ctx, id)
 }
 
 func (s *Store) PublicTokenByCorrelation(ctx context.Context, correlationID string) (string, error) {
@@ -896,8 +988,8 @@ func (s *Store) GetCustomerByTaxID(ctx context.Context, taxID string) (*Customer
 }
 
 // ListCustomersWithStats lista os clientes com agregados das compras (admin).
-func (s *Store) ListCustomersWithStats(ctx context.Context) ([]CustomerWithStats, error) {
-	rows, err := s.q.ListCustomersWithStats(ctx)
+func (s *Store) ListCustomersWithStats(ctx context.Context, page listPage) ([]CustomerWithStats, error) {
+	rows, err := s.q.ListCustomersWithStats(ctx, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -964,7 +1056,7 @@ func (s *Store) GetCustomerDetail(ctx context.Context, id int64) (*CustomerDetai
 		}
 	}
 	// Assinaturas (PIX Automático) do cliente, consolidadas pelo mesmo CPF das compras.
-	recs, err := s.ListRecurrencesByTaxID(ctx, cu.TaxID)
+	recs, err := s.ListRecurrencesByTaxID(ctx, cu.TaxID, defaultPage())
 	if err != nil {
 		return nil, err
 	}
@@ -1031,8 +1123,10 @@ func (s *Store) PayerEmailByCharge(ctx context.Context, chargeID int64) (name, e
 	return r.Name, r.Email, nil
 }
 
-func (s *Store) ListChargesByCustomer(ctx context.Context, customerID int64) ([]Charge, error) {
-	rows, err := s.q.ListChargesByCustomer(ctx, &customerID)
+func (s *Store) ListChargesByCustomer(ctx context.Context, customerID int64, page listPage) ([]Charge, error) {
+	rows, err := s.q.ListChargesByCustomer(ctx, paydb.ListChargesByCustomerParams{
+		CustomerID: &customerID, BeforeID: page.BeforeID, Limit: page.Limit,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1054,8 +1148,10 @@ func (s *Store) ListChargesByCustomer(ctx context.Context, customerID int64) ([]
 }
 
 // ListChargesByRecurrence lista os ciclos (cobranças) de uma recorrência de PIX Automático.
-func (s *Store) ListChargesByRecurrence(ctx context.Context, recurrenceID int64) ([]Charge, error) {
-	rows, err := s.q.ListChargesByRecurrence(ctx, &recurrenceID)
+func (s *Store) ListChargesByRecurrence(ctx context.Context, recurrenceID int64, page listPage) ([]Charge, error) {
+	rows, err := s.q.ListChargesByRecurrence(ctx, paydb.ListChargesByRecurrenceParams{
+		RecurrenceID: &recurrenceID, BeforeID: page.BeforeID, Limit: page.Limit,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1295,12 +1391,14 @@ func (s *Store) GetPaymentLink(ctx context.Context, id int64) (*PaymentLink, err
 }
 
 // ListPaymentLinks lista todos os links de pagamento, mais recentes primeiro.
-func (s *Store) ListPaymentLinks(ctx context.Context) ([]PaymentLink, error) {
+func (s *Store) ListPaymentLinks(ctx context.Context, page listPage) ([]PaymentLink, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id, public_token, amount_cents, product_ids, methods, coupons,
 		       finish_url, return_url, status, created_at
 		FROM pay_payment_links
-		ORDER BY created_at DESC`)
+		WHERE ($1=0 OR id < $1)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $2`, page.BeforeID, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1405,11 +1503,13 @@ func (s *Store) GetWithdrawalByIdempotencyKey(ctx context.Context, key string) (
 }
 
 // ListWithdrawals lista todos os saques, mais recentes primeiro.
-func (s *Store) ListWithdrawals(ctx context.Context) ([]Withdrawal, error) {
+func (s *Store) ListWithdrawals(ctx context.Context, page listPage) ([]Withdrawal, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id, amount_cents, status, public_token, efi_id_envio, e2e_id, created_at
 		FROM pay_withdrawals
-		ORDER BY created_at DESC`)
+		WHERE ($1=0 OR id < $1)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $2`, page.BeforeID, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1440,7 +1540,10 @@ func (s *Store) ListWithdrawals(ctx context.Context) ([]Withdrawal, error) {
 //   - Saques registrados (direction="out", type="payout"): usando created_at como data.
 //
 // Não persiste SQL em handlers: toda a agregação fica aqui no store.
-func (s *Store) ListMovements(ctx context.Context, from, to time.Time) ([]Movement, error) {
+func (s *Store) ListMovements(ctx context.Context, from, to time.Time, page listPage) ([]Movement, error) {
+	// Cada ramo (cobranças e saques) traz no máximo `limit` linhas; depois de juntar e
+	// ordenar, cortamos em `limit`. Sem teto, uma janela larga carregava a tabela toda
+	// na memória do processo antes de virar JSON.
 	// 1. Cobranças pagas no intervalo.
 	chargeRows, err := s.db.Query(ctx, `
 		SELECT
@@ -1456,7 +1559,8 @@ func (s *Store) ListMovements(ctx context.Context, from, to time.Time) ([]Moveme
 		WHERE c.status = 'paid'
 		  AND c.paid_at >= $1
 		  AND c.paid_at < $2
-		ORDER BY c.paid_at DESC`, from, to)
+		ORDER BY c.paid_at DESC, c.id DESC
+		LIMIT $3`, from, to, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1500,7 +1604,8 @@ func (s *Store) ListMovements(ctx context.Context, from, to time.Time) ([]Moveme
 		FROM pay_withdrawals
 		WHERE created_at >= $1
 		  AND created_at < $2
-		ORDER BY created_at DESC`, from, to)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $3`, from, to, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1528,19 +1633,23 @@ func (s *Store) ListMovements(ctx context.Context, from, to time.Time) ([]Moveme
 		return nil, err
 	}
 
-	// Ordena todos os movimentos por data decrescente (combina cobranças + saques).
+	// Ordena todos os movimentos por data decrescente (combina cobranças + saques) e
+	// aplica o teto sobre a lista já combinada.
 	sortMovements(out)
+	if page.Limit > 0 && len(out) > int(page.Limit) {
+		out = out[:page.Limit]
+	}
 	return out, nil
 }
 
-// sortMovements ordena os movimentos por data decrescente sem dependência externa.
+// sortMovements ordena os movimentos por data decrescente.
+//
+// Era um insertion sort "porque o número de movimentos por janela é pequeno" — que é
+// exatamente a premissa que deixa de valer com o tempo: O(n²) numa janela larga de
+// extrato trava o handler. sort.SliceStable é O(n log n) e preserva a ordem relativa
+// dos movimentos com a mesma data (cobranças antes de saques, como já vinha do SQL).
 func sortMovements(mvs []Movement) {
-	// Insertion sort simples — o número de movimentos por janela é pequeno.
-	for i := 1; i < len(mvs); i++ {
-		for j := i; j > 0 && mvs[j].Date.After(mvs[j-1].Date); j-- {
-			mvs[j], mvs[j-1] = mvs[j-1], mvs[j]
-		}
-	}
+	sort.SliceStable(mvs, func(i, j int) bool { return mvs[i].Date.After(mvs[j].Date) })
 }
 
 // ── Coupons ───────────────────────────────────────────────────────────────────
@@ -1558,11 +1667,13 @@ func (s *Store) CreateCoupon(ctx context.Context, c Coupon) (Coupon, error) {
 }
 
 // ListCoupons lista todos os cupons, mais recentes primeiro.
-func (s *Store) ListCoupons(ctx context.Context) ([]Coupon, error) {
+func (s *Store) ListCoupons(ctx context.Context, page listPage) ([]Coupon, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id, code, discount_type, discount_value, max_uses, used_count, active, created_at
 		FROM pay_coupons
-		ORDER BY created_at DESC`)
+		WHERE ($1=0 OR id < $1)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $2`, page.BeforeID, page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1603,10 +1714,37 @@ func (s *Store) SetCouponActive(ctx context.Context, id int64, active bool) erro
 	return nil
 }
 
-// IncrementCouponUse incrementa used_count do cupom pelo ID.
-func (s *Store) IncrementCouponUse(ctx context.Context, id int64) error {
+// RedeemCoupon reserva UM uso do cupom em uma única instrução atômica: só devolve o
+// cupom se ele estava ativo e ainda tinha uso disponível, e o incremento acontece no
+// mesmo UPDATE que checa o limite.
+//
+// Isto substitui o par SELECT-max_uses / IncrementCouponUse, que ficava separado por
+// uma chamada HTTP ao gateway: N pagadores simultâneos liam used_count antes de
+// qualquer incremento e todos furavam o limite. O erro do incremento ainda era
+// descartado com `_ =`, então nem dava para perceber.
+//
+// pgx.ErrNoRows = cupom inexistente, inativo ou esgotado (não distinguimos de
+// propósito — a rota pública não deve virar oráculo de cupom).
+func (s *Store) RedeemCoupon(ctx context.Context, code string) (Coupon, error) {
+	var c Coupon
+	err := s.db.QueryRow(ctx, `
+		UPDATE pay_coupons
+		SET used_count = used_count + 1
+		WHERE LOWER(code) = LOWER($1)
+		  AND active
+		  AND (max_uses = -1 OR used_count < max_uses)
+		RETURNING id, code, discount_type, discount_value, max_uses, used_count, active, created_at`,
+		code).
+		Scan(&c.ID, &c.Code, &c.DiscountType, &c.DiscountValue,
+			&c.MaxUses, &c.UsedCount, &c.Active, &c.CreatedAt)
+	return c, err
+}
+
+// ReleaseCouponUse devolve o uso reservado por RedeemCoupon quando o pagamento não
+// vinga (gateway recusou, INSERT falhou). Nunca deixa used_count negativo.
+func (s *Store) ReleaseCouponUse(ctx context.Context, id int64) error {
 	_, err := s.db.Exec(ctx,
-		`UPDATE pay_coupons SET used_count = used_count + 1 WHERE id=$1`, id)
+		`UPDATE pay_coupons SET used_count = used_count - 1 WHERE id=$1 AND used_count > 0`, id)
 	return err
 }
 
@@ -1627,4 +1765,55 @@ func (s *Store) InsertChargeWithLink(ctx context.Context, c *Charge, linkID int6
 		nullStrPtr(c.BRCode), nullStrPtr(c.QRCode),
 		nullStrPtr(c.PDFURL), nullStrPtr(c.Barcode), linkID,
 	).Scan(&c.ID, &c.Status, &c.CreatedAt)
+}
+
+// UserOwnsProduct diz se o usuário tem cobrança PAGA que inclua este produto (compra
+// avulsa ou ciclo de assinatura). Portão do entregável — ver handleGetMeProductFile.
+func (s *Store) UserOwnsProduct(ctx context.Context, userID, productID int64) (bool, error) {
+	return s.q.UserOwnsProduct(ctx, paydb.UserOwnsProductParams{UserID: userID, ProductID: &productID})
+}
+
+// ── Cobrança em duas fases ('creating' → 'pending') ──────────────────────────
+
+// ActivateCharge promove a cobrança reservada a 'pending' e grava os dados que só o
+// gateway conhece (id da cobrança, copia-e-cola, QR, PDF, código de barras). O
+// correlation_id pode mudar: a Efí devolve o txid efetivo que volta no webhook.
+// Devolve false se a linha não estava em 'creating'.
+func (s *Store) ActivateCharge(ctx context.Context, id int64, c *Charge) (bool, error) {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE pay_charges
+		SET status = 'pending',
+		    provider_charge_id = NULLIF($2, ''),
+		    correlation_id = $3,
+		    br_code = NULLIF($4, ''),
+		    qr_code = NULLIF($5, ''),
+		    pdf_url = NULLIF($6, ''),
+		    barcode = NULLIF($7, '')
+		WHERE id = $1 AND status = 'creating'`,
+		id, c.ProviderChargeID, c.CorrelationID, c.BRCode, c.QRCode, c.PDFURL, c.Barcode)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// AbandonCharge cancela uma cobrança que nunca chegou a existir no gateway
+// ('creating' -> 'canceled'). Nunca toca em cobrança já ativa.
+func (s *Store) AbandonCharge(ctx context.Context, id int64) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE pay_charges SET status='canceled' WHERE id=$1 AND status='creating'`, id)
+	return err
+}
+
+// CancelStaleCreatingCharges limpa as reservas órfãs: linhas que ficaram em
+// 'creating' (processo morreu entre o INSERT e a resposta da Efí). Roda no mesmo job
+// da expiração. 15 minutos é folgado o bastante para qualquer chamada ao gateway.
+func (s *Store) CancelStaleCreatingCharges(ctx context.Context) (int64, error) {
+	tag, err := s.db.Exec(ctx,
+		`UPDATE pay_charges SET status='canceled'
+		 WHERE status='creating' AND created_at < now() - interval '15 minutes'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

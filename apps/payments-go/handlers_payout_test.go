@@ -30,7 +30,7 @@ func (f *fakeWithdrawalStore) CreateWithdrawal(_ context.Context, w *Withdrawal)
 	return nil
 }
 
-func (f *fakeWithdrawalStore) ListWithdrawals(_ context.Context) ([]Withdrawal, error) {
+func (f *fakeWithdrawalStore) ListWithdrawals(_ context.Context, _ listPage) ([]Withdrawal, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
 	}

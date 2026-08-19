@@ -54,55 +54,97 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		wh = s.store
 	}
+	retry := false
 	for _, ev := range evs {
-		fresh, err := wh.MarkWebhookSeen(r.Context(), ev.ID, ev.Type, ev.Raw)
+		claimed, err := wh.ClaimWebhookEvent(r.Context(), ev.ID, ev.Type, ev.Raw)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar evento")
 			return
 		}
-		if !fresh {
-			continue // já processado
+		if !claimed {
+			continue // já concluído, ou entrega concorrente em voo
 		}
-		switch ev.Type {
-		case "CHARGE_PAID":
-			// Não confiamos no corpo do webhook — confirmamos o status real na Efí
-			// antes de marcar paga (evita forja de pagamento via corpo manipulado).
-			if s.provider == nil {
-				slog.Warn("webhook pix: provider não configurado, ignorando evento", "corr", ev.CorrelationID)
-				continue
+		switch s.applyPixEvent(r.Context(), wh, ev) {
+		case whDone:
+			// Fase 2: só agora o evento é consumido de vez.
+			if err := wh.MarkWebhookDone(r.Context(), ev.ID); err != nil {
+				slog.Error("webhook pix: efeito aplicado mas falhou ao encerrar o evento", "id", ev.ID, "err", err)
 			}
-			cr, qerr := s.provider.GetCharge(r.Context(), ev.CorrelationID)
-			if qerr != nil {
-				slog.Warn("webhook pix: falha ao confirmar status na Efí", "corr", ev.CorrelationID, "err", qerr)
-				continue
-			}
-			if cr.Status != "paid" {
-				slog.Warn("webhook pix: status não confirmado como pago", "corr", ev.CorrelationID, "status", cr.Status)
-				continue
-			}
-			if err := wh.MarkChargePaid(r.Context(), ev.CorrelationID); err != nil {
-				slog.Warn("falha ao marcar paga", "corr", ev.CorrelationID, "err", err)
-			} else if tok, e := wh.PublicTokenByCorrelation(r.Context(), ev.CorrelationID); e == nil {
-				s.invalidateChargeStatus(r.Context(), tok)
-				s.publishChargePaid(r.Context(), tok)
-				s.enqueueNotifyPaid(r.Context(), tok)
-			}
-		case "PAYOUT_RESULT":
-			// Resultado final de um Pix Envio (saque). PayoutStatus já vem mapeado:
-			// "completed" (REALIZADO) | "failed" (NAO_REALIZADO) | "" (não-final, ignora).
-			// Casa o saque por idEnvio/e2eId — NÃO confunde com o pix recebido (CHARGE_PAID).
-			if ev.PayoutStatus == "" {
-				slog.Info("webhook pix: envio em estado não-final, sem ação", "idEnvio", ev.IDEnvio)
-				continue
-			}
-			if err := wh.SetWithdrawalStatus(r.Context(), ev.IDEnvio, ev.E2EID, ev.PayoutStatus); err != nil {
-				slog.Warn("webhook pix: falha ao atualizar status do saque", "idEnvio", ev.IDEnvio, "status", ev.PayoutStatus, "err", err)
-			}
-		default:
-			slog.Info("evento efi ignorado", "type", ev.Type)
+		case whRetry:
+			// Deixa 'pending' de propósito: a reentrega da Efí reprocessa.
+			retry = true
+		case whSkip:
+			// Sem efeito agora, mas pode virar efeito depois (status ainda não final).
+			// Também fica 'pending', porém sem pedir reentrega imediata.
 		}
 	}
+	if retry {
+		// 5xx SEM consumir o evento — é o que faz a Efí reentregar de verdade.
+		writeError(w, http.StatusInternalServerError, "webhook_retry", "Falha ao processar evento; reenvie")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// webhookOutcome diz o que fazer com o evento reivindicado.
+type webhookOutcome int
+
+const (
+	whDone  webhookOutcome = iota // efeito aplicado (ou nada a fazer nunca): encerra o evento
+	whSkip                        // sem efeito agora; deixa 'pending' e responde 200
+	whRetry                       // falha transitória; deixa 'pending' e responde 5xx
+)
+
+// applyPixEvent aplica o efeito de um evento do webhook pix. NÃO encerra o evento —
+// quem faz isso é o chamador, e só quando o retorno é whDone. Esse contrato é o que
+// impede um pagamento de ser descartado por um erro no meio do caminho.
+func (s *Server) applyPixEvent(ctx context.Context, wh pixWebhookStore, ev WebhookEvent) webhookOutcome {
+	switch ev.Type {
+	case "CHARGE_PAID":
+		// Não confiamos no corpo do webhook — confirmamos o status real na Efí
+		// antes de marcar paga (evita forja de pagamento via corpo manipulado).
+		if s.provider == nil {
+			slog.Warn("webhook pix: provider não configurado", "corr", ev.CorrelationID)
+			return whRetry
+		}
+		cr, qerr := s.provider.GetCharge(ctx, ev.CorrelationID)
+		if qerr != nil {
+			slog.Warn("webhook pix: falha ao confirmar status na Efí", "corr", ev.CorrelationID, "err", qerr)
+			return whRetry
+		}
+		if cr.Status != "paid" {
+			slog.Warn("webhook pix: status não confirmado como pago", "corr", ev.CorrelationID, "status", cr.Status)
+			return whSkip
+		}
+		if err := wh.MarkChargePaid(ctx, ev.CorrelationID); err != nil {
+			slog.Warn("falha ao marcar paga", "corr", ev.CorrelationID, "err", err)
+			return whRetry
+		}
+		if tok, e := wh.PublicTokenByCorrelation(ctx, ev.CorrelationID); e == nil {
+			s.invalidateChargeStatus(ctx, tok)
+			s.publishChargePaid(ctx, tok)
+			s.enqueueNotifyPaid(ctx, tok)
+		}
+		return whDone
+
+	case "PAYOUT_RESULT":
+		// Resultado final de um Pix Envio (saque). PayoutStatus já vem mapeado:
+		// "completed" (REALIZADO) | "failed" (NAO_REALIZADO) | "" (não-final).
+		// Casa o saque por idEnvio/e2eId — NÃO confunde com o pix recebido (CHARGE_PAID).
+		if ev.PayoutStatus == "" {
+			slog.Info("webhook pix: envio em estado não-final, sem ação", "idEnvio", ev.IDEnvio)
+			return whSkip
+		}
+		if err := wh.SetWithdrawalStatus(ctx, ev.IDEnvio, ev.E2EID, ev.PayoutStatus); err != nil {
+			slog.Warn("webhook pix: falha ao atualizar status do saque", "idEnvio", ev.IDEnvio, "status", ev.PayoutStatus, "err", err)
+			return whRetry
+		}
+		return whDone
+
+	default:
+		slog.Info("evento efi ignorado", "type", ev.Type)
+		return whDone
+	}
 }
 
 // handleRecWebhook recebe as mudanças de status dos contratos de PIX Automático
@@ -218,27 +260,39 @@ func (s *Server) handleCobrWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_body", "Payload inválido")
 		return
 	}
-	if s.efiCobr == nil || s.store == nil { // guarda defensiva (testes / boleto desabilitado)
+	// Resolve o store: campo cobrWH injetável nos testes; caso contrário usa s.store.
+	wh := s.cobrWH
+	if wh == nil {
+		if s.store == nil { // guarda defensiva (testes sem DB)
+			writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+		}
+		wh = s.store
+	}
+	if s.efiCobr == nil { // boleto/cartão desabilitado
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
-	// Idempotência: usa o token de notificação como ID de evento. Se já foi processado,
-	// responde 200 sem re-disparar efeitos (igual ao webhook PIX — MarkWebhookSeen).
+	// Idempotência em DUAS FASES: reivindica o token de notificação como ID de evento
+	// ('pending') e só o encerra ('done') depois do efeito aplicado. Consumir o ID antes
+	// de buscar a notificação na Efí transformava o 502 abaixo num pedido de retry que
+	// era no-op garantido — o pagamento sumia.
 	// pay_webhook_events.payload é JSONB: o corpo da Efí vem form-urlencoded (não-JSON),
 	// então persistimos um objeto JSON com o token (não o corpo cru, que estoura o jsonb).
 	seenPayload, _ := json.Marshal(map[string]string{"notification": notification})
-	fresh, err := s.store.MarkWebhookSeen(r.Context(), notification, "cobr_notification", seenPayload)
+	claimed, err := wh.ClaimWebhookEvent(r.Context(), notification, "cobr_notification", seenPayload)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao registrar evento")
 		return
 	}
-	if !fresh {
+	if !claimed {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
 	// NÃO confiamos no corpo do webhook — buscamos o status real na Efí pelo token.
 	evs, err := s.efiCobr.GetCobrancaNotification(r.Context(), notification)
 	if err != nil {
+		// Evento continua 'pending': a reentrega da Efí reprocessa de verdade.
 		slog.Warn("webhook cobr: falha ao buscar notificação", "err", err)
 		writeError(w, http.StatusBadGateway, "efi_error", "Falha ao consultar a notificação")
 		return
@@ -248,15 +302,17 @@ func (s *Server) handleCobrWebhook(w http.ResponseWriter, r *http.Request) {
 		case "paid", "settled", "approved":
 			// Validamos o charge_id contra o banco (MarkChargePaidByProviderID retorna false
 			// se o provider_charge_id não existir localmente — evita transições espúrias).
-			marked, err := s.store.MarkChargePaidByProviderID(r.Context(), ev.ChargeID)
+			marked, err := wh.MarkChargePaidByProviderID(r.Context(), ev.ChargeID)
 			if err != nil {
+				// Erro de banco no meio do caminho: NÃO encerra o evento e pede reentrega.
 				slog.Warn("webhook cobr: falha ao marcar paga", "charge_id", ev.ChargeID, "err", err)
-				continue
+				writeError(w, http.StatusInternalServerError, "webhook_retry", "Falha ao processar evento; reenvie")
+				return
 			}
 			if !marked {
 				continue // já estava paga/cancelada, ou charge_id desconhecido
 			}
-			if tok, e := s.store.PublicTokenByProviderID(r.Context(), ev.ChargeID); e == nil && tok != "" {
+			if tok, e := wh.PublicTokenByProviderID(r.Context(), ev.ChargeID); e == nil && tok != "" {
 				s.invalidateChargeStatus(r.Context(), tok)
 				s.publishChargePaid(r.Context(), tok)
 				s.enqueueNotifyPaid(r.Context(), tok)
@@ -274,6 +330,10 @@ func (s *Server) handleCobrWebhook(w http.ResponseWriter, r *http.Request) {
 		default:
 			slog.Info("webhook cobr: status ignorado", "charge_id", ev.ChargeID, "status", ev.Status)
 		}
+	}
+	// Fase 2: todos os efeitos deste token foram aplicados.
+	if err := wh.MarkWebhookDone(r.Context(), notification); err != nil {
+		slog.Error("webhook cobr: efeito aplicado mas falhou ao encerrar o evento", "notification", notification, "err", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
