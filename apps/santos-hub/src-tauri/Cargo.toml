@@ -1,6 +1,6 @@
 [package]
 name = "santos-hub"
-version = "0.1.0"
+version = "0.1.1"
 description = "Santos Hub — central de downloads (instaladores e ferramentas internas) pros PCs da empresa."
 authors = ["Santos Tech"]
 edition = "2021"
