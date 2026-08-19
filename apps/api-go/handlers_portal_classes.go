@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/jackc/pgx/v5"
@@ -32,6 +33,7 @@ func (s *Server) handlePortalCreateClass(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "class_create", "class", class.ID, nil)
 	writeJSON(w, http.StatusCreated, map[string]any{"class": class})
 }
 
@@ -82,6 +84,7 @@ func (s *Server) handlePortalUpdateClass(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "class_update", "class", class.ID, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"class": class})
 }
 
@@ -95,6 +98,7 @@ func (s *Server) handlePortalDeleteClass(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "class_delete", "class", fmt.Sprint(id), nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -140,6 +144,7 @@ func (s *Server) handlePortalAddClassStudents(w http.ResponseWriter, r *http.Req
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "class_students_add", "class", fmt.Sprint(id), map[string]any{"requested": len(in.StudentIDs), "added": added, "studentIds": in.StudentIDs})
 	writeJSON(w, http.StatusOK, map[string]any{"added": added})
 }
 
@@ -158,6 +163,7 @@ func (s *Server) handlePortalRemoveClassStudent(w http.ResponseWriter, r *http.R
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "class_student_remove", "class", fmt.Sprint(classID), map[string]any{"studentId": fmt.Sprint(studentID)})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -207,5 +213,6 @@ func (s *Server) handlePortalIniciarFases(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "class_iniciar_fases", "class", fmt.Sprint(id), map[string]any{"phaseId": phase.ID, "students": count})
 	writeJSON(w, http.StatusOK, map[string]any{"phase": phase, "students": count})
 }

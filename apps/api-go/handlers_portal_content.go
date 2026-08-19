@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/jackc/pgx/v5"
@@ -67,6 +68,7 @@ func (s *Server) handlePortalCreateExercise(w http.ResponseWriter, r *http.Reque
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "exercise_create", "exercise", ex.ID, map[string]any{"phaseId": fmt.Sprint(phaseID)})
 	writeJSON(w, http.StatusCreated, map[string]any{"exercise": ex})
 }
 
@@ -90,6 +92,7 @@ func (s *Server) handlePortalUpdateExercise(w http.ResponseWriter, r *http.Reque
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "exercise_update", "exercise", ex.ID, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"exercise": ex})
 }
 
@@ -103,6 +106,7 @@ func (s *Server) handlePortalDeleteExercise(w http.ResponseWriter, r *http.Reque
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "exercise_delete", "exercise", fmt.Sprint(id), nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -125,6 +129,7 @@ func (s *Server) handlePortalReorderExercise(w http.ResponseWriter, r *http.Requ
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "exercise_reorder", "exercise", fmt.Sprint(id), map[string]any{"direction": in.Direction})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -173,6 +178,7 @@ func (s *Server) handlePortalCreateContainer(w http.ResponseWriter, r *http.Requ
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "container_create", "container", "", map[string]any{"name": in.Name, "phaseId": fmt.Sprint(in.PhaseID), "created": count})
 	writeJSON(w, http.StatusCreated, map[string]any{"created": count})
 }
 
@@ -191,6 +197,7 @@ func (s *Server) handlePortalAddContainerExercises(w http.ResponseWriter, r *htt
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "container_exercises_add", "container", "", map[string]any{"name": in.Name, "phaseId": fmt.Sprint(in.PhaseID), "requested": len(in.ExerciseIDs), "added": count})
 	writeJSON(w, http.StatusOK, map[string]any{"added": count})
 }
 
@@ -209,6 +216,7 @@ func (s *Server) handlePortalDeleteContainerGroup(w http.ResponseWriter, r *http
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "container_group_delete", "container", "", map[string]any{"name": in.Name, "phaseId": fmt.Sprint(in.PhaseID), "deleted": deleted})
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 }
 
@@ -222,6 +230,7 @@ func (s *Server) handlePortalDeleteContainerTask(w http.ResponseWriter, r *http.
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "container_task_delete", "container", fmt.Sprint(id), nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -280,6 +289,7 @@ func (s *Server) handlePortalCreateMaterial(w http.ResponseWriter, r *http.Reque
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "material_create", "material", m.ID, map[string]any{"courseId": fmt.Sprint(courseID)})
 	writeJSON(w, http.StatusCreated, map[string]any{"material": m})
 }
 
@@ -299,6 +309,7 @@ func (s *Server) handlePortalUpdateMaterial(w http.ResponseWriter, r *http.Reque
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "material_update", "material", m.ID, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"material": m})
 }
 
@@ -312,6 +323,7 @@ func (s *Server) handlePortalDeleteMaterial(w http.ResponseWriter, r *http.Reque
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "material_delete", "material", fmt.Sprint(id), nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -360,6 +372,7 @@ func (s *Server) handlePortalCreateVideo(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "video_create", "video", v.ID, nil)
 	writeJSON(w, http.StatusCreated, map[string]any{"video": v})
 }
 
@@ -379,6 +392,7 @@ func (s *Server) handlePortalUpdateVideo(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "video_update", "video", v.ID, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"video": v})
 }
 
@@ -392,5 +406,6 @@ func (s *Server) handlePortalDeleteVideo(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "video_delete", "video", fmt.Sprint(id), nil)
 	w.WriteHeader(http.StatusNoContent)
 }

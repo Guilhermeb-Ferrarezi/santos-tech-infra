@@ -1,6 +1,9 @@
 package main
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+)
 
 func (s *Server) handlePortalListClassRooms(w http.ResponseWriter, r *http.Request) {
 	classID, err := portalPathID(r, "classId")
@@ -44,6 +47,7 @@ func (s *Server) handlePortalCreateClassRoom(w http.ResponseWriter, r *http.Requ
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "room_create", "class_room", room.ID, map[string]any{"classId": fmt.Sprint(classID)})
 	writeJSON(w, http.StatusCreated, map[string]any{"room": room})
 }
 
@@ -67,6 +71,7 @@ func (s *Server) handlePortalUpdateClassRoom(w http.ResponseWriter, r *http.Requ
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "room_update", "class_room", room.ID, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"room": room})
 }
 
@@ -94,6 +99,7 @@ func (s *Server) handlePortalUpdateClassRoomStatus(w http.ResponseWriter, r *htt
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "room_status_update", "class_room", room.ID, map[string]any{"isAuthorized": *in.IsAuthorized, "status": room.Status})
 	writeJSON(w, http.StatusOK, map[string]any{"room": room})
 }
 
@@ -107,5 +113,6 @@ func (s *Server) handlePortalDeleteClassRoom(w http.ResponseWriter, r *http.Requ
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "room_delete", "class_room", fmt.Sprint(roomID), nil)
 	w.WriteHeader(http.StatusNoContent)
 }

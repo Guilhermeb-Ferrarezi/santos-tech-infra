@@ -58,17 +58,21 @@ type portalAnswerFilter struct {
 	StudentID int64  // 0 = todos
 }
 
-// portalAnswerPatch — correção/edição parcial de uma resposta.
+// portalAnswerPatch — CORREÇÃO de uma resposta. Só is_correct e feedback: o
+// corretor avalia, não edita. answerText/selectedOption ficaram de fora de
+// propósito — deixar o corretor reescrever a submissão do aluno (e ainda
+// marcá-la como correta, disparando crédito de pontos) apaga a prova do que o
+// aluno de fato respondeu. Como o decoder roda com DisallowUnknownFields, um
+// cliente antigo que ainda mande esses campos recebe 400 em vez de um patch
+// silenciosamente ignorado.
 type portalAnswerPatch struct {
-	AnswerText     *string `json:"answerText"`
-	SelectedOption *int64  `json:"selectedOption"`
-	IsCorrect      *bool   `json:"isCorrect"`
-	Feedback       *string `json:"feedback"`
+	IsCorrect *bool   `json:"isCorrect"`
+	Feedback  *string `json:"feedback"`
 }
 
 func (p *portalAnswerPatch) validate() error {
-	if p.AnswerText == nil && p.SelectedOption == nil && p.IsCorrect == nil && p.Feedback == nil {
-		return validationErr("envie ao menos um campo para atualizar")
+	if p.IsCorrect == nil && p.Feedback == nil {
+		return validationErr("envie ao menos um campo para atualizar (isCorrect e/ou feedback)")
 	}
 	return nil
 }

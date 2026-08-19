@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -100,7 +101,7 @@ func (s *Server) handlePortalUpdateAnswer(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
-	answer, err := s.portalUpdateAnswer(r.Context(), id, patch)
+	answer, prev, err := s.portalUpdateAnswer(r.Context(), id, patch)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeErr(w, notFoundErr("Resposta"))
 		return
@@ -109,6 +110,9 @@ func (s *Server) handlePortalUpdateAnswer(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "answer_correct", "answer", fmt.Sprint(id), map[string]any{
+		"previousIsCorrect": prev, "isCorrect": patch.IsCorrect, "feedbackChanged": patch.Feedback != nil,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"answer": answer})
 }
 
@@ -126,11 +130,16 @@ func (s *Server) handlePortalBatchUpdateAnswers(w http.ResponseWriter, r *http.R
 		writeErr(w, err)
 		return
 	}
-	updated, notFound, err := s.portalBatchUpdateAnswers(r.Context(), in.AnswerIDs, in.Patch)
+	updated, notFound, prev, err := s.portalBatchUpdateAnswers(r.Context(), in.AnswerIDs, in.Patch)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "answer_correct_batch", "answer", "", map[string]any{
+		"updatedCount": len(updated), "notFoundCount": len(notFound),
+		"isCorrect": in.Patch.IsCorrect, "feedbackChanged": in.Patch.Feedback != nil,
+		"previousIsCorrect": portalPrevSample(prev),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"updatedCount": len(updated), "updatedIds": updated,
 		"notFoundCount": len(notFound), "notFoundIds": notFound,
@@ -173,4 +182,24 @@ func (s *Server) handlePortalClassProgress(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// portalPrevPreviousSampleMax limita quantos valores anteriores de is_correct
+// vão para o metadata do log — a coluna "Message" é truncada em 8000 chars e um
+// lote pode ter 500 respostas. Acima do teto, a auditoria guarda a amostra e a
+// contagem total (updatedCount) continua exata.
+const portalPrevPreviousSampleMax = 50
+
+func portalPrevSample(prev map[string]*bool) map[string]*bool {
+	if len(prev) <= portalPrevPreviousSampleMax {
+		return prev
+	}
+	out := make(map[string]*bool, portalPrevPreviousSampleMax)
+	for k, v := range prev {
+		if len(out) == portalPrevPreviousSampleMax {
+			break
+		}
+		out[k] = v
+	}
+	return out
 }

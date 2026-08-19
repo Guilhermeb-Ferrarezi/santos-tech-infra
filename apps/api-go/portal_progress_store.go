@@ -112,60 +112,74 @@ func (s *Server) portalGetAnswer(ctx context.Context, id int64) (*portalAnswerDT
 	return scanAnswer(s.portalDB.QueryRow(ctx, `SELECT `+portalAnswerSelect+portalAnswerFrom+` WHERE a.id = $1`, id))
 }
 
-func (s *Server) portalUpdateAnswer(ctx context.Context, id int64, patch portalAnswerPatch) (*portalAnswerDTO, error) {
-	tag, err := s.portalDB.Exec(ctx, `UPDATE answer SET
-		answer_text = COALESCE($2, answer_text),
-		selected_option = COALESCE($3, selected_option),
-		is_correct = COALESCE($4, is_correct),
-		feedback = COALESCE($5, feedback)
-		WHERE id = $1`, id, patch.AnswerText, patch.SelectedOption, patch.IsCorrect, patch.Feedback)
-	if err != nil {
-		return nil, portalDBErr(err)
+// portalUpdateAnswer aplica a correção e devolve, junto da resposta atualizada,
+// o valor ANTERIOR de is_correct — que o handler grava na trilha de auditoria.
+// O self-join com `answer old` lê a linha antes do UPDATE, num round-trip só.
+func (s *Server) portalUpdateAnswer(ctx context.Context, id int64, patch portalAnswerPatch) (*portalAnswerDTO, *bool, error) {
+	var prev *bool
+	err := s.portalDB.QueryRow(ctx, `UPDATE answer a SET
+		is_correct = COALESCE($2, a.is_correct),
+		feedback = COALESCE($3, a.feedback)
+		FROM answer old
+		WHERE old.id = a.id AND a.id = $1
+		RETURNING old.is_correct`, id, patch.IsCorrect, patch.Feedback).Scan(&prev)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, notFoundErr("Resposta")
 	}
-	if tag.RowsAffected() == 0 {
-		return nil, notFoundErr("Resposta")
+	if err != nil {
+		return nil, nil, portalDBErr(err)
 	}
 	if patch.IsCorrect != nil {
 		s.grantPointsForAnswers(ctx, []int64{id})
 	}
-	return s.portalGetAnswer(ctx, id)
+	dto, err := s.portalGetAnswer(ctx, id)
+	return dto, prev, err
 }
 
-// portalBatchUpdateAnswers aplica o mesmo patch a várias respostas numa
-// transação; devolve os ids atualizados e os não encontrados.
-func (s *Server) portalBatchUpdateAnswers(ctx context.Context, ids []int64, patch portalAnswerPatch) (updated, notFound []string, err error) {
-	tx, err := s.portalDB.Begin(ctx)
+// portalBatchUpdateAnswers aplica a mesma correção a várias respostas num ÚNICO
+// UPDATE (`id = ANY($1)`) — antes era um round-trip por id, até 500 por
+// requisição dentro de uma transação. Devolve os ids atualizados, os não
+// encontrados e o valor anterior de is_correct por id (para a auditoria).
+func (s *Server) portalBatchUpdateAnswers(ctx context.Context, ids []int64, patch portalAnswerPatch) (updated, notFound []string, prev map[string]*bool, err error) {
+	updated, notFound, prev = []string{}, []string{}, map[string]*bool{}
+	if len(ids) == 0 {
+		return updated, notFound, prev, nil
+	}
+	rows, err := s.portalDB.Query(ctx, `UPDATE answer a SET
+		is_correct = COALESCE($2, a.is_correct),
+		feedback = COALESCE($3, a.feedback)
+		FROM answer old
+		WHERE old.id = a.id AND a.id = ANY($1)
+		RETURNING a.id, old.is_correct`, ids, patch.IsCorrect, patch.Feedback)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, portalDBErr(err)
 	}
-	defer tx.Rollback(ctx)
-	updated, notFound = []string{}, []string{}
+	defer rows.Close()
 	updatedIDs := []int64{}
-	for _, id := range ids {
-		var got int64
-		err := tx.QueryRow(ctx, `UPDATE answer SET
-			answer_text = COALESCE($2, answer_text),
-			selected_option = COALESCE($3, selected_option),
-			is_correct = COALESCE($4, is_correct),
-			feedback = COALESCE($5, feedback)
-			WHERE id = $1 RETURNING id`, id, patch.AnswerText, patch.SelectedOption, patch.IsCorrect, patch.Feedback).Scan(&got)
-		if errors.Is(err, pgx.ErrNoRows) {
-			notFound = append(notFound, fmt.Sprint(id))
-			continue
+	seen := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		var before *bool
+		if err := rows.Scan(&id, &before); err != nil {
+			return nil, nil, nil, err
 		}
-		if err != nil {
-			return nil, nil, portalDBErr(err)
-		}
-		updated = append(updated, fmt.Sprint(got))
-		updatedIDs = append(updatedIDs, got)
+		seen[id] = true
+		updatedIDs = append(updatedIDs, id)
+		updated = append(updated, fmt.Sprint(id))
+		prev[fmt.Sprint(id)] = before
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, nil, err
+	if err := rows.Err(); err != nil {
+		return nil, nil, nil, portalDBErr(err)
+	}
+	for _, id := range ids {
+		if !seen[id] {
+			notFound = append(notFound, fmt.Sprint(id))
+		}
 	}
 	if patch.IsCorrect != nil {
 		s.grantPointsForAnswers(ctx, updatedIDs)
 	}
-	return updated, notFound, nil
+	return updated, notFound, prev, nil
 }
 
 // ── Visões "quem respondeu" ──────────────────────────────────────────────────
