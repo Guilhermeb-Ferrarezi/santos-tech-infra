@@ -214,7 +214,7 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "refresh_token é obrigatório"))
 		return
 	}
-	if _, _, err := verifyToken(refresh, s.cfg.JWTRefreshSecret); err != nil {
+	if _, _, err := verifyToken(refresh, s.cfg.JWTRefreshSecret, tokenTypeRefresh); err != nil {
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_GRANT", "refresh_token inválido"))
 		return
 	}

@@ -279,7 +279,7 @@ func (s *Server) resolveToken(ctx context.Context, token string) (int64, *User, 
 		}
 		return uid, nil, nil
 	}
-	uid, _, err := verifyToken(token, s.cfg.JWTSecret)
+	uid, _, err := verifyToken(token, s.cfg.JWTSecret, tokenTypeAccess)
 	if err != nil {
 		return 0, nil, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
 	}

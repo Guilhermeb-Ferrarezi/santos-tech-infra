@@ -48,7 +48,7 @@ func TestGenerateOAuthTokensMarcaAudEScope(t *testing.T) {
 		t.Errorf("aud do refresh = %q", got)
 	}
 	// Retrocompatível: continua sendo um JWT HS256 válido com o mesmo sub.
-	uid, name, err := verifyToken(access, "s-access")
+	uid, name, err := verifyToken(access, "s-access", tokenTypeAccess)
 	if err != nil || uid != 42 || name != "Alice" {
 		t.Errorf("verifyToken(access) = %d, %q, %v", uid, name, err)
 	}

@@ -78,7 +78,7 @@ func generateOAuthTokens(accessSecret, refreshSecret string, userID int64, email
 	now := time.Now()
 	sub := strconv.FormatInt(userID, 10)
 
-	accessClaims := jwt.MapClaims{"sub": sub, "iat": now.Unix(), "exp": now.Add(accessTTL).Unix()}
+	accessClaims := jwt.MapClaims{"sub": sub, "iat": now.Unix(), "exp": now.Add(accessTTL).Unix(), "typ": tokenTypeAccess}
 	if email != "" {
 		accessClaims["email"] = email
 	}
@@ -94,7 +94,7 @@ func generateOAuthTokens(accessSecret, refreshSecret string, userID int64, email
 		return
 	}
 
-	refreshClaims := jwt.MapClaims{"sub": sub, "iat": now.Unix(), "exp": now.Add(refreshTTL).Unix()}
+	refreshClaims := jwt.MapClaims{"sub": sub, "iat": now.Unix(), "exp": now.Add(refreshTTL).Unix(), "typ": tokenTypeRefresh}
 	if clientID != "" {
 		refreshClaims["aud"] = clientID
 		refreshClaims["scope"] = oauthTokenScope
