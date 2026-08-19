@@ -19,17 +19,21 @@ interface HeartbeatResponse {
   name: string | null;
   unpairRequested: boolean;
   message?: { id: string; text: string };
+  pairToken?: string;
 }
 
 // Identifica este PC pro admin (device_uuid gerado uma vez, persistido em
 // disco) e manda heartbeat periódico — devolve o nome atribuído pelo admin
 // (ver hour_lab_devices no backend) e entrega os comandos pendentes:
-// despairar remoto e aviso na tela (gravado no store como toastMessage; quem
+// despairar remoto, aviso na tela (gravado no store como toastMessage; quem
 // exibe é a janela toast própria, ver src/toast.tsx e ensure_toast_window em
-// lib.rs — funciona mesmo com a janela principal escondida na bandeja). Roda
-// só na janela principal (repetir no overlay seria redundante).
-export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () => void) {
+// lib.rs — funciona mesmo com a janela principal escondida na bandeja) e
+// pairToken (pareamento via QR — admin escaneia o QR desta tela, escolhe o
+// cliente em /admin/horas/parear/:deviceUuid, e o token chega aqui sozinho).
+// Roda só na janela principal (repetir no overlay seria redundante).
+export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () => void, onPaired: (token: string) => void) {
   const [deviceName, setDeviceName] = useState<string | null>(null);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
   const tokenRef = useRef(token);
   tokenRef.current = token;
 
@@ -43,6 +47,7 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
         deviceId = crypto.randomUUID();
         await store.set(DEVICE_ID_KEY, deviceId);
       }
+      if (!cancelled) setDeviceId(deviceId);
       const appVersion = await getVersion();
 
       let res: Response;
@@ -60,6 +65,7 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
 
       setDeviceName(data.name);
       if (data.unpairRequested) onUnpairRequested();
+      if (data.pairToken) onPaired(data.pairToken);
 
       if (data.message) {
         const lastShownId = await store.get<string>(LAST_MESSAGE_ID_KEY);
@@ -76,7 +82,7 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
       cancelled = true;
       clearInterval(id);
     };
-  }, [onUnpairRequested]);
+  }, [onUnpairRequested, onPaired]);
 
-  return { deviceName };
+  return { deviceName, deviceId };
 }

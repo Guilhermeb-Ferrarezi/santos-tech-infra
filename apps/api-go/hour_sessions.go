@@ -145,42 +145,49 @@ func scanHourSession(row pgx.Row) (*HourSession, error) {
 	return &h, nil
 }
 
+// shortCodeTTL é a validade do código curto de pareamento (6 dígitos) — janela
+// deliberadamente curta pra limitar o espaço de força-bruta (1M combinações).
+const shortCodeTTL = 15 * time.Minute
+
 // startHourSession cria a sessão + evento "start" numa transação e devolve o
-// token em texto puro (só existe neste retorno — o banco guarda o hash).
-func (s *Server) startHourSession(ctx context.Context, clientID string, createdBy int64) (*HourSession, string, error) {
+// token em texto puro e o código curto (só existem neste retorno — o banco
+// guarda o hash do token e o próprio código, mas o código é zerado no
+// primeiro pareamento, ver pairHourSessionByCode).
+func (s *Server) startHourSession(ctx context.Context, clientID string, createdBy int64) (*HourSession, string, string, error) {
 	token := randomToken(32)
 	tokenHash := sha256Hex(token)
+	shortCode := randomDigits(6)
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	defer tx.Rollback(ctx)
 	var sessionID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO hour_sessions (client_id, status, token_hash, created_by)
-		VALUES ($1::uuid, 'active', $2, $3)
+		INSERT INTO hour_sessions (client_id, status, token_hash, short_code, short_code_expires_at, created_by)
+		VALUES ($1::uuid, 'active', $2, $3, now() + make_interval(mins => $4), $5)
 		RETURNING id::text`,
-		clientID, tokenHash, createdBy).Scan(&sessionID)
+		clientID, tokenHash, shortCode, int(shortCodeTTL.Minutes()), createdBy).Scan(&sessionID)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO hour_session_events (session_id, event_type, actor_user_id)
 		VALUES ($1::uuid, 'start', $2)`,
 		sessionID, createdBy); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	h, err := scanHourSession(tx.QueryRow(ctx, `
 		SELECT `+hourSessionCols+` FROM hour_sessions s JOIN hour_clients c ON c.id = s.client_id
 		WHERE s.id = $1::uuid`, sessionID))
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	h.ElapsedSeconds = 0
-	return h, token, nil
+	return h, token, shortCode, nil
 }
 
 // reissueHourSessionToken gera um novo token pro link público de uma sessão
@@ -199,6 +206,29 @@ func (s *Server) reissueHourSessionToken(ctx context.Context, id string) (string
 	}
 	if tag.RowsAffected() == 0 {
 		return "", errHourSessionNotFound
+	}
+	return token, nil
+}
+
+var errHourSessionCodeInvalid = appErr(http.StatusNotFound, "HOUR_SESSION_CODE_INVALID", "Código inválido ou expirado")
+
+// pairHourSessionByCode troca um código curto ainda válido por um token novo
+// — reemite (como reissueHourSessionToken) em vez de devolver o token
+// original, que nunca fica guardado em texto puro depois da criação. O
+// código é zerado na mesma UPDATE: uso único, mesmo se ainda não tivesse
+// expirado.
+func (s *Server) pairHourSessionByCode(ctx context.Context, code string) (string, error) {
+	token := randomToken(32)
+	tokenHash := sha256Hex(token)
+	tag, err := s.db.Exec(ctx, `
+		UPDATE hour_sessions SET token_hash = $2, short_code = NULL, short_code_expires_at = NULL, updated_at = now()
+		WHERE short_code = $1 AND status != 'ended' AND short_code_expires_at > now()`,
+		code, tokenHash)
+	if err != nil {
+		return "", err
+	}
+	if tag.RowsAffected() == 0 {
+		return "", errHourSessionCodeInvalid
 	}
 	return token, nil
 }

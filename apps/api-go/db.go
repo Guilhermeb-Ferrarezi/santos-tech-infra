@@ -512,6 +512,14 @@ CREATE TABLE IF NOT EXISTS hour_sessions (
 CREATE INDEX IF NOT EXISTS idx_hour_sessions_client ON hour_sessions(client_id);
 CREATE INDEX IF NOT EXISTS idx_hour_sessions_status ON hour_sessions(status) WHERE status != 'ended';
 
+-- Código curto (6 dígitos) como alternativa a colar o link de 64 chars no PC
+-- do laboratório: mesmo token por baixo, só um jeito mais fácil de digitar.
+-- Uso único — zerado no primeiro pareamento bem-sucedido (ver
+-- pairHourSessionByCode) — e com validade curta, pra limitar a janela de
+-- força-bruta sobre um espaço tão pequeno (1M combinações).
+ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code TEXT UNIQUE;
+ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code_expires_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS hour_session_events (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id    UUID NOT NULL REFERENCES hour_sessions(id) ON DELETE CASCADE,
@@ -543,6 +551,14 @@ CREATE TABLE IF NOT EXISTS hour_lab_devices (
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_last_seen ON hour_lab_devices(last_seen_at);
+
+-- pending_pair_token: pareamento via QR (admin escaneia com o celular e
+-- escolhe o cliente em /admin/horas/parear/:deviceId). Token em texto puro
+-- (o app precisa dele cru pra completar o pareamento sozinho) entregue uma
+-- única vez no heartbeat seguinte e zerado na mesma query (ver
+-- upsertLabDeviceHeartbeat) — mesma janela de exposição de digitar o token
+-- na mão, só que automático.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS pending_pair_token TEXT;
 
 -- Arquivos (Google Drive): o conteúdo real mora no Drive; aqui só guardamos
 -- metadados de pasta e a ACL de quem enxerga/envia arquivo em cada uma — por

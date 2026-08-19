@@ -96,7 +96,7 @@ func (s *Server) handleListHourSessions(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 }
 
-// POST /hour-sessions — {clientId} -> {session, token, publicUrl}
+// POST /hour-sessions — {clientId} -> {session, token, publicUrl, shortCode}
 func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	var in struct {
@@ -115,7 +115,7 @@ func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, errHourClientNotFound)
 		return
 	}
-	h, token, err := s.startHourSession(r.Context(), in.ClientID, userIDFrom(r))
+	h, token, shortCode, err := s.startHourSession(r.Context(), in.ClientID, userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -124,7 +124,50 @@ func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) 
 		"session":   h,
 		"token":     token,
 		"publicUrl": s.cfg.DashboardWebOrigin + "/sessao/" + token,
+		"shortCode": shortCode,
 	})
+}
+
+// POST /public/hour-sessions/pair-by-code — {code} -> {token, publicUrl}
+// Trocado por um token novo (reemitido) e o código fica inutilizado — ver
+// pairHourSessionByCode. Sem authGuard: o código curto É a credencial (posse
+// = acesso), mesmo espírito do token na URL da rota pública de leitura.
+func (s *Server) handlePairHourSessionByCode(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var in struct {
+		Code string `json:"code"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	in.Code = strings.TrimSpace(in.Code)
+	if !isValidHourSessionShortCode(in.Code) {
+		writeErr(w, errHourSessionCodeInvalid)
+		return
+	}
+	token, err := s.pairHourSessionByCode(r.Context(), in.Code)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"token":     token,
+		"publicUrl": s.cfg.DashboardWebOrigin + "/sessao/" + token,
+	})
+}
+
+// isValidHourSessionShortCode reporta se s é a saída exata de randomDigits(6).
+func isValidHourSessionShortCode(s string) bool {
+	if len(s) != 6 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // POST /hour-sessions/{id}/link — gera (ou reemite) o link público da sessão.

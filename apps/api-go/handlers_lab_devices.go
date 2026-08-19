@@ -52,6 +52,9 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 	if res.MessageID != nil {
 		resp["message"] = map[string]any{"id": *res.MessageID, "text": *res.MessageText}
 	}
+	if res.PairToken != nil {
+		resp["pairToken"] = *res.PairToken
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -93,6 +96,37 @@ func (s *Server) handleRenameLabDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"device": d})
+}
+
+// POST /hour-lab-devices/pair — {deviceUuid, clientId} — pareamento via QR:
+// PC mostra um QR com o próprio device_uuid, admin escaneia com o celular
+// (já autenticado), confirma o cliente aqui, e o PC recebe o token sozinho
+// no heartbeat seguinte (até ~30s), sem digitar nada.
+func (s *Server) handlePairLabDevice(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var in struct {
+		DeviceUUID string `json:"deviceUuid"`
+		ClientID   string `json:"clientId"`
+	}
+	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.DeviceUUID) || !uuidRe.MatchString(in.ClientID) {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "deviceUuid/clientId inválido"))
+		return
+	}
+	client, err := s.getHourClient(r.Context(), in.ClientID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if client == nil {
+		writeErr(w, errHourClientNotFound)
+		return
+	}
+	h, err := s.pairLabDeviceViaQR(r.Context(), in.DeviceUUID, in.ClientID, userIDFrom(r))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": h})
 }
 
 // POST /hour-lab-devices/{id}/unpair — o PC volta sozinho pra tela de colar

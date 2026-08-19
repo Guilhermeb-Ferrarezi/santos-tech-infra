@@ -365,6 +365,10 @@ func (s *Server) registerHourSessionRoutes(mux *http.ServeMux) {
 	// pedido de pausa é mais restrito pra não virar canal de spam pro admin.
 	mux.HandleFunc("GET /public/hour-sessions/{token}", s.rateLimit(120, min, s.handleGetPublicHourSession))
 	mux.HandleFunc("POST /public/hour-sessions/{token}/request-pause", s.rateLimit(5, min, s.handleRequestHourSessionPause))
+	// Código curto (6 dígitos) como alternativa a colar o link no PC — rate
+	// limit apertado pra não virar canal de força-bruta (código expira em 15min
+	// e é de uso único, mas ainda assim vale limitar tentativas por IP).
+	mux.HandleFunc("POST /public/hour-sessions/pair-by-code", s.rateLimit(15, min, s.handlePairHourSessionByCode))
 }
 
 // registerLabDeviceRoutes: identificação/controle dos PCs do laboratório
@@ -373,6 +377,7 @@ func (s *Server) registerHourSessionRoutes(mux *http.ServeMux) {
 func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	const min = time.Minute
 	mux.HandleFunc("GET /hour-lab-devices", s.adminGuard(s.handleListLabDevices))
+	mux.HandleFunc("POST /hour-lab-devices/pair", s.rateLimit(30, min, s.adminGuard(s.handlePairLabDevice)))
 	mux.HandleFunc("PATCH /hour-lab-devices/{id}", s.rateLimit(30, min, s.adminGuard(s.handleRenameLabDevice)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/unpair", s.rateLimit(30, min, s.adminGuard(s.handleUnpairLabDevice)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/message", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceMessage)))

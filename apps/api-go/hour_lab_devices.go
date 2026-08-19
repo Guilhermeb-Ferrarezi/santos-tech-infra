@@ -35,14 +35,16 @@ type LabDeviceHeartbeatResult struct {
 	UnpairRequested bool
 	MessageID       *string
 	MessageText     *string
+	PairToken       *string
 }
 
 var errLabDeviceNotFound = appErr(http.StatusNotFound, "LAB_DEVICE_NOT_FOUND", "Dispositivo não encontrado")
 
 // upsertLabDeviceHeartbeat grava/atualiza o dispositivo e devolve, na mesma
-// query, os comandos pendentes ANTES de zerar unpair_requested — assim o
-// comando é entregue exatamente uma vez (a query seguinte já não o vê mais).
-// message_id/text não são zerados: o app deduplica localmente pelo id.
+// query, os comandos pendentes ANTES de zerar unpair_requested/pending_pair_token
+// — assim cada comando é entregue exatamente uma vez (a query seguinte já não
+// os vê mais). message_id/text não são zerados: o app deduplica localmente
+// pelo id.
 func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, ip, appVersion string, sessionID *string) (*LabDeviceHeartbeatResult, error) {
 	var res LabDeviceHeartbeatResult
 	err := s.db.QueryRow(ctx, `
@@ -51,14 +53,14 @@ func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, ip, a
 			VALUES ($1, now(), $2, $3, $4::uuid)
 			ON CONFLICT (device_uuid) DO UPDATE SET
 				last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid
-			RETURNING name, unpair_requested, message_id::text, message_text
+			RETURNING name, unpair_requested, message_id::text, message_text, pending_pair_token
 		), cleared AS (
-			UPDATE hour_lab_devices SET unpair_requested = false
-			WHERE device_uuid = $1 AND unpair_requested = true
+			UPDATE hour_lab_devices SET unpair_requested = false, pending_pair_token = NULL
+			WHERE device_uuid = $1 AND (unpair_requested = true OR pending_pair_token IS NOT NULL)
 		)
-		SELECT name, unpair_requested, message_id, message_text FROM upserted`,
+		SELECT name, unpair_requested, message_id, message_text, pending_pair_token FROM upserted`,
 		deviceUUID, ip, appVersion, sessionID).
-		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText)
+		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken)
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +136,35 @@ func (s *Server) requestLabDeviceUnpair(ctx context.Context, id string) error {
 		return errLabDeviceNotFound
 	}
 	return nil
+}
+
+// pairLabDeviceViaQR inicia uma sessão nova pro cliente escolhido (mesma
+// lógica de startHourSession) e deixa o token pronto pra entrega no próximo
+// heartbeat do PC — fluxo do QR: PC mostra um QR com o próprio device_uuid,
+// admin escaneia com o celular (já logado) em /admin/horas/parear/:deviceUuid,
+// escolhe o cliente, e o PC recebe o token sozinho, sem digitar nada.
+func (s *Server) pairLabDeviceViaQR(ctx context.Context, deviceUUID, clientID string, createdBy int64) (*HourSession, error) {
+	var exists bool
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM hour_lab_devices WHERE device_uuid = $1)`, deviceUUID).
+		Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, errLabDeviceNotFound
+	}
+	// Checagem de existência acima, não uma transação com o INSERT/UPDATE
+	// abaixo: janela de corrida (o PC some entre as duas queries) é
+	// improvável e inofensiva — na pior hipótese a sessão fica sem o token
+	// entregue, e o admin repete o pareamento.
+	h, token, _, err := s.startHourSession(ctx, clientID, createdBy)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE hour_lab_devices SET pending_pair_token = $2 WHERE device_uuid = $1`,
+		deviceUUID, token); err != nil {
+		return nil, err
+	}
+	return h, nil
 }
 
 // sendLabDeviceMessage grava um aviso pro PC mostrar no próximo heartbeat.

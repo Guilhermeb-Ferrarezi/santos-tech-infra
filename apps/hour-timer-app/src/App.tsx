@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Clock, HandPalm, ArrowCounterClockwise } from "@phosphor-icons/react";
+import { QRCodeSVG } from "qrcode.react";
 import { useStoredToken } from "./lib/useStoredToken";
 import { useTickingSeconds } from "./lib/useTickingSeconds";
 import { useLowBalanceNotifier } from "./lib/useLowBalanceNotifier";
@@ -7,6 +8,7 @@ import { useDeviceHeartbeat } from "./lib/useDeviceHeartbeat";
 import { Titlebar } from "./components/Titlebar";
 
 const API_ORIGIN = "https://api.santos-tech.com";
+const DASHBOARD_ORIGIN = "https://santos-tech.com/dashboard";
 
 interface PublicHourSession {
   clientName: string;
@@ -39,15 +41,42 @@ const statusText: Record<PublicHourSession["status"], string> = {
   ended: "Sessão encerrada",
 };
 
-function PairScreen({ onConfirm }: { onConfirm: (token: string) => void }) {
+function PairScreen({ deviceId, onConfirm }: { deviceId: string | null; onConfirm: (token: string) => void }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
+  const [pairing, setPairing] = useState(false);
 
-  function onSubmit(e: React.FormEvent) {
+  // Detecta pelo formato do que foi digitado: 6 dígitos = código curto (troca
+  // por um token novo no backend, ver POST /public/hour-sessions/pair-by-code);
+  // qualquer outra coisa tenta como link/token cru (sem chamada de rede).
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const token = extractToken(value);
+    const trimmed = value.trim();
+    if (/^\d{6}$/.test(trimmed)) {
+      setPairing(true);
+      setError("");
+      try {
+        const res = await fetch(`${API_ORIGIN}/public/hour-sessions/pair-by-code`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: trimmed }),
+        });
+        if (!res.ok) {
+          setError("Código inválido ou expirado — peça um código novo no painel admin.");
+          return;
+        }
+        const data: { token: string } = await res.json();
+        onConfirm(data.token);
+      } catch {
+        setError("Falha ao conectar — confira a internet e tente de novo.");
+      } finally {
+        setPairing(false);
+      }
+      return;
+    }
+    const token = extractToken(trimmed);
     if (!token) {
-      setError("Link ou token inválido — cole o link que aparece no botão Abrir/Copiar do painel admin.");
+      setError("Link, token ou código inválido — cole o link (ou digite o código de 6 dígitos) do painel admin.");
       return;
     }
     setError("");
@@ -55,27 +84,46 @@ function PairScreen({ onConfirm }: { onConfirm: (token: string) => void }) {
   }
 
   return (
-    <div className="grid flex-1 place-items-center bg-[#04325A] px-6 text-white">
-      <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4">
+    <div className="grid flex-1 place-items-center overflow-y-auto bg-[#04325A] px-6 py-6 text-white">
+      <div className="w-full max-w-sm space-y-5">
         <div className="text-center">
           <p className="text-lg font-bold">Santos Tech</p>
-          <p className="text-sm text-white/70">Cole o link da sessão pra iniciar o cronômetro neste PC</p>
+          <p className="text-sm text-white/70">Escaneie o QR com o celular do admin</p>
         </div>
-        <input
-          autoFocus
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder="https://santos-tech.com/dashboard/sessao/..."
-          className="w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-sm text-white outline-none placeholder:text-white/40 focus:border-[#0DB88F]"
-        />
-        {error && <p className="text-xs text-red-300">{error}</p>}
-        <button
-          type="submit"
-          className="w-full rounded-lg bg-[#0DB88F] py-2 text-sm font-semibold text-white hover:bg-[#0DB88F]/90"
-        >
-          Confirmar
-        </button>
-      </form>
+
+        <div className="flex flex-col items-center gap-2 rounded-lg bg-white p-3">
+          {deviceId ? (
+            <QRCodeSVG value={`${DASHBOARD_ORIGIN}/admin/horas/parear/${deviceId}`} size={168} />
+          ) : (
+            <div className="grid size-[168px] place-items-center text-xs text-[#04325A]/60">Conectando...</div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 text-xs text-white/40">
+          <div className="h-px flex-1 bg-white/15" />
+          ou
+          <div className="h-px flex-1 bg-white/15" />
+        </div>
+
+        <form onSubmit={onSubmit} className="space-y-4">
+          <p className="text-center text-sm text-white/70">Cole o link ou digite o código de 6 dígitos da sessão</p>
+          <input
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="Link ou código de 6 dígitos..."
+            className="w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-center text-sm text-white outline-none placeholder:text-white/40 focus:border-[#0DB88F]"
+          />
+          {error && <p className="text-xs text-red-300">{error}</p>}
+          <button
+            type="submit"
+            disabled={pairing}
+            className="w-full rounded-lg bg-[#0DB88F] py-2 text-sm font-semibold text-white hover:bg-[#0DB88F]/90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {pairing ? "Conectando..." : "Confirmar"}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
@@ -174,7 +222,7 @@ function TimerScreen({ token, onChangeSession }: { token: string; onChangeSessio
 
 export default function App() {
   const { token, loading, setToken, clearToken } = useStoredToken();
-  const { deviceName } = useDeviceHeartbeat(token, clearToken);
+  const { deviceName, deviceId } = useDeviceHeartbeat(token, clearToken, setToken);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
@@ -182,7 +230,7 @@ export default function App() {
       {loading && (
         <div className="grid flex-1 place-items-center bg-[#04325A] text-white/60">Carregando...</div>
       )}
-      {!loading && !token && <PairScreen onConfirm={setToken} />}
+      {!loading && !token && <PairScreen deviceId={deviceId} onConfirm={setToken} />}
       {!loading && token && <TimerScreen token={token} onChangeSession={clearToken} />}
     </div>
   );

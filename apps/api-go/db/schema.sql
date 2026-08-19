@@ -282,7 +282,9 @@ CREATE TABLE IF NOT EXISTS hour_sessions (
   pause_requested_at TIMESTAMPTZ,
   created_by         INTEGER NOT NULL REFERENCES users(id),
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  short_code            TEXT UNIQUE,
+  short_code_expires_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_hour_sessions_client ON hour_sessions(client_id);
@@ -317,7 +319,8 @@ CREATE TABLE IF NOT EXISTS hour_lab_devices (
   message_id          UUID,
   message_text        TEXT,
   message_sent_at     TIMESTAMPTZ,
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  pending_pair_token  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_last_seen ON hour_lab_devices(last_seen_at);
 
