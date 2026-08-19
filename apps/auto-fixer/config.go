@@ -90,6 +90,9 @@ func loadConfig() (Config, error) {
 		"COOLIFY_API_TOKEN": c.CoolifyAPIToken, "EVOLUTION_API_URL": c.EvolutionURL,
 		"EVOLUTION_API_KEY": c.EvolutionKey, "EVOLUTION_INSTANCE": c.EvolutionInst,
 		"NOTIF_GROUP_JID": c.GroupJID, "CLAUDE_CODE_OAUTH_TOKEN": c.ClaudeOAuth,
+		// Obrigatório: sem ele o webhook aceitava POST anônimo e qualquer um
+		// disparava o ciclo de auto-fix (clone + Claude + push na branch de deploy).
+		"COOLIFY_WEBHOOK_SECRET": c.WebhookSecret,
 	} {
 		if v == "" {
 			return c, fmt.Errorf("config: %s obrigatório", k)
