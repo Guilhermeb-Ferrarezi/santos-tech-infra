@@ -393,9 +393,20 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /hour-lab-devices/{id}/unpair", s.rateLimit(30, min, s.adminGuard(s.handleUnpairLabDevice)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/message", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceMessage)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/reset-secret", s.rateLimit(30, min, s.adminGuard(s.handleResetLabDeviceSecret)))
+	mux.HandleFunc("GET /hour-lab-devices/{id}/programs", s.adminGuard(s.handleGetLabDevicePrograms))
+
+	// Programas esperados nos PCs do lab (cadastro do admin) — o cruzamento com
+	// o inventário de cada PC sai em /hour-lab-devices/{id}/programs.
+	mux.HandleFunc("GET /hour-lab-expected-programs", s.adminGuard(s.handleListExpectedPrograms))
+	mux.HandleFunc("POST /hour-lab-expected-programs", s.rateLimit(30, min, s.adminGuard(s.handleCreateExpectedProgram)))
+	mux.HandleFunc("PATCH /hour-lab-expected-programs/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateExpectedProgram)))
+	mux.HandleFunc("DELETE /hour-lab-expected-programs/{id}", s.rateLimit(30, min, s.adminGuard(s.handleDeleteExpectedProgram)))
 
 	// Heartbeat a cada ~30s por PC — limite folgado pra cobrir reconexões/retries.
 	mux.HandleFunc("POST /public/lab-devices/heartbeat", s.rateLimit(120, min, s.handleLabDeviceHeartbeat))
+	// Inventário é raro (muda quando alguém instala algo): o app manda no boot e
+	// uma vez por dia, então 10/min por IP já cobre reinstalação e retry.
+	mux.HandleFunc("POST /public/lab-devices/inventory", s.rateLimit(10, min, s.handleLabDeviceInventory))
 }
 
 // registerDownloadsRoutes: catálogo de downloads do Santos Hub. Cadastro/edição/

@@ -405,6 +405,30 @@ Público (sem auth — `deviceId` é a identidade):
   — a query seguinte já não os vê mais (exceto `message`, que o app deduplica
   pelo id).
 
+#### Inventário de software do PC
+
+O app lê a lista de programas instalados do registro do Windows (as três chaves
+`Uninstall`: HKLM, HKLM\WOW6432Node e HKCU — a mesma fonte de "Adicionar ou
+remover programas") e manda **inteira**; quem sabe o que é esperado é o
+servidor, então mudar a expectativa é editar no dashboard, sem instalador novo.
+Cada envio **substitui** o inventário anterior: é uma foto do estado atual.
+
+- `POST /public/lab-devices/inventory {deviceId, deviceSecret, programs:[{name, version?, publisher?}]}`
+  → `{ok, count}` · rate limit 10/min · máx. 1000 programas
+  (`INVENTORY_TOO_LARGE`). Exige o mesmo `deviceSecret` do heartbeat e, ao
+  contrário dele, **não adota** dispositivo novo — `deviceId` que nunca bateu
+  heartbeat leva 404. O app manda depois de um heartbeat bem-sucedido, só
+  quando a lista muda ou passa 24h (0.1.2+).
+- `GET /hour-lab-devices/{id}/programs` (admin) →
+  `{collectedAt, expected:[{id, label, matchPattern, installed, matchedName?, matchedVersion?}], installed:[{name, version, publisher}]}`
+  · `collectedAt` nulo = PC nunca reportou.
+- `GET|POST /hour-lab-expected-programs` e `PATCH|DELETE /hour-lab-expected-programs/{id}`
+  (admin, rate limit 30/min no que escreve) — cadastro do que se espera achar.
+  `matchPattern` casa por substring sem diferenciar caixa contra o nome exibido
+  ("unity" pega "Unity 6000.0.23f1" e "Unity Hub"); omitido, usa o `label`.
+  Curinga do LIKE (`%`, `_`, `\`) é recusado com 400 — um `%` solto casaria com
+  qualquer coisa e marcaria todo PC como em dia.
+
 ## Catálogo de downloads (Santos Hub) — `api.santos-tech.com/auth/admin/downloads` e `/public/downloads`
 
 App desktop Tauri Windows (`apps/santos-hub`) instalado nos PCs da empresa,

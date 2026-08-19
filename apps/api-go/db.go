@@ -596,6 +596,33 @@ ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS device_secret_set_at TIMES
 CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_order
   ON hour_lab_devices(name NULLS LAST, device_uuid);
 
+-- Inventário de software do PC: o app lê o registro do Windows (a mesma lista
+-- de "Adicionar ou remover programas") e manda inteira; o servidor é quem sabe
+-- o que É esperado, então mudar a expectativa não exige instalador novo.
+-- Substituído por completo a cada coleta (DELETE + INSERT na mesma transação) —
+-- é uma foto do estado atual, não um histórico.
+CREATE TABLE IF NOT EXISTS hour_lab_device_programs (
+  device_id  UUID NOT NULL REFERENCES hour_lab_devices(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  version    TEXT NOT NULL DEFAULT '',
+  publisher  TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (device_id, name, version)
+);
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS inventory_collected_at TIMESTAMPTZ;
+
+-- Programas esperados nos PCs do laboratório (cadastro do admin em
+-- /admin/horas/programas). match_pattern casa por substring, sem diferenciar
+-- maiúscula, contra o nome que o Windows exibe: "unity" pega "Unity 6000.0.23f1"
+-- e "Unity Hub". É substring de propósito — o nome exibido carrega a versão e
+-- muda a cada atualização, então igualdade exata quebraria toda semana.
+CREATE TABLE IF NOT EXISTS hour_lab_expected_programs (
+  id            BIGSERIAL PRIMARY KEY,
+  label         TEXT NOT NULL,
+  match_pattern TEXT NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Arquivos (Google Drive): o conteúdo real mora no Drive; aqui só guardamos
 -- metadados de pasta e a ACL de quem enxerga/envia arquivo em cada uma — por
 -- cargo (fixo ou personalizado) E por usuário individual, união dos dois.

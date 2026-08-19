@@ -3899,6 +3899,211 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /public/lab-devices/inventory:
+    post:
+      tags: [Horas]
+      summary: Inventário de software do PC (sem login, autenticado pelo segredo do dispositivo)
+      description: |
+        O app lê a lista de programas instalados do registro do Windows (a mesma
+        que aparece em "Adicionar ou remover programas") e manda inteira; o
+        servidor substitui o inventário anterior — é uma foto do estado atual,
+        não histórico. Enviado depois de um heartbeat bem-sucedido, só quando a
+        lista muda ou passa um dia.
+
+        Exige o mesmo `deviceSecret` do heartbeat e, diferente dele, **não**
+        adota dispositivo novo: inventário de um `deviceId` que nunca bateu
+        heartbeat é recusado. Rate limit 10/min por IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceId: { type: string, format: uuid }
+                deviceSecret: { type: string, description: "Segredo emitido no primeiro heartbeat (64 chars hex)." }
+                programs:
+                  type: array
+                  maxItems: 1000
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string, maxLength: 200 }
+                      version: { type: string, maxLength: 200 }
+                      publisher: { type: string, maxLength: 200 }
+                    required: [name]
+              required: [deviceId]
+      responses:
+        "200":
+          description: Inventário substituído.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  count: { type: integer }
+        "400":
+          description: deviceId inválido ou mais de 1000 programas (INVENTORY_TOO_LARGE).
+        "401":
+          description: Segredo do dispositivo ausente ou inválido (LAB_DEVICE_UNAUTHORIZED).
+        "404":
+          description: Dispositivo desconhecido (nunca mandou heartbeat).
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /hour-lab-devices/{id}/programs:
+    get:
+      tags: [Horas]
+      summary: Inventário do PC cruzado com os programas esperados
+      description: |
+        Admin-only. `expected` é o cadastro de `/hour-lab-expected-programs` com
+        `installed` resolvido para este PC; `installed` é a lista completa que a
+        máquina reportou. `collectedAt` nulo = o PC nunca mandou inventário
+        (app anterior à 0.1.2, ou ainda não adotado).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Inventário do PC.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  collectedAt: { type: string, format: date-time, nullable: true }
+                  expected:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer, format: int64 }
+                        label: { type: string }
+                        matchPattern: { type: string }
+                        installed: { type: boolean }
+                        matchedName: { type: string }
+                        matchedVersion: { type: string }
+                  installed:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        version: { type: string }
+                        publisher: { type: string }
+        "404":
+          description: Dispositivo não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-expected-programs:
+    get:
+      tags: [Horas]
+      summary: Lista os programas esperados nos PCs do laboratório
+      description: Admin-only. Ordenado por nome.
+      responses:
+        "200":
+          description: Programas cadastrados.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  programs:
+                    type: array
+                    items: { $ref: "#/components/schemas/ExpectedProgram" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Horas]
+      summary: Cadastra um programa esperado
+      description: |
+        Admin-only. Rate limit 30/min. `matchPattern` é procurado por substring,
+        sem diferenciar caixa, no nome que o Windows exibe — omitido, o `label`
+        é usado. Curingas do LIKE (`%`, `_`, `\`) são recusados: um `%` solto
+        casaria com qualquer programa e marcaria todo PC como em dia.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 80 }
+                matchPattern: { type: string, maxLength: 80 }
+              required: [label]
+      responses:
+        "201":
+          description: Programa criado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  program: { $ref: "#/components/schemas/ExpectedProgram" }
+        "400":
+          description: Nome vazio/longo demais, ou padrão com curinga.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-expected-programs/{id}:
+    patch:
+      tags: [Horas]
+      summary: Edita um programa esperado
+      description: Admin-only. Rate limit 30/min. Mesmas regras do POST.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 80 }
+                matchPattern: { type: string, maxLength: 80 }
+              required: [label]
+      responses:
+        "200":
+          description: Programa atualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  program: { $ref: "#/components/schemas/ExpectedProgram" }
+        "400":
+          description: Nome vazio/longo demais, ou padrão com curinga.
+        "404":
+          description: Programa não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [Horas]
+      summary: Remove um programa esperado
+      description: |
+        Admin-only. Rate limit 30/min. Some da checagem dos PCs; nada é
+        desinstalado de máquina nenhuma.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: Programa removido.
+        "404":
+          description: Programa não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /auth/admin/drive-folders/browse:
     get:
       tags: [Arquivos]
@@ -5205,6 +5410,19 @@ components:
         currentStatus: { type: string, enum: [active, paused, ended], nullable: true }
         createdAt: { type: string, format: date-time }
       required: [id, deviceUuid, createdAt]
+
+    ExpectedProgram:
+      type: object
+      description: |
+        Programa que todo PC do laboratório deveria ter. O cruzamento com o que
+        cada máquina reportou sai em /hour-lab-devices/{id}/programs.
+      properties:
+        id: { type: integer, format: int64 }
+        label: { type: string, description: "Nome exibido no dashboard (ex.: Unity)." }
+        matchPattern: { type: string, description: "Trecho procurado no nome instalado, sem diferenciar caixa." }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, label, matchPattern, createdAt, updatedAt]
 
     DriveFolder:
       type: object

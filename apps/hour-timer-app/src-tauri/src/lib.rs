@@ -197,6 +197,101 @@ fn update_tray_status(app: AppHandle, status: String, tooltip: String) {
     let _ = tray.set_tooltip(Some(tooltip));
 }
 
+// Inventário de software do PC: uma entrada de "Adicionar ou remover programas".
+// O que sai daqui vai inteiro pro servidor (POST /public/lab-devices/inventory),
+// que é quem sabe quais programas são esperados — assim a lista de expectativa
+// muda no dashboard, sem instalador novo.
+#[derive(serde::Serialize)]
+pub struct InstalledProgram {
+    name: String,
+    version: String,
+    publisher: String,
+}
+
+// Lê as três chaves Uninstall do registro: HKLM (64 bits), HKLM\WOW6432Node
+// (programas de 32 bits numa máquina de 64) e HKCU (instalado só pro usuário
+// atual, caso do VS Code e do Unity Hub). É a mesma fonte que o painel do
+// Windows usa — não existe API melhor sem instalar agente.
+#[cfg(windows)]
+#[tauri::command]
+fn list_installed_programs() -> Vec<InstalledProgram> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
+
+    const UNINSTALL: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
+    const UNINSTALL_WOW: &str = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall";
+
+    let roots = [
+        (HKEY_LOCAL_MACHINE, UNINSTALL),
+        (HKEY_LOCAL_MACHINE, UNINSTALL_WOW),
+        (HKEY_CURRENT_USER, UNINSTALL),
+    ];
+
+    let mut out: Vec<InstalledProgram> = Vec::new();
+    for (hive, path) in roots {
+        let Ok(root) = RegKey::predef(hive).open_subkey_with_flags(path, KEY_READ) else {
+            continue; // WOW6432Node não existe em Windows 32 bits
+        };
+        for key_name in root.enum_keys().flatten() {
+            let Ok(entry) = root.open_subkey_with_flags(&key_name, KEY_READ) else {
+                continue;
+            };
+            let name: String = match entry.get_value("DisplayName") {
+                Ok(v) => v,
+                Err(_) => continue, // sem nome exibido = não aparece nem pro usuário
+            };
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                continue;
+            }
+            // SystemComponent=1 e ReleaseType de atualização são o ruído do
+            // registro: runtimes, hotfix do Office, KB do Windows. Sem esse
+            // filtro o inventário vem com centenas de linhas que ninguém quer
+            // ver na tela do dashboard.
+            if entry.get_value::<u32, _>("SystemComponent").unwrap_or(0) == 1 {
+                continue;
+            }
+            let release_type: String = entry.get_value("ReleaseType").unwrap_or_default();
+            if matches!(
+                release_type.as_str(),
+                "Security Update" | "Update Rollup" | "Hotfix" | "Update"
+            ) {
+                continue;
+            }
+            // Entrada filha de outra (patch de um programa já listado).
+            if entry.get_value::<String, _>("ParentKeyName").is_ok() {
+                continue;
+            }
+            out.push(InstalledProgram {
+                name,
+                version: entry
+                    .get_value::<String, _>("DisplayVersion")
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+                publisher: entry
+                    .get_value::<String, _>("Publisher")
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+            });
+        }
+    }
+    // A mesma entrada costuma aparecer em HKLM e HKCU; o servidor também
+    // deduplica, mas mandar duas vezes só gasta payload.
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.dedup_by(|a, b| a.name == b.name && a.version == b.version);
+    out
+}
+
+// Fora do Windows o app só roda em dev (o alvo real é o PC do laboratório):
+// devolve lista vazia pra manter a mesma interface pro front.
+#[cfg(not(windows))]
+#[tauri::command]
+fn list_installed_programs() -> Vec<InstalledProgram> {
+    Vec::new()
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
@@ -323,7 +418,11 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![set_overlay_position, update_tray_status])
+        .invoke_handler(tauri::generate_handler![
+            set_overlay_position,
+            update_tray_status,
+            list_installed_programs
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

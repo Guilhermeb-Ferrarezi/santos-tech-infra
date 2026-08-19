@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { load, type Store } from "@tauri-apps/plugin-store";
 import { getVersion } from "@tauri-apps/api/app";
+import { syncInventory } from "./inventory";
 
 const STORE_FILE = "config.json";
 const DEVICE_ID_KEY = "deviceId";
@@ -84,6 +85,11 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
       // deste device_uuid. Se não gravarmos agora, os heartbeats seguintes
       // levam 401 e o PC deixa de receber comandos e pairToken.
       if (data.deviceSecret) await store.set(DEVICE_SECRET_KEY, data.deviceSecret);
+
+      // Inventário de software (o admin vê em /admin/horas/dispositivos): só
+      // sai quando a lista muda ou passa um dia, e nunca antes da adoção — a
+      // rota exige o mesmo segredo. Não é await pra não segurar o heartbeat.
+      void syncInventory(store, API_ORIGIN, deviceId, data.deviceSecret ?? deviceSecret);
 
       setDeviceName(data.name);
       if (data.unpairRequested) onUnpairRequested();
