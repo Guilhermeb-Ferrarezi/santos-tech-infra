@@ -15,12 +15,25 @@ import (
 // pixWebhookStore define as operações de persistência usadas pelo handleWebhook (PIX).
 // Extraída como interface para facilitar testes sem DB.
 type pixWebhookStore interface {
-	MarkWebhookSeen(ctx context.Context, id, typ string, payload []byte) (bool, error)
+	// ClaimWebhookEvent/MarkWebhookDone formam o processamento em duas fases:
+	// reivindica ('pending') → aplica o efeito → encerra ('done'). Nunca encerre
+	// antes do efeito: a reentrega da Efí precisa reprocessar quando algo falha.
+	ClaimWebhookEvent(ctx context.Context, id, typ string, payload []byte) (bool, error)
+	MarkWebhookDone(ctx context.Context, id string) error
 	MarkChargePaid(ctx context.Context, correlationID string) error
 	PublicTokenByCorrelation(ctx context.Context, correlationID string) (string, error)
 	// SetWithdrawalStatus aplica o resultado final de um Pix Envio (payout), casando o
 	// saque por efi_id_envio OU e2e_id. Usado pelo ramo PAYOUT_RESULT do webhook pix.
 	SetWithdrawalStatus(ctx context.Context, idEnvio, e2eID, status string) error
+}
+
+// cobrWebhookStore define as operações usadas pelo handleCobrWebhook (API Cobranças:
+// boleto/cartão). Mesmo contrato de duas fases do webhook pix.
+type cobrWebhookStore interface {
+	ClaimWebhookEvent(ctx context.Context, id, typ string, payload []byte) (bool, error)
+	MarkWebhookDone(ctx context.Context, id string) error
+	MarkChargePaidByProviderID(ctx context.Context, providerChargeID string) (bool, error)
+	PublicTokenByProviderID(ctx context.Context, providerChargeID string) (string, error)
 }
 
 // productStore define as operações de persistência de produtos usadas pelos
@@ -79,6 +92,7 @@ type Server struct {
 	rdb        *redis.Client
 	store      *Store
 	pixWH      pixWebhookStore  // store do webhook PIX; nil usa s.store
+	cobrWH     cobrWebhookStore // store do webhook Cobranças (boleto/cartão); nil usa s.store
 	links      paymentLinkStore // store de links; nil usa s.store
 	coupons    couponStore      // store de cupons; nil usa s.store
 	products   productStore     // store de produtos; nil usa s.store

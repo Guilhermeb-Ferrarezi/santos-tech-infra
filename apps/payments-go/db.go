@@ -244,6 +244,18 @@ ALTER TABLE pay_withdrawals ADD COLUMN IF NOT EXISTS efi_id_envio TEXT;
 ALTER TABLE pay_withdrawals ADD COLUMN IF NOT EXISTS e2e_id       TEXT;
 CREATE INDEX IF NOT EXISTS idx_pay_withdrawals_efi_id_envio ON pay_withdrawals(efi_id_envio);
 CREATE INDEX IF NOT EXISTS idx_pay_withdrawals_e2e_id       ON pay_withdrawals(e2e_id);
+-- Webhook em duas fases: 'pending' = reivindicado, efeito AINDA NÃO aplicado;
+-- 'done' = efeito aplicado (reentrega vira no-op). O DEFAULT é 'done' de propósito:
+-- as linhas que já existem foram gravadas pelo esquema antigo, que só inseria depois
+-- (na prática, junto) do processamento — reprocessá-las mandaria e-mail duplicado.
+ALTER TABLE pay_webhook_events ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'done';
+DO $$
+BEGIN
+  ALTER TABLE pay_webhook_events DROP CONSTRAINT IF EXISTS pay_webhook_events_status_check;
+  ALTER TABLE pay_webhook_events ADD CONSTRAINT pay_webhook_events_status_check
+    CHECK (status IN ('pending','done'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END$$;
 `
 
 func migrate(ctx context.Context, db *pgxpool.Pool) error {

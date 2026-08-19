@@ -719,9 +719,14 @@ func (s *Store) PublicTokenByProviderID(ctx context.Context, providerChargeID st
 
 // ── Webhook idempotência ──────────────────────────────────────────────────
 
-// MarkWebhookSeen retorna true se é a 1ª vez que vemos este evento (deve processar).
-func (s *Store) MarkWebhookSeen(ctx context.Context, id, typ string, payload []byte) (bool, error) {
-	n, err := s.q.MarkWebhookSeen(ctx, paydb.MarkWebhookSeenParams{
+// ClaimWebhookEvent reivindica o evento (fase 1) e devolve true se este processo
+// deve aplicar o efeito. O evento fica 'pending' — só MarkWebhookDone o encerra.
+//
+// NÃO substitua isto por um "marcar visto" antes do efeito: era exatamente esse o
+// bug — um timeout da Efí ou erro de banco no meio do caminho descartava o
+// pagamento para sempre, porque a reentrega caía no "já visto".
+func (s *Store) ClaimWebhookEvent(ctx context.Context, id, typ string, payload []byte) (bool, error) {
+	n, err := s.q.ClaimWebhookEvent(ctx, paydb.ClaimWebhookEventParams{
 		ID:      id,
 		Type:    typ,
 		Payload: payload,
@@ -730,6 +735,11 @@ func (s *Store) MarkWebhookSeen(ctx context.Context, id, typ string, payload []b
 		return false, err
 	}
 	return n == 1, nil
+}
+
+// MarkWebhookDone encerra o evento (fase 2), depois do efeito aplicado.
+func (s *Store) MarkWebhookDone(ctx context.Context, id string) error {
+	return s.q.MarkWebhookDone(ctx, id)
 }
 
 func (s *Store) PublicTokenByCorrelation(ctx context.Context, correlationID string) (string, error) {
