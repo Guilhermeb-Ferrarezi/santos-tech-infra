@@ -1,9 +1,12 @@
 -- name: InsertCharge :one
+-- status é explícito: o fluxo PIX/boleto insere 'creating' ANTES de chamar a Efí e
+-- promove a 'pending' depois (ver ActivateCharge). Sem isso, uma falha no INSERT
+-- deixava um QR pagável na Efí sem cobrança nenhuma do nosso lado.
 INSERT INTO pay_charges
   (kind, subscription_id, student_id, customer_id, amount_cents, due_date, reference_month,
    provider, provider_charge_id, correlation_id, public_token, payer_tax_id, method,
-   br_code, qr_code, pdf_url, barcode)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+   br_code, qr_code, pdf_url, barcode, status)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 RETURNING id, status, created_at;
 
 -- name: InsertRecurrenceCharge :one

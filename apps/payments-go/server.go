@@ -85,6 +85,17 @@ type paymentLinkStore interface {
 	MarkChargePaid(ctx context.Context, correlationID string) error
 }
 
+// chargeWriteStore isola a persistência em DUAS FASES da cobrança: a linha nasce
+// em 'creating' (reserva), o gateway é chamado, e só então ela é promovida a
+// 'pending' (ActivateCharge) ou cancelada (AbandonCharge). Extraída como interface
+// para permitir testar a ordem sem Postgres — e essa ordem é o ponto: criar na Efí
+// antes de gravar deixava um QR pagável sem cobrança nenhuma no banco.
+type chargeWriteStore interface {
+	InsertCharge(ctx context.Context, c *Charge) error
+	ActivateCharge(ctx context.Context, id int64, c *Charge) (bool, error)
+	AbandonCharge(ctx context.Context, id int64) error
+}
+
 // rateLimiterIface permite injetar limiters alternativos nos testes (sem depender
 // da variável global). Em produção, usamos *rate.Limiter diretamente.
 type rateLimiterIface interface {
@@ -122,6 +133,8 @@ type Server struct {
 	// couponApplyRateLimiter substitui o rate-limit por IP de /coupons/apply em testes;
 	// nil usa o limitador global por IP (applyCouponLimiters).
 	couponApplyRateLimiter rateLimiterIface
+	// chargeWr store de escrita de cobrança (reserva/ativa/cancela); nil usa s.store.
+	chargeWr chargeWriteStore
 	// statement store de extrato; nil usa s.store.
 	statement statementStore
 	// queue enfileira tasks asynq (notificação de pagamento). Pode ser nil em

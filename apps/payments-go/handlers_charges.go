@@ -410,11 +410,18 @@ func (s *Server) createAndPersistCharge(ctx context.Context, c *Charge, st *Stud
 	if d, err := time.Parse("2006-01-02", c.DueDate); err == nil {
 		expires = d.Add(23 * time.Hour).Format(time.RFC3339)
 	}
+	// RESERVA a linha ANTES de chamar a Efí. A ordem inversa (criar na Efí e só então
+	// inserir) deixava um QR PAGÁVEL sem cobrança nenhuma no banco quando o INSERT
+	// falhava: o cliente pagava e o webhook não tinha o que casar.
+	if err := s.reserveCharge(ctx, c); err != nil {
+		return err
+	}
 	res, err := s.provider.CreateCharge(ctx, ChargeRequest{
 		CorrelationID: c.CorrelationID, AmountCents: c.AmountCents,
 		PayerName: st.Name, PayerTaxID: st.TaxID, Description: desc, ExpiresAt: expires,
 	})
 	if err != nil {
+		s.abandonCharge(ctx, c)
 		return err
 	}
 	c.ProviderChargeID, c.BRCode, c.QRCode = res.ProviderChargeID, res.BRCode, res.QRCode
@@ -423,10 +430,53 @@ func (s *Server) createAndPersistCharge(ctx context.Context, c *Charge, st *Stud
 	if res.CorrelationID != "" {
 		c.CorrelationID = res.CorrelationID
 	}
-	if err := s.store.InsertCharge(ctx, c); err != nil {
+	return s.activateCharge(ctx, c)
+}
+
+// chargeWriteStoreOf devolve s.chargeWr se injetado (testes), senão s.store.
+func (s *Server) chargeWriteStoreOf() chargeWriteStore {
+	if s.chargeWr != nil {
+		return s.chargeWr
+	}
+	return s.store
+}
+
+// reserveCharge insere a cobranca em 'creating' (linha reservada, ainda sem gateway).
+func (s *Server) reserveCharge(ctx context.Context, c *Charge) error {
+	c.Status = "creating"
+	if err := s.chargeWriteStoreOf().InsertCharge(ctx, c); err != nil {
+		c.Status = ""
 		return err
 	}
 	return nil
+}
+
+// activateCharge promove a reserva a 'pending' com os dados devolvidos pelo gateway.
+func (s *Server) activateCharge(ctx context.Context, c *Charge) error {
+	ok, err := s.chargeWriteStoreOf().ActivateCharge(ctx, c.ID, c)
+	if err != nil {
+		// A cobranca EXISTE no gateway e e pagavel; a linha ficou em 'creating'.
+		// Precisa aparecer: e dinheiro que pode entrar sem baixa automatica.
+		slog.Error("cobranca criada no gateway mas nao ativada no banco",
+			"charge", c.ID, "correlation", c.CorrelationID, "err", err)
+		return err
+	}
+	if !ok {
+		slog.Error("cobranca criada no gateway mas a reserva nao estava em 'creating'",
+			"charge", c.ID, "correlation", c.CorrelationID)
+	}
+	c.Status = "pending"
+	return nil
+}
+
+// abandonCharge cancela a reserva quando o gateway recusa a cobranca.
+func (s *Server) abandonCharge(ctx context.Context, c *Charge) {
+	if c.ID == 0 {
+		return
+	}
+	if err := s.chargeWriteStoreOf().AbandonCharge(context.WithoutCancel(ctx), c.ID); err != nil {
+		slog.Warn("falha ao cancelar a reserva da cobranca", "charge", c.ID, "err", err)
+	}
 }
 
 // createAndPersistBoleto emite o boleto na API Cobranças e grava a cobrança. A confirmação
@@ -439,22 +489,24 @@ func (s *Server) createAndPersistBoleto(ctx context.Context, c *Charge, st *Stud
 			notifyURL += "?token=" + s.cfg.EFIWebhookSecret
 		}
 	}
+	// Mesma reserva do PIX: a linha nasce em 'creating' antes de existir na Efi.
+	if err := s.reserveCharge(ctx, c); err != nil {
+		return err
+	}
 	res, err := s.efiCobr.CreateBoleto(ctx, BoletoRequest{
 		AmountCents: c.AmountCents, PayerName: st.Name, PayerTaxID: st.TaxID,
 		PayerEmail: st.Email, PayerPhone: st.Phone, Description: desc,
 		DueDate: c.DueDate, CustomID: c.CorrelationID, NotificationURL: notifyURL,
 	})
 	if err != nil {
+		s.abandonCharge(ctx, c)
 		return err
 	}
 	c.ProviderChargeID = res.ChargeID // charge_id do Efí → casa a notificação
 	c.BRCode = res.Line               // linha digitável (copia-e-cola do boleto)
 	c.PDFURL = res.PDFURL
 	c.Barcode = res.Line
-	if err := s.store.InsertCharge(ctx, c); err != nil {
-		return err
-	}
-	return nil
+	return s.activateCharge(ctx, c)
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {

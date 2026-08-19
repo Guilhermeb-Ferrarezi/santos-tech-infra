@@ -550,8 +550,17 @@ func methodOrPix(m string) string {
 	return m
 }
 
+// InsertCharge grava a cobrança. O status vem de c.Status: o fluxo PIX/boleto usa
+// 'creating' (linha reservada ANTES da Efí, promovida a 'pending' por ActivateCharge);
+// quem já tem a cobrança confirmada no gateway passa 'pending' — que é também o
+// default quando c.Status vem vazio.
 func (s *Store) InsertCharge(ctx context.Context, c *Charge) error {
+	status := c.Status
+	if status == "" {
+		status = "pending"
+	}
 	row, err := s.q.InsertCharge(ctx, paydb.InsertChargeParams{
+		Status:           status,
 		Kind:             c.Kind,
 		SubscriptionID:   c.SubscriptionID,
 		StudentID:        c.StudentID,
@@ -1736,4 +1745,49 @@ func (s *Store) InsertChargeWithLink(ctx context.Context, c *Charge, linkID int6
 // avulsa ou ciclo de assinatura). Portão do entregável — ver handleGetMeProductFile.
 func (s *Store) UserOwnsProduct(ctx context.Context, userID, productID int64) (bool, error) {
 	return s.q.UserOwnsProduct(ctx, paydb.UserOwnsProductParams{UserID: userID, ProductID: &productID})
+}
+
+// ── Cobrança em duas fases ('creating' → 'pending') ──────────────────────────
+
+// ActivateCharge promove a cobrança reservada a 'pending' e grava os dados que só o
+// gateway conhece (id da cobrança, copia-e-cola, QR, PDF, código de barras). O
+// correlation_id pode mudar: a Efí devolve o txid efetivo que volta no webhook.
+// Devolve false se a linha não estava em 'creating'.
+func (s *Store) ActivateCharge(ctx context.Context, id int64, c *Charge) (bool, error) {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE pay_charges
+		SET status = 'pending',
+		    provider_charge_id = NULLIF($2, ''),
+		    correlation_id = $3,
+		    br_code = NULLIF($4, ''),
+		    qr_code = NULLIF($5, ''),
+		    pdf_url = NULLIF($6, ''),
+		    barcode = NULLIF($7, '')
+		WHERE id = $1 AND status = 'creating'`,
+		id, c.ProviderChargeID, c.CorrelationID, c.BRCode, c.QRCode, c.PDFURL, c.Barcode)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// AbandonCharge cancela uma cobrança que nunca chegou a existir no gateway
+// ('creating' -> 'canceled'). Nunca toca em cobrança já ativa.
+func (s *Store) AbandonCharge(ctx context.Context, id int64) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE pay_charges SET status='canceled' WHERE id=$1 AND status='creating'`, id)
+	return err
+}
+
+// CancelStaleCreatingCharges limpa as reservas órfãs: linhas que ficaram em
+// 'creating' (processo morreu entre o INSERT e a resposta da Efí). Roda no mesmo job
+// da expiração. 15 minutos é folgado o bastante para qualquer chamada ao gateway.
+func (s *Store) CancelStaleCreatingCharges(ctx context.Context) (int64, error) {
+	tag, err := s.db.Exec(ctx,
+		`UPDATE pay_charges SET status='canceled'
+		 WHERE status='creating' AND created_at < now() - interval '15 minutes'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
