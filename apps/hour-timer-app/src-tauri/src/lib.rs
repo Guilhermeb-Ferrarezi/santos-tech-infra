@@ -1,10 +1,22 @@
 use tauri::{
+    image::Image,
     menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     AppHandle, LogicalPosition, Manager, Position, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_store::StoreExt;
+
+// Bolinhas de status geradas por icons/gen-tray-dots.mjs (embutidas no
+// binário em tempo de compilação — sem depender de arquivo solto instalado).
+// .rgba = RGBA cru 32x32 (não .png): Image::new espera pixels já decodificados
+// — essa versão do Tauri não tem construtor que decodifique PNG a partir de
+// bytes embutidos, só via arquivo em disco (feature opcional não habilitada).
+const TRAY_ICON_SIZE: u32 = 32;
+const TRAY_ICON_GRAY: &[u8] = include_bytes!("../icons/tray-gray.rgba");
+const TRAY_ICON_GREEN: &[u8] = include_bytes!("../icons/tray-green.rgba");
+const TRAY_ICON_AMBER: &[u8] = include_bytes!("../icons/tray-amber.rgba");
+const TRAY_ICON_RED: &[u8] = include_bytes!("../icons/tray-red.rgba");
 
 const OVERLAY_CORNER_KEY: &str = "overlayCorner";
 
@@ -141,6 +153,28 @@ fn set_overlay_position(app: AppHandle, corner: String) {
     }
 }
 
+// Comando chamado sempre que o front detecta uma mudança relevante de status
+// (poll da sessão em TimerScreen, sucesso/falha do heartbeat em
+// useDeviceHeartbeat.ts) — troca a cor do ícone da bandeja e o texto do
+// tooltip (aparece ao passar o mouse, padrão nativo do Windows). status:
+// "no-session" | "ok" | "low" | "empty" | "offline" — qualquer valor não
+// reconhecido cai no cinza.
+#[tauri::command]
+fn update_tray_status(app: AppHandle, status: String, tooltip: String) {
+    let Some(tray) = app.try_state::<TrayIcon>() else {
+        return;
+    };
+    let bytes: &[u8] = match status.as_str() {
+        "ok" => TRAY_ICON_GREEN,
+        "low" => TRAY_ICON_AMBER,
+        "empty" | "offline" => TRAY_ICON_RED,
+        _ => TRAY_ICON_GRAY,
+    };
+    let icon = Image::new(bytes, TRAY_ICON_SIZE, TRAY_ICON_SIZE);
+    let _ = tray.set_icon(Some(icon));
+    let _ = tray.set_tooltip(Some(tooltip));
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
@@ -176,8 +210,9 @@ pub fn run() {
             let quit_item = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &overlay_item, &quit_item])?;
 
-            TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("Santos Tech")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -197,6 +232,10 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+            // Guardado como managed state pra update_tray_status conseguir
+            // achar o mesmo ícone depois (troca cor/tooltip ao vivo conforme
+            // o front reporta status da sessão/heartbeat).
+            app.manage(tray);
 
             ensure_toast_window(&app.handle());
             ensure_overlay_window(&app.handle());
@@ -214,7 +253,7 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![set_overlay_position])
+        .invoke_handler(tauri::generate_handler![set_overlay_position, update_tray_status])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

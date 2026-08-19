@@ -5,6 +5,7 @@ import { useStoredToken } from "./lib/useStoredToken";
 import { useTickingSeconds } from "./lib/useTickingSeconds";
 import { useLowBalanceNotifier } from "./lib/useLowBalanceNotifier";
 import { useDeviceHeartbeat } from "./lib/useDeviceHeartbeat";
+import { useTraySync } from "./lib/useTraySync";
 import { Titlebar } from "./components/Titlebar";
 import { OverlayPositionButton } from "./components/OverlayPositionButton";
 
@@ -42,10 +43,39 @@ const statusText: Record<PublicHourSession["status"], string> = {
   ended: "Sessão encerrada",
 };
 
-function PairScreen({ deviceId, onConfirm }: { deviceId: string | null; onConfirm: (token: string) => void }) {
+// Traduz o estado atual (heartbeat + sessão) pra cor+tooltip da bandeja (ver
+// update_tray_status em lib.rs): "offline" sempre vence (sem conexão é mais
+// urgente que qualquer outra coisa), senão segue o saldo restante.
+function trayStatusFor(
+  heartbeatOk: boolean,
+  data: PublicHourSession | null,
+  remainingMinutes: number,
+): [status: string, tooltip: string] {
+  if (!heartbeatOk) return ["offline", "Santos Tech — sem conexão com o servidor"];
+  if (!data) return ["no-session", "Santos Tech — carregando..."];
+  if (data.status === "ended") return ["no-session", "Santos Tech — sessão encerrada"];
+  if (remainingMinutes <= 0) return ["empty", `${data.clientName} — saldo esgotado`];
+  if (remainingMinutes <= 10) return ["low", `${data.clientName} — ${remainingMinutes} min restantes`];
+  return ["ok", `${data.clientName} — ${remainingMinutes} min restantes`];
+}
+
+function PairScreen({
+  deviceId,
+  heartbeatOk,
+  onConfirm,
+}: {
+  deviceId: string | null;
+  heartbeatOk: boolean;
+  onConfirm: (token: string) => void;
+}) {
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
   const [pairing, setPairing] = useState(false);
+
+  const [pairScreenTrayStatus, pairScreenTrayTooltip] = heartbeatOk
+    ? ["no-session", "Santos Tech — sem sessão pareada"]
+    : ["offline", "Santos Tech — sem conexão com o servidor"];
+  useTraySync(pairScreenTrayStatus, pairScreenTrayTooltip);
 
   // Detecta pelo formato do que foi digitado: 6 dígitos = código curto (troca
   // por um token novo no backend, ver POST /public/hour-sessions/pair-by-code);
@@ -129,7 +159,15 @@ function PairScreen({ deviceId, onConfirm }: { deviceId: string | null; onConfir
   );
 }
 
-function TimerScreen({ token, onChangeSession }: { token: string; onChangeSession: () => void }) {
+function TimerScreen({
+  token,
+  onChangeSession,
+  heartbeatOk,
+}: {
+  token: string;
+  onChangeSession: () => void;
+  heartbeatOk: boolean;
+}) {
   const [data, setData] = useState<PublicHourSession | null>(null);
   const [error, setError] = useState(false);
 
@@ -160,6 +198,8 @@ function TimerScreen({ token, onChangeSession }: { token: string; onChangeSessio
   const tickedMinutes = Math.floor(displaySeconds / 60) - Math.floor((data?.elapsedSeconds ?? 0) / 60);
   const remainingMinutes = (data?.remainingMinutes ?? 0) - tickedMinutes;
   useLowBalanceNotifier(data ? remainingMinutes : null, data?.status === "active");
+
+  useTraySync(...trayStatusFor(heartbeatOk, data, remainingMinutes));
 
   return (
     <div className="flex flex-1 flex-col justify-between bg-[#04325A] px-4 py-6 text-white">
@@ -205,7 +245,7 @@ function TimerScreen({ token, onChangeSession }: { token: string; onChangeSessio
 
 export default function App() {
   const { token, loading, setToken, clearToken } = useStoredToken();
-  const { deviceName, deviceId } = useDeviceHeartbeat(token, clearToken, setToken);
+  const { deviceName, deviceId, heartbeatOk } = useDeviceHeartbeat(token, clearToken, setToken);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
@@ -213,8 +253,10 @@ export default function App() {
       {loading && (
         <div className="grid flex-1 place-items-center bg-[#04325A] text-white/60">Carregando...</div>
       )}
-      {!loading && !token && <PairScreen deviceId={deviceId} onConfirm={setToken} />}
-      {!loading && token && <TimerScreen token={token} onChangeSession={clearToken} />}
+      {!loading && !token && <PairScreen deviceId={deviceId} heartbeatOk={heartbeatOk} onConfirm={setToken} />}
+      {!loading && token && (
+        <TimerScreen token={token} onChangeSession={clearToken} heartbeatOk={heartbeatOk} />
+      )}
     </div>
   );
 }

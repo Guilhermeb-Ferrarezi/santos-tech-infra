@@ -34,6 +34,9 @@ interface HeartbeatResponse {
 export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () => void, onPaired: (token: string) => void) {
   const [deviceName, setDeviceName] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
+  // true até o primeiro heartbeat falhar — usado pelo ícone da bandeja pra
+  // mostrar "sem conexão" (ver TimerScreen/App, comando update_tray_status).
+  const [heartbeatOk, setHeartbeatOk] = useState(true);
   const tokenRef = useRef(token);
   tokenRef.current = token;
 
@@ -58,9 +61,15 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
           body: JSON.stringify({ deviceId, token: tokenRef.current, appVersion }),
         });
       } catch {
+        if (!cancelled) setHeartbeatOk(false);
         return; // sem rede — tenta de novo no próximo ciclo, silencioso
       }
-      if (cancelled || !res.ok) return;
+      if (cancelled) return;
+      if (!res.ok) {
+        setHeartbeatOk(false);
+        return;
+      }
+      setHeartbeatOk(true);
       const data: HeartbeatResponse = await res.json();
 
       setDeviceName(data.name);
@@ -84,5 +93,5 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
     };
   }, [onUnpairRequested, onPaired]);
 
-  return { deviceName, deviceId };
+  return { deviceName, deviceId, heartbeatOk };
 }
