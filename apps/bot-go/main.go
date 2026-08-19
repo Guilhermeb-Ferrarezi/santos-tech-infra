@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,6 +30,12 @@ func main() {
 
 	golog.InitSentry("bot-go")
 	defer golog.FlushSentry()
+
+	// LGPD: com LOG_BODIES ligado, o corpo dos webhooks da Meta/Evolution e das
+	// rotas de conversa vai íntegro para o Loki (text.body, from, wa_id,
+	// profile.name não são redigidos pelo golog). O default do serviço é 0
+	// (Dockerfile); se alguém religar, que seja com aviso no log.
+	warnIfBodyLoggingOn(logger)
 
 	// 3. Context cancelável via sinal do SO
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -219,4 +226,18 @@ func main() {
 
 	_ = leads
 	_ = scheduled
+}
+
+// warnIfBodyLoggingOn avisa quando LOG_BODIES está explicitamente ligado. O
+// golog captura request+response e redige por NOME de chave; os campos do
+// payload da Meta (text.body, from, wa_id, profile.name) não casam com nenhuma
+// regra e seriam logados em claro, em nível INFO, a cada mensagem recebida.
+//
+// A flag do golog é lida no init do pacote — antes do main —, então não dá para
+// forçá-la aqui; o default seguro vem do ENV LOG_BODIES=0 no Dockerfile.
+func warnIfBodyLoggingOn(logger *slog.Logger) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LOG_BODIES"))) {
+	case "1", "true", "yes", "on":
+		logger.Warn("LOG_BODIES ligado: corpo de webhooks e conversas irá em claro para o log (dados pessoais). Desligue em produção.")
+	}
 }
