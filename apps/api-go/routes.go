@@ -188,6 +188,11 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// dashboard/web (sem login).
 	s.registerHourSessionRoutes(mux)
 
+	// Identificação/controle dos PCs do laboratório (hour-timer-app): nome
+	// atribuído pelo admin, heartbeat público por device_uuid, comandos
+	// (despairar/mandar aviso) entregues no heartbeat seguinte.
+	s.registerLabDeviceRoutes(mux)
+
 	// Automação de resposta a comentário do Instagram (private reply,
 	// substitui o ManyChat) — webhook público autenticado por assinatura
 	// Meta (não cookie/PAT) + CRUD admin do mapeamento post -> link.
@@ -348,6 +353,20 @@ func (s *Server) registerHourSessionRoutes(mux *http.ServeMux) {
 	// pedido de pausa é mais restrito pra não virar canal de spam pro admin.
 	mux.HandleFunc("GET /public/hour-sessions/{token}", s.rateLimit(120, min, s.handleGetPublicHourSession))
 	mux.HandleFunc("POST /public/hour-sessions/{token}/request-pause", s.rateLimit(5, min, s.handleRequestHourSessionPause))
+}
+
+// registerLabDeviceRoutes: identificação/controle dos PCs do laboratório
+// (hour-timer-app). Heartbeat é público (device_uuid local é a identidade,
+// sem login); listar/renomear/despairar/mandar aviso é admin-only.
+func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
+	const min = time.Minute
+	mux.HandleFunc("GET /hour-lab-devices", s.adminGuard(s.handleListLabDevices))
+	mux.HandleFunc("PATCH /hour-lab-devices/{id}", s.rateLimit(30, min, s.adminGuard(s.handleRenameLabDevice)))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/unpair", s.rateLimit(30, min, s.adminGuard(s.handleUnpairLabDevice)))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/message", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceMessage)))
+
+	// Heartbeat a cada ~30s por PC — limite folgado pra cobrir reconexões/retries.
+	mux.HandleFunc("POST /public/lab-devices/heartbeat", s.rateLimit(120, min, s.handleLabDeviceHeartbeat))
 }
 
 func (s *Server) registerInstagramRoutes(mux *http.ServeMux) {

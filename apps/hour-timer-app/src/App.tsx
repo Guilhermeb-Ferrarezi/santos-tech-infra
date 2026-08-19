@@ -3,6 +3,9 @@ import { Clock, HandPalm, ArrowCounterClockwise } from "@phosphor-icons/react";
 import { useStoredToken } from "./lib/useStoredToken";
 import { useTickingSeconds } from "./lib/useTickingSeconds";
 import { useLowBalanceNotifier } from "./lib/useLowBalanceNotifier";
+import { useDeviceHeartbeat } from "./lib/useDeviceHeartbeat";
+import { Titlebar } from "./components/Titlebar";
+import { AdminMessageBanner } from "./components/AdminMessageBanner";
 
 const API_ORIGIN = "https://api.santos-tech.com";
 
@@ -53,7 +56,7 @@ function PairScreen({ onConfirm }: { onConfirm: (token: string) => void }) {
   }
 
   return (
-    <div className="grid min-h-screen place-items-center bg-[#04325A] px-6 text-white">
+    <div className="grid flex-1 place-items-center bg-[#04325A] px-6 text-white">
       <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4">
         <div className="text-center">
           <p className="text-lg font-bold">Santos Tech</p>
@@ -121,7 +124,7 @@ function TimerScreen({ token, onChangeSession }: { token: string; onChangeSessio
   }
 
   return (
-    <div className="flex min-h-screen flex-col justify-between bg-[#04325A] px-4 py-6 text-white">
+    <div className="flex flex-1 flex-col justify-between bg-[#04325A] px-4 py-6 text-white">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium text-white/70">{data ? data.clientName : "Carregando..."}</p>
         <button
@@ -172,14 +175,17 @@ function TimerScreen({ token, onChangeSession }: { token: string; onChangeSessio
 
 export default function App() {
   const { token, loading, setToken, clearToken } = useStoredToken();
+  const { deviceName, message, dismissMessage } = useDeviceHeartbeat(token, clearToken);
 
-  if (loading) {
-    return <div className="grid min-h-screen place-items-center bg-[#04325A] text-white/60">Carregando...</div>;
-  }
-
-  if (!token) {
-    return <PairScreen onConfirm={setToken} />;
-  }
-
-  return <TimerScreen token={token} onChangeSession={clearToken} />;
+  return (
+    <div className="flex h-screen flex-col overflow-hidden">
+      <Titlebar deviceName={deviceName} />
+      {message && <AdminMessageBanner text={message.text} onDismiss={dismissMessage} />}
+      {loading && (
+        <div className="grid flex-1 place-items-center bg-[#04325A] text-white/60">Carregando...</div>
+      )}
+      {!loading && !token && <PairScreen onConfirm={setToken} />}
+      {!loading && token && <TimerScreen token={token} onChangeSession={clearToken} />}
+    </div>
+  );
 }

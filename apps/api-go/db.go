@@ -521,6 +521,29 @@ CREATE TABLE IF NOT EXISTS hour_session_events (
 );
 CREATE INDEX IF NOT EXISTS idx_hour_session_events_session ON hour_session_events(session_id, created_at);
 
+-- PCs do laboratório: cada instalação do app desktop (hour-timer-app) gera um
+-- device_uuid estável e manda heartbeat periódico. Nome é atribuído pelo admin
+-- (nunca pelo próprio PC) para não bagunçar com quem estiver sentado nele.
+-- unpair_requested e message_id/text são comandos de admin entregues no
+-- próximo heartbeat: unpair_requested volta true uma única vez (o UPDATE que
+-- zera roda na mesma query do upsert, ver upsertLabDeviceHeartbeat) e
+-- message_id troca a cada envio para o app conseguir deduplicar no cliente.
+CREATE TABLE IF NOT EXISTS hour_lab_devices (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  device_uuid         TEXT NOT NULL UNIQUE,
+  name                TEXT,
+  last_seen_at        TIMESTAMPTZ,
+  last_ip             TEXT,
+  app_version         TEXT,
+  current_session_id  UUID REFERENCES hour_sessions(id) ON DELETE SET NULL,
+  unpair_requested    BOOLEAN NOT NULL DEFAULT FALSE,
+  message_id          UUID,
+  message_text        TEXT,
+  message_sent_at     TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_last_seen ON hour_lab_devices(last_seen_at);
+
 -- Arquivos (Google Drive): o conteúdo real mora no Drive; aqui só guardamos
 -- metadados de pasta e a ACL de quem enxerga/envia arquivo em cada uma — por
 -- cargo (fixo ou personalizado) E por usuário individual, união dos dois.

@@ -75,7 +75,9 @@ tags:
       Controle de horas de clientes (lan house/escola). `/hour-clients` e
       `/hour-sessions` são admin-only (dado financeiro). `/public/hour-sessions/{token}`
       é a rota sem autenticação usada pelo link que o cliente abre — o token
-      (posse) é a credencial, não cookie/sessão.
+      (posse) é a credencial, não cookie/sessão. `/hour-lab-devices` identifica
+      e controla os PCs do laboratório (hour-timer-app); `/public/lab-devices/heartbeat`
+      é a contraparte sem autenticação usada pelo app (device_uuid local é a identidade).
 
 paths:
   /health:
@@ -3347,6 +3349,160 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /hour-lab-devices:
+    get:
+      tags: [Horas]
+      summary: Lista os PCs do laboratório (hour-timer-app) já vistos
+      description: |
+        Admin-only. Cada PC aparece depois do primeiro heartbeat. "Online/offline"
+        não é um campo — decida no cliente a partir de `lastSeenAt` (heartbeat a
+        cada ~30s; recomendado considerar offline acima de ~90s sem heartbeat).
+      responses:
+        "200":
+          description: Lista de dispositivos.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  devices: { type: array, items: { $ref: "#/components/schemas/LabDevice" } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/{id}:
+    patch:
+      tags: [Horas]
+      summary: Renomeia um PC do laboratório
+      description: |
+        Admin-only. Nome é sempre atribuído pelo admin, nunca pelo próprio app —
+        evita bagunça de nomes dados por quem estiver sentado no PC. Rate limit 30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 80 }
+              required: [name]
+      responses:
+        "200":
+          description: Dispositivo renomeado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device: { $ref: "#/components/schemas/LabDevice" }
+        "400":
+          description: Nome vazio ou maior que 80 caracteres.
+        "404":
+          description: Dispositivo não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/{id}/unpair:
+    post:
+      tags: [Horas]
+      summary: Força o PC a voltar pra tela de colar link
+      description: |
+        Admin-only. Não afeta a sessão em si (pausar/encerrar é
+        `/hour-sessions/{id}/...`), só solta o pareamento local do PC — entregue
+        no heartbeat seguinte (até ~30s de atraso). Rate limit 30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Comando registrado.
+        "404":
+          description: Dispositivo não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/{id}/message:
+    post:
+      tags: [Horas]
+      summary: Manda um aviso pra aparecer na tela do PC
+      description: |
+        Admin-only. Entregue no heartbeat seguinte (até ~30s de atraso); o app
+        deduplica pelo id da mensagem, então enviar o mesmo texto de novo exibe
+        de novo. Rate limit 30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: { type: string, maxLength: 300 }
+              required: [text]
+      responses:
+        "204":
+          description: Aviso registrado.
+        "400":
+          description: Texto vazio ou maior que 300 caracteres.
+        "404":
+          description: Dispositivo não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /public/lab-devices/heartbeat:
+    post:
+      tags: [Horas]
+      summary: Heartbeat periódico do app desktop (sem autenticação)
+      description: |
+        Sem login — `deviceId` (UUID gerado e persistido localmente no primeiro
+        boot do app) é a própria identidade. Enviado a cada ~30s pelo
+        hour-timer-app; devolve o nome atribuído pelo admin e os comandos
+        pendentes (despairar / aviso), entregues exatamente uma vez. Rate limit
+        120/min por IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceId: { type: string, format: uuid }
+                token: { type: string, description: "Token da sessão pareada localmente, se houver (64 chars hex)." , nullable: true }
+                appVersion: { type: string, maxLength: 50 }
+              required: [deviceId]
+      responses:
+        "200":
+          description: Nome atual e comandos pendentes.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string, nullable: true }
+                  unpairRequested: { type: boolean }
+                  message:
+                    type: object
+                    nullable: true
+                    properties:
+                      id: { type: string, format: uuid }
+                      text: { type: string }
+                required: [name, unpairRequested]
+        "400":
+          description: deviceId inválido.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /auth/admin/drive-folders/browse:
     get:
       tags: [Arquivos]
@@ -4479,6 +4635,22 @@ components:
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
       required: [id, clientId, clientName, status, elapsedSeconds, balanceMinutes, createdAt, updatedAt]
+
+    LabDevice:
+      type: object
+      description: PC do laboratório rodando o hour-timer-app. "Online/offline" não é campo — decida por lastSeenAt.
+      properties:
+        id: { type: string, format: uuid }
+        deviceUuid: { type: string, format: uuid, description: "Identidade gerada localmente pelo app no primeiro boot." }
+        name: { type: string, nullable: true, description: "Atribuído pelo admin; null até a primeira renomeação." }
+        lastSeenAt: { type: string, format: date-time, nullable: true }
+        lastIp: { type: string, nullable: true }
+        appVersion: { type: string, nullable: true }
+        currentSessionId: { type: string, format: uuid, nullable: true }
+        currentClientName: { type: string, nullable: true }
+        currentStatus: { type: string, enum: [active, paused, ended], nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, deviceUuid, createdAt]
 
     DriveFolder:
       type: object

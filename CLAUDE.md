@@ -31,9 +31,14 @@ apps/
   auth-web/    ← Frontend de login (React 19 + Vite + TanStack Router/Query + Tailwind 4)
   hour-timer-app/ ← App desktop (Tauri v2 + React) pros PCs do laboratório: exibe o
                    cronômetro da sessão de horas do cliente (ver api-go, domínio
-                   hour-sessions). Pareamento por link colado (sem cadastro de
-                   máquina), sem deploy no Coolify — instalador Windows gerado via
-                   `cargo tauri build`, distribuído manualmente pros PCs.
+                   hour-sessions). Pareamento por link colado (sem cadastro manual
+                   de máquina) — cada instalação gera um device_uuid sozinha e
+                   manda heartbeat pra /public/lab-devices/heartbeat; identificação
+                   (nome atribuído pelo admin) e controle (despairar remoto, aviso
+                   na tela) ficam em /hour-lab-devices, visão em
+                   dashboard/web:/admin/horas/dispositivos. Sem deploy no Coolify —
+                   instalador Windows gerado via `cargo tauri build`, distribuído
+                   manualmente pros PCs.
 infra/
   docker-compose.yml      ← Postgres 16 + Redis 7 + API + agent-go + mcp-go
   Dockerfile.api-go
