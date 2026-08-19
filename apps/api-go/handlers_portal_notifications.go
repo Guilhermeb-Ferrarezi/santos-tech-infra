@@ -258,6 +258,31 @@ type portalDispatchInput struct {
 	AlunoIDs []int64 `json:"alunoIds"`
 }
 
+// portalDispatchMaxTargets — teto de ids explícitos num disparo. O corpo é
+// limitado a 64 KiB, o que ainda caberia ~6 mil ids repassados de bandeja ao
+// gateway. 500 cobre a maior turma real com folga.
+const portalDispatchMaxTargets = 500
+
+// total conta os ids de todos os filtros. Zero = broadcast (a semântica de
+// "todos" fica a critério do upstream) — por isso o handler exige admin.
+func (in *portalDispatchInput) total() int {
+	return len(in.CursoIDs) + len(in.TurmaIDs) + len(in.AlunoIDs)
+}
+
+func (in *portalDispatchInput) validate() error {
+	if n := in.total(); n > portalDispatchMaxTargets {
+		return validationErr(fmt.Sprintf("no máximo %d destinatários por disparo (recebidos %d)", portalDispatchMaxTargets, n))
+	}
+	for _, ids := range [][]int64{in.CursoIDs, in.TurmaIDs, in.AlunoIDs} {
+		for _, id := range ids {
+			if id <= 0 {
+				return validationErr("ids de destinatário devem ser positivos")
+			}
+		}
+	}
+	return nil
+}
+
 // handlePortalDispatchTemplate dispara um template. Se o template usa
 // placeholders de curso/turma, resolve e filtra os destinatários elegíveis
 // (mesmo Postgres) antes de pedir o envio ao gateway.
@@ -270,6 +295,17 @@ func (s *Server) handlePortalDispatchTemplate(w http.ResponseWriter, r *http.Req
 	var in portalDispatchInput
 	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	if err := in.validate(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	// Os três filtros vazios significam "todos" para o gateway — um broadcast
+	// para a base inteira. A rota é portalWrite (qualquer cargo com
+	// portal_notificacoes:write), então o broadcast fica restrito a admin.
+	if in.total() == 0 && !s.portalActorIsAdmin(r.Context(), userIDFrom(r)) {
+		writeErr(w, appErr(http.StatusForbidden, "FORBIDDEN", "informe cursoIds, turmaIds ou alunoIds — disparo para todos é restrito a admin"))
 		return
 	}
 
@@ -338,7 +374,9 @@ func (s *Server) handlePortalDispatchTemplate(w http.ResponseWriter, r *http.Req
 		writeErr(w, validationErr(resp.firstError("erro ao disparar notificação")))
 		return
 	}
-	s.portalLogActivity(r, "notification_dispatch_create", "notification_dispatch", fmt.Sprint(id), nil)
+	s.portalLogActivity(r, "notification_dispatch_create", "notification_dispatch", fmt.Sprint(id), map[string]any{
+		"cursoIds": in.CursoIDs, "turmaIds": in.TurmaIDs, "alunoIds": len(in.AlunoIDs), "broadcast": in.total() == 0,
+	})
 	// devolve o Result cru do gateway sob "dispatch" (shape do upstream)
 	var dispatch map[string]any
 	if err := json.Unmarshal(resp.Result, &dispatch); err != nil {
