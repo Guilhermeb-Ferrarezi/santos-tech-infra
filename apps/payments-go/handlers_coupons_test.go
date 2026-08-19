@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"golang.org/x/time/rate"
 )
 
 // ── Fake store de cupons ──────────────────────────────────────────────────────
@@ -158,7 +159,9 @@ var errFakeDuplicate = errors.New("fake: unique violation")
 
 // buildCouponServer monta um Server com o fakeCouponStore injetado.
 func buildCouponServer(st *fakeCouponStore) *Server {
-	return &Server{coupons: st}
+	// Sem limitador nos testes de lógica: o rate-limit real de /coupons/apply é por
+	// IP e process-level, e todos os requests de teste vêm do mesmo IP.
+	return &Server{coupons: st, couponApplyRateLimiter: unlimitedLimiter{}}
 }
 
 // couponFixture cria um cupom no fake store e devolve o Coupon resultante.
@@ -534,8 +537,10 @@ func TestHandleApplyCoupon_Inactive(t *testing.T) {
 	if out.Valid {
 		t.Fatal("válido esperado false para cupom inativo")
 	}
-	if out.Reason != "cupom inativo" {
-		t.Fatalf("reason esperado 'cupom inativo', veio %q", out.Reason)
+	// Razão GENÉRICA de propósito: distinguir "não existe" de "inativo" na rota
+	// pública permitia enumerar cupons por dicionário.
+	if out.Reason != couponInvalid.Reason {
+		t.Fatalf("reason deveria ser genérica (%q), veio %q", couponInvalid.Reason, out.Reason)
 	}
 }
 
@@ -557,8 +562,8 @@ func TestHandleApplyCoupon_Exhausted(t *testing.T) {
 	if out.Valid {
 		t.Fatal("válido esperado false para cupom esgotado")
 	}
-	if out.Reason != "cupom esgotado" {
-		t.Fatalf("reason esperado 'cupom esgotado', veio %q", out.Reason)
+	if out.Reason != couponInvalid.Reason {
+		t.Fatalf("reason deveria ser genérica (%q), veio %q", couponInvalid.Reason, out.Reason)
 	}
 }
 
@@ -971,7 +976,7 @@ func TestCouponDiscount_TetoAbsoluto(t *testing.T) {
 func TestApplyCoupon_RespeitaTeto(t *testing.T) {
 	cSt := newFakeCouponStore()
 	couponFixture(t, cSt, "META90", "percent", 90, -1)
-	s := &Server{coupons: cSt, cfg: Config{CouponMaxDiscountCents: 100_000}}
+	s := &Server{coupons: cSt, cfg: Config{CouponMaxDiscountCents: 100_000}, couponApplyRateLimiter: unlimitedLimiter{}}
 
 	body := `{"code":"META90","amountCents":1000000}`
 	req := httptest.NewRequest("POST", "/coupons/apply", strings.NewReader(body))
@@ -986,5 +991,61 @@ func TestApplyCoupon_RespeitaTeto(t *testing.T) {
 	}
 	if out.DiscountCents != 100_000 || out.FinalCents != 900_000 {
 		t.Fatalf("preview deveria respeitar o teto (desconto 100000, final 900000), veio %d/%d", out.DiscountCents, out.FinalCents)
+	}
+}
+
+// TestApplyCoupon_RateLimit: /coupons/apply é público e sem autenticação. Sem
+// rate-limit, dava para varrer um dicionário de códigos à vontade.
+func TestApplyCoupon_RateLimit(t *testing.T) {
+	cSt := newFakeCouponStore()
+	couponFixture(t, cSt, "EXISTE", "fixed", 100, -1)
+	reg := newIPLimiterRegistry(rate.Every(time.Hour), 2, time.Minute)
+	s := &Server{coupons: cSt, couponApplyRateLimiter: reg.For("203.0.113.50")}
+
+	post := func(code string) int {
+		body := `{"code":"` + code + `","amountCents":10000}`
+		req := httptest.NewRequest("POST", "/coupons/apply", strings.NewReader(body))
+		req.RemoteAddr = "203.0.113.50:1234"
+		w := httptest.NewRecorder()
+		s.handleApplyCoupon(w, req)
+		return w.Code
+	}
+
+	if got := post("TENTA1"); got != http.StatusOK {
+		t.Fatalf("1ª tentativa deveria passar, veio %d", got)
+	}
+	if got := post("TENTA2"); got != http.StatusOK {
+		t.Fatalf("2ª tentativa deveria passar, veio %d", got)
+	}
+	if got := post("TENTA3"); got != http.StatusTooManyRequests {
+		t.Fatalf("3ª tentativa deveria ser barrada com 429, veio %d", got)
+	}
+}
+
+// TestApplyCoupon_RazaoGenerica: a resposta negativa não pode diferenciar
+// "não existe" de "existe mas está inativo/esgotado" — isso é o oráculo.
+func TestApplyCoupon_RazaoGenerica(t *testing.T) {
+	cSt := newFakeCouponStore()
+	inativo := couponFixture(t, cSt, "INATIVO2", "percent", 5, -1)
+	_ = cSt.SetCouponActive(context.Background(), inativo.ID, false)
+	esgotado := couponFixture(t, cSt, "ESGOTADO2", "percent", 5, 1)
+	_ = cSt.IncrementCouponUse(context.Background(), esgotado.ID)
+	s := buildCouponServer(cSt)
+
+	razoes := map[string]bool{}
+	for _, code := range []string{"NAO_EXISTE_MESMO", "INATIVO2", "ESGOTADO2"} {
+		body := `{"code":"` + code + `","amountCents":10000}`
+		req := httptest.NewRequest("POST", "/coupons/apply", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		s.handleApplyCoupon(w, req)
+		var out applyCouponResult
+		json.Unmarshal(w.Body.Bytes(), &out)
+		if out.Valid {
+			t.Fatalf("%s não deveria ser válido", code)
+		}
+		razoes[out.Reason] = true
+	}
+	if len(razoes) != 1 {
+		t.Fatalf("as três recusas deveriam dar a MESMA razão, vieram %d razões distintas: %v", len(razoes), razoes)
 	}
 }

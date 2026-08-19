@@ -119,6 +119,9 @@ type Server struct {
 	// linkPayRateLimiter substitui o rate-limit por IP de /link/{token}/pay em testes;
 	// nil usa o limitador global por IP (payLinkLimiterFor).
 	linkPayRateLimiter rateLimiterIface
+	// couponApplyRateLimiter substitui o rate-limit por IP de /coupons/apply em testes;
+	// nil usa o limitador global por IP (applyCouponLimiters).
+	couponApplyRateLimiter rateLimiterIface
 	// statement store de extrato; nil usa s.store.
 	statement statementStore
 	// queue enfileira tasks asynq (notificação de pagamento). Pode ser nil em

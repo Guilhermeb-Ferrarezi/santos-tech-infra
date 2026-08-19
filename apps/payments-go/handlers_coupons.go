@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"golang.org/x/time/rate"
 )
 
 // couponUniqueViolation retorna true se o erro for de violação de UNIQUE (código 23505).
@@ -172,10 +174,30 @@ type applyCouponResult struct {
 	FinalCents    int64  `json:"finalCents,omitempty"`
 }
 
+// couponInvalid é a ÚNICA resposta negativa de /coupons/apply. Antes cada caso tinha
+// sua própria reason ("cupom não encontrado", "cupom inativo", "cupom esgotado"), o
+// que transformava a rota pública num oráculo: dava para varrer um dicionário de
+// códigos e separar "não existe" de "existe mas está esgotado/inativo".
+var couponInvalid = applyCouponResult{Valid: false, Reason: "cupom inválido"}
+
+// applyCouponLimiters: 20 tentativas/min por IP na validação pública de cupom. Sem
+// isto, /coupons/apply era enumerável à vontade — rota pública, sem autenticação e
+// sem custo por tentativa.
+var applyCouponLimiters = newIPLimiterRegistry(rate.Every(time.Minute/20), 20, 5*time.Minute)
+
 // handleApplyCoupon (POST /coupons/apply) valida um cupom e calcula o desconto.
-// Rota PÚBLICA — sem guard de autenticação. Não incrementa uso (só valida).
+// Rota PÚBLICA — sem guard de autenticação. Não reserva uso (só valida).
 // Retorna sempre 200: {valid:false,reason} ou {valid:true,...}.
 func (s *Server) handleApplyCoupon(w http.ResponseWriter, r *http.Request) {
+	limiter := rateLimiterIface(applyCouponLimiters.For(clientIP(r)))
+	if s.couponApplyRateLimiter != nil {
+		limiter = s.couponApplyRateLimiter
+	}
+	if !limiter.Allow() {
+		writeError(w, http.StatusTooManyRequests, "rate_limited", "Muitas tentativas. Aguarde e tente novamente.")
+		return
+	}
+
 	var in applyCouponInput
 	if err := decodeJSON(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", "JSON inválido")
@@ -194,27 +216,25 @@ func (s *Server) handleApplyCoupon(w http.ResponseWriter, r *http.Request) {
 
 	st := s.couponStoreOf()
 	if st == nil {
-		writeJSON(w, http.StatusOK, applyCouponResult{Valid: false, Reason: "cupom não encontrado"})
+		writeJSON(w, http.StatusOK, couponInvalid)
 		return
 	}
 
 	c, err := st.GetCouponByCode(r.Context(), in.Code)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeJSON(w, http.StatusOK, applyCouponResult{Valid: false, Reason: "cupom não encontrado"})
-			return
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("coupons/apply: falha ao buscar cupom", "code", in.Code, "err", err)
 		}
-		slog.Warn("coupons/apply: falha ao buscar cupom", "code", in.Code, "err", err)
-		writeJSON(w, http.StatusOK, applyCouponResult{Valid: false, Reason: "erro ao validar cupom"})
+		writeJSON(w, http.StatusOK, couponInvalid)
 		return
 	}
 
 	if !c.Active {
-		writeJSON(w, http.StatusOK, applyCouponResult{Valid: false, Reason: "cupom inativo"})
+		writeJSON(w, http.StatusOK, couponInvalid)
 		return
 	}
 	if c.MaxUses != -1 && c.UsedCount >= c.MaxUses {
-		writeJSON(w, http.StatusOK, applyCouponResult{Valid: false, Reason: "cupom esgotado"})
+		writeJSON(w, http.StatusOK, couponInvalid)
 		return
 	}
 
