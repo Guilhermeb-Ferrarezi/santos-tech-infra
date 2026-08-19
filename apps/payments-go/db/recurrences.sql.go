@@ -297,6 +297,80 @@ func (q *Queries) ListRecurrences(ctx context.Context) ([]ListRecurrencesRow, er
 	return items, nil
 }
 
+const listRecurrencesByUserID = `-- name: ListRecurrencesByUserID :many
+SELECT r.id, r.subscription_id, r.product_id, r.customer_id, r.payer_tax_id, r.payer_name,
+       r.amount_cents, r.periodicity, r.due_day, r.start_date::text, COALESCE(r.end_date::text, '')::text AS end_date, r.journey,
+       COALESCE(r.efi_id_rec, ''), COALESCE(r.br_code, ''), COALESCE(r.qr_code, ''), COALESCE(r.public_token, '')::text AS public_token,
+       r.status, r.created_at
+FROM pay_recurrences r
+JOIN pay_customers cu ON cu.id = r.customer_id
+WHERE cu.user_id = $1
+ORDER BY r.created_at DESC
+`
+
+type ListRecurrencesByUserIDRow struct {
+	ID             int64
+	SubscriptionID *int64
+	ProductID      *int64
+	CustomerID     *int64
+	PayerTaxID     string
+	PayerName      string
+	AmountCents    int64
+	Periodicity    string
+	DueDay         *int32
+	StartDate      string
+	EndDate        string
+	Journey        int16
+	EfiIDRec       string
+	BrCode         string
+	QrCode         string
+	PublicToken    string
+	Status         string
+	CreatedAt      pgtype.Timestamptz
+}
+
+// Recorrências do usuário logado, amarradas pelo customer_id (JOIN em pay_customers).
+// NUNCA filtrar só por payer_tax_id aqui: o CPF não é segredo e não prova posse da
+// conta — quem soubesse um CPF lia as assinaturas alheias (valor, copia-e-cola, token).
+func (q *Queries) ListRecurrencesByUserID(ctx context.Context, userID int64) ([]ListRecurrencesByUserIDRow, error) {
+	rows, err := q.db.Query(ctx, listRecurrencesByUserID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecurrencesByUserIDRow
+	for rows.Next() {
+		var i ListRecurrencesByUserIDRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SubscriptionID,
+			&i.ProductID,
+			&i.CustomerID,
+			&i.PayerTaxID,
+			&i.PayerName,
+			&i.AmountCents,
+			&i.Periodicity,
+			&i.DueDay,
+			&i.StartDate,
+			&i.EndDate,
+			&i.Journey,
+			&i.EfiIDRec,
+			&i.BrCode,
+			&i.QrCode,
+			&i.PublicToken,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecurrencesByTaxID = `-- name: ListRecurrencesByTaxID :many
 SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        amount_cents, periodicity, due_day, start_date::text, COALESCE(end_date::text, '')::text AS end_date, journey,

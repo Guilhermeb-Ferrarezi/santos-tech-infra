@@ -84,7 +84,7 @@ func (s *Server) handlePutMeCustomer(w http.ResponseWriter, r *http.Request) {
 	phone := onlyDigits(in.Phone)
 	// O cliente é identificado pelo CPF — sem CPF não há cliente a salvar.
 	if !validCPF(taxID) {
-		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido (11 dígitos)")
+		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido")
 		return
 	}
 	if !validPhone(phone) {
@@ -188,7 +188,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validCPF(in.TaxID) {
-		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido (11 dígitos)")
+		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido")
 		return
 	}
 	if !validPhone(in.Phone) {
@@ -332,18 +332,14 @@ func (s *Server) handleMeCharges(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMeRecurrences lista as assinaturas (PIX Automático) do usuário logado,
-// consolidadas pelo CPF do cliente. Sem customer ainda → lista vazia (200).
+// amarradas ao customer_id do próprio usuário (JOIN pay_customers.user_id).
+//
+// ATENÇÃO: já foi filtrado por payer_tax_id (CPF), o que era um IDOR — o CPF não é
+// segredo, então bastava um CPF vazado para ler nome, valor, periodicidade,
+// copia-e-cola e publicToken das assinaturas alheias. Não volte a filtrar por CPF.
+// Sem assinatura → lista vazia (200).
 func (s *Server) handleMeRecurrences(w http.ResponseWriter, r *http.Request) {
-	cust, err := s.store.GetCustomerByUserID(r.Context(), s.uid(r))
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeJSON(w, http.StatusOK, []Recurrence{})
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", "Falha")
-		return
-	}
-	list, err := s.store.ListRecurrencesByTaxID(r.Context(), cust.TaxID)
+	list, err := s.store.ListRecurrencesByUserID(r.Context(), s.uid(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar")
 		return

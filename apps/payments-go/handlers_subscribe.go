@@ -56,7 +56,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validCPF(in.TaxID) {
-		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido (11 dígitos)")
+		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido")
 		return
 	}
 	if !validPhone(in.Phone) {
