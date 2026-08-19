@@ -20,6 +20,14 @@ COPY --from=builder /app/apps/pay-web/dist /usr/share/nginx/html
 # (workers caem para o usuário `nginx` automaticamente), igual ao comportamento
 # original. O non-root completo do master fica para um passo futuro com a imagem
 # nginxinc/nginx-unprivileged, validado com `docker run` (não só `docker build`).
+#
+# CSP: FONTE ÚNICA. Havia também uma <meta http-equiv="Content-Security-Policy">
+# em apps/pay-web/index.html com as origens da Efí/ClearSale. Políticas múltiplas
+# valem por INTERSEÇÃO — como este header não listava nenhuma origem da Efí,
+# `script-src`/`connect-src` caíam no `default-src 'self'` e a tokenização PCI do
+# cartão era bloqueada em produção. A meta tag foi removida e todas as origens que
+# ela mapeava vivem agora nesta política. Ao adicionar um domínio externo novo,
+# altere APENAS aqui.
 RUN set -eux; \
     printf '%s\n' \
       'server {' \
@@ -30,7 +38,7 @@ RUN set -eux; \
       '  add_header X-Content-Type-Options "nosniff" always;' \
       '  add_header X-Frame-Options "DENY" always;' \
       '  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' \
-      "  add_header Content-Security-Policy \"default-src 'self'; connect-src 'self' https://api.santos-tech.com https://auth.santos-tech.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:\" always;" \
+      "  add_header Content-Security-Policy \"default-src 'self'; script-src 'self' https://device.clearsale.com.br https://web.fpcs-monitor.com.br; connect-src 'self' https://api.santos-tech.com https://auth.santos-tech.com https://tokenizer.sejaefi.com.br https://cobrancas.api.efipay.com.br https://cobrancas-h.api.efipay.com.br https://device.clearsale.com.br; img-src 'self' data: https://device.clearsale.com.br https://web.fpcs-monitor.com.br; style-src 'self' 'unsafe-inline'; font-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'\" always;" \
       '  location / {' \
       '    try_files $uri $uri/ /index.html;' \
       '  }' \
