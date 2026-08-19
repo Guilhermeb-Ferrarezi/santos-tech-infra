@@ -349,7 +349,7 @@ Admin (role admin, sem cargo personalizado):
 - `GET /hour-sessions` — sessões não encerradas, com `elapsedSeconds` calculado → `{sessions:[HourSession]}`
 - `POST /hour-sessions {clientId}` → cria e devolve o token E um código curto
   de 6 dígitos em texto puro (só aqui — o banco guarda o hash de cada um) →
-  201 `{session, token, publicUrl, shortCode}`. `shortCode` expira em 15min e
+  201 `{session, token, publicUrl, shortCode}`. `shortCode` expira em 24h e
   é de uso único — alternativa a colar o link de 64 chars no PC do laboratório.
 - `POST /hour-sessions/{id}/pause` — só de `active` → `paused`; limpa pedido de pausa pendente
 - `POST /hour-sessions/{id}/resume` — só de `paused` → `active`

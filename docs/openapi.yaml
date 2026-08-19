@@ -3427,7 +3427,7 @@ paths:
       summary: Inicia sessão para um cliente
       description: |
         Admin-only. Gera o token do link público E um código curto de 6 dígitos
-        (alternativa a colar o link no PC — expira em 15min, uso único; ver
+        (alternativa a colar o link no PC — expira em 24h, uso único; ver
         `POST /public/hour-sessions/pair-by-code`). Ambos devolvidos em texto
         puro só nesta resposta — o banco guarda apenas o hash do token (e o
         próprio código, zerado no primeiro pareamento). Rate limit 30/min.
@@ -3451,7 +3451,7 @@ paths:
                   session: { $ref: "#/components/schemas/HourSession" }
                   token: { type: string, description: "64 chars hex — só aparece nesta resposta." }
                   publicUrl: { type: string }
-                  shortCode: { type: string, description: "6 dígitos — só aparece nesta resposta. Expira em 15min, uso único." }
+                  shortCode: { type: string, description: "6 dígitos — só aparece nesta resposta. Expira em 24h, uso único." }
                 required: [session, token, publicUrl, shortCode]
         "400":
           description: clientId inválido.
@@ -3654,7 +3654,7 @@ paths:
         Alternativa a colar o link de 64 chars no PC do laboratório: digita-se
         só os 6 dígitos. Devolve um token REEMITIDO (nunca o token original,
         que não fica guardado em texto puro) e zera o código — uso único,
-        mesmo que ainda não tivesse expirado (15min). Rate limit 15/min por IP.
+        mesmo que ainda não tivesse expirado (24h). Rate limit 15/min por IP.
       security: []
       requestBody:
         required: true

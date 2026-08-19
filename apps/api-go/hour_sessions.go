@@ -145,9 +145,13 @@ func scanHourSession(row pgx.Row) (*HourSession, error) {
 	return &h, nil
 }
 
-// shortCodeTTL é a validade do código curto de pareamento (6 dígitos) — janela
-// deliberadamente curta pra limitar o espaço de força-bruta (1M combinações).
-const shortCodeTTL = 15 * time.Minute
+// shortCodeTTL é a validade do código curto de pareamento (6 dígitos). 15min
+// era curto demais pro uso real (admin pode preparar sessões bem antes do
+// cliente sentar no PC) — 24h cobre um dia de operação. Ainda é uso único
+// (zerado no primeiro pareamento) e o rate limit de POST /pair-by-code é
+// 15/min por IP: força-bruta nas 1M combinações levaria ~46 dias contínuos
+// de uma IP só, então o risco não escala muito ao alongar a janela.
+const shortCodeTTL = 24 * time.Hour
 
 // startHourSession cria a sessão + evento "start" numa transação e devolve o
 // token em texto puro e o código curto (só existem neste retorno — o banco
