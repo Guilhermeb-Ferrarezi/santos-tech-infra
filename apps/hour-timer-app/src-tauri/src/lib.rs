@@ -1,6 +1,6 @@
 use tauri::{
     image::Image,
-    menu::{Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     AppHandle, LogicalPosition, Manager, Position, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
@@ -98,17 +98,47 @@ fn ensure_overlay_window(app: &AppHandle) {
         .build();
 }
 
-// Mostra/esconde ao clicar no item do menu da bandeja — a janela já existe
-// desde o boot (ensure_overlay_window), então é só toggle de visibilidade.
-fn toggle_overlay(app: &AppHandle) {
+fn hide_overlay(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
-        let visible = win.is_visible().unwrap_or(false);
-        if visible {
-            let _ = win.hide();
-        } else {
-            let _ = win.show();
-        }
+        let _ = win.hide();
     }
+}
+
+// Os 4 itens marcáveis (✓) do submenu "Cronômetro no canto" — guardados como
+// managed state pra sync_corner_checkmarks conseguir achar e atualizar o
+// check de cada um depois (tanto ao clicar um canto no próprio submenu
+// quanto ao clicar "Aplicar" na janela principal, ver set_overlay_position).
+struct OverlayCornerMenuItems {
+    top_left: CheckMenuItem<tauri::Wry>,
+    top_right: CheckMenuItem<tauri::Wry>,
+    bottom_left: CheckMenuItem<tauri::Wry>,
+    bottom_right: CheckMenuItem<tauri::Wry>,
+}
+
+fn sync_corner_checkmarks(app: &AppHandle, active_corner: &str) {
+    let Some(items) = app.try_state::<OverlayCornerMenuItems>() else {
+        return;
+    };
+    let _ = items.top_left.set_checked(active_corner == "top-left");
+    let _ = items.top_right.set_checked(active_corner == "top-right");
+    let _ = items.bottom_left.set_checked(active_corner == "bottom-left");
+    let _ = items.bottom_right.set_checked(active_corner == "bottom-right");
+}
+
+// Salva o canto, reposiciona+mostra o overlay (janela já existe desde o
+// boot) e mantém os checkmarks do submenu da bandeja em sincronia — chamado
+// tanto pelo comando set_overlay_position (botão "Aplicar" da janela
+// principal) quanto pelos itens do submenu da bandeja diretamente.
+fn apply_overlay_corner(app: &AppHandle, corner: &str) {
+    if let Ok(store) = app.store("config.json") {
+        store.set(OVERLAY_CORNER_KEY, corner);
+    }
+    if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
+        let (x, y) = corner_position_in_work_area(app, OVERLAY_WIDTH, OVERLAY_HEIGHT, 16.0, corner);
+        let _ = win.set_position(Position::Logical(LogicalPosition { x, y }));
+        let _ = win.show();
+    }
+    sync_corner_checkmarks(app, corner);
 }
 
 // Janela de notificação estilo "aviso de antivírus" — canto inferior direito,
@@ -137,20 +167,12 @@ fn ensure_toast_window(app: &AppHandle) {
         .build();
 }
 
-// Comando chamado pelo botão "Aplicar" da tela principal — salva a escolha e
-// reposiciona+mostra o overlay (que já existe desde o boot, ver
-// ensure_overlay_window — este comando nunca cria janela, só mexe numa que
-// já existe, por isso não trava).
+// Comando chamado pelo botão "Aplicar" da tela principal — mesma lógica dos
+// itens do submenu da bandeja (ver apply_overlay_corner), só que disparada
+// pelo front em vez de um clique direto no menu.
 #[tauri::command]
 fn set_overlay_position(app: AppHandle, corner: String) {
-    if let Ok(store) = app.store("config.json") {
-        store.set(OVERLAY_CORNER_KEY, corner.clone());
-    }
-    if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
-        let (x, y) = corner_position_in_work_area(&app, OVERLAY_WIDTH, OVERLAY_HEIGHT, 16.0, &corner);
-        let _ = win.set_position(Position::Logical(LogicalPosition { x, y }));
-        let _ = win.show();
-    }
+    apply_overlay_corner(&app, &corner);
 }
 
 // Comando chamado sempre que o front detecta uma mudança relevante de status
@@ -204,11 +226,55 @@ pub fn run() {
             // novo a cada boot não duplica o registro de autostart.
             let _ = app.autolaunch().enable();
 
-            let show_item = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
-            let overlay_item =
-                MenuItem::with_id(app, "overlay", "Mostrar tempo no canto", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &overlay_item, &quit_item])?;
+            // Glifos Unicode como "ícone" de cada item — menu nativo da
+            // bandeja no Windows não aceita widget/imagem arbitrária dentro
+            // dele (só texto, ícone de imagem por item ou checkmark), e um
+            // glifo simples (◰◳◱◲) já entrega a mesma leitura visual rápida
+            // de "em qual canto" sem precisar gerar 4 ícones de imagem novos.
+            let show_item = MenuItem::with_id(app, "show", "🗖  Abrir", true, None::<&str>)?;
+
+            let initial_corner = read_overlay_corner(&app.handle());
+            let corner_top_left = CheckMenuItem::with_id(
+                app, "overlay_top_left", "◰  Superior esquerdo", true,
+                initial_corner == "top-left", None::<&str>,
+            )?;
+            let corner_top_right = CheckMenuItem::with_id(
+                app, "overlay_top_right", "◳  Superior direito", true,
+                initial_corner == "top-right", None::<&str>,
+            )?;
+            let corner_bottom_left = CheckMenuItem::with_id(
+                app, "overlay_bottom_left", "◱  Inferior esquerdo", true,
+                initial_corner == "bottom-left", None::<&str>,
+            )?;
+            let corner_bottom_right = CheckMenuItem::with_id(
+                app, "overlay_bottom_right", "◲  Inferior direito", true,
+                initial_corner == "bottom-right", None::<&str>,
+            )?;
+            let hide_overlay_item = MenuItem::with_id(app, "overlay_hide", "✕  Esconder", true, None::<&str>)?;
+            let overlay_separator = PredefinedMenuItem::separator(app)?;
+            let overlay_submenu = Submenu::with_id_and_items(
+                app,
+                "overlay_submenu",
+                "⏱  Cronômetro no canto",
+                true,
+                &[
+                    &corner_top_left,
+                    &corner_top_right,
+                    &corner_bottom_left,
+                    &corner_bottom_right,
+                    &overlay_separator,
+                    &hide_overlay_item,
+                ],
+            )?;
+            app.manage(OverlayCornerMenuItems {
+                top_left: corner_top_left,
+                top_right: corner_top_right,
+                bottom_left: corner_bottom_left,
+                bottom_right: corner_bottom_right,
+            });
+
+            let quit_item = MenuItem::with_id(app, "quit", "⏻  Sair", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &overlay_submenu, &quit_item])?;
 
             let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -217,7 +283,11 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main(app),
-                    "overlay" => toggle_overlay(app),
+                    "overlay_top_left" => apply_overlay_corner(app, "top-left"),
+                    "overlay_top_right" => apply_overlay_corner(app, "top-right"),
+                    "overlay_bottom_left" => apply_overlay_corner(app, "bottom-left"),
+                    "overlay_bottom_right" => apply_overlay_corner(app, "bottom-right"),
+                    "overlay_hide" => hide_overlay(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
