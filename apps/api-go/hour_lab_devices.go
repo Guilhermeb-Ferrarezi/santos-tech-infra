@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type LabDevice struct {
@@ -40,29 +41,70 @@ type LabDeviceHeartbeatResult struct {
 
 var errLabDeviceNotFound = appErr(http.StatusNotFound, "LAB_DEVICE_NOT_FOUND", "Dispositivo não encontrado")
 
-// upsertLabDeviceHeartbeat grava/atualiza o dispositivo e devolve, na mesma
-// query, os comandos pendentes ANTES de zerar unpair_requested/pending_pair_token
-// — assim cada comando é entregue exatamente uma vez (a query seguinte já não
-// os vê mais). message_id/text não são zerados: o app deduplica localmente
-// pelo id.
+// labDeviceQuerier é o subconjunto de pgx.Tx que upsertLabDeviceHeartbeatTx usa.
+// Existe pra o teste conseguir provar a entrega-exatamente-uma-vez sem um
+// Postgres real (o harness de teste deste pacote roda com s.db == nil).
+type labDeviceQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// labDeviceHeartbeatUpsertSQL grava/atualiza os campos de heartbeat e devolve os
+// comandos pendentes. As colunas de comando (name, unpair_requested, message_*,
+// pending_pair_token) NÃO entram no SET, então o RETURNING traz justamente os
+// valores ANTIGOS — que é o que o app precisa receber.
+//
+// Antes isto era um único comando com dois CTEs (`upserted` fazendo
+// INSERT...ON CONFLICT DO UPDATE e `cleared` fazendo UPDATE) sobre a MESMA
+// linha: o Postgres aplica só uma das modificações por comando, e todos os
+// sub-statements enxergam o mesmo snapshot — o `cleared` nunca tinha efeito e
+// unpair_requested/pending_pair_token eram reentregues em TODO heartbeat,
+// apesar do comentário prometer "entregue exatamente uma vez".
+const labDeviceHeartbeatUpsertSQL = `
+	INSERT INTO hour_lab_devices (device_uuid, last_seen_at, last_ip, app_version, current_session_id)
+	VALUES ($1, now(), $2, $3, $4::uuid)
+	ON CONFLICT (device_uuid) DO UPDATE SET
+		last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid
+	RETURNING name, unpair_requested, message_id::text, message_text, pending_pair_token`
+
+// labDeviceHeartbeatClearSQL roda como comando SEPARADO, na mesma transação do
+// upsert — é assim que a limpeza de fato acontece. Como o upsert já segurou o
+// lock da linha, um pareamento concorrente (pairLabDeviceViaQR) fica bloqueado
+// até o commit e só então grava o token novo: nenhum token se perde.
+const labDeviceHeartbeatClearSQL = `
+	UPDATE hour_lab_devices SET unpair_requested = false, pending_pair_token = NULL
+	WHERE device_uuid = $1 AND (unpair_requested = true OR pending_pair_token IS NOT NULL)`
+
+// upsertLabDeviceHeartbeat grava/atualiza o dispositivo e devolve os comandos
+// pendentes, zerando unpair_requested/pending_pair_token na mesma transação —
+// assim cada comando é entregue exatamente uma vez. message_id/text não são
+// zerados: o app deduplica localmente pelo id.
 func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, ip, appVersion string, sessionID *string) (*LabDeviceHeartbeatResult, error) {
-	var res LabDeviceHeartbeatResult
-	err := s.db.QueryRow(ctx, `
-		WITH upserted AS (
-			INSERT INTO hour_lab_devices (device_uuid, last_seen_at, last_ip, app_version, current_session_id)
-			VALUES ($1, now(), $2, $3, $4::uuid)
-			ON CONFLICT (device_uuid) DO UPDATE SET
-				last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid
-			RETURNING name, unpair_requested, message_id::text, message_text, pending_pair_token
-		), cleared AS (
-			UPDATE hour_lab_devices SET unpair_requested = false, pending_pair_token = NULL
-			WHERE device_uuid = $1 AND (unpair_requested = true OR pending_pair_token IS NOT NULL)
-		)
-		SELECT name, unpair_requested, message_id, message_text, pending_pair_token FROM upserted`,
-		deviceUUID, ip, appVersion, sessionID).
-		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op depois do Commit
+	res, err := upsertLabDeviceHeartbeatTx(ctx, tx, deviceUUID, ip, appVersion, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, ip, appVersion string, sessionID *string) (*LabDeviceHeartbeatResult, error) {
+	var res LabDeviceHeartbeatResult
+	if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, deviceUUID, ip, appVersion, sessionID).
+		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken); err != nil {
+		return nil, err
+	}
+	if res.UnpairRequested || res.PairToken != nil {
+		if _, err := tx.Exec(ctx, labDeviceHeartbeatClearSQL, deviceUUID); err != nil {
+			return nil, err
+		}
 	}
 	return &res, nil
 }

@@ -534,8 +534,9 @@ CREATE INDEX IF NOT EXISTS idx_hour_session_events_session ON hour_session_event
 -- (nunca pelo próprio PC) para não bagunçar com quem estiver sentado nele.
 -- unpair_requested e message_id/text são comandos de admin entregues no
 -- próximo heartbeat: unpair_requested volta true uma única vez (o UPDATE que
--- zera roda na mesma query do upsert, ver upsertLabDeviceHeartbeat) e
--- message_id troca a cada envio para o app conseguir deduplicar no cliente.
+-- zera roda como comando separado, na mesma transação do upsert, ver
+-- upsertLabDeviceHeartbeat) e message_id troca a cada envio para o app
+-- conseguir deduplicar no cliente.
 CREATE TABLE IF NOT EXISTS hour_lab_devices (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   device_uuid         TEXT NOT NULL UNIQUE,
@@ -555,7 +556,7 @@ CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_last_seen ON hour_lab_devices(la
 -- pending_pair_token: pareamento via QR (admin escaneia com o celular e
 -- escolhe o cliente em /admin/horas/parear/:deviceId). Token em texto puro
 -- (o app precisa dele cru pra completar o pareamento sozinho) entregue uma
--- única vez no heartbeat seguinte e zerado na mesma query (ver
+-- única vez no heartbeat seguinte e zerado na mesma transação (ver
 -- upsertLabDeviceHeartbeat) — mesma janela de exposição de digitar o token
 -- na mão, só que automático.
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS pending_pair_token TEXT;
