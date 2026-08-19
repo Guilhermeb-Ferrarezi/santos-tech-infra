@@ -228,4 +228,35 @@ func headSHA(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func workdirFor(root, app, id string) string { return filepath.Join(root, app+"-"+id) }
+// safeSegment valida os pedaços do nome do diretório de trabalho que vêm de fora
+// (nome do app no payload da Coolify, id do incidente).
+var safeSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// workdirFor monta o diretório de trabalho do incidente dentro do WorkspaceRoot.
+//
+// SEGURANÇA (#7): `app` vinha cru do payload do webhook direto para o
+// filepath.Join, que NORMALIZA "..". Um app chamado "../../etc" fazia o clone —
+// e o os.RemoveAll da limpeza — escapar do WorkspaceRoot. Agora cada segmento é
+// validado e o caminho final precisa continuar sob a raiz.
+func workdirFor(root, app, id string) (string, error) {
+	if app == "" {
+		app = "app" // a Coolify nem sempre manda o nome; ausência não é hostil
+	}
+	// Também recusa o hífen inicial: o caminho vai para o argv do git e um
+	// segmento em "-" é a mesma classe de problema que validRef já cobre.
+	ok := func(seg string) bool {
+		return seg != "." && seg != ".." && !strings.HasPrefix(seg, "-") && safeSegment.MatchString(seg)
+	}
+	if !ok(app) {
+		return "", fmt.Errorf("nome de app inválido para workdir: %q", app)
+	}
+	if !ok(id) {
+		return "", fmt.Errorf("id de incidente inválido para workdir: %q", id)
+	}
+	root = filepath.Clean(root)
+	dest := filepath.Clean(filepath.Join(root, app+"-"+id))
+	if dest == root || !strings.HasPrefix(dest, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("workdir fora do WorkspaceRoot: %q", dest)
+	}
+	return dest, nil
+}

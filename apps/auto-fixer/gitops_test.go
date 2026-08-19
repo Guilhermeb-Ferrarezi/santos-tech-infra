@@ -151,3 +151,27 @@ func TestCommitAllNoChanges(t *testing.T) {
 		t.Fatalf("sem mudanças deveria ser (false, nil), got changed=%v err=%v", changed, err)
 	}
 }
+
+func TestWorkdirForRejeitaTraversal(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator)+"data", "workspaces")
+	bad := []string{"../../etc", "..", ".", "a/b", "a" + string(filepath.Separator) + "b", "app;rm", "app name", "-rf"}
+	for _, app := range bad {
+		if got, err := workdirFor(root, app, "id1"); err == nil {
+			t.Errorf("workdirFor(app=%q) deveria falhar, devolveu %q", app, got)
+		}
+	}
+	if _, err := workdirFor(root, "bot-go", "../../etc"); err == nil {
+		t.Error("id com traversal deveria falhar")
+	}
+	got, err := workdirFor(root, "bot-go", "abc-123")
+	if err != nil {
+		t.Fatalf("caso válido falhou: %v", err)
+	}
+	if want := filepath.Join(root, "bot-go-abc-123"); got != want {
+		t.Errorf("workdirFor = %q, want %q", got, want)
+	}
+	// App vazio (a Coolify nem sempre manda o nome) continua funcionando.
+	if got, err := workdirFor(root, "", "abc"); err != nil || !strings.HasPrefix(got, root) {
+		t.Errorf("app vazio: got %q err %v", got, err)
+	}
+}

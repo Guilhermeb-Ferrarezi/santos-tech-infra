@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -133,7 +134,17 @@ func (w *Workers) HandleFixRun(ctx context.Context, t *asynq.Task) error {
 
 	token := w.repoToken(ctx, in.Repo)
 	cloneURL := repoCloneURL(in.Repo) // Coolify devolve "owner/repo" → URL https
-	workdir := workdirFor(w.cfg.WorkspaceRoot, in.App, in.ID)
+	workdir, err := workdirFor(w.cfg.WorkspaceRoot, in.App, in.ID)
+	if err != nil {
+		return w.fail(ctx, in, "workdir inválido: "+err.Error())
+	}
+	// (#10) O clone ficava no volume para sempre — um repo por incidente até o
+	// disco encher. Some ao fim do run, em qualquer caminho de saída.
+	defer func() {
+		if rerr := os.RemoveAll(workdir); rerr != nil {
+			slog.Warn("não consegui limpar o workdir do incidente", "err", rerr, "workdir", workdir)
+		}
+	}()
 	if err := cloneRepo(ctx, cloneURL, in.Branch, workdir, token); err != nil {
 		return w.fail(ctx, in, "falha ao clonar o repo: "+err.Error())
 	}
