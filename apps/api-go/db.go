@@ -627,6 +627,18 @@ CREATE TABLE IF NOT EXISTS downloads (
 );
 CREATE INDEX IF NOT EXISTS idx_downloads_category ON downloads(category);
 CREATE INDEX IF NOT EXISTS idx_downloads_pinned_created ON downloads(pinned DESC, created_at DESC);
+
+-- Configurações extras do publicador universal (ver social_publish.go):
+-- capa customizada de Reel (mesmo padrão drive_folder_id/file_id/file_name
+-- do arquivo principal, só que pra outro arquivo — a capa), texto
+-- alternativo de acessibilidade (só imagem estática), e itens extras de um
+-- carrossel (o item 1 continua usando drive_folder_id/file_id/file_name
+-- acima; carousel_items guarda os itens 2..10, mesmo shape em JSON).
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_cover_folder_id UUID REFERENCES drive_folders(id) ON DELETE SET NULL;
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_cover_file_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_cover_file_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS alt_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS carousel_items JSONB NOT NULL DEFAULT '[]';
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

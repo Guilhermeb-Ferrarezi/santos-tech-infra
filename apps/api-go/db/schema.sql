@@ -111,6 +111,16 @@ CREATE TABLE IF NOT EXISTS social_posts (
   drive_folder_id     UUID,
   drive_file_id       TEXT NOT NULL DEFAULT '',
   drive_file_name     TEXT NOT NULL DEFAULT '',
+  -- Capa customizada de Reel (mesmo shape do trio acima, mesma ressalva de FK).
+  drive_cover_folder_id UUID,
+  drive_cover_file_id   TEXT NOT NULL DEFAULT '',
+  drive_cover_file_name TEXT NOT NULL DEFAULT '',
+  -- Texto alternativo de acessibilidade (só imagem estática, ver alt_text da
+  -- Graph API do Instagram / alt_text_custom do Facebook).
+  alt_text            TEXT NOT NULL DEFAULT '',
+  -- Itens 2..10 de um carrossel — array de {folderId,fileId,fileName}; o
+  -- item 1 é o trio drive_folder_id/drive_file_id/drive_file_name acima.
+  carousel_items      JSONB NOT NULL DEFAULT '[]',
   formato             TEXT NOT NULL DEFAULT 'estatico',
   objetivo            TEXT NOT NULL DEFAULT 'alcance',
   programa            TEXT NOT NULL DEFAULT '',

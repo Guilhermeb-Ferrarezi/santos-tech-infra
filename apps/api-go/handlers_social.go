@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -62,6 +63,26 @@ func validateSocialPostInput(in *SocialPostInput) error {
 	if in.DriveFolderID == nil {
 		in.DriveFileID = ""
 		in.DriveFileName = ""
+	}
+	// Mesma normalização pro trio de capa do Reel.
+	if in.DriveCoverFolderID != nil && strings.TrimSpace(*in.DriveCoverFolderID) == "" {
+		in.DriveCoverFolderID = nil
+	}
+	if in.DriveCoverFolderID == nil {
+		in.DriveCoverFileID = ""
+		in.DriveCoverFileName = ""
+	}
+	// carousel_items é livre pra salvar incompleto (planejamento em progresso) —
+	// só o TETO de 10 itens no total (1 do trio principal + até 9 aqui) é uma
+	// regra dura, é o limite real da Graph API do Instagram.
+	if len(in.CarouselItems) > 0 {
+		var items []carouselItemRef
+		if err := json.Unmarshal(in.CarouselItems, &items); err != nil {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "carouselItems inválido")
+		}
+		if len(items) > 9 {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Carrossel aceita no máximo 10 itens no total")
+		}
 	}
 	return nil
 }

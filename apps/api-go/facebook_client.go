@@ -20,6 +20,7 @@ type facebookClient struct {
 	baseURL string // ex: https://graph.facebook.com/v21.0
 	pageID  string
 	token   string
+	placeID string // ver Config.FacebookPlaceID — vazio = não marca local
 	client  *http.Client
 }
 
@@ -28,6 +29,7 @@ func newFacebookClient(cfg Config) *facebookClient {
 		baseURL: "https://graph.facebook.com/v21.0",
 		pageID:  cfg.FacebookPageID,
 		token:   cfg.FacebookAccessToken,
+		placeID: cfg.FacebookPlaceID,
 		client:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -36,8 +38,11 @@ func (c *facebookClient) enabled() bool { return c.pageID != "" && c.token != ""
 
 // publishMedia publica uma foto ou um vídeo na Página a partir de uma URL
 // pública (a Graph API busca o arquivo sozinha — não aceita upload binário
-// nesses endpoints). Devolve o ID do post/vídeo criado na Página.
-func (c *facebookClient) publishMedia(ctx context.Context, mediaURL, caption string, isVideo bool) (string, error) {
+// nesses endpoints). Devolve o ID do post/vídeo criado na Página. opts só
+// se aplica à foto: vídeo da Página não tem alt_text_custom nem place nos
+// parâmetros documentados do endpoint /videos (teria que ser via upload
+// binário do thumb, que não implementamos).
+func (c *facebookClient) publishMedia(ctx context.Context, mediaURL, caption string, isVideo bool, opts publishOptions) (string, error) {
 	if !c.enabled() {
 		return "", fmt.Errorf("facebook client não configurado (FACEBOOK_PAGE_ID/FACEBOOK_ACCESS_TOKEN ausentes)")
 	}
@@ -50,6 +55,12 @@ func (c *facebookClient) publishMedia(ctx context.Context, mediaURL, caption str
 	} else {
 		form.Set("url", mediaURL)
 		form.Set("caption", caption)
+		if opts.altText != "" {
+			form.Set("alt_text_custom", opts.altText)
+		}
+		if c.placeID != "" {
+			form.Set("place", c.placeID)
+		}
 	}
 	return c.postForm(ctx, fmt.Sprintf("%s/%s", c.pageID, edge), form)
 }
