@@ -2,9 +2,12 @@ package main
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 )
+
+// sentryMaxIssues é o teto de issues por página aceito do cliente (mesmo teto
+// que o sentryClient aplica internamente).
+const sentryMaxIssues = 100
 
 // handleSentryIssues lista as issues (erros) dos projetos do Sentry do
 // ecossistema. Admin-only. Responde 503 se SENTRY_API_TOKEN não configurado.
@@ -14,13 +17,12 @@ func (s *Server) handleSentryIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))
 	issues, err := s.sentry.listIssues(r.Context(), sentryIssuesParams{
 		Project:     strings.TrimSpace(q.Get("project")),
 		Status:      strings.TrimSpace(q.Get("status")),
 		Search:      q.Get("q"),
 		StatsPeriod: strings.TrimSpace(q.Get("stats_period")),
-		Limit:       limit,
+		Limit:       clampLimit(q.Get("limit"), 25, sentryMaxIssues),
 	})
 	if err != nil {
 		writeErr(w, appErr(http.StatusBadGateway, "SENTRY_ERROR", "Erro ao consultar o Sentry"))
