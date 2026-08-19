@@ -105,6 +105,7 @@ type Download struct {
 	UploadedBy  pgtype.Int4
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
+	ImageUrl    pgtype.Text
 }
 
 type IpBan struct {

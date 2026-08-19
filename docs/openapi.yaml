@@ -1331,6 +1331,10 @@ paths:
                   type: string
                   format: uri
                   description: "Obrigatório para kind=link — deve começar com http:// ou https://."
+                imageUrl:
+                  type: string
+                  format: uri
+                  description: "Opcional, qualquer kind — foto/ícone pro grid. Deve começar com http:// ou https:// (máx 1000 chars)."
               required: [name, kind]
       responses:
         "201":
@@ -1410,6 +1414,7 @@ paths:
                 category: { type: string }
                 version: { type: string }
                 pinned: { type: boolean }
+                imageUrl: { type: string, format: uri, description: "String vazia remove a imagem." }
       responses:
         "200":
           description: Item atualizado
@@ -4776,6 +4781,10 @@ components:
           description: Ausente para kind=link.
         pinned: { type: boolean, description: Favoritado — aparece no topo da lista. }
         updatedAt: { type: string, format: date-time }
+        imageUrl:
+          type: string
+          format: uri
+          description: Foto/ícone do item pro grid (Santos Hub e admin) — URL livre, opcional.
       required: [id, name, description, category, version, kind, url, pinned, updatedAt]
     DownloadAdmin:
       description: Mesmo objeto de `Download`, com os campos internos que só o admin vê.

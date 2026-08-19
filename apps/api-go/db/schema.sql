@@ -199,7 +199,8 @@ CREATE TABLE IF NOT EXISTS downloads (
   pinned       BOOLEAN NOT NULL DEFAULT false,
   uploaded_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  image_url    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS api_router_providers (

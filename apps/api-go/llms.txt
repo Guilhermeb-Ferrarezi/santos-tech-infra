@@ -415,8 +415,10 @@ Admin (role admin, sem cargo personalizado — mesmo critério de model3d):
 - `POST /auth/admin/downloads {name, kind, ...}` → 201 `{item}` · rate limit
   20/min · `kind=file` exige `objectKey`+`filename`+`contentType`+`sizeBytes`
   (do passo do `/presign`); `kind=link` exige `externalUrl` (http/https)
-- `PATCH /auth/admin/downloads/{id} {name?, description?, category?, version?, pinned?}` →
-  `{item}` · rate limit 30/min · só metadados — trocar o arquivo é apagar e recadastrar
+- `PATCH /auth/admin/downloads/{id} {name?, description?, category?, version?, pinned?, imageUrl?}` →
+  `{item}` · rate limit 30/min · só metadados — trocar o arquivo é apagar e recadastrar.
+  `imageUrl` é opcional em qualquer kind (foto/ícone pro grid, URL livre — não é
+  upload); string vazia remove.
 - `DELETE /auth/admin/downloads/{id}` → 204 — apaga o objeto no R2 também, se `kind=file`
 
 Público (sem auth nenhuma — leitura 100% aberta):

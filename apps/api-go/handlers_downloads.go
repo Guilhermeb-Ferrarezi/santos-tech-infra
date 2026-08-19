@@ -93,6 +93,7 @@ type createDownloadRequest struct {
 	ContentType string `json:"contentType"`
 	SizeBytes   int64  `json:"sizeBytes"`
 	ExternalUrl string `json:"externalUrl"`
+	ImageUrl    string `json:"imageUrl"`
 }
 
 // POST /auth/admin/downloads — grava a linha do catálogo. Pra kind="file" o
@@ -120,6 +121,15 @@ func (s *Server) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "categoria (máx 60) ou versão (máx 40) grande demais"))
 		return
 	}
+	body.ImageUrl = strings.TrimSpace(body.ImageUrl)
+	if body.ImageUrl != "" && !strings.HasPrefix(body.ImageUrl, "http://") && !strings.HasPrefix(body.ImageUrl, "https://") {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "imageUrl deve começar com http:// ou https://"))
+		return
+	}
+	if len(body.ImageUrl) > 1000 {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "imageUrl grande demais"))
+		return
+	}
 
 	params := db.CreateDownloadParams{
 		Name:        body.Name,
@@ -128,6 +138,7 @@ func (s *Server) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 		Version:     body.Version,
 		Kind:        body.Kind,
 		UploadedBy:  pgtype.Int4{Int32: int32(userIDFrom(r)), Valid: true},
+		ImageUrl:    pgtype.Text{String: body.ImageUrl, Valid: body.ImageUrl != ""},
 	}
 
 	switch body.Kind {
@@ -199,6 +210,7 @@ func (s *Server) handleUpdateDownload(w http.ResponseWriter, r *http.Request) {
 		Category    *string `json:"category"`
 		Version     *string `json:"version"`
 		Pinned      *bool   `json:"pinned"`
+		ImageUrl    *string `json:"imageUrl"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
@@ -212,6 +224,7 @@ func (s *Server) handleUpdateDownload(w http.ResponseWriter, r *http.Request) {
 		Category:    current.Category,
 		Version:     current.Version,
 		Pinned:      current.Pinned,
+		ImageUrl:    current.ImageUrl,
 	}
 	if body.Name != nil {
 		name := strings.TrimSpace(*body.Name)
@@ -244,6 +257,18 @@ func (s *Server) handleUpdateDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Pinned != nil {
 		params.Pinned = *body.Pinned
+	}
+	if body.ImageUrl != nil {
+		imageURL := strings.TrimSpace(*body.ImageUrl)
+		if imageURL != "" && !strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "imageUrl deve começar com http:// ou https://"))
+			return
+		}
+		if len(imageURL) > 1000 {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "imageUrl grande demais"))
+			return
+		}
+		params.ImageUrl = pgtype.Text{String: imageURL, Valid: imageURL != ""}
 	}
 
 	rec, err := s.q.UpdateDownload(r.Context(), params)
@@ -320,6 +345,9 @@ func (s *Server) downloadPublicJSON(d *db.Download) map[string]any {
 	}
 	if d.SizeBytes.Valid {
 		m["sizeBytes"] = d.SizeBytes.Int64
+	}
+	if d.ImageUrl.Valid {
+		m["imageUrl"] = d.ImageUrl.String
 	}
 	return m
 }

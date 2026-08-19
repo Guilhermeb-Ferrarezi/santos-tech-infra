@@ -627,6 +627,10 @@ CREATE TABLE IF NOT EXISTS downloads (
 );
 CREATE INDEX IF NOT EXISTS idx_downloads_category ON downloads(category);
 CREATE INDEX IF NOT EXISTS idx_downloads_pinned_created ON downloads(pinned DESC, created_at DESC);
+-- Foto/ícone do item pro catálogo (Santos Hub e admin do dashboard mostram
+-- em grid) — URL livre (o admin cola de onde já estiver hospedada), não
+-- upload pelo backend.
+ALTER TABLE downloads ADD COLUMN IF NOT EXISTS image_url TEXT;
 
 -- Configurações extras do publicador universal (ver social_publish.go):
 -- capa customizada de Reel (mesmo padrão drive_folder_id/file_id/file_name
