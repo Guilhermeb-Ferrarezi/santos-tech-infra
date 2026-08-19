@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -40,12 +42,45 @@ func sanitizeFilenameForHeader(name string) string {
 		if r == '\n' || r == '\r' {
 			return -1
 		}
+		// Categoria Unicode Cf (caracteres de formatação, ex. U+202E
+		// RIGHT-TO-LEFT OVERRIDE) — sem isso dá pra disfarçar a extensão real
+		// de um arquivo (ex. fazer "evil<RLO>fdp.exe" aparecer como
+		// "evilexe.pdf" no nome baixado/exibido).
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
 		return r
 	}, name)
 	if strings.TrimSpace(name) == "" {
 		return "arquivo"
 	}
 	return name
+}
+
+// inlineSafeContentTypePrefixes: tipos que o navegador sabe renderizar como
+// mídia pura (imagem/vídeo/áudio) ou como documento sem executar script no
+// contexto do nosso domínio quando abertos INLINE. Qualquer coisa fora disso
+// (HTML, SVG — que pode ter <script> embutido e RODA se aberto como documento
+// top-level —, texto que algum navegador tentaria re-interpretar, etc.) é
+// sempre forçada a `attachment` + `application/octet-stream`, mesmo sem
+// `?download=1` na URL. Isso é a defesa em profundidade: a real proteção
+// contra um upload que MENTE o Content-Type é o sniff nos bytes reais feito em
+// handleUploadDriveFile (o valor salvo no Drive já vem confiável para uploads
+// novos); esta allowlist ainda protege arquivos adicionados fora do nosso
+// fluxo de upload (direto no Drive, ou enviados antes deste fix).
+func isInlineSafeContentType(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	if strings.HasPrefix(ct, "image/svg") {
+		return false // SVG pode ter <script> — nunca inline, mesmo sendo "image/*"
+	}
+	switch {
+	case strings.HasPrefix(ct, "image/"),
+		strings.HasPrefix(ct, "video/"),
+		strings.HasPrefix(ct, "audio/"),
+		ct == "application/pdf":
+		return true
+	}
+	return false
 }
 
 type driveFolderInput struct {
@@ -361,7 +396,18 @@ func (s *Server) handleListDriveFolderFiles(w http.ResponseWriter, r *http.Reque
 // impede que alguém com escrita/leitura numa pasta baixe/renomeie/apague um
 // arquivo de FORA dela só por adivinhar/saber o ID no Drive (a ACL deste
 // dashboard é por pasta raiz, não por ID individual do Drive).
-func (s *Server) ensureFileInFolder(ctx context.Context, folder *DriveFolder, fileID string) error {
+//
+// allowRoot controla se o próprio ID da pasta raiz conta como "dentro dela":
+// true para leitura (download/thumbnail — inofensivo, o Drive nem serve
+// download/thumbnail de um mimeType de pasta), false para qualquer MUTAÇÃO
+// (rename/delete) — `IsDescendant` trata folderID==rootID como válido (correto
+// pra navegação, onde "abrir a raiz" é um no-op), mas sem essa checagem extra
+// alguém com write numa pasta poderia renomear ou mandar pra lixeira a PASTA
+// RAIZ INTEIRA só passando o próprio driveFolderId como fileId.
+func (s *Server) ensureFileInFolder(ctx context.Context, folder *DriveFolder, fileID string, allowRoot bool) error {
+	if !allowRoot && fileID == folder.DriveFolderID {
+		return appErr(http.StatusForbidden, "FORBIDDEN", "não é possível modificar a pasta raiz por aqui")
+	}
 	ok, err := s.drive.IsDescendant(ctx, fileID, folder.DriveFolderID)
 	if err != nil {
 		return appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar o arquivo")
@@ -397,7 +443,7 @@ func (s *Server) handleDownloadDriveFile(w http.ResponseWriter, r *http.Request)
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido"))
 		return
 	}
-	if err := s.ensureFileInFolder(r.Context(), folder, fileID); err != nil {
+	if err := s.ensureFileInFolder(r.Context(), folder, fileID, true); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -415,6 +461,16 @@ func (s *Server) handleDownloadDriveFile(w http.ResponseWriter, r *http.Request)
 	if r.URL.Query().Get("download") != "" {
 		disposition = "attachment"
 	}
+	// Nunca serve inline um tipo fora da allowlist de mídia segura (ver
+	// isInlineSafeContentType) — mesmo sem `?download=1` — e nunca deixa o
+	// Content-Type declarado por fora dessa allowlist chegar ao navegador,
+	// pra não abrir brecha de XSS armazenado (upload que mentiu o tipo, ou
+	// arquivo adicionado fora do nosso fluxo de upload).
+	if !isInlineSafeContentType(contentType) {
+		disposition = "attachment"
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", disposition+`; filename="`+sanitizeFilenameForHeader(filename)+`"`)
 	for k, v := range rangeHeaders {
@@ -449,7 +505,7 @@ func (s *Server) handleDriveFileThumbnail(w http.ResponseWriter, r *http.Request
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido"))
 		return
 	}
-	if err := s.ensureFileInFolder(r.Context(), folder, fileID); err != nil {
+	if err := s.ensureFileInFolder(r.Context(), folder, fileID, true); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -463,6 +519,7 @@ func (s *Server) handleDriveFileThumbnail(w http.ResponseWriter, r *http.Request
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "sem miniatura pra esse arquivo"))
 		return
 	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	w.WriteHeader(http.StatusOK)
@@ -541,7 +598,34 @@ func (s *Server) handleUploadDriveFile(w http.ResponseWriter, r *http.Request) {
 		if contentType == "" {
 			contentType = "application/octet-stream"
 		}
-		f, uploadErr := s.drive.UploadFile(r.Context(), target, filename, contentType, part)
+
+		var reader io.Reader = part
+		if isInlineSafeContentType(contentType) {
+			// Só confere contra os bytes reais quando o tipo DECLARADO já cai
+			// na allowlist "segura pra inline" (mesma allowlist do download) —
+			// é exatamente aí que uma mentira no Content-Type (ex. manda
+			// HTML/script mas declara "image/png") escaparia da checagem de
+			// handleDownloadDriveFile. Tipos fora dessa categoria (docx, zip,
+			// glb…) já são sempre forçados a download lá, então preservam o
+			// Content-Type declarado sem essa validação extra (não vale a pena
+			// trocar por um sniff genérico e perder rótulo específico à toa).
+			peek := make([]byte, 512)
+			n, readErr := io.ReadFull(part, peek)
+			if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+				part.Close()
+				writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "falha ao ler o arquivo"))
+				return
+			}
+			peek = peek[:n]
+			if sniffed := http.DetectContentType(peek); !isInlineSafeContentType(sniffed) {
+				part.Close()
+				writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "o conteúdo do arquivo não corresponde ao tipo declarado"))
+				return
+			}
+			reader = io.MultiReader(bytes.NewReader(peek), part)
+		}
+
+		f, uploadErr := s.drive.UploadFile(r.Context(), target, filename, contentType, reader)
 		part.Close()
 		if uploadErr != nil {
 			slog.Error("falha no upload pro Drive", "folder", folder.ID, "err", uploadErr)
@@ -580,7 +664,7 @@ func (s *Server) handleRenameDriveFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido"))
 		return
 	}
-	if err := s.ensureFileInFolder(r.Context(), folder, fileID); err != nil {
+	if err := s.ensureFileInFolder(r.Context(), folder, fileID, false); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -630,7 +714,7 @@ func (s *Server) handleDeleteDriveFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido"))
 		return
 	}
-	if err := s.ensureFileInFolder(r.Context(), folder, fileID); err != nil {
+	if err := s.ensureFileInFolder(r.Context(), folder, fileID, false); err != nil {
 		writeErr(w, err)
 		return
 	}

@@ -7,6 +7,7 @@ package main
 // antes de qualquer query — cobertura de graceful-degradation "de graça".
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -224,6 +225,60 @@ func TestHandleRenameDriveFileDriveDisabled(t *testing.T) {
 	s.handleRenameDriveFile(w, reqAs(r, 1))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("code=%d", w.Code)
+	}
+}
+
+// TestEnsureFileInFolderRejectsRootMutation cobre a falha de segurança corrigida:
+// allowRoot=false (usado por rename/delete) tem que rejeitar fileID igual ao
+// DriveFolderID da própria pasta ANTES de chamar o Drive — s.drive fica um
+// DriveClient zero-value de propósito (nunca é usado, prova que o bloqueio é
+// short-circuit e não depende de rede).
+func TestIsInlineSafeContentType(t *testing.T) {
+	safe := []string{"image/png", "image/jpeg", "video/mp4", "audio/mpeg", "application/pdf"}
+	for _, ct := range safe {
+		if !isInlineSafeContentType(ct) {
+			t.Errorf("isInlineSafeContentType(%q) = false, esperava true", ct)
+		}
+	}
+	unsafe := []string{
+		"text/html", "image/svg+xml", "application/javascript",
+		"application/octet-stream", "application/zip",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	}
+	for _, ct := range unsafe {
+		if isInlineSafeContentType(ct) {
+			t.Errorf("isInlineSafeContentType(%q) = true, esperava false", ct)
+		}
+	}
+}
+
+func TestSanitizeFilenameForHeaderStripsBidiControl(t *testing.T) {
+	// U+202E RIGHT-TO-LEFT OVERRIDE — usado pra disfarçar extensão de arquivo.
+	name := "evil‮fdp.exe"
+	got := sanitizeFilenameForHeader(name)
+	if strings.ContainsRune(got, '‮') {
+		t.Fatalf("sanitizeFilenameForHeader(%q) = %q, ainda contém RTLO", name, got)
+	}
+	if got != "evilfdp.exe" {
+		t.Fatalf("sanitizeFilenameForHeader(%q) = %q, esperava %q", name, got, "evilfdp.exe")
+	}
+}
+
+func TestEnsureFileInFolderRejectsRootMutation(t *testing.T) {
+	s := testServer(Config{})
+	s.drive = &DriveClient{}
+	folder := &DriveFolder{ID: validUUID, DriveFolderID: "root-drive-id"}
+
+	err := s.ensureFileInFolder(context.Background(), folder, "root-drive-id", false)
+	if err == nil {
+		t.Fatal("esperava erro ao tentar renomear/excluir a própria pasta raiz")
+	}
+	ae, ok := err.(*AppError)
+	if !ok {
+		t.Fatalf("esperava *AppError, veio %T", err)
+	}
+	if ae.Status != http.StatusForbidden {
+		t.Fatalf("status=%d, esperava 403", ae.Status)
 	}
 }
 

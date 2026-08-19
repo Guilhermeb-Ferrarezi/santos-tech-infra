@@ -439,7 +439,12 @@ Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por pe
   imagem/vídeo/PDF quando sabe); `?download=1` força attachment. Repassa
   header `Range` pro Drive (206 Partial Content) — dá seek em vídeo sem
   baixar tudo primeiro. `fileId` validado por ancestralidade contra `{id}`
-  (403 se fora da árvore autorizada — impede adivinhar um ID de fora da pasta)
+  (403 se fora da árvore autorizada — impede adivinhar um ID de fora da pasta).
+  Segurança: só abre INLINE um `Content-Type` da allowlist de mídia segura
+  (imagem/vídeo/áudio/PDF, exceto `image/svg+xml`) — qualquer outro tipo é
+  sempre forçado a `attachment`+`application/octet-stream`, resposta sempre
+  com `X-Content-Type-Options: nosniff` (evita XSS armazenado via upload que
+  mentiu o Content-Type)
 - `GET /drive-folders/{id}/files/{fileId}/thumbnail` — exige `read`; miniatura
   proxeada (thumbnailLink do Drive exige o Bearer token da service account,
   não é URL pública) · rate limit 120/min · 404 se o arquivo não tem
@@ -448,15 +453,24 @@ Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por pe
 - `POST /drive-folders/{id}/files[?parent=<driveFileId>]` — exige `write` na
   raiz `{id}`; `multipart/form-data` campo `file` (máx. 25MB, streamado sem
   bufferizar inteiro em memória) → 201 `{file}` · rate limit 10/min ·
-  `parent` envia pra uma subpasta (mesma validação de ancestralidade do GET)
+  `parent` envia pra uma subpasta (mesma validação de ancestralidade do GET).
+  Segurança: se o `Content-Type` declarado no multipart cair na allowlist
+  "segura pra inline" (imagem/vídeo/áudio/PDF), os primeiros 512 bytes são
+  sniffados (`http.DetectContentType`) e conferidos contra ele — Content-Type
+  mentiroso (ex. HTML/script declarado como `image/png`) → 400, nunca chega
+  a subir pro Drive. Tipos fora dessa allowlist (docx, zip, glb…) não passam
+  por esse sniff (já são sempre forçados a download no endpoint acima)
 - `PATCH /drive-folders/{id}/files/{fileId} {name}` — exige `write` na raiz
   `{id}` (qualquer cargo/usuário com `write`, não só admin) · rate limit
   30/min · renomeia arquivo/subpasta no Drive → `{file}` · `fileId` validado
-  por ancestralidade (403 se fora da árvore)
+  por ancestralidade (403 se fora da árvore) · `fileId` igual ao
+  `driveFolderId` da própria pasta é sempre rejeitado (403) — sem isso dava
+  pra renomear a pasta raiz inteira só com acesso `write`
 - `DELETE /drive-folders/{id}/files/{fileId}` — exige `write` na raiz `{id}`
   · rate limit 30/min · move pra lixeira do Drive (NÃO é exclusão permanente,
   mesmo botão "Remover" da UI do Drive) → 204 · `fileId` validado por
-  ancestralidade (403 se fora da árvore)
+  ancestralidade (403 se fora da árvore) · mesma rejeição de `fileId` igual
+  ao `driveFolderId` da própria pasta (não dá pra excluir a raiz por aqui)
 
 ## Social — Calendário Editorial — `api.santos-tech.com/social`
 

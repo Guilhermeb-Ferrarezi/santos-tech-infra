@@ -425,8 +425,12 @@ func (s *Server) registerDriveRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /auth/admin/drive-folders/{id}/access", s.rateLimit(30, min, s.adminGuard(s.handleSetDriveFolderAccess)))
 
 	mux.HandleFunc("GET /drive-folders/mine", s.authGuard(s.handleListMyDriveFolders))
-	mux.HandleFunc("GET /drive-folders/{id}/files", s.folderAccessGuard("read", s.handleListDriveFolderFiles))
-	mux.HandleFunc("GET /drive-folders/{id}/files/{fileId}/download", s.folderAccessGuard("read", s.handleDownloadDriveFile))
+	// list e download não tinham rate limit — como a service account é
+	// compartilhada por TODAS as pastas/usuários, um único usuário martelando
+	// essas rotas sem limite podia estourar a cota do Drive pro ecossistema
+	// inteiro, não só pra pasta dele.
+	mux.HandleFunc("GET /drive-folders/{id}/files", s.rateLimit(60, min, s.folderAccessGuard("read", s.handleListDriveFolderFiles)))
+	mux.HandleFunc("GET /drive-folders/{id}/files/{fileId}/download", s.rateLimit(60, min, s.folderAccessGuard("read", s.handleDownloadDriveFile)))
 	mux.HandleFunc("GET /drive-folders/{id}/files/{fileId}/thumbnail", s.rateLimit(120, min, s.folderAccessGuard("read", s.handleDriveFileThumbnail)))
 	mux.HandleFunc("PATCH /drive-folders/{id}/files/{fileId}", s.rateLimit(30, min, s.folderAccessGuard("write", s.handleRenameDriveFile)))
 	mux.HandleFunc("DELETE /drive-folders/{id}/files/{fileId}", s.rateLimit(30, min, s.folderAccessGuard("write", s.handleDeleteDriveFile)))

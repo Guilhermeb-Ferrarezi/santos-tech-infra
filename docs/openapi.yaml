@@ -3926,10 +3926,13 @@ paths:
       summary: Lista o conteúdo de uma pasta (arquivos e subpastas)
       description: |
         Exige acesso `read` (ou superior) na pasta raiz `{id}` — resolvido por
-        registro (cargo/membro), não por permissão fixa de cargo. Responde 503
-        se o Drive não estiver configurado (`GOOGLE_DRIVE_SA_JSON_B64` vazio).
-        Itens vêm misturados (pastas e arquivos); distinga pelo `mimeType`
-        (`application/vnd.google-apps.folder` = pasta) pra navegação estilo Drive.
+        registro (cargo/membro), não por permissão fixa de cargo. Rate limit
+        60/min (a service account é compartilhada por todas as pastas/usuários
+        — sem limite aqui, um único usuário podia estourar a cota do Drive pro
+        ecossistema inteiro). Responde 503 se o Drive não estiver configurado
+        (`GOOGLE_DRIVE_SA_JSON_B64` vazio). Itens vêm misturados (pastas e
+        arquivos); distinga pelo `mimeType` (`application/vnd.google-apps.folder`
+        = pasta) pra navegação estilo Drive.
       parameters:
         - name: id
           in: path
@@ -3970,7 +3973,12 @@ paths:
         `multipart/form-data` com o arquivo no campo `file` (máx. 25MB),
         streamado direto pro Drive sem bufferizar o arquivo inteiro em
         memória. `?parent=<driveFileId>` envia pra uma SUBPASTA (mesma
-        validação de ancestralidade do GET) em vez da raiz.
+        validação de ancestralidade do GET) em vez da raiz. Se o
+        `Content-Type` declarado no multipart for de uma categoria "segura pra
+        inline" (imagem/vídeo/áudio/PDF — mesma allowlist do endpoint de
+        download), os bytes reais são conferidos contra ele (sniff dos
+        primeiros 512 bytes); um `Content-Type` mentiroso (ex. HTML/script
+        disfarçado de `image/png`) é rejeitado com 400 em vez de ir pro Drive.
       parameters:
         - name: id
           in: path
@@ -4016,13 +4024,21 @@ paths:
       tags: [Arquivos]
       summary: Baixa ou visualiza um arquivo (proxeado pelo backend)
       description: |
-        Exige acesso `read` na pasta. O download SEMPRE passa pelo backend
-        (nunca um link direto do Drive) — quem tem permissão no Drive é a
-        service account, não o usuário final; a autorização real é a ACL
-        deste dashboard. Por padrão abre INLINE (o navegador renderiza
+        Exige acesso `read` na pasta. Rate limit 60/min (mesmo motivo da
+        listagem — quota da service account é compartilhada). O download
+        SEMPRE passa pelo backend (nunca um link direto do Drive) — quem tem
+        permissão no Drive é a service account, não o usuário final; a
+        autorização real é a ACL deste dashboard. Por padrão abre INLINE (o
+        navegador renderiza
         imagem/vídeo/PDF quando sabe); `?download=1` força o download
         (Content-Disposition: attachment). Suporta o header `Range` — dá pra
-        dar seek num vídeo sem baixar o arquivo inteiro.
+        dar seek num vídeo sem baixar o arquivo inteiro. **Segurança:** só uma
+        allowlist de tipos (imagem, vídeo, áudio, PDF — exceto `image/svg+xml`,
+        que pode ter `<script>` embutido) pode abrir INLINE; qualquer outro
+        `Content-Type` é sempre forçado a `attachment` +
+        `application/octet-stream`, mesmo sem `?download=1`, e a resposta leva
+        `X-Content-Type-Options: nosniff` — evita XSS armazenado a partir de um
+        upload que declarou um tipo de mídia mas contém HTML/script.
       parameters:
         - name: id
           in: path
@@ -4100,7 +4116,10 @@ paths:
         qualquer usuário/cargo com `write` nessa pasta pode renomear). Rate
         limit 30/min. `fileId` é validado por ancestralidade (IsDescendant)
         contra a árvore de `{id}` — não dá pra renomear algo fora do escopo
-        autorizado só adivinhando o ID no Drive.
+        autorizado só adivinhando o ID no Drive. `fileId` igual ao
+        `driveFolderId` da própria pasta raiz é sempre rejeitado (403) — sem
+        essa checagem, "renomear a raiz" seria um caso técnico válido de
+        ancestralidade, e afetaria todo mundo com acesso àquela pasta.
       parameters:
         - name: id
           in: path
@@ -4145,10 +4164,12 @@ paths:
       description: |
         Exige acesso `write` na pasta raiz `{id}` (mesma regra do renomear —
         qualquer usuário/cargo com `write`, não só Admin). Rate limit 30/min.
-        `fileId` validado por ancestralidade, igual ao renomear/download. Move
-        pra lixeira do Google Drive — **não** é exclusão permanente (mesmo
-        comportamento do botão "Remover" da UI do próprio Drive; reversível
-        de lá pelo dono real do arquivo).
+        `fileId` validado por ancestralidade, igual ao renomear/download —
+        incluindo a mesma rejeição de `fileId` igual ao `driveFolderId` da
+        própria pasta (não dá pra mandar a pasta raiz inteira pra lixeira por
+        aqui). Move pra lixeira do Google Drive — **não** é exclusão permanente
+        (mesmo comportamento do botão "Remover" da UI do próprio Drive;
+        reversível de lá pelo dono real do arquivo).
       parameters:
         - name: id
           in: path
