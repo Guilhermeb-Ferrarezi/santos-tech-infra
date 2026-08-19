@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -408,8 +409,7 @@ func (s *Server) ensureFileInFolder(ctx context.Context, folder *DriveFolder, fi
 	if !allowRoot && fileID == folder.DriveFolderID {
 		return appErr(http.StatusForbidden, "FORBIDDEN", "não é possível modificar a pasta raiz por aqui")
 	}
-	ok, err := getOrSetJSON(ctx, s.rdb, cacheDriveDescendantKey(fileID, folder.DriveFolderID), cacheDriveDescendantTTL,
-		func(ctx context.Context) (bool, error) { return s.drive.IsDescendant(ctx, fileID, folder.DriveFolderID) })
+	ok, err := s.driveIsDescendantCached(ctx, fileID, folder.DriveFolderID)
 	if err != nil {
 		return appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar o arquivo")
 	}
@@ -417,6 +417,41 @@ func (s *Server) ensureFileInFolder(ctx context.Context, folder *DriveFolder, fi
 		return appErr(http.StatusForbidden, "FORBIDDEN", "arquivo fora do escopo autorizado")
 	}
 	return nil
+}
+
+// errDriveNotDescendant é um erro-sentinela interno: existe só pra manter o
+// "não é descendente" FORA do cache. getOrSetJSON só grava quando o fetch
+// retorna sem erro, então devolvendo erro no caso negativo o Redis guarda
+// apenas a resposta positiva.
+//
+// Cachear o negativo era perigoso: junto com um erro transitório do Drive
+// virando false (ver IsDescendant), um 429 do Google negava acesso legítimo
+// pelos 5 minutos inteiros do TTL. E o positivo é o único lado que vale
+// cachear de qualquer forma — é ele que se repete a cada item da listagem.
+var errDriveNotDescendant = errors.New("drive: item fora da árvore autorizada")
+
+// driveIsDescendantCached é o caminho ÚNICO de checagem de ancestralidade:
+// cache-aside sobre IsDescendant, que custa até maxDriveAncestryDepth idas
+// sequenciais ao Google por chamada.
+func (s *Server) driveIsDescendantCached(ctx context.Context, fileID, rootID string) (bool, error) {
+	ok, err := getOrSetJSON(ctx, s.rdb, cacheDriveDescendantKey(fileID, rootID), cacheDriveDescendantTTL,
+		func(ctx context.Context) (bool, error) {
+			ok, err := s.drive.IsDescendant(ctx, fileID, rootID)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, errDriveNotDescendant
+			}
+			return true, nil
+		})
+	if errors.Is(err, errDriveNotDescendant) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
 }
 
 // GET /drive-folders/{id}/files/{fileId}/download?download=1 — sempre

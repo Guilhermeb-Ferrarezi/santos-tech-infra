@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path"
 	"testing"
 )
 
@@ -247,5 +248,59 @@ func TestMoveFile(t *testing.T) {
 	}
 	if f.ID != "f1" {
 		t.Fatalf("resultado inesperado: %+v", f)
+	}
+}
+
+// TestIsDescendantErroTransitorioNaoViraNegado: antes, qualquer status != 200 na
+// consulta de `parents` era tratado como "não é ancestral" — um 429 do Google
+// (rate limit da service account) virava 403 "acesso negado", e o false ainda
+// era cacheado por 5 minutos.
+func TestIsDescendantErroTransitorioNaoViraNegado(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		d := fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+		})
+		ok, err := d.IsDescendant(context.Background(), "filho", "raiz")
+		if err == nil {
+			t.Errorf("status %d: err = nil, quer erro (senão vira acesso negado)", status)
+		}
+		if ok {
+			t.Errorf("status %d: ok = true num erro", status)
+		}
+	}
+}
+
+// TestIsDescendantItemSumidoNaoEhErro: 404/403 num dos pais é definitivo (item
+// na lixeira, ou a service account não enxerga) — não conta como ancestral, mas
+// não pode abortar a busca pelos outros pais.
+func TestIsDescendantItemSumidoNaoEhErro(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusForbidden} {
+		d := fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+		})
+		ok, err := d.IsDescendant(context.Background(), "filho", "raiz")
+		if err != nil {
+			t.Errorf("status %d: err = %v, quer nil", status, err)
+		}
+		if ok {
+			t.Errorf("status %d: ok = true", status)
+		}
+	}
+}
+
+// TestIsDescendantAchaAncestral cobre o caminho feliz de vários níveis.
+func TestIsDescendantAchaAncestral(t *testing.T) {
+	parents := map[string][]string{"neto": {"filho"}, "filho": {"raiz"}}
+	d := fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+		id := path.Base(r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"parents": parents[id]})
+	})
+	ok, err := d.IsDescendant(context.Background(), "neto", "raiz")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !ok {
+		t.Error("neto deveria ser descendente de raiz")
 	}
 }

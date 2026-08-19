@@ -332,6 +332,13 @@ func (d *DriveClient) GetThumbnail(ctx context.Context, fileID string) (data []b
 // estourar maxDriveAncestryDepth. Usado pra impedir que alguém com acesso à
 // pasta A navegue pra um ID de pasta arbitrário fora da árvore de A (a ACL é
 // por pasta raiz, não por ID do Drive — ver handleListDriveFolderFiles).
+//
+// Um item que o Drive recusa (404/403: sumiu, foi pra lixeira, ou a service
+// account não enxerga) simplesmente não conta como ancestral e a busca segue
+// pelos outros pais. Já 429/5xx é falha transitória e vira ERRO: antes qualquer
+// status != 200 era tratado como "não é ancestral", então um rate limit do
+// Google respondia "acesso negado" — e o false ainda ia parar no cache de 5min,
+// negando acesso legítimo muito depois do Drive já ter voltado.
 func (d *DriveClient) IsDescendant(ctx context.Context, folderID, rootID string) (bool, error) {
 	if folderID == rootID {
 		return true, nil
@@ -353,10 +360,16 @@ func (d *DriveClient) IsDescendant(ctx context.Context, folderID, rootID string)
 			var meta struct {
 				Parents []string `json:"parents"`
 			}
+			status := resp.StatusCode
 			decodeErr := json.NewDecoder(resp.Body).Decode(&meta)
 			resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				continue // pasta sumiu/sem acesso: só não conta como ancestral, não aborta a busca inteira
+			if status != http.StatusOK {
+				if driveRetryableStatus(status) {
+					// d.do já repetiu e não adiantou: falha transitória do
+					// Drive não pode virar "não é ancestral" (= acesso negado).
+					return false, fmt.Errorf("drive ancestry %s: status %d", id, status)
+				}
+				continue // sumiu/sem acesso: só não conta como ancestral, não aborta a busca inteira
 			}
 			if decodeErr != nil {
 				return false, decodeErr
