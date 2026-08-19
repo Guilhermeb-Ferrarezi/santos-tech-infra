@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/santos-tech/auth/db"
@@ -79,7 +78,7 @@ func (s *Server) handleDownloadsPresign(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{
 		// contentType é fixado pelo servidor e vai assinado na URL: o PUT precisa
 		// mandar exatamente este valor, senão o R2 devolve 403.
-		"uploadUrl":   s.r2.PresignPut(key, contentType, 30*time.Minute),
+		"uploadUrl":   s.r2.PresignPut(key, contentType, presignExpiry),
 		"objectKey":   key,
 		"contentType": contentType,
 	})
@@ -100,8 +99,9 @@ type createDownloadRequest struct {
 }
 
 // POST /auth/admin/downloads — grava a linha do catálogo. Pra kind="file" o
-// arquivo já deve ter sido enviado direto ao R2 via handleDownloadsPresign
-// (esta rota só registra o objectKey); pra kind="link" não há upload nenhum.
+// arquivo já deve ter sido enviado direto ao R2 via handleDownloadsPresign, e é
+// o HeadObject aqui que confere tamanho e Content-Type do que subiu de fato (o
+// que o cliente manda no corpo é só declaração); pra kind="link" não há upload.
 func (s *Server) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	var body createDownloadRequest
@@ -150,14 +150,40 @@ func (s *Server) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "objectKey inválido — peça um upload via /auth/admin/downloads/presign"))
 			return
 		}
-		if body.Filename == "" || body.ContentType == "" || body.SizeBytes <= 0 {
-			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "filename, contentType e sizeBytes são obrigatórios pra kind=file"))
+		if body.Filename == "" {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "filename é obrigatório pra kind=file"))
+			return
+		}
+		if s.r2 == nil {
+			writeErr(w, appErr(http.StatusServiceUnavailable, "UPLOAD_DISABLED", "upload não configurado (R2)"))
+			return
+		}
+		// Enforcement server-side: os bytes foram direto pro R2 sem passar por
+		// aqui, então tamanho e content-type do cliente são só declaração. O que
+		// vale — e o que vai pro catálogo — é o que o objeto REALMENTE tem.
+		size, contentType, found, err := s.r2.HeadObject(r.Context(), body.ObjectKey)
+		if err != nil {
+			writeErr(w, appErr(http.StatusBadGateway, "CHECK_FAILED", "falha ao verificar o arquivo enviado ao R2"))
+			return
+		}
+		if !found {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo não encontrado no R2 — envie o arquivo na uploadUrl antes de cadastrar"))
+			return
+		}
+		if size <= 0 || size > maxDownloadPresignBytes {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo enviado tem tamanho inválido (máx 2GB)"))
+			return
+		}
+		keyExt := strings.ToLower(strings.TrimPrefix(filepath.Ext(body.ObjectKey), "."))
+		wantContentType, okExt := downloadExtContentType[keyExt]
+		if !okExt || contentType != wantContentType {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "o arquivo no R2 não tem o Content-Type esperado pra extensão — refaça o upload pela uploadUrl"))
 			return
 		}
 		params.ObjectKey = pgtype.Text{String: body.ObjectKey, Valid: true}
 		params.Filename = body.Filename
-		params.ContentType = body.ContentType
-		params.SizeBytes = pgtype.Int8{Int64: body.SizeBytes, Valid: true}
+		params.ContentType = contentType
+		params.SizeBytes = pgtype.Int8{Int64: size, Valid: true}
 	case "link":
 		body.ExternalUrl = strings.TrimSpace(body.ExternalUrl)
 		if !strings.HasPrefix(body.ExternalUrl, "http://") && !strings.HasPrefix(body.ExternalUrl, "https://") {

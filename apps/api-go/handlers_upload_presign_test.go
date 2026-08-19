@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -190,5 +191,29 @@ func TestHandleVideoPresignContentTypeFixado(t *testing.T) {
 	}
 	if u.Query().Get("X-Amz-SignedHeaders") != "content-type;host" {
 		t.Errorf("SignedHeaders inesperado: %q", u.Query().Get("X-Amz-SignedHeaders"))
+	}
+}
+
+// TestPresignExpiryCurta: a URL presigned vale só o tempo de o cliente COMEÇAR o
+// PUT. Eram 15-30min, tempo de sobra pra a URL vazar e ser reusada pra
+// sobrescrever um objeto já catalogado.
+func TestPresignExpiryCurta(t *testing.T) {
+	if presignExpiry > 2*time.Minute {
+		t.Fatalf("presignExpiry = %v, quer no máximo 2min", presignExpiry)
+	}
+	w := presignReq(t, presignUploadRequest{Filename: "aula.mp4", ContentType: "video/mp4", Size: 1 << 20})
+	var resp struct {
+		UploadURL string `json:"uploadUrl"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	u, err := url.Parse(resp.UploadURL)
+	if err != nil {
+		t.Fatalf("uploadUrl inválida: %v", err)
+	}
+	want := strconv.Itoa(int(presignExpiry.Seconds()))
+	if got := u.Query().Get("X-Amz-Expires"); got != want {
+		t.Errorf("X-Amz-Expires = %q, quer %q", got, want)
 	}
 }

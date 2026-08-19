@@ -9,6 +9,12 @@ import (
 
 const maxPresignVideoBytes = 500 << 20 // 500 MB — mesmo teto do admin antigo
 
+// presignExpiry: a URL vale só o tempo de o cliente começar o PUT (o R2 valida
+// a assinatura ao RECEBER a requisição, não ao terminá-la — um upload longo que
+// começou dentro da janela conclui normalmente). Eram 15-30min, tempo de sobra
+// pra a URL vazar e ser reusada pra sobrescrever o objeto já catalogado.
+const presignExpiry = 2 * time.Minute
+
 // videoExtByType são os formatos de vídeo aceitos pro upload direto (presigned).
 // Diferente de uploadExt, aqui não dá pra fazer sniff de magic-bytes (os bytes
 // nunca passam pelo backend), mas o content-type NÃO é livre: só os desta
@@ -61,7 +67,7 @@ func (s *Server) handleVideoPresign(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFrom(r)
 	key := fmt.Sprintf("uploads/%d/%s.%s", uid, randomToken(8), ext)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"uploadUrl": s.r2.PresignPut(key, contentType, 15*time.Minute),
+		"uploadUrl": s.r2.PresignPut(key, contentType, presignExpiry),
 		"publicUrl": s.r2.PublicURL(key),
 		// O PUT precisa mandar exatamente este Content-Type: ele é parte da
 		// assinatura (qualquer outro valor devolve 403 do R2).
