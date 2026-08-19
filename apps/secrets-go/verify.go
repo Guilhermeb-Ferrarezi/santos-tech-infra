@@ -3,6 +3,7 @@ package main
 import (
 	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -75,7 +76,33 @@ func assignmentRegex(keyword string) *regexp.Regexp {
 	// [ \t]* (não \s*) entre "=" e o valor: um "=" seguido de quebra de
 	// linha (valor vazio, ex: "API_KEY=\nOUTRA_VAR=...") não pode deixar o
 	// regex atravessar a linha e capturar o nome da PRÓXIMA variável.
-	return regexp.MustCompile(`(?i)` + escaped + "[\"'`]?[ \t]*[:=][ \t]*[\"'`]?([A-Za-z0-9_\\-\\.\\/\\+]{16,})[\"'`]?")
+	return cachedRegex("assign|"+keyword,
+		`(?i)`+escaped+"[\"'`]?[ \t]*[:=][ \t]*[\"'`]?([A-Za-z0-9_\\-\\.\\/\\+]{16,})[\"'`]?")
+}
+
+// ── Cache de regex ───────────────────────────────────────────────────────
+// assignmentRegex e valuePrefixRegex são chamados uma vez POR ARQUIVO
+// escaneado, e regexp.MustCompile não é barato: um scan grande fazia centenas
+// de milhares de compilações do mesmo punhado de padrões (o conjunto de
+// keywords é pequeno e estável). O cache mantém uma entrada por keyword.
+
+var (
+	regexCacheMu sync.RWMutex
+	regexCache   = map[string]*regexp.Regexp{}
+)
+
+func cachedRegex(key, pattern string) *regexp.Regexp {
+	regexCacheMu.RLock()
+	re, ok := regexCache[key]
+	regexCacheMu.RUnlock()
+	if ok {
+		return re
+	}
+	re = regexp.MustCompile(pattern)
+	regexCacheMu.Lock()
+	regexCache[key] = re
+	regexCacheMu.Unlock()
+	return re
 }
 
 // valuePrefixRegex reconhece quando a keyword É um prefixo de valor
@@ -103,7 +130,7 @@ func valuePrefixRegex(keyword string) *regexp.Regexp {
 	}
 	// charset inclui "." porque tokens tipo SendGrid ("SG.xxxx.xxxx") e
 	// muitos webhooks têm pontos internos; entropia/placeholder filtram o lixo.
-	return regexp.MustCompile(regexp.QuoteMeta(best) + `[A-Za-z0-9_\-\.]{8,}`)
+	return cachedRegex("prefix|"+best, regexp.QuoteMeta(best)+`[A-Za-z0-9_\-\.]{8,}`)
 }
 
 // verifyContent confere o conteúdo real do arquivo (não a resposta "fuzzy" da
