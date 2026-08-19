@@ -38,16 +38,21 @@ FROM pay_charges
 WHERE public_token = $1;
 
 -- name: MarkChargePaid :exec
+-- Aceita 'expired' além de 'pending': o pagamento vem CONFIRMADO pelo gateway, e uma
+-- cobrança que o job de expiração já fechou (ou que foi paga no limite da janela) não
+-- pode ficar sem baixa — o dinheiro está na Efí de qualquer jeito.
 UPDATE pay_charges
 SET status = 'paid', paid_at = now()
-WHERE correlation_id = $1 AND status = 'pending';
+WHERE correlation_id = $1 AND status IN ('pending', 'expired');
 
 -- name: MarkChargePaidByProviderID :execrows
 -- Boleto (API Cobranças): a notificação casa pelo charge_id do Efí (provider_charge_id),
 -- não pelo correlation_id. Devolve nº de linhas afetadas (>0 = realmente marcou paga agora).
+-- Aceita 'expired' pelo mesmo motivo de MarkChargePaid: boleto liquida em D+1 e o
+-- gateway já confirmou o pagamento.
 UPDATE pay_charges
 SET status = 'paid', paid_at = now()
-WHERE provider_charge_id = $1 AND status = 'pending';
+WHERE provider_charge_id = $1 AND status IN ('pending', 'expired');
 
 -- name: PublicTokenByProviderID :one
 SELECT public_token
@@ -114,11 +119,18 @@ WHERE cu.tax_id = $1
 ORDER BY ci.charge_id;
 
 -- name: ExpireOverdueCharges :execrows
--- Marca como expiradas as cobranças pendentes cujo QR já passou da validade
+-- Marca como expiradas as cobranças PIX pendentes cujo QR já passou da validade
 -- (vencimento + 23h, igual à expiração enviada à Efí em createAndPersistCharge).
+--
+-- O filtro method = 'pix' é obrigatório: a janela de 23h é a do QR do PIX e não vale
+-- para os outros meios. Sem ele, cartão (que nasce com due_date = hoje) expirava em
+-- ~23h e boleto liquidado em D+1 já chegava expirado — e como MarkChargePaidByProviderID
+-- não casava com 'expired', a confirmação virava no-op: dinheiro na Efí, cobrança
+-- expirada no banco.
 UPDATE pay_charges
 SET status = 'expired'
 WHERE status = 'pending'
+  AND method = 'pix'
   AND (due_date + interval '23 hours') < now();
 
 -- name: CancelChargeByToken :one

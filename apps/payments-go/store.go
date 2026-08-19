@@ -682,8 +682,9 @@ func (s *Store) MarkChargeRefunded(ctx context.Context, correlationID string) er
 	return err
 }
 
-// ExpireOverdueCharges marca como expiradas as cobranças pendentes vencidas (job
-// periódico). Devolve quantas foram expiradas.
+// ExpireOverdueCharges marca como expiradas as cobranças PIX pendentes vencidas (job
+// periódico). Devolve quantas foram expiradas. Só PIX: a janela de 23h é a do QR, e
+// aplicá-la a cartão/boleto expirava cobranças que ainda seriam pagas.
 func (s *Store) ExpireOverdueCharges(ctx context.Context) (int64, error) {
 	return s.q.ExpireOverdueCharges(ctx)
 }
