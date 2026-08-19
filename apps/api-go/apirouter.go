@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -24,6 +25,11 @@ var apiRouterHTTP = &http.Client{Timeout: 30 * time.Second}
 
 var errAPIRouterNoActiveKeys = errors.New("apirouter: nenhuma chave ativa para o provider")
 var errAPIRouterAllKeysExhausted = errors.New("apirouter: todas as chaves ativas falharam")
+
+// errAPIRouterInvalidPath: o path pedido tentaria sair do host do provider
+// (sequestro de host) — a requisição carrega a chave decifrada no header de
+// auth, então mandar para outro host é exfiltração de credencial.
+var errAPIRouterInvalidPath = errors.New("apirouter: path inválido (precisa começar com / e não pode trocar o host do provider)")
 
 const (
 	apiRouterOutcomeSuccess        = "success"
@@ -65,6 +71,63 @@ func authHeaderValue(scheme, secret string) string {
 	return scheme + " " + secret
 }
 
+// apiRouterRequestURL junta base_url + path SEM deixar o path trocar o host.
+// A concatenação crua ("https://api.x.com" + path) era sequestrável: um path
+// como "@evil.com/v1/models" produz "https://api.x.com@evil.com/v1/models",
+// cujo host é evil.com — e buildAPIRouterRequest manda a chave decifrada no
+// header de auth. Mesma armadilha com "//evil.com/x" (URL protocolo-relativa).
+//
+// Regras: path vazio = a própria base_url (usado por test_path vazio); senão
+// precisa começar com "/" e não pode começar com "//". A query é separada
+// antes do JoinPath (que escaparia o "?") e reanexada depois. No fim,
+// scheme/host/userinfo do resultado são conferidos contra a base — cinto e
+// suspensório caso alguma regra acima escape.
+func apiRouterRequestURL(baseURL, path string) (string, error) {
+	base, err := url.Parse(baseURL)
+	if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") {
+		return "", fmt.Errorf("apirouter: base_url inválida: %q", baseURL)
+	}
+	if path == "" {
+		return base.String(), nil
+	}
+	if !apiRouterValidPath(path) {
+		return "", errAPIRouterInvalidPath
+	}
+	rawPath, rawQuery, hasQuery := strings.Cut(path, "?")
+	u := base.JoinPath(rawPath)
+	if u.Scheme != base.Scheme || u.Host != base.Host || u.User != nil {
+		return "", errAPIRouterInvalidPath
+	}
+	if hasQuery {
+		u.RawQuery = rawQuery
+	}
+	return u.String(), nil
+}
+
+// apiRouterValidPath valida a SINTAXE do path (sem precisar da base_url), pra
+// os handlers recusarem com 400 antes de chegar no provider e pro cadastro de
+// provider barrar test_path/chat_path envenenados. Vazio é válido: test_path
+// vazio significa "GET na própria base_url" e chat_path vazio cai no default
+// do adapter.
+func apiRouterValidPath(path string) bool {
+	if path == "" {
+		return true
+	}
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		return false
+	}
+	if strings.Contains(path, "#") {
+		return false
+	}
+	return strings.IndexFunc(path, isCtlByte) < 0
+}
+
+// isCtlByte reporta se r é um caractere de controle (CR/LF/NUL/DEL...), que
+// não tem uso legítimo num path e serve pra confundir proxies.
+func isCtlByte(r rune) bool {
+	return r < 0x20 || r == 0x7f
+}
+
 // buildAPIRouterRequest monta a requisição HTTP para uma chave decifrada:
 // base_url do provider + path, com o header de auth configurado e headers extras.
 // contentType vazio com body != nil assume application/json (comportamento
@@ -74,7 +137,11 @@ func buildAPIRouterRequest(ctx context.Context, provider db.ApiRouterProvider, s
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, provider.BaseUrl+path, reader)
+	full, err := apiRouterRequestURL(provider.BaseUrl, path)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, full, reader)
 	if err != nil {
 		return nil, fmt.Errorf("apirouter: montar request: %w", err)
 	}

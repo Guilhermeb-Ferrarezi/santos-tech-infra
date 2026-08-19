@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/santos-tech/auth/db"
@@ -120,5 +121,108 @@ func TestTestAPIRouterKeyMontaRequestCorretamente(t *testing.T) {
 	}
 	if classifyAPIRouterStatus(provider.UnauthorizedCodes, provider.NoCreditCodes, resp.StatusCode) != apiRouterOutcomeUnauthorized {
 		t.Fatalf("esperava classify=unauthorized pro status %d", resp.StatusCode)
+	}
+}
+
+// Sequestro de host: buildAPIRouterRequest manda a chave decifrada no header
+// de auth, então um path que troque o host exfiltra a credencial.
+func TestAPIRouterRequestURL(t *testing.T) {
+	const base = "https://api.provider.com"
+	cases := []struct {
+		name    string
+		base    string
+		path    string
+		want    string
+		wantErr bool
+	}{
+		{name: "path normal", base: base, path: "/v1/models", want: "https://api.provider.com/v1/models"},
+		{name: "com query", base: base, path: "/v1/listen?model=nova-3&smart_format=true", want: "https://api.provider.com/v1/listen?model=nova-3&smart_format=true"},
+		{name: "path vazio usa a base", base: base, path: "", want: "https://api.provider.com"},
+		{name: "base com prefixo", base: "https://api.provider.com/openai", path: "/v1/models", want: "https://api.provider.com/openai/v1/models"},
+
+		{name: "userinfo sequestra o host", base: base, path: "@evil.com/v1/models", wantErr: true},
+		{name: "protocolo-relativa", base: base, path: "//evil.com/x", wantErr: true},
+		{name: "sem barra inicial", base: base, path: "v1/models", wantErr: true},
+		{name: "url absoluta", base: base, path: "https://evil.com/x", wantErr: true},
+		{name: "CRLF no path", base: base, path: "/v1/models\r\nX-Evil: 1", wantErr: true},
+		{name: "fragmento", base: base, path: "/v1/models#x", wantErr: true},
+		{name: "base_url invalida", base: "nao-e-url", path: "/v1/models", wantErr: true},
+	}
+	for _, c := range cases {
+		got, err := apiRouterRequestURL(c.base, c.path)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("%s: esperava erro, veio %q", c.name, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: erro inesperado: %v", c.name, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: got %q, queria %q", c.name, got, c.want)
+		}
+	}
+}
+
+// O host da URL final nunca pode diferir do host da base_url, aconteça o que
+// acontecer com o path.
+func TestAPIRouterRequestURLNuncaTrocaHost(t *testing.T) {
+	paths := []string{
+		"@evil.com/v1/models",
+		"//evil.com/x",
+		"/../..//evil.com/x",
+		"https://evil.com/x",
+		"\\evil.com/x",
+		"/v1/../../../etc/passwd",
+	}
+	for _, p := range paths {
+		got, err := apiRouterRequestURL("https://api.provider.com", p)
+		if err != nil {
+			continue // rejeitado: ótimo
+		}
+		u, perr := url.Parse(got)
+		if perr != nil {
+			t.Errorf("path %q gerou URL impossível de parsear: %q", p, got)
+			continue
+		}
+		if u.Host != "api.provider.com" || u.User != nil {
+			t.Errorf("path %q sequestrou o host: %q", p, got)
+		}
+	}
+}
+
+// buildAPIRouterRequest é o ponto onde a chave decifrada entra no header —
+// tem que recusar o path envenenado ANTES de montar a requisição.
+func TestBuildAPIRouterRequestRecusaHostSequestrado(t *testing.T) {
+	provider := db.ApiRouterProvider{BaseUrl: "https://api.provider.com", AuthHeader: "Authorization", AuthScheme: "Bearer"}
+	for _, p := range []string{"@evil.com/v1/models", "//evil.com/x"} {
+		req, err := buildAPIRouterRequest(context.Background(), provider, "sk-secreta", http.MethodGet, p, nil, "", nil)
+		if err == nil {
+			t.Errorf("path %q foi aceito: url=%s auth=%q", p, req.URL, req.Header.Get("Authorization"))
+		}
+	}
+	req, err := buildAPIRouterRequest(context.Background(), provider, "sk-secreta", http.MethodGet, "/v1/models", nil, "", nil)
+	if err != nil {
+		t.Fatalf("path legítimo recusado: %v", err)
+	}
+	if req.URL.String() != "https://api.provider.com/v1/models" {
+		t.Errorf("url = %s", req.URL)
+	}
+}
+
+func TestAPIRouterValidPath(t *testing.T) {
+	ok := []string{"", "/v1/models", "/v1/listen?model=nova-3", "/v1/text-to-speech/abc?output_format=mp3"}
+	bad := []string{"@evil.com/x", "//evil.com/x", "v1/models", "https://evil.com/x", "/x#y", "/x\ny"}
+	for _, p := range ok {
+		if !apiRouterValidPath(p) {
+			t.Errorf("apiRouterValidPath(%q) = false, queria true", p)
+		}
+	}
+	for _, p := range bad {
+		if apiRouterValidPath(p) {
+			t.Errorf("apiRouterValidPath(%q) = true, queria false", p)
+		}
 	}
 }

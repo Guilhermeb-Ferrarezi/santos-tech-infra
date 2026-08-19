@@ -170,6 +170,12 @@ func (s *Server) handleCreateAPIRouterProvider(w http.ResponseWriter, r *http.Re
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "opAdapter inválido"))
 		return
 	}
+	// testPath/chatPath também viram URL com a chave decifrada junto — mesma
+	// regra do /proxy, barrada já no cadastro.
+	if !apiRouterValidPath(body.TestPath) || !apiRouterValidPath(body.ChatPath) {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_PATH", "testPath/chatPath precisam começar com / e não podem trocar o host do provider"))
+		return
+	}
 	body = body.defaults()
 
 	p, err := s.q.InsertAPIRouterProvider(r.Context(), db.InsertAPIRouterProviderParams{
@@ -211,6 +217,12 @@ func (s *Server) handleUpdateAPIRouterProvider(w http.ResponseWriter, r *http.Re
 	}
 	if body.OpAdapter != "" && !validOpAdapters[body.OpAdapter] {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "opAdapter inválido"))
+		return
+	}
+	// testPath/chatPath também viram URL com a chave decifrada junto — mesma
+	// regra do /proxy, barrada já no cadastro.
+	if !apiRouterValidPath(body.TestPath) || !apiRouterValidPath(body.ChatPath) {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_PATH", "testPath/chatPath precisam começar com / e não podem trocar o host do provider"))
 		return
 	}
 	body = body.defaults()
@@ -517,6 +529,14 @@ func (s *Server) handleAPIRouterProxy(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "path é obrigatório (ex.: /v1/chat/completions)"))
 		return
 	}
+	// O path do chamador vira URL junto com a base_url do provider E leva a
+	// chave decifrada no header de auth: se ele puder trocar o host (ex.
+	// "@evil.com/v1/models"), a credencial vaza pro atacante. Ver
+	// apiRouterValidPath/apiRouterRequestURL em apirouter.go.
+	if !apiRouterValidPath(body.Path) {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_PATH", "path precisa começar com / e não pode trocar o host do provider"))
+		return
+	}
 	method := body.Method
 	if method == "" {
 		method = http.MethodPost
@@ -543,6 +563,8 @@ func (s *Server) handleAPIRouterProxy(w http.ResponseWriter, r *http.Request) {
 	outcome, err := s.executeAPIRouterRequest(r.Context(), provider, method, body.Path, payload, "", headers)
 	if err != nil {
 		switch {
+		case errors.Is(err, errAPIRouterInvalidPath):
+			writeErr(w, appErr(http.StatusBadRequest, "INVALID_PATH", "path inválido para este provider"))
 		case errors.Is(err, errAPIRouterNoActiveKeys):
 			writeErr(w, appErr(http.StatusServiceUnavailable, "NO_ACTIVE_KEYS", "provider sem chaves ativas"))
 		case errors.Is(err, errAPIRouterAllKeysExhausted):
@@ -617,6 +639,8 @@ func (s *Server) handleAPIRouterChat(w http.ResponseWriter, r *http.Request) {
 	outcome, err := s.executeAPIRouterRequest(r.Context(), provider, http.MethodPost, path, reqBody, "", headers)
 	if err != nil {
 		switch {
+		case errors.Is(err, errAPIRouterInvalidPath):
+			writeErr(w, appErr(http.StatusBadRequest, "INVALID_PATH", "path inválido para este provider"))
 		case errors.Is(err, errAPIRouterNoActiveKeys):
 			writeErr(w, appErr(http.StatusServiceUnavailable, "NO_ACTIVE_KEYS", "provider sem chaves ativas"))
 		case errors.Is(err, errAPIRouterAllKeysExhausted):
@@ -746,6 +770,8 @@ func (s *Server) handleAPIRouterOp(w http.ResponseWriter, r *http.Request) {
 // HTTP com o mesmo vocabulário do /chat.
 func (s *Server) apiRouterWriteExecuteErr(w http.ResponseWriter, code string, err error) {
 	switch {
+	case errors.Is(err, errAPIRouterInvalidPath):
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_PATH", "path inválido para este provider"))
 	case errors.Is(err, errAPIRouterNoActiveKeys):
 		writeErr(w, appErr(http.StatusServiceUnavailable, "NO_ACTIVE_KEYS", "provider sem chaves ativas"))
 	case errors.Is(err, errAPIRouterAllKeysExhausted):
