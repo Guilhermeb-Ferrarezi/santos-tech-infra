@@ -10,14 +10,16 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
 
-  // Duas páginas: a janela principal (index.html) e o widget flutuante do
-  // canto inferior direito (overlay.html), criado pelo Rust sob demanda
-  // (ver src-tauri/src/lib.rs, toggle_overlay).
+  // Três páginas: a janela principal (index.html), o widget flutuante do
+  // canto inferior direito (overlay.html, criado sob demanda) e o popup de
+  // aviso do admin (toast.html, criado escondido já no boot) — ver
+  // src-tauri/src/lib.rs (toggle_overlay / ensure_toast_window).
   build: {
     rollupOptions: {
       input: {
         main: fileURLToPath(new URL("./index.html", import.meta.url)),
         overlay: fileURLToPath(new URL("./overlay.html", import.meta.url)),
+        toast: fileURLToPath(new URL("./toast.html", import.meta.url)),
       },
     },
   },

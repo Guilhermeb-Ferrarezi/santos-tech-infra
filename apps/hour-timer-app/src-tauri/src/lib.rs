@@ -8,6 +8,10 @@ const OVERLAY_LABEL: &str = "overlay";
 const OVERLAY_WIDTH: f64 = 220.0;
 const OVERLAY_HEIGHT: f64 = 70.0;
 
+const TOAST_LABEL: &str = "toast";
+const TOAST_WIDTH: f64 = 340.0;
+const TOAST_HEIGHT: f64 = 120.0;
+
 // Janela flutuante com o tempo, canto inferior direito — mostra/esconde ao
 // clicar de novo no item do menu da bandeja. Só é criada na primeira vez.
 fn toggle_overlay(app: &AppHandle) {
@@ -44,6 +48,43 @@ fn toggle_overlay(app: &AppHandle) {
         .resizable(false)
         .shadow(false)
         .transparent(true)
+        .build();
+}
+
+// Janela de notificação estilo "aviso de antivírus" — canto inferior direito,
+// por cima de tudo. Criada já no boot (escondida): o próprio toast.tsx decide
+// quando mostrar/esconder (poll no store por mensagem nova do admin, ver
+// useDeviceHeartbeat.ts), sem precisar de IPC entre janelas — mesmo padrão
+// autocontido do overlay.tsx.
+fn ensure_toast_window(app: &AppHandle) {
+    if app.get_webview_window(TOAST_LABEL).is_some() {
+        return;
+    }
+
+    let (x, y) = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| {
+            let scale = m.scale_factor();
+            let size = m.size();
+            let w = size.width as f64 / scale;
+            let h = size.height as f64 / scale;
+            (w - TOAST_WIDTH - 16.0, h - TOAST_HEIGHT - 16.0)
+        })
+        .unwrap_or((900.0, 700.0));
+
+    let _ = WebviewWindowBuilder::new(app, TOAST_LABEL, WebviewUrl::App("toast.html".into()))
+        .title("Aviso")
+        .inner_size(TOAST_WIDTH, TOAST_HEIGHT)
+        .position(x, y)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .shadow(true)
+        .transparent(true)
+        .visible(false)
         .build();
 }
 
@@ -88,6 +129,8 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            ensure_toast_window(&app.handle());
 
             Ok(())
         })

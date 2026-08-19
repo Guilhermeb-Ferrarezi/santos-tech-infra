@@ -5,7 +5,6 @@ import { useTickingSeconds } from "./lib/useTickingSeconds";
 import { useLowBalanceNotifier } from "./lib/useLowBalanceNotifier";
 import { useDeviceHeartbeat } from "./lib/useDeviceHeartbeat";
 import { Titlebar } from "./components/Titlebar";
-import { AdminMessageBanner } from "./components/AdminMessageBanner";
 
 const API_ORIGIN = "https://api.santos-tech.com";
 
@@ -175,12 +174,11 @@ function TimerScreen({ token, onChangeSession }: { token: string; onChangeSessio
 
 export default function App() {
   const { token, loading, setToken, clearToken } = useStoredToken();
-  const { deviceName, message, dismissMessage } = useDeviceHeartbeat(token, clearToken);
+  const { deviceName } = useDeviceHeartbeat(token, clearToken);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       <Titlebar deviceName={deviceName} />
-      {message && <AdminMessageBanner text={message.text} onDismiss={dismissMessage} />}
       {loading && (
         <div className="grid flex-1 place-items-center bg-[#04325A] text-white/60">Carregando...</div>
       )}
