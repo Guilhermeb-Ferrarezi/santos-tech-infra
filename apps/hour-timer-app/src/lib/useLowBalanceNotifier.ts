@@ -1,26 +1,30 @@
 import { useEffect, useRef } from "react";
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { load, type Store } from "@tauri-apps/plugin-store";
 
+const STORE_FILE = "config.json";
+const TOAST_MESSAGE_KEY = "toastMessage";
 const LOW_THRESHOLD_MINUTES = 10;
 
-// Notifica nativamente quando o saldo cruza os limites (uma vez por
-// cruzamento, não a cada poll) — "acabando" (<= 10 min) e "esgotado" (<= 0).
-// Só a janela principal chama isso (não o overlay), pra não duplicar aviso
-// se as duas estiverem abertas ao mesmo tempo.
+let storePromise: Promise<Store> | null = null;
+function getStore() {
+  if (!storePromise) storePromise = load(STORE_FILE, { autoSave: true });
+  return storePromise;
+}
+
+async function pushToast(text: string) {
+  const store = await getStore();
+  await store.set(TOAST_MESSAGE_KEY, { id: crypto.randomUUID(), text });
+}
+
+// Avisa quando o saldo cruza os limites (uma vez por cruzamento, não a cada
+// poll) — "acabando" (<= 10 min) e "esgotado" (<= 0) — pelo mesmo popup no
+// canto usado pro aviso do admin (ver toast.tsx/ensure_toast_window em
+// lib.rs), não mais a notificação nativa do Windows (aparecia como "Windows
+// PowerShell", sem identidade nenhuma do app). Só a janela principal chama
+// isso (não o overlay), pra não duplicar aviso se as duas estiverem abertas.
 export function useLowBalanceNotifier(remainingMinutes: number | null, active: boolean) {
   const notifiedLow = useRef(false);
   const notifiedEmpty = useRef(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const granted = (await isPermissionGranted()) || (await requestPermission()) === "granted";
-      if (cancelled || !granted) return;
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (remainingMinutes === null || !active) return;
@@ -28,7 +32,7 @@ export function useLowBalanceNotifier(remainingMinutes: number | null, active: b
     if (remainingMinutes <= 0) {
       if (!notifiedEmpty.current) {
         notifiedEmpty.current = true;
-        sendNotification({ title: "Saldo esgotado", body: "O tempo do cliente acabou — chame o admin pra encerrar ou recarregar." });
+        pushToast("Saldo esgotado — o tempo do cliente acabou. Chame o colaborador pra encerrar ou recarregar.");
       }
     } else {
       notifiedEmpty.current = false;
@@ -37,7 +41,7 @@ export function useLowBalanceNotifier(remainingMinutes: number | null, active: b
     if (remainingMinutes <= LOW_THRESHOLD_MINUTES && remainingMinutes > 0) {
       if (!notifiedLow.current) {
         notifiedLow.current = true;
-        sendNotification({ title: "Tempo acabando", body: `Restam ${remainingMinutes} min pro cliente.` });
+        pushToast(`Tempo acabando — restam ${remainingMinutes} min pro cliente.`);
       }
     } else if (remainingMinutes > LOW_THRESHOLD_MINUTES) {
       notifiedLow.current = false;
