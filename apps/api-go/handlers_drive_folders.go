@@ -397,6 +397,36 @@ func (s *Server) handleDownloadDriveFile(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// GET /drive-folders/{id}/files/{fileId}/thumbnail — miniatura pro grid/lista
+// (não todo arquivo tem: 404 nesse caso, o frontend cai pro ícone genérico).
+// Cache-Control curto: a miniatura do Drive raramente muda, mas não vale a
+// pena investir em cache mais sofisticado só pra isso.
+func (s *Server) handleDriveFileThumbnail(w http.ResponseWriter, r *http.Request) {
+	if s.drive == nil {
+		writeErr(w, appErr(http.StatusServiceUnavailable, "DRIVE_DISABLED", "Arquivos (Google Drive) não configurado"))
+		return
+	}
+	fileID := strings.TrimSpace(r.PathValue("fileId"))
+	if fileID == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "arquivo inválido"))
+		return
+	}
+	data, contentType, ok, err := s.drive.GetThumbnail(r.Context(), fileID)
+	if err != nil {
+		slog.Error("falha ao buscar miniatura do Drive", "fileId", fileID, "err", err)
+		writeErr(w, appErr(http.StatusBadGateway, "THUMBNAIL_FAILED", "falha ao buscar miniatura"))
+		return
+	}
+	if !ok {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "sem miniatura pra esse arquivo"))
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
 // POST /drive-folders/{id}/files?parent=<driveFileId> — folderAccessGuard("write")
 // já garantiu o acesso à pasta raiz {id}. `parent` (opcional, mesma validação
 // de ancestralidade do GET) envia pra uma SUBPASTA em vez da raiz. Lê o

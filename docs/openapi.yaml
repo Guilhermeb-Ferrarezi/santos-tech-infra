@@ -3709,6 +3709,43 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /drive-folders/{id}/files/{fileId}/thumbnail:
+    get:
+      tags: [Arquivos]
+      summary: Miniatura de um arquivo (proxeada pelo backend)
+      description: |
+        Exige acesso `read` na pasta. Rate limit 120/min (chamado uma vez por
+        item visível na lista/grade). `thumbnailLink` do Drive não é uma URL
+        pública — exige o Bearer token da service account, por isso o proxy
+        (não dá pra apontar um `<img src>` direto pra ela do navegador). Nem
+        todo arquivo tem miniatura (Drive não gera pra todo tipo): 404 nesse
+        caso — o frontend cai pro ícone genérico do tipo.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Imagem da miniatura (Cache-Control 1h).
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        "403":
+          description: Sem acesso a essa pasta.
+        "404":
+          description: Arquivo sem miniatura.
+        "502":
+          description: Falha ao buscar do Drive.
+        "503":
+          description: Google Drive não configurado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
 components:
   securitySchemes:
     cookieAuth:

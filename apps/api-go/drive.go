@@ -176,6 +176,59 @@ func (d *DriveClient) ListSharedFolders(ctx context.Context) ([]DriveFolderInfo,
 	return out.Files, nil
 }
 
+// GetThumbnail busca a miniatura de um arquivo (`thumbnailLink`, gerado pelo
+// Drive pra imagem/vídeo/PDF/documentos — não existe pra todo tipo) e devolve
+// os bytes já baixados via o MESMO client autenticado da service account —
+// thumbnailLink não é uma URL pública, precisa do Bearer token pra responder
+// (por isso não dá pra apontar um <img src> direto pra ela do navegador).
+// ok=false (sem erro) quando o arquivo não tem miniatura.
+func (d *DriveClient) GetThumbnail(ctx context.Context, fileID string) (data []byte, contentType string, ok bool, err error) {
+	metaReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"https://www.googleapis.com/drive/v3/files/"+url.PathEscape(fileID)+"?fields=thumbnailLink&supportsAllDrives=true", nil)
+	if err != nil {
+		return nil, "", false, err
+	}
+	metaResp, err := d.http.Do(metaReq)
+	if err != nil {
+		return nil, "", false, err
+	}
+	defer metaResp.Body.Close()
+	if metaResp.StatusCode != http.StatusOK {
+		return nil, "", false, driveAPIError(metaResp)
+	}
+	var meta struct {
+		ThumbnailLink string `json:"thumbnailLink"`
+	}
+	if err := json.NewDecoder(metaResp.Body).Decode(&meta); err != nil {
+		return nil, "", false, err
+	}
+	if meta.ThumbnailLink == "" {
+		return nil, "", false, nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, meta.ThumbnailLink, nil)
+	if err != nil {
+		return nil, "", false, err
+	}
+	resp, err := d.http.Do(req)
+	if err != nil {
+		return nil, "", false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", false, nil // thumbnailLink pode expirar/falhar — trata como "sem miniatura", não erro
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20)) // 5MB de teto (miniatura é sempre pequena)
+	if err != nil {
+		return nil, "", false, err
+	}
+	contentType = resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+	return body, contentType, true, nil
+}
+
 // IsDescendant reporta se folderID é a própria rootID ou está dentro dela em
 // qualquer profundidade — sobe por `parents` (um arquivo/pasta do Drive pode
 // ter múltiplos pais; segue todos) até achar rootID, esgotar parents ou

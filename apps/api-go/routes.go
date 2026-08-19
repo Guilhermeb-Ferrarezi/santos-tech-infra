@@ -388,5 +388,6 @@ func (s *Server) registerDriveRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /drive-folders/mine", s.authGuard(s.handleListMyDriveFolders))
 	mux.HandleFunc("GET /drive-folders/{id}/files", s.folderAccessGuard("read", s.handleListDriveFolderFiles))
 	mux.HandleFunc("GET /drive-folders/{id}/files/{fileId}/download", s.folderAccessGuard("read", s.handleDownloadDriveFile))
+	mux.HandleFunc("GET /drive-folders/{id}/files/{fileId}/thumbnail", s.rateLimit(120, min, s.folderAccessGuard("read", s.handleDriveFileThumbnail)))
 	mux.HandleFunc("POST /drive-folders/{id}/files", s.rateLimit(10, min, s.folderAccessGuard("write", s.handleUploadDriveFile)))
 }
