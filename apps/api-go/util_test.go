@@ -39,3 +39,42 @@ func TestSha256HexKnownVector(t *testing.T) {
 		t.Errorf("sha256Hex(abc) = %s, queria %s", got, want)
 	}
 }
+
+// randomDigits usa amostragem com rejeição: a distribuição dos dígitos tem que
+// ser uniforme. Com byte%10 direto (o bug antigo), 0-5 saíam ~4% mais que 6-9 —
+// o que aparece como qui-quadrado alto nessa amostra.
+func TestRandomDigitsUniform(t *testing.T) {
+	const draws = 20000
+	var counts [10]int
+	for i := 0; i < draws/10; i++ {
+		code := randomDigits(10)
+		if len(code) != 10 {
+			t.Fatalf("randomDigits(10) devolveu %d chars: %q", len(code), code)
+		}
+		for _, c := range code {
+			if c < '0' || c > '9' {
+				t.Fatalf("caractere não-numérico em %q", code)
+			}
+			counts[c-'0']++
+		}
+	}
+	expected := float64(draws) / 10
+	var chi2 float64
+	for _, c := range counts {
+		d := float64(c) - expected
+		chi2 += d * d / expected
+	}
+	// 9 graus de liberdade: o valor crítico a 0.1% é 27.88. O viés antigo dava
+	// um chi2 na casa das centenas com esse tamanho de amostra.
+	if chi2 > 27.88 {
+		t.Errorf("distribuição enviesada: chi2=%.1f, contagens=%v", chi2, counts)
+	}
+}
+
+func TestRandomDigitsLengths(t *testing.T) {
+	for _, n := range []int{0, 1, 6, 13, 64} {
+		if got := randomDigits(n); len(got) != n {
+			t.Errorf("randomDigits(%d) = %q (len %d)", n, got, len(got))
+		}
+	}
+}

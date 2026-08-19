@@ -100,6 +100,17 @@ CREATE TABLE IF NOT EXISTS board_members (
 );
 CREATE INDEX IF NOT EXISTS idx_board_members_user ON board_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+-- sessions.refresh_token_hash é lido em TODO /auth/refresh, /auth/accounts e
+-- logout; sem índice era seq scan na tabela inteira. user_id cobre o
+-- DELETE FROM sessions WHERE user_id=$1 (logout global, suspensão, exclusão).
+-- Índice NÃO-único de propósito: o refresh JWT só carrega sub/iat/exp, então
+-- dois refresh do mesmo usuário no MESMO segundo (abas em paralelo, duplo
+-- clique no login) geram um token idêntico e, portanto, o mesmo hash. Com
+-- UNIQUE, o segundo INSERT quebraria — e a criação do índice falharia se já
+-- houvesse duplicata, derrubando a migração inteira (migrate roda tudo num
+-- Exec só) e com ela o boot da API. Para a performance da busca dá no mesmo.
+CREATE INDEX IF NOT EXISTS idx_sessions_refresh_hash ON sessions(refresh_token_hash);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS name        TEXT NOT NULL DEFAULT '';
 ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '{}';
