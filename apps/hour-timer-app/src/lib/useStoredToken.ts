@@ -42,8 +42,21 @@ export function useStoredToken() {
   const clearToken = useCallback(async () => {
     const store = await getStore();
     await store.delete(TOKEN_KEY);
+    await store.save();
     setTokenState(null);
   }, []);
 
-  return { token, loading, setToken, clearToken };
+  // Apaga o token do DISCO mas mantém o valor em memória. Serve pro fim de
+  // sessão (status "ended"): o token de 64 hex fica em claro no config.json de
+  // um PC que atende vários clientes por dia, e uma sessão já encerrada não
+  // tem motivo nenhum pra sobreviver ao próximo turno — a partir daqui ele
+  // morre junto com o processo. Mantendo em memória, a tela ainda consegue
+  // mostrar "Sessão encerrada" em vez de saltar pro pareamento no mesmo frame.
+  const purgeStoredToken = useCallback(async () => {
+    const store = await getStore();
+    await store.delete(TOKEN_KEY);
+    await store.save();
+  }, []);
+
+  return { token, loading, setToken, clearToken, purgeStoredToken };
 }

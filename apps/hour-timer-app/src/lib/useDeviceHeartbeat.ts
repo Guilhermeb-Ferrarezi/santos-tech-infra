@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 
 const STORE_FILE = "config.json";
 const DEVICE_ID_KEY = "deviceId";
+const DEVICE_SECRET_KEY = "deviceSecret";
 const LAST_MESSAGE_ID_KEY = "lastMessageId";
 const TOAST_MESSAGE_KEY = "toastMessage";
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -20,6 +21,12 @@ interface HeartbeatResponse {
   unpairRequested: boolean;
   message?: { id: string; text: string };
   pairToken?: string;
+  // Credencial deste PC, emitida pelo servidor UMA ÚNICA VEZ (no primeiro
+  // heartbeat de um device_uuid ainda sem segredo). Guardamos em disco e
+  // reenviamos em todo heartbeat seguinte — sem ela o servidor responde 401 e
+  // não entrega comando nem pairToken. Se o disco for perdido, o admin usa
+  // POST /hour-lab-devices/{id}/reset-secret pra permitir nova adoção.
+  deviceSecret?: string;
 }
 
 // Identifica este PC pro admin (device_uuid gerado uma vez, persistido em
@@ -51,6 +58,7 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
         await store.set(DEVICE_ID_KEY, deviceId);
       }
       if (!cancelled) setDeviceId(deviceId);
+      const deviceSecret = await store.get<string>(DEVICE_SECRET_KEY);
       const appVersion = await getVersion();
 
       let res: Response;
@@ -58,7 +66,7 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
         res = await fetch(`${API_ORIGIN}/public/lab-devices/heartbeat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deviceId, token: tokenRef.current, appVersion }),
+          body: JSON.stringify({ deviceId, deviceSecret, token: tokenRef.current, appVersion }),
         });
       } catch {
         if (!cancelled) setHeartbeatOk(false);
@@ -71,6 +79,11 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
       }
       setHeartbeatOk(true);
       const data: HeartbeatResponse = await res.json();
+
+      // Adoção: o servidor só emite o segredo uma vez, no primeiro heartbeat
+      // deste device_uuid. Se não gravarmos agora, os heartbeats seguintes
+      // levam 401 e o PC deixa de receber comandos e pairToken.
+      if (data.deviceSecret) await store.set(DEVICE_SECRET_KEY, data.deviceSecret);
 
       setDeviceName(data.name);
       if (data.unpairRequested) onUnpairRequested();

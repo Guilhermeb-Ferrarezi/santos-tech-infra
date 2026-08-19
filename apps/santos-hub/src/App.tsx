@@ -27,6 +27,22 @@ interface DownloadItem {
   imageUrl?: string;
 }
 
+// O catálogo (/public/downloads) é dado remoto: `url` vem do banco e o app
+// mandava direto pro openUrl. Como o escopo do opener era http://*/https://*
+// (opener:default), um item adulterado abria qualquer coisa em TODOS os PCs da
+// empresa. O escopo real agora vive em src-tauri/capabilities/default.json —
+// esta lista precisa espelhá-lo, e só existe pra dar mensagem de erro decente:
+// sem ela o openUrl seria rejeitado pelo Tauri sem nenhum sinal na tela.
+const ALLOWED_DOWNLOAD_ORIGINS = ["https://cdn.santos-tech.com", "https://santos-tech.com"];
+
+function isAllowedDownloadUrl(raw: string) {
+  try {
+    return ALLOWED_DOWNLOAD_ORIGINS.includes(new URL(raw).origin);
+  } catch {
+    return false;
+  }
+}
+
 function formatSize(bytes?: number) {
   if (!bytes) return null;
   const units = ["B", "KB", "MB", "GB"];
@@ -41,11 +57,19 @@ function formatSize(bytes?: number) {
 
 function DownloadCard({ item }: { item: DownloadItem }) {
   const [opening, setOpening] = useState(false);
+  const [blocked, setBlocked] = useState(false);
 
   async function handleOpen() {
+    if (!isAllowedDownloadUrl(item.url)) {
+      setBlocked(true);
+      return;
+    }
     setOpening(true);
+    setBlocked(false);
     try {
       await openUrl(item.url);
+    } catch {
+      setBlocked(true);
     } finally {
       setOpening(false);
     }
@@ -87,6 +111,12 @@ function DownloadCard({ item }: { item: DownloadItem }) {
           {item.kind === "file" ? <DownloadSimple className="size-4" /> : <LinkSimple className="size-4" />}
           {item.kind === "file" ? "Baixar" : "Abrir"}
         </button>
+        {blocked && (
+          <p className="mt-1 flex items-start gap-1 text-[10px] leading-tight text-red-300">
+            <WarningCircle className="mt-px size-3 shrink-0" />
+            Link fora dos domínios permitidos — bloqueado por segurança.
+          </p>
+        )}
       </div>
     </div>
   );
