@@ -1008,29 +1008,42 @@ func toDashLog(e ProcessingLogEntry) dashProcessingLog {
 }
 
 // ── GET /api/ws ───────────────────────────────────────────────────────────────
-// Upgrade para WebSocket. Auth via sub-protocol "dash, <key>" (browser JS não
-// suporta headers customizados em WebSocket); cai no query param ?key= como
-// fallback de transição.
+// Upgrade para WebSocket. Auth por (a) cookie de sessão de admin — o browser
+// manda cookies no handshake automaticamente, é o caminho do painel — ou
+// (b) DASH_API_KEY via sub-protocol "dash, <key>" (browser JS não suporta
+// headers customizados em WebSocket), para integrações server-to-server. O
+// query param ?key= segue aceito como fallback de transição.
 
 func (s *Server) handleDashWS(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.DashAPIKey == "" || s.hub == nil {
+	if s.hub == nil {
 		http.NotFound(w, r)
 		return
 	}
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		// Browser manda a chave como sub-protocol: "dash, <key>".
-		for _, p := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
-			if p = strings.TrimSpace(p); p != "" && p != "dash" {
-				key = p
-			}
-		}
-	}
-	if subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) != 1 {
+	if !s.dashWSAuthorized(r) {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
 	s.hub.Upgrade(w, r)
+}
+
+// dashWSAuthorized replica dashAuthorized, mas lendo a DASH_API_KEY do
+// sub-protocol/query em vez do header (limitação da API WebSocket do browser).
+func (s *Server) dashWSAuthorized(r *http.Request) bool {
+	if s.cfg.DashAPIKey != "" {
+		key := r.URL.Query().Get("key")
+		if key == "" {
+			// Browser manda a chave como sub-protocol: "dash, <key>".
+			for _, p := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
+				if p = strings.TrimSpace(p); p != "" && p != "dash" {
+					key = p
+				}
+			}
+		}
+		if key != "" && subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) == 1 {
+			return true
+		}
+	}
+	return s.session.Authorized(r)
 }
 
 // Garante que context é usado (lint).

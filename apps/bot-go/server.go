@@ -145,6 +145,8 @@ type Server struct {
 	retryStream *RetryStream
 	// tenantCache cacheia debounce_ms por tenant no Redis (fail-open p/ o banco).
 	tenantCache *TenantCache
+	// session valida a sessão do painel (cookie access_token) no auth central.
+	session *SessionAuth
 }
 
 // NewServer cria um Server com as dependências fornecidas.
@@ -170,6 +172,7 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		notifDedupe: newNotifDedupe(),
 		retryStream: NewRetryStream(rdb, cfg.RetryStreamKey, cfg.RetryStreamGroup, cfg.RetryStreamConsumer, logger),
 		tenantCache: NewTenantCache(rdb, cfg.DebounceCacheTTL, logger),
+		session:     NewSessionAuth(cfg.AuthMeURL, cfg.AuthTimeout, cfg.AuthCacheTTL),
 	}
 }
 
@@ -216,21 +219,11 @@ func (s *Server) Handler() http.Handler {
 	return golog.RequestLogger(s.ipBanCheck(metricsMiddleware(mux)))
 }
 
-// dashMiddleware adiciona CORS e verifica X-Dash-Key.
+// dashMiddleware adiciona CORS e autentica a request (ver dashAuthorized).
 func (s *Server) dashMiddleware(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.setCORSHeaders(w)
-		if s.cfg.DashAPIKey == "" {
-			http.NotFound(w, r)
-			return
-		}
-		key := r.Header.Get("X-Dash-Key")
-		if key == "" {
-			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-				key = strings.TrimPrefix(auth, "Bearer ")
-			}
-		}
-		if subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) != 1 {
+		if !s.dashAuthorized(r) {
 			w.Header().Set("Content-Type", "application/json")
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
@@ -239,9 +232,44 @@ func (s *Server) dashMiddleware(next http.HandlerFunc) http.Handler {
 	})
 }
 
+// dashKeyMatch confere a DASH_API_KEY (header X-Dash-Key ou Authorization:
+// Bearer). Continua valendo para integrações server-to-server.
+func (s *Server) dashKeyMatch(r *http.Request) bool {
+	if s.cfg.DashAPIKey == "" {
+		return false
+	}
+	key := r.Header.Get("X-Dash-Key")
+	if key == "" {
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			key = strings.TrimPrefix(auth, "Bearer ")
+		}
+	}
+	if key == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) == 1
+}
+
+// dashAuthorized aceita duas credenciais, nesta ordem:
+//  1. DASH_API_KEY (integrações server-to-server);
+//  2. sessão de admin do auth central — cookie access_token validado em
+//     /auth/me, que é o que o painel manda (credentials: include).
+//
+// Fail-closed: sem nenhuma das duas, nega.
+func (s *Server) dashAuthorized(r *http.Request) bool {
+	if s.dashKeyMatch(r) {
+		return true
+	}
+	return s.session.Authorized(r)
+}
+
 func (s *Server) setCORSHeaders(w http.ResponseWriter) {
 	if origin := s.cfg.DashCORSOrigin; origin != "" {
+		w.Header().Set("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Origin", origin)
+		// O painel manda cookie de sessão (credentials: include); sem este
+		// header o browser descarta a resposta.
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dash-Key, Authorization")
 	}

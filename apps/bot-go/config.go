@@ -74,6 +74,13 @@ type Config struct {
 	DashAPIKey     string
 	DashCORSOrigin string
 
+	// Auth central — o painel autentica por cookie de sessão (access_token),
+	// validado em /auth/me exigindo papel Admin. A DashAPIKey continua valendo
+	// para integrações server-to-server.
+	AuthMeURL    string
+	AuthTimeout  time.Duration
+	AuthCacheTTL time.Duration
+
 	// Coolify — webhook de falha de deploy
 	CoolifyWebhookSecret string
 
@@ -150,6 +157,10 @@ func LoadConfig() Config {
 
 		DashAPIKey:     getEnv("DASH_API_KEY", ""),
 		DashCORSOrigin: getEnv("DASH_CORS_ORIGIN", "https://santos-tech.com"),
+
+		AuthMeURL:    getEnv("AUTH_ME_URL", "https://api.santos-tech.com/auth/me"),
+		AuthTimeout:  time.Duration(envInt("AUTH_TIMEOUT_MS", 3000)) * time.Millisecond,
+		AuthCacheTTL: time.Duration(envInt("AUTH_CACHE_TTL_SEC", 60)) * time.Second,
 
 		CoolifyWebhookSecret: getEnv("COOLIFY_WEBHOOK_SECRET", ""),
 		CoolifyAPIURL:        strings.TrimRight(getEnv("COOLIFY_API_URL", ""), "/"),
