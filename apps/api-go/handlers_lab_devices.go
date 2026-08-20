@@ -87,6 +87,12 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		// Única vez que o segredo trafega — o app PRECISA persistir agora.
 		resp["deviceSecret"] = *res.DeviceSecret
 	}
+	if res.PreviousDeviceResolved {
+		// Libera o app a esquecer o id anterior. Enquanto não sai, ele reenvia
+		// previousDeviceId — é o que faz a migração sobreviver a um heartbeat
+		// que chega antes do servidor certo ou com o registro antigo travado.
+		resp["previousDeviceResolved"] = true
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

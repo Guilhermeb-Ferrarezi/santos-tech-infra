@@ -7,6 +7,9 @@ import { captureAndSend } from "./screenshot";
 
 const STORE_FILE = "config.json";
 const DEVICE_ID_KEY = "deviceId";
+// Identidade anterior, guardada em disco até o servidor confirmar que não sobrou
+// nada a migrar. Ver o bloco em beat() — mandar uma vez só não basta.
+const PREVIOUS_DEVICE_ID_KEY = "previousDeviceId";
 const DEVICE_SECRET_KEY = "deviceSecret";
 const LAST_MESSAGE_ID_KEY = "lastMessageId";
 const TOAST_MESSAGE_KEY = "toastMessage";
@@ -32,6 +35,8 @@ interface HeartbeatResponse {
   // não entrega comando nem pairToken. Se o disco for perdido, o admin usa
   // POST /hour-lab-devices/{id}/reset-secret pra permitir nova adoção.
   deviceSecret?: string;
+  /** Não sobrou nada a migrar do previousDeviceId — pode esquecê-lo. */
+  previousDeviceResolved?: boolean;
 }
 
 // Identifica este PC pro admin (device_uuid gerado uma vez, persistido em
@@ -70,12 +75,23 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
         // registro ilegível: segue com o id do store (comportamento antigo)
       }
 
-      let deviceId = stableId || storedId || crypto.randomUUID();
-      // previousDeviceId vai UMA vez, no heartbeat da troca: o servidor usa
-      // para mover o registro antigo (nome, sessão, inventário, capturas) para
-      // a identidade nova, em vez de criar um dispositivo duplicado.
-      const previousDeviceId = storedId && storedId !== deviceId ? storedId : undefined;
-      if (deviceId !== storedId) await store.set(DEVICE_ID_KEY, deviceId);
+      const deviceId = stableId || storedId || crypto.randomUUID();
+      // previousDeviceId manda o id ANTIGO junto pro servidor MOVER o registro
+      // (nome, sessão, inventário, capturas) em vez de criar um duplicado.
+      //
+      // Fica gravado em disco e vai em TODO heartbeat até o servidor responder
+      // previousDeviceResolved. Mandar uma vez só não funciona: no rollout da
+      // 0.1.10 o primeiro heartbeat chegou 6 segundos antes de a API nova subir,
+      // o servidor antigo ignorou o campo, e o PC virou dois dispositivos sem
+      // chance de retomada — o app já tinha esquecido a identidade anterior.
+      // Insistindo, a migração acontece sozinha quando o impedimento sai do
+      // caminho (deploy termina, admin esquece o segredo do registro antigo ou
+      // apaga a duplicata).
+      if (deviceId !== storedId) {
+        if (storedId) await store.set(PREVIOUS_DEVICE_ID_KEY, storedId);
+        await store.set(DEVICE_ID_KEY, deviceId);
+      }
+      const previousDeviceId = (await store.get<string>(PREVIOUS_DEVICE_ID_KEY)) || undefined;
       if (!cancelled) setDeviceId(deviceId);
       const deviceSecret = await store.get<string>(DEVICE_SECRET_KEY);
       const appVersion = await getVersion();
@@ -114,6 +130,11 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
       // deste device_uuid. Se não gravarmos agora, os heartbeats seguintes
       // levam 401 e o PC deixa de receber comandos e pairToken.
       if (data.deviceSecret) await store.set(DEVICE_SECRET_KEY, data.deviceSecret);
+
+      // Migração concluída (ou nada a migrar): para de mandar o id antigo.
+      if (previousDeviceId && data.previousDeviceResolved) {
+        await store.delete(PREVIOUS_DEVICE_ID_KEY);
+      }
 
       // Inventário de software (o admin vê em /admin/horas/dispositivos): só
       // sai quando a lista muda ou passa um dia, e nunca antes da adoção — a

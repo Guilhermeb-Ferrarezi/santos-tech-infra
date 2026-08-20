@@ -27,6 +27,7 @@ type fakeLabDeviceDB struct {
 	pendingPairToken    *string
 	screenshotRequested bool
 	secretHash          *string
+	migrationBlocked    bool
 
 	upserts    int
 	clears     int
@@ -99,6 +100,11 @@ func (f *fakeLabDeviceDB) QueryRow(_ context.Context, sql string, args ...any) p
 func (f *fakeLabDeviceDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
 	if strings.Contains(sql, "SET device_uuid =") {
 		f.migrations++
+		if f.migrationBlocked {
+			// A identidade nova já tem registro próprio: o WHERE NOT EXISTS não
+			// casa e nada é movido.
+			return pgconn.NewCommandTag("UPDATE 0"), nil
+		}
 		return pgconn.NewCommandTag("UPDATE 1"), nil
 	}
 	if !strings.Contains(sql, "UPDATE hour_lab_devices SET unpair_requested = false") {
@@ -347,40 +353,68 @@ func TestMigracaoDeIdentidadeExigeOSegredoAntigo(t *testing.T) {
 	const segredo = "segredo-do-pc"
 	ctx := context.Background()
 
-	// Com o segredo certo: migra.
+	// Com o segredo certo: migra, e o app é liberado a esquecer o id antigo.
 	fake := &fakeLabDeviceDB{exists: true, name: ptrTo("PC-01"), secretHash: ptrTo(sha256Hex(segredo))}
-	if err := migrateLabDeviceUUIDTx(ctx, fake, "antigo", "novo", segredo); err != nil {
+	resolvido, err := migrateLabDeviceUUIDTx(ctx, fake, "antigo", "novo", segredo)
+	if err != nil {
 		t.Fatalf("migração com segredo certo: %v", err)
 	}
-	if fake.migrations != 1 {
-		t.Errorf("%d migrações, quer 1", fake.migrations)
+	if fake.migrations != 1 || !resolvido {
+		t.Errorf("%d migrações (resolvido=%v), quer 1 e true", fake.migrations, resolvido)
 	}
 
 	// Sem o segredo certo: NÃO migra. Saber o device_uuid (que fica visível num
 	// QR na tela do PC) não pode bastar pra sequestrar o registro de outra
-	// máquina.
+	// máquina. Fica PENDENTE: o app segue mandando o id antigo, e a migração sai
+	// sozinha se o admin esquecer o segredo do registro antigo.
 	outro := &fakeLabDeviceDB{exists: true, secretHash: ptrTo(sha256Hex("outro-segredo"))}
-	if err := migrateLabDeviceUUIDTx(ctx, outro, "antigo", "novo", segredo); err != nil {
+	resolvido, err = migrateLabDeviceUUIDTx(ctx, outro, "antigo", "novo", segredo)
+	if err != nil {
 		t.Fatalf("migração com segredo errado devolveu erro: %v", err)
 	}
-	if outro.migrations != 0 {
-		t.Errorf("migrou com segredo errado (%d)", outro.migrations)
+	if outro.migrations != 0 || resolvido {
+		t.Errorf("segredo errado: %d migrações, resolvido=%v — quer 0 e false", outro.migrations, resolvido)
+	}
+}
+
+// Se a identidade nova JÁ tem registro próprio, nada é movido — mas isso fica
+// pendente, não resolvido: o app continua mandando o id antigo, e a migração
+// acontece sozinha assim que o admin apagar o registro duplicado. É a diferença
+// entre uma recuperação de dois cliques no dashboard e cirurgia no banco.
+func TestMigracaoBloqueadaContinuaPendente(t *testing.T) {
+	const segredo = "segredo-do-pc"
+	fake := &fakeLabDeviceDB{exists: true, secretHash: ptrTo(sha256Hex(segredo)), migrationBlocked: true}
+	resolvido, err := migrateLabDeviceUUIDTx(context.Background(), fake, "antigo", "novo", segredo)
+	if err != nil {
+		t.Fatalf("migração bloqueada devolveu erro: %v", err)
+	}
+	if resolvido {
+		t.Error("migração bloqueada marcou resolvido — o app esqueceria o id antigo e a duplicata ficaria pra sempre")
 	}
 }
 
 func TestMigracaoIgnoraCasosSemEfeito(t *testing.T) {
 	ctx := context.Background()
-	for _, c := range []struct{ old, new_, secret string }{
-		{"", "novo", "s"},       // sem id antigo (instalação nova)
-		{"igual", "igual", "s"}, // mesma identidade
-		{"antigo", "novo", ""},  // sem segredo pra provar posse
+	for _, c := range []struct {
+		old, new_, secret string
+		querResolvido     bool
+	}{
+		// Nada a migrar: resolvido, senão o app mandaria o id antigo pra sempre.
+		{"", "novo", "s", true},       // sem id antigo (instalação nova)
+		{"igual", "igual", "s", true}, // mesma identidade
+		// Registro antigo tem segredo e o app não apresentou nenhum: pendente.
+		{"antigo", "novo", "", false},
 	} {
 		fake := &fakeLabDeviceDB{exists: true, secretHash: ptrTo(sha256Hex("s"))}
-		if err := migrateLabDeviceUUIDTx(ctx, fake, c.old, c.new_, c.secret); err != nil {
+		resolvido, err := migrateLabDeviceUUIDTx(ctx, fake, c.old, c.new_, c.secret)
+		if err != nil {
 			t.Fatalf("caso %v: %v", c, err)
 		}
 		if fake.migrations != 0 {
 			t.Errorf("caso %v migrou sem precisar", c)
+		}
+		if resolvido != c.querResolvido {
+			t.Errorf("caso %v: resolvido=%v, quer %v", c, resolvido, c.querResolvido)
 		}
 	}
 }
@@ -395,20 +429,22 @@ func TestMigracaoIgnoraCasosSemEfeito(t *testing.T) {
 func TestMigracaoDeRegistroSemSegredoNaoExigeProva(t *testing.T) {
 	ctx := context.Background()
 	fake := &fakeLabDeviceDB{exists: true, name: ptrTo("Pc gui"), secretHash: nil}
-	if err := migrateLabDeviceUUIDTx(ctx, fake, "antigo", "novo", ""); err != nil {
+	resolvido, err := migrateLabDeviceUUIDTx(ctx, fake, "antigo", "novo", "")
+	if err != nil {
 		t.Fatalf("migração de registro sem segredo: %v", err)
 	}
-	if fake.migrations != 1 {
-		t.Errorf("%d migrações, quer 1", fake.migrations)
+	if fake.migrations != 1 || !resolvido {
+		t.Errorf("%d migrações (resolvido=%v), quer 1 e true", fake.migrations, resolvido)
 	}
 
 	// Hash vazio (em vez de NULL) conta como sem segredo pelo mesmo motivo.
 	vazio := &fakeLabDeviceDB{exists: true, secretHash: ptrTo("")}
-	if err := migrateLabDeviceUUIDTx(ctx, vazio, "antigo", "novo", ""); err != nil {
+	resolvido, err = migrateLabDeviceUUIDTx(ctx, vazio, "antigo", "novo", "")
+	if err != nil {
 		t.Fatalf("migração com hash vazio: %v", err)
 	}
-	if vazio.migrations != 1 {
-		t.Errorf("%d migrações com hash vazio, quer 1", vazio.migrations)
+	if vazio.migrations != 1 || !resolvido {
+		t.Errorf("%d migrações com hash vazio (resolvido=%v), quer 1 e true", vazio.migrations, resolvido)
 	}
 }
 

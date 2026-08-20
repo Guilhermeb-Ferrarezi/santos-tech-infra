@@ -52,6 +52,13 @@ type LabDeviceHeartbeatResult struct {
 	// ScreenshotRequested: o admin pediu uma captura de tela; o app tira, MOSTRA
 	// o aviso na tela do PC e manda em POST /public/lab-devices/screenshot.
 	ScreenshotRequested bool
+	// PreviousDeviceResolved diz que não sobrou nada a migrar do id anterior — o
+	// app só ESQUECE o id antigo quando ouve isto, e reenvia previousDeviceId em
+	// todo heartbeat até lá. Sem essa confirmação a migração seria um evento
+	// único e irrepetível: um envio que chegasse na hora errada (servidor ainda
+	// no build anterior, registro antigo travado) deixaria um dispositivo
+	// duplicado pra sempre. Aconteceu de verdade no rollout da 0.1.10.
+	PreviousDeviceResolved bool
 	// DeviceSecret só vem preenchido no ÚNICO heartbeat em que o segredo é
 	// criado (dispositivo novo, ou legado ainda sem segredo). O app tem que
 	// gravar em disco: sem ele os heartbeats seguintes levam 401.
@@ -156,17 +163,22 @@ const labDeviceSecretBytes = 32
 // device_uuid (que fica visível num QR na tela do PC) bastaria para sequestrar
 // o registro de outra máquina. Registro sem segredo migra livre, pela mesma
 // política de adoção aberta de authLabDeviceTx.
-func migrateLabDeviceUUIDTx(ctx context.Context, tx labDeviceQuerier, oldUUID, newUUID, deviceSecret string) error {
+// Devolve resolvido=true quando não sobrou nada a migrar (migrou agora, ou o
+// registro antigo já não existe). false significa "ainda pendente": o app
+// continua mandando previousDeviceId nos próximos heartbeats, e a migração
+// acontece sozinha assim que o impedimento sair do caminho — o admin esquece o
+// segredo do registro antigo, ou apaga o registro duplicado.
+func migrateLabDeviceUUIDTx(ctx context.Context, tx labDeviceQuerier, oldUUID, newUUID, deviceSecret string) (bool, error) {
 	if oldUUID == "" || oldUUID == newUUID {
-		return nil
+		return true, nil
 	}
 	var storedHash *string
 	err := tx.QueryRow(ctx, labDeviceSecretLookupSQL, oldUUID).Scan(&storedHash)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil // registro antigo já não existe: nada a migrar
+		return true, nil // registro antigo já não existe: nada a migrar
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	// Registro SEM segredo é migrado sem prova, pela mesma política que
 	// authLabDeviceTx usa pra adoção: exigir prova aqui não protegeria nada
@@ -176,18 +188,21 @@ func migrateLabDeviceUUIDTx(ctx context.Context, tx labDeviceQuerier, oldUUID, n
 	if storedHash != nil && *storedHash != "" {
 		if deviceSecret == "" ||
 			subtle.ConstantTimeCompare([]byte(sha256Hex(deviceSecret)), []byte(*storedHash)) != 1 {
-			return nil // segredo não confere: ignora em silêncio, o heartbeat segue
+			return false, nil // segredo não confere: fica pendente, o app insiste
 		}
 	}
 	// WHERE NOT EXISTS: se a identidade nova já tem registro próprio (o PC já
 	// bateu heartbeat com ela), migrar apagaria esse — melhor deixar os dois e o
 	// admin resolver do que perder dados.
-	_, err = tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		UPDATE hour_lab_devices SET device_uuid = $2
 		WHERE device_uuid = $1
 		  AND NOT EXISTS (SELECT 1 FROM hour_lab_devices WHERE device_uuid = $2)`,
 		oldUUID, newUUID)
-	return err
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // upsertLabDeviceHeartbeat autentica o dispositivo, grava/atualiza o heartbeat e
@@ -253,7 +268,8 @@ func authLabDeviceTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, devic
 func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte, previousUUID string) (*LabDeviceHeartbeatResult, error) {
 	// Antes de autenticar: se o app trocou de identidade (0.1.10+), costura o
 	// registro antigo na nova em vez de deixar o PC duplicado.
-	if err := migrateLabDeviceUUIDTx(ctx, tx, previousUUID, deviceUUID, deviceSecret); err != nil {
+	migrado, err := migrateLabDeviceUUIDTx(ctx, tx, previousUUID, deviceUUID, deviceSecret)
+	if err != nil {
 		return nil, err
 	}
 	minted, err := authLabDeviceTx(ctx, tx, deviceUUID, deviceSecret)
@@ -267,6 +283,7 @@ func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, device
 			&res.ScreenshotRequested); err != nil {
 		return nil, err
 	}
+	res.PreviousDeviceResolved = migrado
 	if res.UnpairRequested || res.PairToken != nil || res.ScreenshotRequested {
 		if _, err := tx.Exec(ctx, labDeviceHeartbeatClearSQL, deviceUUID); err != nil {
 			return nil, err

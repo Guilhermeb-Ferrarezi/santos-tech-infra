@@ -3963,15 +3963,17 @@ paths:
                   type: string
                   format: uuid
                   description: >
-                    Identidade anterior do PC (app 0.1.10+), enviada uma vez quando o app
-                    passa a derivar o id do MachineGuid do Windows. O servidor MOVE o
-                    registro antigo (nome, sessão, inventário, capturas) para a identidade
-                    nova. Registro que já tem segredo exige o deviceSecret antigo como
-                    prova de posse; segredo que não confere é ignorado em silêncio.
-                    Registro ainda sem segredo migra livre, pela mesma política de adoção
-                    aberta do primeiro heartbeat (necessário pro upgrade dos PCs em 0.1.0,
-                    anteriores ao segredo existir). Se a identidade nova já tiver registro
-                    próprio, nada é movido.
+                    Identidade anterior do PC (app 0.1.10+), enviada quando o app passa a
+                    derivar o id do MachineGuid do Windows. O servidor MOVE o registro
+                    antigo (nome, sessão, inventário, capturas) para a identidade nova.
+                    Registro que já tem segredo exige o deviceSecret antigo como prova de
+                    posse; registro ainda sem segredo migra livre, pela mesma política de
+                    adoção aberta do primeiro heartbeat (necessário pro upgrade dos PCs em
+                    0.1.0, anteriores ao segredo existir). Se a identidade nova já tiver
+                    registro próprio, nada é movido. O app (0.1.11+) reenvia este campo em
+                    todo heartbeat até a resposta trazer previousDeviceResolved — um envio
+                    único que chegue na hora errada deixaria um dispositivo duplicado sem
+                    chance de retomada.
                 openApps:
                   type: array
                   maxItems: 100
@@ -3999,6 +4001,16 @@ paths:
                       id: { type: string, format: uuid }
                       text: { type: string }
                   pairToken: { type: string, description: "Token pronto pra uso (pareamento via QR concluído pelo admin) — entregue uma única vez." }
+                  screenshotRequested: { type: boolean, description: "O admin pediu uma captura de tela — entregue uma única vez." }
+                  deviceSecret: { type: string, description: "Credencial deste PC, emitida no ÚNICO heartbeat em que é criada (adoção). O app precisa persistir; sem ela os heartbeats seguintes levam 401." }
+                  previousDeviceResolved:
+                    type: boolean
+                    description: >
+                      Não sobrou nada a migrar do previousDeviceId (moveu agora, ou o
+                      registro antigo já não existe). Só então o app esquece o id antigo;
+                      enquanto não vier, ele reenvia previousDeviceId a cada heartbeat e a
+                      migração acontece sozinha quando o impedimento sair do caminho —
+                      admin esquece o segredo do registro antigo, ou apaga o duplicado.
                 required: [name, unpairRequested]
         "400":
           description: deviceId inválido.
