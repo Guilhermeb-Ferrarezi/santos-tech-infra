@@ -261,7 +261,15 @@ func (s *Server) handleGetInstallments(w http.ResponseWriter, r *http.Request) {
 // chargeRefundStore isola as operações de banco necessárias para handleRefundCard.
 type chargeRefundStore interface {
 	GetCharge(ctx context.Context, id int64) (*Charge, error)
-	MarkChargeRefunded(ctx context.Context, correlationID string) error
+	// BeginChargeRefund reserva a cobrança ('paid' → 'refunding') numa única
+	// instrução. false = outra requisição já reservou, ou a cobrança não está paga.
+	// Nunca volte ao check-then-act: ele deixava dois estornos simultâneos passarem.
+	BeginChargeRefund(ctx context.Context, correlationID string) (bool, error)
+	// RollbackChargeRefund devolve a cobrança a 'paid' quando o gateway recusa.
+	RollbackChargeRefund(ctx context.Context, correlationID string) error
+	// FinishChargeRefund soma o valor estornado e resolve o status final
+	// ('paid' enquanto for parcial, 'refunded' quando o acumulado fecha o valor).
+	FinishChargeRefund(ctx context.Context, correlationID string, refundedCents int64) (string, error)
 }
 
 // refundStoreOf devolve o store de estorno: usa s.refund quando injetado (testes),
@@ -325,18 +333,51 @@ func (s *Server) handleRefundCard(w http.ResponseWriter, r *http.Request) {
 	}
 	providerChargeID := c.ProviderChargeID
 
-	// Valor parcial (opcional).
+	// Valor parcial (opcional). O saldo estornável é o que ainda não foi devolvido.
+	remaining := c.AmountCents - c.RefundedCents
+	if remaining <= 0 {
+		writeError(w, http.StatusConflict, "already_refunded", "Esta cobrança já foi estornada")
+		return
+	}
 	var amountCents *int64
 	var body struct {
 		AmountCents *int64 `json:"amountCents"`
 	}
 	// Ignora erro de decodificação — corpo é opcional para estorno total.
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	if body.AmountCents != nil && *body.AmountCents > 0 {
+	if body.AmountCents != nil {
+		// Teto obrigatório: sem ele dava para pedir à Efí um estorno maior do que a
+		// cobrança — devolvendo dinheiro que nunca entrou.
+		if *body.AmountCents <= 0 || *body.AmountCents > remaining {
+			writeError(w, http.StatusBadRequest, "invalid_amount", "amountCents deve estar entre 1 e o saldo ainda não estornado")
+			return
+		}
 		amountCents = body.AmountCents
+	}
+	// Valor efetivamente estornado nesta chamada (sem corpo = estorno total do saldo).
+	refunding := remaining
+	if amountCents != nil {
+		refunding = *amountCents
+	}
+
+	// RESERVA antes do gateway: 'paid' → 'refunding' numa única instrução. Duas
+	// requisições simultâneas — só uma reserva, só uma estorna.
+	reserved, err := rs.BeginChargeRefund(r.Context(), c.CorrelationID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao reservar o estorno")
+		return
+	}
+	if !reserved {
+		writeError(w, http.StatusConflict, "refund_in_progress", "Já existe um estorno em andamento para esta cobrança")
+		return
 	}
 
 	if err := s.efiCobr.RefundCard(r.Context(), providerChargeID, amountCents); err != nil {
+		// Gateway recusou: devolve a cobrança a 'paid' para não travar num estado
+		// intermediário e permitir uma nova tentativa.
+		if rbErr := rs.RollbackChargeRefund(context.WithoutCancel(r.Context()), c.CorrelationID); rbErr != nil {
+			slog.Error("refund card: falha ao desfazer a reserva do estorno", "charge", c.ID, "err", rbErr)
+		}
 		var pe *ProviderError
 		if errors.As(err, &pe) {
 			// Não loga pe.Message bruto — pode conter dados sensíveis do gateway.
@@ -349,11 +390,20 @@ func (s *Server) handleRefundCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Marca a cobrança como estornada no banco (fecha double-refund).
-	if err := rs.MarkChargeRefunded(r.Context(), c.CorrelationID); err != nil {
-		slog.Warn("refund card: falha ao marcar estornada", "err", err)
-		// Não retorna erro ao cliente — o estorno já foi executado no gateway.
+	// Registra o valor estornado. Parcial volta para 'paid'; só o total vira 'refunded'.
+	status, err := rs.FinishChargeRefund(context.WithoutCancel(r.Context()), c.CorrelationID, refunding)
+	if err != nil {
+		// O estorno JÁ saiu no gateway — não devolve erro ao cliente, mas isto precisa
+		// ser visível: o banco ficou dessincronizado do dinheiro.
+		slog.Error("refund card: estorno executado mas não registrado no banco",
+			"charge", c.ID, "correlation", c.CorrelationID, "refunded_cents", refunding, "err", err)
+		status = c.Status
 	}
 
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":             true,
+		"refundedCents":  refunding,
+		"status":         status,
+		"remainingCents": remaining - refunding,
+	})
 }

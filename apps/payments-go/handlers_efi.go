@@ -26,7 +26,7 @@ type EfiBalance struct {
 // withdrawalStore isola as operações de persistência de saques.
 type withdrawalStore interface {
 	CreateWithdrawal(ctx context.Context, w *Withdrawal) error
-	ListWithdrawals(ctx context.Context) ([]Withdrawal, error)
+	ListWithdrawals(ctx context.Context, page listPage) ([]Withdrawal, error)
 	// GetWithdrawalByIdempotencyKey devolve o withdrawal existente com aquela chave,
 	// ou nil (sem erro) se não existir. Usado para dedupe de saques.
 	GetWithdrawalByIdempotencyKey(ctx context.Context, key string) (*Withdrawal, error)
@@ -111,7 +111,7 @@ func (s *Server) handleListWithdrawals(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "db_unavailable", "Banco de dados não disponível")
 		return
 	}
-	list, err := ws.ListWithdrawals(r.Context())
+	list, err := ws.ListWithdrawals(r.Context(), pageFromRequest(r))
 	if err != nil {
 		slog.Warn("withdrawals: falha ao listar", "err", err)
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar saques")
@@ -124,7 +124,11 @@ func (s *Server) handleListWithdrawals(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReceipt(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_param", "id inválido")
+		return
+	}
 	c, err := s.charges.GetCharge(r.Context(), id)
 	if err != nil || c == nil {
 		writeError(w, http.StatusNotFound, "not_found", "Cobrança não encontrada")
@@ -140,7 +144,9 @@ func (s *Server) handleReceipt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Content-Disposition", `attachment; filename="comprovante-`+r.PathValue("id")+`.pdf"`)
+	// Usa o id já parseado (número), nunca o texto cru do path: ele iria para dentro
+	// de um cabeçalho de resposta.
+	w.Header().Set("Content-Disposition", `attachment; filename="comprovante-`+strconv.FormatInt(id, 10)+`.pdf"`)
 	w.Write(body) //nolint:errcheck
 }
 
@@ -172,8 +178,11 @@ func (s *Server) handleReportRequest(w http.ResponseWriter, r *http.Request) {
 //   - pronto      → 200 text/csv com Content-Disposition
 func (s *Server) handleReportGet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if id == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "ID do relatório obrigatório")
+	// r.PathValue vem DESESCAPADO e o id ia direto para a URL da Efí (efi.go GetReport)
+	// e para o Content-Disposition. Sem validar, um id com barra ou CRLF escapava do
+	// caminho da API ou injetava cabeçalho na resposta.
+	if !validProviderID(id) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "ID do relatório inválido")
 		return
 	}
 	status, ct, body, err := s.efi.GetReport(r.Context(), id)

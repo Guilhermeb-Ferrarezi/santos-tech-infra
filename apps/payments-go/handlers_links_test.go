@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 
 // fakeLinkStore é um stub em memória de paymentLinkStore para testes sem DB.
 type fakeLinkStore struct {
+	mu      sync.Mutex              // protege charges (testes de concorrência do cupom)
 	links   map[string]*PaymentLink // indexado por public_token
 	byID    map[int64]*PaymentLink
 	nextID  atomic.Int64
@@ -70,7 +72,7 @@ func (f *fakeLinkStore) GetPaymentLink(_ context.Context, id int64) (*PaymentLin
 	return &cp, nil
 }
 
-func (f *fakeLinkStore) ListPaymentLinks(_ context.Context) ([]PaymentLink, error) {
+func (f *fakeLinkStore) ListPaymentLinks(_ context.Context, _ listPage) ([]PaymentLink, error) {
 	if f.failOn == "list" {
 		return nil, errors.New("db error fake")
 	}
@@ -103,7 +105,9 @@ func (f *fakeLinkStore) InsertChargeWithLink(_ context.Context, c *Charge, linkI
 	c.CreatedAt = time.Now()
 	cp := *c
 	cp.LinkID = &linkID
+	f.mu.Lock()
 	f.charges = append(f.charges, &cp)
+	f.mu.Unlock()
 	return nil
 }
 

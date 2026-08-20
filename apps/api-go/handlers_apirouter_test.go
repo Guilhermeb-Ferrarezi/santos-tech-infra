@@ -4,15 +4,18 @@ package main
 // retornam ANTES de tocar no banco (padrão do repo: sem Postgres no CI).
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/santos-tech/auth/db"
 )
 
 func apiRouterTestServer() *Server {
 	s := testServer(Config{})
-	s.vault = newVault("test-vault-secret")
+	s.vault = newVault("test-vault-secret", "test-vault-salt")
 	return s
 }
 
@@ -238,5 +241,50 @@ func TestHandleCreateAPIRouterProviderChatAdapterInvalido(t *testing.T) {
 	s.handleCreateAPIRouterProvider(w, r)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("chatAdapter inválido: code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// A listagem/mutação de chaves NÃO pode devolver o segredo cru: o valor
+// completo só sai pelo GET .../keys/{keyId}/reveal (sudo + auditoria).
+func TestAPIRouterKeyJSONNaoVazaSegredo(t *testing.T) {
+	s := apiRouterTestServer()
+	enc, err := s.vault.EncryptKeySecret("sk-super-secreto-123", 3, "e123")
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	m := s.apiRouterKeyJSON(&db.ApiRouterKey{ID: 7, ProviderID: 3, Label: "principal", SecretEnc: enc, SecretTail: "e123"})
+	if _, ok := m["secret"]; ok {
+		t.Fatalf("apiRouterKeyJSON não pode conter a chave \"secret\": %v", m)
+	}
+	if m["secretTail"] != "e123" {
+		t.Errorf("secretTail = %v", m["secretTail"])
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "sk-super-secreto-123") {
+		t.Fatalf("segredo cru vazou no JSON: %s", raw)
+	}
+}
+
+func TestRevealAPIRouterKeySemVault(t *testing.T) {
+	s := testServer(Config{}) // vault nil
+	w := httptest.NewRecorder()
+	s.handleRevealAPIRouterKey(w, httptest.NewRequest("GET", "/auth/admin/api-router/providers/1/keys/2/reveal", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code=%d (queria 503)", w.Code)
+	}
+}
+
+func TestRevealAPIRouterKeyIDInvalido(t *testing.T) {
+	s := apiRouterTestServer()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/auth/admin/api-router/providers/x/keys/y/reveal", nil)
+	r.SetPathValue("id", "abc")
+	r.SetPathValue("keyId", "abc")
+	s.handleRevealAPIRouterKey(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d (queria 400)", w.Code)
 	}
 }

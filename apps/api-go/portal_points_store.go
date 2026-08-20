@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 )
 
@@ -11,86 +10,56 @@ import (
 // ranking. Mesmo valor usado pelo sistema antigo (.NET) pra premiação por notas.
 const portalMinAnswersForRanking = 10
 
-// grantExercisePointsIfComplete concede pontos ao aluno por um exercício assim
-// que TODAS as questões dele estiverem corrigidas (is_correct preenchido) pra
-// aquele aluno. Idempotente por (user_id, reason) via UNIQUE INDEX — chamar de
-// novo pra um exercício já pontuado é no-op, então correções subsequentes (ex.:
-// professor edita uma resposta depois) não duplicam o crédito.
+// grantPointsForAnswers concede pontos pelos exercícios que ficaram COMPLETOS
+// (todas as questões do aluno corrigidas) entre as respostas de answerIDs.
 //
-// ponytail: sem penalidade por resposta fora do prazo (o sistema antigo reduzia
-// 40% dos pontos se respondido após exercise.term_at) — aqui é sempre
-// pointsRedeem * (corretas/total). Upgrade se isso for necessário: comparar
-// answer.answered_at com exercise.term_at por resposta.
-func (s *Server) grantExercisePointsIfComplete(ctx context.Context, userID, exerciseID int64) error {
-	var totalQuestions int
-	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM question WHERE exercise_id=$1`, exerciseID).Scan(&totalQuestions); err != nil {
-		return err
-	}
-	if totalQuestions == 0 {
-		return nil
-	}
-	var corrected, correct int
-	if err := s.portalDB.QueryRow(ctx, `SELECT
-		COUNT(*) FILTER (WHERE is_correct IS NOT NULL),
-		COUNT(*) FILTER (WHERE is_correct IS TRUE)
-		FROM answer WHERE exercise_id=$1 AND user_id=$2`, exerciseID, userID).Scan(&corrected, &correct); err != nil {
-		return err
-	}
-	if corrected < totalQuestions {
-		return nil // ainda falta corrigir alguma questão desse aluno nesse exercício
-	}
-	var pointsRedeem float64
-	if err := s.portalDB.QueryRow(ctx, `SELECT COALESCE(points_redeem,0) FROM exercise WHERE id=$1`, exerciseID).Scan(&pointsRedeem); err != nil {
-		return err
-	}
-	points := pointsRedeem * float64(correct) / float64(totalQuestions)
-	if points <= 0 {
-		return nil
-	}
-	_, err := s.portalDB.Exec(ctx, `INSERT INTO portal_point (user_id, exercise_id, points, reason)
-		VALUES ($1,$2,$3,$4) ON CONFLICT (user_id, reason) DO NOTHING`,
-		userID, exerciseID, points, fmt.Sprintf("exercise:%d", exerciseID))
-	return err
-}
-
-// grantPointsForAnswers concede pontos (melhor esforço, fora da transação
-// principal de correção — falha aqui não deve derrubar a resposta HTTP de
-// correção) pra cada par (aluno, exercício) distinto entre as respostas cujo id
-// está em answerIDs.
+// É melhor esforço: roda fora da transação de correção e uma falha aqui não
+// derruba a resposta HTTP — o crédito é recuperável numa correção posterior,
+// porque é idempotente por (user_id, reason) via UNIQUE INDEX.
+//
+// Tudo acontece num ÚNICO statement. Antes eram 1 SELECT de pares + 3 queries
+// e 1 INSERT POR PAR, na thread do request: um lote de 500 respostas podia
+// virar ~2.500 round-trips e estourar o WriteTimeout de 60s.
+//
+// ponytail: sem penalidade por resposta fora do prazo (o sistema antigo
+// reduzia 40% dos pontos se respondido após exercise.term_at) — aqui é sempre
+// points_redeem * (corretas/total).
 func (s *Server) grantPointsForAnswers(ctx context.Context, answerIDs []int64) {
 	if len(answerIDs) == 0 {
 		return
 	}
-	rows, err := s.portalDB.Query(ctx, `SELECT DISTINCT user_id, exercise_id FROM answer WHERE id = ANY($1)`, answerIDs)
-	if err != nil {
-		slog.Error("ranking: falha ao buscar pares aluno/exercício pra pontos", "err", err)
-		return
-	}
-	type pair struct{ userID, exerciseID int64 }
-	var pairs []pair
-	for rows.Next() {
-		var p pair
-		if err := rows.Scan(&p.userID, &p.exerciseID); err != nil {
-			slog.Error("ranking: falha ao ler par aluno/exercício", "err", err)
-			rows.Close()
-			return
-		}
-		pairs = append(pairs, p)
-	}
-	rows.Close()
-	for _, p := range pairs {
-		if err := s.grantExercisePointsIfComplete(ctx, p.userID, p.exerciseID); err != nil {
-			slog.Error("ranking: falha ao conceder pontos", "err", err, "userId", p.userID, "exerciseId", p.exerciseID)
-		}
+	if _, err := s.portalDB.Exec(ctx, `
+		INSERT INTO portal_point (user_id, exercise_id, points, reason)
+		SELECT t.user_id, t.exercise_id,
+			COALESCE(e.points_redeem, 0)::numeric * t.corretas / t.total_questoes,
+			'exercise:' || t.exercise_id
+		FROM (
+			SELECT p.user_id, p.exercise_id, tq.total_questoes,
+				COUNT(*) FILTER (WHERE a.is_correct IS NOT NULL) AS corrigidas,
+				COUNT(*) FILTER (WHERE a.is_correct IS TRUE) AS corretas
+			FROM (SELECT DISTINCT user_id, exercise_id FROM answer WHERE id = ANY($1)) p
+			JOIN LATERAL (SELECT COUNT(*) AS total_questoes FROM question q WHERE q.exercise_id = p.exercise_id) tq ON true
+			JOIN answer a ON a.user_id = p.user_id AND a.exercise_id = p.exercise_id
+			GROUP BY p.user_id, p.exercise_id, tq.total_questoes
+		) t
+		JOIN exercise e ON e.id = t.exercise_id
+		WHERE t.total_questoes > 0
+		  AND t.corrigidas >= t.total_questoes
+		  AND t.corretas > 0
+		  AND COALESCE(e.points_redeem, 0) > 0
+		ON CONFLICT (user_id, reason) DO NOTHING`, answerIDs); err != nil {
+		slog.Error("ranking: falha ao conceder pontos", "err", err, "answers", len(answerIDs))
 	}
 }
 
 // ── Rankings ─────────────────────────────────────────────────────────────────
 
+// portalRankingNotaDTO — leaderboard não carrega e-mail: a rota é liberada a
+// qualquer cargo com portal_rankings:read e um placar não precisa de PII de
+// contato para ordenar alunos.
 type portalRankingNotaDTO struct {
 	StudentID      string  `json:"studentId"`
 	Name           string  `json:"name"`
-	Email          string  `json:"email"`
 	TotalAnswers   int64   `json:"totalAnswers"`
 	CorrectAnswers int64   `json:"correctAnswers"`
 	PercentCorrect float64 `json:"percentCorrect"`
@@ -99,7 +68,6 @@ type portalRankingNotaDTO struct {
 type portalRankingPontoDTO struct {
 	StudentID   string  `json:"studentId"`
 	Name        string  `json:"name"`
-	Email       string  `json:"email"`
 	TotalPoints float64 `json:"totalPoints"`
 }
 
@@ -115,11 +83,11 @@ func (s *Server) portalRankingNotas(ctx context.Context, p portalPagination) ([]
 	) t`, portalMinAnswersForRanking).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''),
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''),
 		COUNT(*) FILTER (WHERE a.is_correct IS NOT NULL) AS total_respondidas,
 		COUNT(*) FILTER (WHERE a.is_correct IS TRUE) AS corretas
 		FROM answer a JOIN "user" u ON u.id = a.user_id
-		GROUP BY u.id, u.name, u.email
+		GROUP BY u.id, u.name
 		HAVING COUNT(*) FILTER (WHERE a.is_correct IS NOT NULL) >= $1
 		ORDER BY (COUNT(*) FILTER (WHERE a.is_correct IS TRUE))::float
 			/ NULLIF(COUNT(*) FILTER (WHERE a.is_correct IS NOT NULL), 0) DESC,
@@ -132,7 +100,7 @@ func (s *Server) portalRankingNotas(ctx context.Context, p portalPagination) ([]
 	items := []portalRankingNotaDTO{}
 	for rows.Next() {
 		var dto portalRankingNotaDTO
-		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.Email, &dto.TotalAnswers, &dto.CorrectAnswers); err != nil {
+		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.TotalAnswers, &dto.CorrectAnswers); err != nil {
 			return nil, 0, err
 		}
 		if dto.TotalAnswers > 0 {
@@ -150,9 +118,9 @@ func (s *Server) portalRankingPontos(ctx context.Context, p portalPagination) ([
 	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(DISTINCT user_id) FROM portal_point`).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''), SUM(pp.points) AS total_points
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.name,''), SUM(pp.points) AS total_points
 		FROM portal_point pp JOIN "user" u ON u.id = pp.user_id
-		GROUP BY u.id, u.name, u.email
+		GROUP BY u.id, u.name
 		ORDER BY total_points DESC, u.id ASC
 		LIMIT $1 OFFSET $2`, p.Limit, p.Offset)
 	if err != nil {
@@ -162,7 +130,7 @@ func (s *Server) portalRankingPontos(ctx context.Context, p portalPagination) ([
 	items := []portalRankingPontoDTO{}
 	for rows.Next() {
 		var dto portalRankingPontoDTO
-		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.Email, &dto.TotalPoints); err != nil {
+		if err := rows.Scan(&dto.StudentID, &dto.Name, &dto.TotalPoints); err != nil {
 			return nil, 0, err
 		}
 		items = append(items, dto)

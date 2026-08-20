@@ -362,7 +362,7 @@ func (m *SessionManager) claudeArgsLive(conv *Conversation, mediaGlob string) []
 //
 // Observação: o MCP do GitHub recebe o token no PRÓPRIO env do servidor MCP
 // (writeMCPConfig em mcp.go), então não depende deste env do processo Claude.
-func (m *SessionManager) claudeEnv(ctx context.Context, conv *Conversation) []string {
+func (s *Server) claudeEnv(ctx context.Context, conv *Conversation) []string {
 	env := []string{}
 	// Repassa só variáveis de runtime essenciais do ambiente do container (sem segredos).
 	for _, key := range []string{
@@ -374,14 +374,14 @@ func (m *SessionManager) claudeEnv(ctx context.Context, conv *Conversation) []st
 			env = append(env, key+"="+v)
 		}
 	}
-	if tok, err := m.s.oauthToken(ctx); err == nil && tok != "" {
+	if tok, err := s.oauthToken(ctx); err == nil && tok != "" {
 		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
 	}
 	// GITHUB_TOKEN só quando há repo clonado nesta conversa (git push/pull legítimo).
 	// Sem repo, não há motivo para o token estar no env — não o injetamos.
-	if conv != nil && conv.Repo != nil && *conv.Repo != "" && m.s.cfg.GithubToken != "" {
-		env = append(env, "GITHUB_TOKEN="+m.s.cfg.GithubToken,
-			"GITHUB_PERSONAL_ACCESS_TOKEN="+m.s.cfg.GithubToken)
+	if conv != nil && conv.Repo != nil && *conv.Repo != "" && s.cfg.GithubToken != "" {
+		env = append(env, "GITHUB_TOKEN="+s.cfg.GithubToken,
+			"GITHUB_PERSONAL_ACCESS_TOKEN="+s.cfg.GithubToken)
 	}
 	return env
 }
@@ -404,7 +404,7 @@ func (m *SessionManager) exec(ctx context.Context, conv *Conversation, prompt, m
 
 	cmd := exec.CommandContext(ctx, m.s.cfg.ClaudeBin, m.claudeArgs(conv, mediaGlob)...)
 	cmd.Dir = conv.Workdir
-	cmd.Env = m.claudeEnv(ctx, conv)
+	cmd.Env = m.s.claudeEnv(ctx, conv)
 	cmd.Stdin = strings.NewReader(prompt)
 	// (#3) Roda o CLI no PRÓPRIO grupo de processos (Setpgid): assim o kill-switch /
 	// timeout consegue matar o GRUPO inteiro (o `claude` + os filhos que ele spawna,

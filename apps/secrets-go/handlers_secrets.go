@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -261,9 +263,12 @@ func (s *Server) handlePresets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePresetByID(w http.ResponseWriter, r *http.Request) {
+	// Formato fechado (24 hex, o que newPresetID gera): o id vai para a URL do
+	// Elasticsearch, e um id arbitrário injetaria query string ou outro caminho
+	// da API do cluster compartilhado. Ver validPresetID em presets.go.
 	id := r.PathValue("id")
-	if id == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "id do preset é obrigatório")
+	if !validPresetID(id) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "id do preset inválido")
 		return
 	}
 	switch r.Method {
@@ -328,4 +333,76 @@ func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {
 	s.hub.Broadcast(Event{Type: "status", Data: st})
 	s.hub.Broadcast(Event{Type: "stats", Data: map[string]int{}})
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": true})
+}
+
+// ── Revelar o valor de UMA chave ─────────────────────────────────────────
+// A listagem (/repos) devolve só prefixo + hash — nunca o valor. Quando o
+// admin precisa do valor em si (para revogar no provedor, por exemplo), passa
+// por aqui: POST, admin-only, um id por chamada, e cada revelação vira uma
+// linha de auditoria no log (quem, qual documento, qual repo/keyword).
+//
+// Nunca há revelação em lote: se um dia precisar, é uma decisão consciente,
+// não um efeito colateral de listar.
+
+func (s *Server) handleReveal(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", `body inválido, esperado {"id": "..."}`)
+		return
+	}
+	id := strings.TrimSpace(body.ID)
+	// O id é o _id determinístico do ES: sha1 hex de repo|path|keyword.
+	if !validHitID(id) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "id inválido")
+		return
+	}
+
+	hit, err := s.es.GetHit(r.Context(), id)
+	if errors.Is(err, errHitNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "achado não encontrado")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "elasticsearch_error", err.Error())
+		return
+	}
+	if hit.MatchedValue == "" {
+		writeError(w, http.StatusNotFound, "no_value", "este achado não tem valor guardado (ou o cofre não consegue decifrá-lo)")
+		return
+	}
+
+	uid, _ := r.Context().Value(userIDKey).(int64)
+	slog.WarnContext(r.Context(), "valor de chave vazada revelado",
+		"audit", "secrets.reveal",
+		"user_id", uid,
+		"hit_id", id,
+		"repo", hit.RepoFullName,
+		"file", hit.FilePath,
+		"keyword", hit.Keyword,
+		"value_hash", hit.MatchedValueHash,
+	)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":           id,
+		"keyword":      hit.Keyword,
+		"repoFullName": hit.RepoFullName,
+		"matchedValue": hit.MatchedValue,
+	})
+}
+
+// validHitID confere o formato do _id gerado por docID (sha1 hex, 40 chars) —
+// tanto para não montar URL do Elasticsearch com entrada arbitrária quanto para
+// rejeitar chute cedo.
+func validHitID(id string) bool {
+	if len(id) != 40 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }

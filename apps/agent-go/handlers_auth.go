@@ -195,15 +195,30 @@ func cleanTTY(s string) string {
 }
 
 // gc remove fluxos pendentes com mais de 5min.
+//
+// CONCORRÊNCIA: iterava e deletava em a.pend SEM o mutex, enquanto start() e
+// complete() escrevem no mesmo mapa sob lock. Isso rende
+// "fatal error: concurrent map iteration and map write", que é um fatal error
+// do runtime — não passa por recover, derruba o processo inteiro.
+//
+// Coleta os expirados sob o lock e só depois faz Kill/Close/Wait, para não
+// segurar o mutex durante o Wait (que bloqueia até o processo morrer).
 func (a *claudeAuth) gc() {
+	a.mu.Lock()
+	var expired []*pendingAuth
 	for state, p := range a.pend {
 		if time.Since(p.created) > 5*time.Minute {
-			_ = p.cmd.Process.Kill()
-			_ = p.ptmx.Close()
-			// (#8) Reap o processo morto (evita zumbi/goroutine do PTY vazada).
-			_ = p.cmd.Wait()
+			expired = append(expired, p)
 			delete(a.pend, state)
 		}
+	}
+	a.mu.Unlock()
+
+	for _, p := range expired {
+		_ = p.cmd.Process.Kill()
+		_ = p.ptmx.Close()
+		// (#8) Reap o processo morto (evita zumbi/goroutine do PTY vazada).
+		_ = p.cmd.Wait()
 	}
 }
 

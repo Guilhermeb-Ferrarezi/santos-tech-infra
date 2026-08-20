@@ -13,3 +13,6 @@ build/
 *~
 .superpowers/
 .worktrees/
+
+# binários compilados
+*.exe

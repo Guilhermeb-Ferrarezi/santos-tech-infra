@@ -15,12 +15,25 @@ import (
 // pixWebhookStore define as operações de persistência usadas pelo handleWebhook (PIX).
 // Extraída como interface para facilitar testes sem DB.
 type pixWebhookStore interface {
-	MarkWebhookSeen(ctx context.Context, id, typ string, payload []byte) (bool, error)
+	// ClaimWebhookEvent/MarkWebhookDone formam o processamento em duas fases:
+	// reivindica ('pending') → aplica o efeito → encerra ('done'). Nunca encerre
+	// antes do efeito: a reentrega da Efí precisa reprocessar quando algo falha.
+	ClaimWebhookEvent(ctx context.Context, id, typ string, payload []byte) (bool, error)
+	MarkWebhookDone(ctx context.Context, id string) error
 	MarkChargePaid(ctx context.Context, correlationID string) error
 	PublicTokenByCorrelation(ctx context.Context, correlationID string) (string, error)
 	// SetWithdrawalStatus aplica o resultado final de um Pix Envio (payout), casando o
 	// saque por efi_id_envio OU e2e_id. Usado pelo ramo PAYOUT_RESULT do webhook pix.
 	SetWithdrawalStatus(ctx context.Context, idEnvio, e2eID, status string) error
+}
+
+// cobrWebhookStore define as operações usadas pelo handleCobrWebhook (API Cobranças:
+// boleto/cartão). Mesmo contrato de duas fases do webhook pix.
+type cobrWebhookStore interface {
+	ClaimWebhookEvent(ctx context.Context, id, typ string, payload []byte) (bool, error)
+	MarkWebhookDone(ctx context.Context, id string) error
+	MarkChargePaidByProviderID(ctx context.Context, providerChargeID string) (bool, error)
+	PublicTokenByProviderID(ctx context.Context, providerChargeID string) (string, error)
 }
 
 // productStore define as operações de persistência de produtos usadas pelos
@@ -38,10 +51,15 @@ type productStore interface {
 // Extraída como interface para facilitar testes sem DB.
 type couponStore interface {
 	CreateCoupon(ctx context.Context, c Coupon) (Coupon, error)
-	ListCoupons(ctx context.Context) ([]Coupon, error)
+	ListCoupons(ctx context.Context, page listPage) ([]Coupon, error)
 	GetCouponByCode(ctx context.Context, code string) (Coupon, error)
 	SetCouponActive(ctx context.Context, id int64, active bool) error
-	IncrementCouponUse(ctx context.Context, id int64) error
+	// RedeemCoupon reserva um uso de forma ATÔMICA (checa limite e incrementa no
+	// mesmo UPDATE). Nunca volte ao par "consulta max_uses" + "incrementa depois":
+	// entre os dois cabe uma chamada HTTP ao gateway, e o limite do cupom fura.
+	RedeemCoupon(ctx context.Context, code string) (Coupon, error)
+	// ReleaseCouponUse devolve o uso reservado quando o pagamento não se concretiza.
+	ReleaseCouponUse(ctx context.Context, id int64) error
 }
 
 // checkoutStore isola o acesso ao banco usado pelo checkout do carrinho (POST
@@ -60,11 +78,22 @@ type paymentLinkStore interface {
 	CreatePaymentLink(ctx context.Context, l *PaymentLink) error
 	GetPaymentLinkByToken(ctx context.Context, token string) (*PaymentLink, error)
 	GetPaymentLink(ctx context.Context, id int64) (*PaymentLink, error)
-	ListPaymentLinks(ctx context.Context) ([]PaymentLink, error)
+	ListPaymentLinks(ctx context.Context, page listPage) ([]PaymentLink, error)
 	SetPaymentLinkStatus(ctx context.Context, id int64, status string) error
 	InsertChargeWithLink(ctx context.Context, c *Charge, linkID int64) error
 	// MarkChargePaid é necessário para marcar cobrança paga após cartão sincronamente.
 	MarkChargePaid(ctx context.Context, correlationID string) error
+}
+
+// chargeWriteStore isola a persistência em DUAS FASES da cobrança: a linha nasce
+// em 'creating' (reserva), o gateway é chamado, e só então ela é promovida a
+// 'pending' (ActivateCharge) ou cancelada (AbandonCharge). Extraída como interface
+// para permitir testar a ordem sem Postgres — e essa ordem é o ponto: criar na Efí
+// antes de gravar deixava um QR pagável sem cobrança nenhuma no banco.
+type chargeWriteStore interface {
+	InsertCharge(ctx context.Context, c *Charge) error
+	ActivateCharge(ctx context.Context, id int64, c *Charge) (bool, error)
+	AbandonCharge(ctx context.Context, id int64) error
 }
 
 // rateLimiterIface permite injetar limiters alternativos nos testes (sem depender
@@ -79,6 +108,7 @@ type Server struct {
 	rdb        *redis.Client
 	store      *Store
 	pixWH      pixWebhookStore  // store do webhook PIX; nil usa s.store
+	cobrWH     cobrWebhookStore // store do webhook Cobranças (boleto/cartão); nil usa s.store
 	links      paymentLinkStore // store de links; nil usa s.store
 	coupons    couponStore      // store de cupons; nil usa s.store
 	products   productStore     // store de produtos; nil usa s.store
@@ -100,6 +130,11 @@ type Server struct {
 	// linkPayRateLimiter substitui o rate-limit por IP de /link/{token}/pay em testes;
 	// nil usa o limitador global por IP (payLinkLimiterFor).
 	linkPayRateLimiter rateLimiterIface
+	// couponApplyRateLimiter substitui o rate-limit por IP de /coupons/apply em testes;
+	// nil usa o limitador global por IP (applyCouponLimiters).
+	couponApplyRateLimiter rateLimiterIface
+	// chargeWr store de escrita de cobrança (reserva/ativa/cancela); nil usa s.store.
+	chargeWr chargeWriteStore
 	// statement store de extrato; nil usa s.store.
 	statement statementStore
 	// queue enfileira tasks asynq (notificação de pagamento). Pode ser nil em
@@ -176,7 +211,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /products/{id}", s.requireAdmin(s.handleGetProduct))
 	mux.HandleFunc("PUT /products/{id}", s.requireAdmin(s.handleUpdateProduct))
 	mux.HandleFunc("DELETE /products/{id}", s.requireAdmin(s.handleDeleteProduct))
-	mux.HandleFunc("GET /products/by-slug/{slug}", s.handleGetProductBySlug) // público
+	// Público: DTO reduzido, SEM fileUrl (o entregável).
+	mux.HandleFunc("GET /products/by-slug/{slug}", s.handleGetProductBySlug)
+	// Entregável do produto: só para quem tem cobrança paga dele.
+	mux.HandleFunc("GET /me/products/{id}/file", s.authGuard(s.handleGetMeProductFile))
 
 	mux.HandleFunc("GET /me/customer", s.authGuard(s.handleGetMeCustomer))
 	mux.HandleFunc("PUT /me/customer", s.authGuard(s.handlePutMeCustomer))

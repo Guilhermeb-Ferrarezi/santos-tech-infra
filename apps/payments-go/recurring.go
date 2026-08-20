@@ -182,6 +182,13 @@ func (s *Server) expireOverdueCharges(ctx context.Context) {
 	if n > 0 {
 		slog.Info("cobranças expiradas (QR vencido)", "count", n)
 	}
+	// Reservas órfãs: o processo morreu entre o INSERT ('creating') e a resposta da
+	// Efí. Ficam canceladas para não poluírem listagem e relatórios.
+	if n, err := s.store.CancelStaleCreatingCharges(ctx); err != nil {
+		slog.Error("falha ao limpar cobranças presas em 'creating'", "err", err)
+	} else if n > 0 {
+		slog.Info("cobranças órfãs canceladas (presas em 'creating')", "count", n)
+	}
 }
 
 func (s *Server) generateMonthlyCharges(ctx context.Context) {

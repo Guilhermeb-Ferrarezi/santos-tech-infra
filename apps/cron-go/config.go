@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -15,6 +16,9 @@ type Config struct {
 	AuthMeURL     string   // URL do /auth/me para validar sessão (guard de admin)
 	CORSOrigins   []string // origens permitidas no CORS (CSV em CORS_ORIGIN)
 	RedisURL      string   // opcional; se vazio, ban check é desabilitado
+	// RunRetentionDays é por quantos dias o histórico de cron_runs é mantido.
+	// <= 0 desliga a purga (a tabela cresce sem limite). Ver Server.RunRetention.
+	RunRetentionDays int
 }
 
 func LoadConfig() Config {
@@ -40,6 +44,12 @@ func LoadConfig() Config {
 			cors = append(cors, o)
 		}
 	}
+	retention := 90
+	if v := strings.TrimSpace(os.Getenv("CRON_RUN_RETENTION_DAYS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			retention = n
+		}
+	}
 	return Config{
 		Port:          port,
 		DatabaseURL:   os.Getenv("DATABASE_URL"),
@@ -50,5 +60,7 @@ func LoadConfig() Config {
 		AuthMeURL:     authMeURL,
 		CORSOrigins:   cors,
 		RedisURL:      os.Getenv("REDIS_URL"),
+
+		RunRetentionDays: retention,
 	}
 }

@@ -154,18 +154,46 @@ func (s *Server) syncExerciseQuestions(ctx context.Context, tx pgx.Tx, exerciseI
 	if _, err := tx.Exec(ctx, `DELETE FROM question WHERE exercise_id=$1`, exerciseID); err != nil {
 		return err
 	}
+	if len(questions) == 0 {
+		return nil
+	}
+	// Antes: 1 INSERT por questão + 1 por opção, serializados. Agora as
+	// questões vão num pipeline só (pgx.Batch) e as opções em outro — 2
+	// round-trips no total, sem depender da ordem do RETURNING de um
+	// INSERT ... SELECT para casar id com questão.
+	qb := &pgx.Batch{}
 	for _, q := range questions {
-		var qid int64
-		if err := tx.QueryRow(ctx, `INSERT INTO question (statement, exercise_id) VALUES ($1,$2) RETURNING id`, q.Statement, exerciseID).Scan(&qid); err != nil {
+		qb.Queue(`INSERT INTO question (statement, exercise_id) VALUES ($1,$2) RETURNING id`, q.Statement, exerciseID)
+	}
+	qres := tx.SendBatch(ctx, qb)
+	ids := make([]int64, len(questions))
+	for i := range questions {
+		if err := qres.QueryRow().Scan(&ids[i]); err != nil {
+			qres.Close()
 			return err
 		}
+	}
+	if err := qres.Close(); err != nil {
+		return err
+	}
+
+	ob := &pgx.Batch{}
+	for i, q := range questions {
 		for _, o := range q.Options {
-			if _, err := tx.Exec(ctx, `INSERT INTO question_option (question_id, option_text, is_correct) VALUES ($1,$2,$3)`, qid, o.Text, o.IsCorrect); err != nil {
-				return err
-			}
+			ob.Queue(`INSERT INTO question_option (question_id, option_text, is_correct) VALUES ($1,$2,$3)`, ids[i], o.Text, o.IsCorrect)
 		}
 	}
-	return nil
+	if ob.Len() == 0 {
+		return nil
+	}
+	ores := tx.SendBatch(ctx, ob)
+	for i := 0; i < ob.Len(); i++ {
+		if _, err := ores.Exec(); err != nil {
+			ores.Close()
+			return err
+		}
+	}
+	return ores.Close()
 }
 
 func portalExerciseDefaults(in portalExerciseInput) (typ, difficulty, points int, isDaily, isFinal bool) {
@@ -307,15 +335,20 @@ func (s *Server) portalDeleteExercise(ctx context.Context, id int64) error {
 
 // ── Containers ───────────────────────────────────────────────────────────────
 
-func (s *Server) portalListContainers(ctx context.Context, phaseID int64) ([]portalContainerGroupDTO, error) {
+func (s *Server) portalListContainers(ctx context.Context, phaseID int64, p portalPagination) ([]portalContainerGroupDTO, int64, error) {
+	var total int64
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM container_tasks WHERE phase_id=$1`, phaseID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.portalDB.Query(ctx, `SELECT ct.id::text, ct.exercise_id::text, COALESCE(ct.name,''),
 		COALESCE(ct.is_daily_task,false), ct.container_date_target_int,
 		COALESCE(e.title,''), COALESCE(e.description,''), COALESCE(e.index_order,1)
 		FROM container_tasks ct JOIN exercise e ON e.id = ct.exercise_id
 		WHERE ct.phase_id=$1
-		ORDER BY ct.container_date_target_int ASC NULLS LAST, ct.name ASC, e.index_order ASC, ct.id ASC`, phaseID)
+		ORDER BY ct.container_date_target_int ASC NULLS LAST, ct.name ASC, e.index_order ASC, ct.id ASC
+		LIMIT $2 OFFSET $3`, phaseID, p.Limit, p.Offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -327,7 +360,7 @@ func (s *Server) portalListContainers(ctx context.Context, phaseID int64) ([]por
 		var dateTarget *int
 		var indexOrder int
 		if err := rows.Scan(&ctID, &exID, &name, &isDaily, &dateTarget, &title, &desc, &indexOrder); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		key := portalContainerKey(name, isDaily, dateTarget)
 		pos, ok := idx[key]
@@ -343,7 +376,7 @@ func (s *Server) portalListContainers(ctx context.Context, phaseID int64) ([]por
 			ContainerTaskID: ctID, ExerciseID: exID, Title: title, Description: desc, IndexOrder: indexOrder,
 		})
 	}
-	return groups, rows.Err()
+	return groups, total, rows.Err()
 }
 
 func portalContainerKey(name string, isDaily bool, dateTarget *int) string {
@@ -380,26 +413,36 @@ func (s *Server) portalCreateContainer(ctx context.Context, in portalContainerIn
 	}
 	defer tx.Rollback(ctx)
 
-	count := 0
-	for _, exID := range in.ExerciseIDs {
-		// um exercício só pode estar em um container por fase
-		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM container_tasks WHERE exercise_id=$1 AND phase_id=$2)`, exID, in.PhaseID).Scan(&exists); err != nil {
-			return 0, err
-		}
-		if exists {
-			return 0, conflictErr(fmt.Sprintf("exercício %d já está em um container desta fase", exID))
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO container_tasks (name, exercise_id, phase_id, is_daily_task, container_date_target_int, created_at)
-			VALUES ($1,$2,$3,$4,$5,NOW())`, in.Name, exID, in.PhaseID, isDaily, in.ContainerDateTargetInt); err != nil {
-			return 0, portalDBErr(err)
-		}
-		count++
+	// um exercício só pode estar em um container por fase — a checagem vira
+	// uma query em conjunto (antes: 2 SELECT EXISTS + 1 INSERT por exercício).
+	if err := portalFirstConflictingExercise(ctx, tx, in.ExerciseIDs, in.PhaseID); err != nil {
+		return 0, err
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO container_tasks (name, exercise_id, phase_id, is_daily_task, container_date_target_int, created_at)
+		SELECT $1, x.id, $3, $4, $5, NOW() FROM unnest($2::bigint[]) AS x(id)`,
+		in.Name, in.ExerciseIDs, in.PhaseID, isDaily, in.ContainerDateTargetInt)
+	if err != nil {
+		return 0, portalDBErr(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	return count, nil
+	return int(tag.RowsAffected()), nil
+}
+
+// portalFirstConflictingExercise devolve 409 se algum dos exercícios já estiver
+// num container da fase. Uma query para o lote inteiro.
+func portalFirstConflictingExercise(ctx context.Context, tx pgx.Tx, exerciseIDs []int64, phaseID int64) error {
+	var dup int64
+	err := tx.QueryRow(ctx, `SELECT exercise_id FROM container_tasks
+		WHERE phase_id = $2 AND exercise_id = ANY($1) ORDER BY exercise_id LIMIT 1`, exerciseIDs, phaseID).Scan(&dup)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return conflictErr(fmt.Sprintf("exercício %d já está em um container desta fase", dup))
 }
 
 func (s *Server) portalAddContainerExercises(ctx context.Context, ref portalContainerGroupRef, exerciseIDs []int64) (int, error) {
@@ -421,32 +464,32 @@ func (s *Server) portalAddContainerExercises(ctx context.Context, ref portalCont
 		return 0, notFoundErr("Container")
 	}
 
-	count := 0
-	for _, exID := range exerciseIDs {
-		var inPhase bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM exercise WHERE id=$1 AND phase_id=$2)`, exID, ref.PhaseID).Scan(&inPhase); err != nil {
-			return 0, err
-		}
-		if !inPhase {
-			return 0, validationErr(fmt.Sprintf("exercício %d não pertence à fase", exID))
-		}
-		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM container_tasks WHERE exercise_id=$1 AND phase_id=$2)`, exID, ref.PhaseID).Scan(&exists); err != nil {
-			return 0, err
-		}
-		if exists {
-			return 0, conflictErr(fmt.Sprintf("exercício %d já está em um container desta fase", exID))
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO container_tasks (name, exercise_id, phase_id, is_daily_task, container_date_target_int, created_at)
-			VALUES ($1,$2,$3,$4,$5,NOW())`, ref.Name, exID, ref.PhaseID, ref.IsDailyTask, ref.ContainerDateTargetInt); err != nil {
-			return 0, portalDBErr(err)
-		}
-		count++
+	// todos os exercícios precisam ser da fase e não estar em outro container —
+	// duas queries em conjunto no lugar de 2 SELECT EXISTS por exercício.
+	var foreign int64
+	err = tx.QueryRow(ctx, `SELECT x.id FROM unnest($1::bigint[]) AS x(id)
+		WHERE NOT EXISTS (SELECT 1 FROM exercise e WHERE e.id = x.id AND e.phase_id = $2)
+		ORDER BY x.id LIMIT 1`, exerciseIDs, ref.PhaseID).Scan(&foreign)
+	if err == nil {
+		return 0, validationErr(fmt.Sprintf("exercício %d não pertence à fase", foreign))
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return 0, err
+	}
+	if err := portalFirstConflictingExercise(ctx, tx, exerciseIDs, ref.PhaseID); err != nil {
+		return 0, err
+	}
+
+	tag, err := tx.Exec(ctx, `INSERT INTO container_tasks (name, exercise_id, phase_id, is_daily_task, container_date_target_int, created_at)
+		SELECT $1, x.id, $3, $4, $5, NOW() FROM unnest($2::bigint[]) AS x(id)`,
+		ref.Name, exerciseIDs, ref.PhaseID, ref.IsDailyTask, ref.ContainerDateTargetInt)
+	if err != nil {
+		return 0, portalDBErr(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	return count, nil
+	return int(tag.RowsAffected()), nil
 }
 
 func (s *Server) portalDeleteContainerGroup(ctx context.Context, ref portalContainerGroupRef) (int64, error) {

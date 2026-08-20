@@ -61,7 +61,7 @@ type oaiChatRequest struct {
 func (s *Server) handleOAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 	var req oaiChatRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSONLimit(r, &req, maxGenerateBody); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
 		return
 	}

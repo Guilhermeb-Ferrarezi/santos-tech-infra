@@ -62,7 +62,7 @@ function OverlayApp() {
   const low = remainingSeconds < 10 * 60;
 
   return (
-    <div className="flex h-screen w-screen flex-col items-center justify-center gap-0.5 bg-transparent text-white [text-shadow:0_1px_6px_rgba(0,0,0,0.9)]">
+    <div className="flex h-screen w-screen select-none flex-col items-center justify-center gap-0.5 bg-transparent text-white [text-shadow:0_1px_6px_rgba(0,0,0,0.9)]">
       <p className="text-xs font-medium text-white/80">Tempo restante:</p>
       <p className={`font-mono text-4xl font-bold tabular-nums ${low ? "text-red-400" : "text-white"}`}>
         {data ? formatDuration(remainingSeconds) : "--:--"}

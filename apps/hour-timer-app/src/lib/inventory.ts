@@ -1,0 +1,111 @@
+import { invoke } from "@tauri-apps/api/core";
+import type { Store } from "@tauri-apps/plugin-store";
+
+const INVENTORY_HASH_KEY = "inventoryHash";
+const INVENTORY_SENT_AT_KEY = "inventorySentAt";
+
+// Reenvio periódico mesmo sem mudança: prova pro admin que a foto é recente.
+// Sem isso, um PC desligado há um mês exibiria a lista antiga como se fosse de
+// hoje — e "não sei" é diferente de "está tudo instalado".
+const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+// Ícones por requisição no 2º passo — o servidor aceita até 200 por lote.
+const ICON_BATCH = 50;
+
+interface InstalledProgram {
+  name: string;
+  version: string;
+  publisher: string;
+  /** PNG do ícone em base64 puro; vazio quando o programa não declara ícone. */
+  icon: string;
+  /** sha256 do PNG — é o que identifica o ícone no servidor. */
+  icon_hash: string;
+}
+
+// Versão do FORMATO do payload, não do app. Entra no hash pra que uma mudança
+// de esquema force um reenvio: quando o ícone passou a ser coletado, a lista de
+// programas continuou idêntica — sem isto, o hash gravado bateria e nenhum PC
+// jamais mandaria os ícones novos.
+const PAYLOAD_SCHEMA = "v3-icon-hash";
+
+// Hash barato (djb2) só pra decidir "mudou desde a última vez?". Não é
+// segurança: colisão aqui atrasa um envio, não expõe nada.
+function hashPrograms(programs: InstalledProgram[]) {
+  const text =
+    PAYLOAD_SCHEMA +
+    "\n" +
+    programs.map((p) => `${p.name}@${p.version}@${p.icon_hash}`).join("\n");
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return String(h);
+}
+
+// Manda a lista de programas instalados quando ela muda (ou uma vez por dia).
+// Chamado depois de um heartbeat bem-sucedido: o servidor exige o mesmo
+// deviceSecret, então não adianta tentar antes da adoção.
+//
+// Falha silenciosa de propósito — inventário é informação de apoio pro admin,
+// não pode atrapalhar o cronômetro, que é a função do app.
+export async function syncInventory(
+  store: Store,
+  apiOrigin: string,
+  deviceId: string,
+  deviceSecret: string | null | undefined,
+) {
+  if (!deviceSecret) return; // PC ainda não adotado
+  try {
+    const programs = await invoke<InstalledProgram[]>("list_installed_programs");
+    if (!programs.length) return;
+
+    const hash = hashPrograms(programs);
+    const lastHash = await store.get<string>(INVENTORY_HASH_KEY);
+    const lastSentAt = (await store.get<number>(INVENTORY_SENT_AT_KEY)) ?? 0;
+    if (hash === lastHash && Date.now() - lastSentAt < MAX_AGE_MS) return;
+
+    // 1º passo: a lista, SEM as imagens — só o hash de cada ícone. O ícone do
+    // Blender é o mesmo arquivo em todo PC do laboratório; mandar os bytes a
+    // cada máquina e a cada coleta repetiria ~200 KB que o servidor já tem.
+    const res = await fetch(`${apiOrigin}/public/lab-devices/inventory`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId,
+        deviceSecret,
+        programs: programs.map(({ name, version, publisher, icon_hash }) => ({
+          name,
+          version,
+          publisher,
+          iconHash: icon_hash,
+        })),
+      }),
+    });
+    if (!res.ok) return; // tenta de novo no próximo ciclo
+
+    // 2º passo: só as imagens que o servidor disse não conhecer. Num PC que
+    // estreia vêm quase todas; do segundo em diante, quase nenhuma.
+    const { missingIcons } = (await res.json()) as { missingIcons?: string[] };
+    if (missingIcons?.length) {
+      const wanted = new Set(missingIcons);
+      const icons = programs
+        .filter((p) => p.icon && wanted.has(p.icon_hash))
+        .map((p) => ({ hash: p.icon_hash, png: p.icon }));
+      // Deduplica: programas do mesmo fabricante repetem o mesmo ícone.
+      const unique = [...new Map(icons.map((i) => [i.hash, i])).values()];
+      for (let i = 0; i < unique.length; i += ICON_BATCH) {
+        const ok = await fetch(`${apiOrigin}/public/lab-devices/icons`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceId, deviceSecret, icons: unique.slice(i, i + ICON_BATCH) }),
+        });
+        // Ícone que não subiu volta a aparecer em missingIcons na próxima
+        // coleta — a lista de programas já está gravada de qualquer forma.
+        if (!ok.ok) break;
+      }
+    }
+
+    await store.set(INVENTORY_HASH_KEY, hash);
+    await store.set(INVENTORY_SENT_AT_KEY, Date.now());
+  } catch {
+    // sem rede, registro ilegível, etc. — próximo heartbeat tenta de novo
+  }
+}

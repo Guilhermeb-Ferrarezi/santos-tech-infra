@@ -17,3 +17,24 @@ SELECT EXISTS(
     WHERE job_id=$1 AND status='running'
       AND started_at > now() - interval '1 hour'
 ) AS running;
+
+-- name: LockJobForRun :exec
+-- Lock consultivo com escopo de transação, por job. Serializa "checar
+-- sobreposição" + "criar run": sem ele a checagem e a inserção eram dois
+-- statements soltos, e o tick do scheduler concorrendo com um disparo manual
+-- (ou duas réplicas) criava dois runs para o mesmo job.
+SELECT pg_advisory_xact_lock($1);
+
+-- name: PurgeOldRuns :execrows
+-- Retenção do histórico. O scheduler tica a cada 30s e cada execução grava uma
+-- linha com response_excerpt TEXT: um job de 1/min gera ~525 mil linhas por
+-- ano, e nada apagava nada. Apaga só o que já terminou (status != 'running'),
+-- para nunca remover um run em andamento.
+DELETE FROM cron_runs
+WHERE id IN (
+    SELECT id FROM cron_runs
+    WHERE status <> 'running'
+      AND started_at < now() - (sqlc.arg(retention_days)::int * interval '1 day')
+    ORDER BY started_at
+    LIMIT sqlc.arg(max_rows)
+);

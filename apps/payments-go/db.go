@@ -192,14 +192,21 @@ BEGIN
     CHECK (method IN ('pix','boleto','card'));
 EXCEPTION WHEN duplicate_object THEN NULL;
 END$$;
--- Estorno: alarga o CHECK de status para incluir 'refunded'.
+-- Estorno: 'refunding' é o estado INTERMEDIÁRIO que reserva a cobrança antes de
+-- chamar o gateway. Sem ele, o check-then-act do handler permitia dois estornos
+-- simultâneos passarem pela mesma verificação e estornarem duas vezes.
+-- 'creating' reserva a cobrança antes de existir na Efí (ver createAndPersistCharge).
 DO $$
 BEGIN
   ALTER TABLE pay_charges DROP CONSTRAINT IF EXISTS pay_charges_status_check;
   ALTER TABLE pay_charges ADD CONSTRAINT pay_charges_status_check
-    CHECK (status IN ('pending','paid','expired','canceled','refunded'));
+    CHECK (status IN ('creating','pending','paid','expired','canceled','refunding','refunded'));
 EXCEPTION WHEN duplicate_object THEN NULL;
 END$$;
+-- refunded_cents acumula o total estornado. Estorno PARCIAL soma aqui e devolve a
+-- cobrança para 'paid'; só quando o acumulado alcança amount_cents o status vira
+-- 'refunded'. Antes um estorno de R$ 1 marcava a cobrança inteira como estornada.
+ALTER TABLE pay_charges ADD COLUMN IF NOT EXISTS refunded_cents BIGINT NOT NULL DEFAULT 0;
 -- Links de pagamento reutilizáveis.
 CREATE TABLE IF NOT EXISTS pay_payment_links (
   id           BIGSERIAL PRIMARY KEY,
@@ -244,6 +251,29 @@ ALTER TABLE pay_withdrawals ADD COLUMN IF NOT EXISTS efi_id_envio TEXT;
 ALTER TABLE pay_withdrawals ADD COLUMN IF NOT EXISTS e2e_id       TEXT;
 CREATE INDEX IF NOT EXISTS idx_pay_withdrawals_efi_id_envio ON pay_withdrawals(efi_id_envio);
 CREATE INDEX IF NOT EXISTS idx_pay_withdrawals_e2e_id       ON pay_withdrawals(e2e_id);
+-- Índices dos caminhos QUENTES: webhook (o pagamento chega por aqui e não pode
+-- depender de seq scan), listagem do cliente e casamento das recorrências.
+-- Sem eles, cada notificação da Efí varria pay_charges inteira.
+CREATE INDEX IF NOT EXISTS idx_pay_charges_provider_charge_id
+  ON pay_charges(provider_charge_id) WHERE provider_charge_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pay_charges_customer   ON pay_charges(customer_id) WHERE customer_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pay_charges_recurrence ON pay_charges(recurrence_id) WHERE recurrence_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pay_recurrences_efi_id_rec ON pay_recurrences(efi_id_rec) WHERE efi_id_rec IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pay_recurrences_payer_tax_id ON pay_recurrences(payer_tax_id);
+CREATE INDEX IF NOT EXISTS idx_pay_recurrences_customer ON pay_recurrences(customer_id) WHERE customer_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pay_customers_tax_id ON pay_customers(tax_id);
+-- Webhook em duas fases: 'pending' = reivindicado, efeito AINDA NÃO aplicado;
+-- 'done' = efeito aplicado (reentrega vira no-op). O DEFAULT é 'done' de propósito:
+-- as linhas que já existem foram gravadas pelo esquema antigo, que só inseria depois
+-- (na prática, junto) do processamento — reprocessá-las mandaria e-mail duplicado.
+ALTER TABLE pay_webhook_events ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'done';
+DO $$
+BEGIN
+  ALTER TABLE pay_webhook_events DROP CONSTRAINT IF EXISTS pay_webhook_events_status_check;
+  ALTER TABLE pay_webhook_events ADD CONSTRAINT pay_webhook_events_status_check
+    CHECK (status IN ('pending','done'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END$$;
 `
 
 func migrate(ctx context.Context, db *pgxpool.Pool) error {

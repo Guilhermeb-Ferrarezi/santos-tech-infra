@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/jackc/pgx/v5"
@@ -59,6 +60,7 @@ func (s *Server) handlePortalCreateCourse(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "course_create", "course", course.ID, nil)
 	writeJSON(w, http.StatusCreated, map[string]any{"course": course})
 }
 
@@ -78,6 +80,7 @@ func (s *Server) handlePortalUpdateCourse(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "course_update", "course", course.ID, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"course": course})
 }
 
@@ -91,6 +94,7 @@ func (s *Server) handlePortalDeleteCourse(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "course_delete", "course", fmt.Sprint(id), nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 func (s *Server) handlePortalListModules(w http.ResponseWriter, r *http.Request) {
@@ -127,6 +131,7 @@ func (s *Server) handlePortalCreateModule(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "module_create", "module", module.ID, map[string]any{"courseId": fmt.Sprint(courseID)})
 	writeJSON(w, http.StatusCreated, map[string]any{"module": module})
 }
 
@@ -146,6 +151,7 @@ func (s *Server) handlePortalUpdateModule(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "module_update", "module", module.ID, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"module": module})
 }
 
@@ -159,6 +165,7 @@ func (s *Server) handlePortalDeleteModule(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "module_delete", "module", fmt.Sprint(moduleID), nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 func (s *Server) handlePortalListPhases(w http.ResponseWriter, r *http.Request) {
@@ -195,6 +202,7 @@ func (s *Server) handlePortalCreatePhase(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "phase_create", "phase", phase.ID, map[string]any{"moduleId": fmt.Sprint(moduleID)})
 	writeJSON(w, http.StatusCreated, map[string]any{"phase": phase})
 }
 
@@ -214,6 +222,7 @@ func (s *Server) handlePortalUpdatePhase(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "phase_update", "phase", phase.ID, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"phase": phase})
 }
 
@@ -227,6 +236,7 @@ func (s *Server) handlePortalDeletePhase(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "phase_delete", "phase", fmt.Sprint(phaseID), nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -249,6 +259,7 @@ func (s *Server) handlePortalReorderModule(w http.ResponseWriter, r *http.Reques
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "module_reorder", "module", fmt.Sprint(id), map[string]any{"direction": in.Direction})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -271,5 +282,6 @@ func (s *Server) handlePortalReorderPhase(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
+	s.portalLogActivity(r, "phase_reorder", "phase", fmt.Sprint(id), map[string]any{"direction": in.Direction})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

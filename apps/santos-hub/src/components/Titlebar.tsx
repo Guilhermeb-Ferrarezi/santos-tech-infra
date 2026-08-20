@@ -1,14 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CornersIn, CornersOut, Minus, X } from "@phosphor-icons/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-
-const appWindow = getCurrentWindow();
 
 // Titlebar custom (decorations:false em tauri.conf.json) — a barra branca
 // nativa do Windows destoava do fundo escuro do app. Diferente do
 // hour-timer-app, aqui "Fechar" encerra o processo de verdade — o Santos Hub
 // não roda em segundo plano, é só um launcher que se abre quando precisa.
 export function Titlebar() {
+  // getCurrentWindow() lê window.__TAURI_INTERNALS__ — chamando só dentro do
+  // componente (não no escopo do módulo) garante que só roda depois que o
+  // React já montou, nunca antes da ponte do Tauri estar pronta.
+  const appWindow = useMemo(() => getCurrentWindow(), []);
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {

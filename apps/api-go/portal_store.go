@@ -59,11 +59,18 @@ func (s *Server) portalOverviewFromDB(ctx context.Context) (portalOverview, erro
 
 // portalSearchUsers busca usuários do portal (tabela "user") por nome/email,
 // para os seletores de aluno (atribuir medalha/meta, matricular em turma).
-func (s *Server) portalSearchUsers(ctx context.Context, q string, limit int) ([]portalStudentDTO, error) {
+//
+// O filtro de role é obrigatório: sem ele a rota virava um diretório completo
+// com e-mail e papel de QUALQUER usuário — inclusive admins — acessível a
+// qualquer cargo com uma permissão portal_*:read (portalAnyRead). O handler
+// só permite role != aluno quando o ator é admin. O termo de busca também é
+// obrigatório (>= 2 chars, validado no handler): com q vazio a query casava
+// a base inteira.
+func (s *Server) portalSearchUsers(ctx context.Context, q string, role int16, limit int) ([]portalStudentDTO, error) {
 	rows, err := s.portalDB.Query(ctx, `SELECT id::text, COALESCE(email,''), COALESCE(name,''), COALESCE(role,1)
 		FROM "user"
-		WHERE ($1 = '' OR name ILIKE $2 OR email ILIKE $2)
-		ORDER BY name ASC LIMIT $3`, q, "%"+q+"%", limit)
+		WHERE COALESCE(role,1) = $1 AND (name ILIKE $2 OR email ILIKE $2)
+		ORDER BY name ASC LIMIT $3`, role, "%"+q+"%", limit)
 	if err != nil {
 		return nil, err
 	}
@@ -492,49 +499,47 @@ func (s *Server) portalDeleteClass(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (s *Server) portalListClassStudents(ctx context.Context, classID int64) ([]portalStudentDTO, error) {
+// portalListClassStudents — paginada: uma turma grande devolvia a lista inteira
+// numa resposta só, e a mesma query alimenta GET /portal/classes/{id}.
+func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p portalPagination) ([]portalStudentDTO, int64, error) {
+	var total int64
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM enrollment WHERE class_id=$1`, classID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role
 		FROM enrollment e JOIN "user" u ON u.id = e.user_id
-		WHERE e.class_id=$1 ORDER BY COALESCE(u.name,'') ASC, u.id ASC`, classID)
+		WHERE e.class_id=$1 ORDER BY COALESCE(u.name,'') ASC, u.id ASC
+		LIMIT $2 OFFSET $3`, classID, p.Limit, p.Offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	items := []portalStudentDTO{}
 	for rows.Next() {
 		var dto portalStudentDTO
 		if err := rows.Scan(&dto.ID, &dto.Email, &dto.Name, &dto.Role); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		items = append(items, dto)
 	}
-	return items, rows.Err()
+	return items, total, rows.Err()
 }
 
 // portalAddClassStudents matricula os usuários na turma, ignorando duplicatas.
-// Devolve quantos foram efetivamente inseridos.
+// Devolve quantos foram efetivamente inseridos. Um INSERT só (unnest sobre o
+// array de ids) — antes era um INSERT por aluno dentro de uma transação, sem
+// teto de tamanho.
 func (s *Server) portalAddClassStudents(ctx context.Context, classID int64, ids []int64) (int, error) {
-	tx, err := s.portalDB.Begin(ctx)
+	tag, err := s.portalDB.Exec(ctx, `INSERT INTO enrollment (user_id, class_id, created_at)
+		SELECT DISTINCT u.id, $2, NOW()
+		FROM unnest($1::bigint[]) AS u(id)
+		WHERE NOT EXISTS (
+			SELECT 1 FROM enrollment e WHERE e.user_id = u.id AND e.class_id = $2
+		)`, ids, classID)
 	if err != nil {
-		return 0, err
+		return 0, portalDBErr(err)
 	}
-	defer tx.Rollback(ctx)
-	added := 0
-	for _, uid := range ids {
-		tag, err := tx.Exec(ctx, `INSERT INTO enrollment (user_id, class_id, created_at)
-			SELECT $1, $2, NOW()
-			WHERE NOT EXISTS (
-			  SELECT 1 FROM enrollment WHERE user_id=$1 AND class_id=$2
-			)`, uid, classID)
-		if err != nil {
-			return 0, portalDBErr(err)
-		}
-		added += int(tag.RowsAffected())
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return added, nil
+	return int(tag.RowsAffected()), nil
 }
 
 func (s *Server) portalRemoveClassStudent(ctx context.Context, classID, studentID int64) error {
@@ -552,23 +557,28 @@ func (s *Server) portalRemoveClassStudent(ctx context.Context, classID, studentI
 
 const portalRoomCols = `id::text, class_id::text, COALESCE(name,''), created_at, is_authorized, target_limited`
 
-func (s *Server) portalListClassRooms(ctx context.Context, classID int64) ([]portalRoomDTO, error) {
+func (s *Server) portalListClassRooms(ctx context.Context, classID int64, p portalPagination) ([]portalRoomDTO, int64, error) {
+	var total int64
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM class_rooms WHERE class_id=$1`, classID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.portalDB.Query(ctx, `SELECT `+portalRoomCols+`
-		FROM class_rooms WHERE class_id=$1 ORDER BY created_at DESC`, classID)
+		FROM class_rooms WHERE class_id=$1 ORDER BY created_at DESC, id DESC
+		LIMIT $2 OFFSET $3`, classID, p.Limit, p.Offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	items := []portalRoomDTO{}
 	for rows.Next() {
 		var dto portalRoomDTO
 		if err := rows.Scan(&dto.ID, &dto.ClassID, &dto.Name, &dto.CreatedAt, &dto.IsAuthorized, &dto.TargetLimited); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		dto.Status = portalRoomStatus(dto.IsAuthorized, dto.TargetLimited)
 		items = append(items, dto)
 	}
-	return items, rows.Err()
+	return items, total, rows.Err()
 }
 
 // portalRoomStatus deriva o estado da sala: fechada se a data-limite passou,
@@ -718,24 +728,29 @@ func (s *Server) portalReorder(ctx context.Context, table, scopeCol, entity stri
 
 // portalClassCronograma deriva o cronograma da turma a partir das fases do módulo
 // atual, agrupadas por week_number. Não existe tabela de cronograma no schema.
-func (s *Server) portalClassCronograma(ctx context.Context, classID int64) (*portalClassDTO, map[string][]portalCronogramaPhase, error) {
+func (s *Server) portalClassCronograma(ctx context.Context, classID int64, p portalPagination) (*portalClassDTO, map[string][]portalCronogramaPhase, int64, error) {
 	class, err := s.portalGetClass(ctx, classID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if class.CurrentModuleID == "" {
-		return class, map[string][]portalCronogramaPhase{}, nil
+		return class, map[string][]portalCronogramaPhase{}, 0, nil
 	}
 	moduleID, err := strconv.ParseInt(class.CurrentModuleID, 10, 64)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ID de módulo inválido %q: %w", class.CurrentModuleID, err)
+		return nil, nil, 0, fmt.Errorf("ID de módulo inválido %q: %w", class.CurrentModuleID, err)
+	}
+	var total int64
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM phase WHERE module_id=$1`, moduleID).Scan(&total); err != nil {
+		return nil, nil, 0, err
 	}
 	rows, err := s.portalDB.Query(ctx, `SELECT p.id::text, COALESCE(p.name,''), COALESCE(m.name,''), p.week_number
 		FROM phase p JOIN module m ON m.id = p.module_id
 		WHERE p.module_id=$1
-		ORDER BY p.week_number ASC, p.index_order ASC, p.id ASC`, moduleID)
+		ORDER BY p.week_number ASC, p.index_order ASC, p.id ASC
+		LIMIT $2 OFFSET $3`, moduleID, p.Limit, p.Offset)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	defer rows.Close()
 	grouped := map[string][]portalCronogramaPhase{}
@@ -743,7 +758,7 @@ func (s *Server) portalClassCronograma(ctx context.Context, classID int64) (*por
 		var ph portalCronogramaPhase
 		var week int
 		if err := rows.Scan(&ph.ID, &ph.Name, &ph.Module, &week); err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		if ph.Name == "" {
 			ph.Name = "Fase " + ph.ID
@@ -751,7 +766,7 @@ func (s *Server) portalClassCronograma(ctx context.Context, classID int64) (*por
 		key := strconv.Itoa(week)
 		grouped[key] = append(grouped[key], ph)
 	}
-	return class, grouped, rows.Err()
+	return class, grouped, total, rows.Err()
 }
 
 // portalIniciarFases inicializa o progresso dos alunos nas fases do módulo atual
@@ -813,14 +828,15 @@ func (s *Server) portalIniciarFases(ctx context.Context, classID int64, studentI
 		return nil, 0, validationErr("nenhum aluno inscrito na turma")
 	}
 
-	// cria progresso (0/0) para todas as fases do módulo, sem duplicar
-	for _, uid := range valid {
-		if _, err := tx.Exec(ctx, `INSERT INTO progress_student_phase (user_id, phase_id, progress, status, created_at)
-			SELECT $1, p.id, 0, 0, NOW() FROM phase p
-			WHERE p.module_id=$2
-			AND NOT EXISTS (SELECT 1 FROM progress_student_phase psp WHERE psp.user_id=$1 AND psp.phase_id=p.id)`, uid, moduleID); err != nil {
-			return nil, 0, err
-		}
+	// cria progresso (0/0) para todas as fases do módulo, sem duplicar — um
+	// INSERT só para o produto alunos × fases (antes: um por aluno).
+	if _, err := tx.Exec(ctx, `INSERT INTO progress_student_phase (user_id, phase_id, progress, status, created_at)
+		SELECT u.id, p.id, 0, 0, NOW()
+		FROM unnest($1::bigint[]) AS u(id)
+		CROSS JOIN phase p
+		WHERE p.module_id = $2
+		AND NOT EXISTS (SELECT 1 FROM progress_student_phase psp WHERE psp.user_id = u.id AND psp.phase_id = p.id)`, valid, moduleID); err != nil {
+		return nil, 0, err
 	}
 
 	// desbloqueia a primeira fase (status 1 = em progresso; mantém 2 = concluído)

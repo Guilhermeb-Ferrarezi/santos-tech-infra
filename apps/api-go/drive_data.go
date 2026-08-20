@@ -208,19 +208,32 @@ func (s *Server) replaceDriveFolderAccess(ctx context.Context, folderID string, 
 // listDriveFoldersForUser devolve as pastas com acesso >= read pra um usuário
 // NÃO-admin (admin vê tudo com write, resolvido em Go pelo handler chamador —
 // ver handleListMyDriveFolders — pra não precisar de um caminho especial aqui).
+// driveACLSourceRowsSQL é a fonte ÚNICA da regra "quem tem acesso a uma pasta
+// do Drive e com que nível" — união de cargo (fixo `role_value` in {"1","2"}
+// ou personalizado por UUID) e membro individual. Parâmetros fixos em TODA
+// query que a embute: $1=userID (int64), $2=role (text, ex. "1"/"2"),
+// $3=customRoleID (text, "" = nenhum).
+//
+// listDriveFoldersForUser (todas as pastas de um usuário) e
+// effectiveDriveFolderAccess (uma pasta específica) resolvem a MESMA regra —
+// antes cada uma tinha sua própria cópia da lógica em SQL, divergente na
+// posição dos parâmetros; um teste não pegaria as duas desalinharem com o
+// tempo. Mudou a regra de acesso? Muda só aqui.
+const driveACLSourceRowsSQL = `
+	SELECT folder_id, access FROM drive_folder_role_access
+	WHERE (role_kind = 'fixed' AND role_value = $2)
+	   OR (role_kind = 'custom' AND $3 != '' AND role_value = $3)
+	UNION ALL
+	SELECT folder_id, access FROM drive_folder_members WHERE user_id = $1
+`
+
 func (s *Server) listDriveFoldersForUser(ctx context.Context, userID int64, role int16, customRoleID *string) ([]MyDriveFolder, error) {
 	crID := ""
 	if customRoleID != nil {
 		crID = *customRoleID
 	}
 	rows, err := s.db.Query(ctx, `
-		WITH acl AS (
-			SELECT folder_id, access FROM drive_folder_role_access
-			WHERE (role_kind = 'fixed' AND role_value = $2)
-			   OR (role_kind = 'custom' AND $3 != '' AND role_value = $3)
-			UNION ALL
-			SELECT folder_id, access FROM drive_folder_members WHERE user_id = $1
-		),
+		WITH acl AS (`+driveACLSourceRowsSQL+`),
 		best AS (
 			SELECT folder_id, MAX(CASE WHEN access = 'write' THEN 2 ELSE 1 END) AS lvl
 			FROM acl GROUP BY folder_id
@@ -248,6 +261,8 @@ func (s *Server) listDriveFoldersForUser(ctx context.Context, userID int64, role
 // effectiveDriveFolderAccess resolve o nível de acesso de um usuário NÃO-admin
 // numa pasta específica: "" (sem acesso), "read" ou "write". Admin não passa
 // por aqui — sempre "write", checado no chamador (folderAccessGuard, drive_access.go).
+// Reaproveita driveACLSourceRowsSQL (ver comentário lá) — filtra pra UMA pasta
+// na cláusula externa em vez de repetir a regra de ACL com outro texto.
 func (s *Server) effectiveDriveFolderAccess(ctx context.Context, folderID string, userID int64, role int16, customRoleID *string) (string, error) {
 	crID := ""
 	if customRoleID != nil {
@@ -255,16 +270,10 @@ func (s *Server) effectiveDriveFolderAccess(ctx context.Context, folderID string
 	}
 	var lvl int
 	err := s.db.QueryRow(ctx, `
-		WITH acl AS (
-			SELECT access FROM drive_folder_role_access
-			WHERE folder_id = $1::uuid
-			  AND ((role_kind = 'fixed' AND role_value = $3)
-			       OR (role_kind = 'custom' AND $4 != '' AND role_value = $4))
-			UNION ALL
-			SELECT access FROM drive_folder_members WHERE folder_id = $1::uuid AND user_id = $2
-		)
-		SELECT COALESCE(MAX(CASE WHEN access = 'write' THEN 2 ELSE 1 END), 0) FROM acl`,
-		folderID, userID, strconv.Itoa(int(role)), crID).Scan(&lvl)
+		WITH acl AS (`+driveACLSourceRowsSQL+`)
+		SELECT COALESCE(MAX(CASE WHEN access = 'write' THEN 2 ELSE 1 END), 0)
+		FROM acl WHERE folder_id = $4::uuid`,
+		userID, strconv.Itoa(int(role)), crID, folderID).Scan(&lvl)
 	if err != nil {
 		return "", err
 	}
