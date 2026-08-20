@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Santos Tech - Cronômetro",
+  "version": "0.1.11",
+  "identifier": "com.santos-tech.hour-timer-app",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "cargo build --manifest-path watchdog/Cargo.toml --release && bun run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Santos Tech - Cronômetro",
+        "width": 420,
+        "height": 640,
+        "minWidth": 420,
+        "minHeight": 640,
+        "maxWidth": 420,
+        "maxHeight": 640,
+        "resizable": false,
+        "maximizable": false,
+        "decorations": false,
+        "visible": false
+      }
+    ],
+    "trayIcon": {
+      "iconPath": "icons/32x32.png"
+    },
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.santos-tech.com; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": {
+      "../watchdog/target/release/watchdog.exe": "watchdog.exe",
+      "target/release/WebView2Loader.dll": "WebView2Loader.dll"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer-hooks.nsh"
+      }
+    }
+  }
+}

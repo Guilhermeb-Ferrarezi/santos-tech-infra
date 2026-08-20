@@ -155,7 +155,17 @@ func findBlendTestBlock(data []byte) (w, h int, pix []byte, ok bool) {
 			return ww, hh, data[pixOff : pixOff+need], true
 		}
 
-		if code == "" || code == "ENDB" || blockLen < 0 {
+		if code == "" || code == "ENDB" {
+			return 0, 0, nil, false
+		}
+		// blockLen vem de um uint64 do arquivo: um .blend forjado com
+		// 0x7FFF_FFFF_FFFF_FFFF passava pelo `< 0` e estourava em
+		// payloadOff+int(blockLen), deixando off NEGATIVO — aí a checagem
+		// off+bheadSize > len(data) da iteração seguinte não pegava (negativo
+		// não é maior que len) e data[off:off+4] entrava em panic de slice
+		// bounds. Limitar ao tamanho do arquivo elimina o overflow: nenhum
+		// bloco legítimo é maior que o próprio .blend.
+		if blockLen < 0 || blockLen > int64(len(data)) {
 			return 0, 0, nil, false
 		}
 		off = payloadOff + int(blockLen)

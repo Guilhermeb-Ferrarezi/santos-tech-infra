@@ -60,6 +60,7 @@ func main() {
 	schedCtx, cancelSched := context.WithCancel(rootCtx)
 	defer cancelSched()
 	go srv.RunScheduler(schedCtx)
+	go srv.RunRetention(schedCtx)
 
 	go func() {
 		slog.Info("cron-go ouvindo", "port", cfg.Port)

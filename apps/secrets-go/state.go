@@ -29,6 +29,9 @@ type StateData struct {
 	KeywordWorkers     int        `json:"keywordWorkers"`  // quantas keywords processadas em paralelo
 	PageConcurrency    int        `json:"pageConcurrency"` // quantos arquivos verificados em paralelo por página de busca
 	MaxPages           int        `json:"maxPages"`        // teto de páginas de busca por keyword (100 resultados/página)
+	IncludeForks       bool       `json:"includeForks"`    // inclui forks nos resultados (mais repos, mais ruído)
+	DateSplit          bool       `json:"dateSplit"`       // fatia a busca em janelas de data (contorna o teto de 1000 resultados/keyword)
+	DateSplitYears     int        `json:"dateSplitYears"`  // tamanho de cada janela de data, em anos
 	StartedAt          *time.Time `json:"startedAt,omitempty"`
 	StoppedAt          *time.Time `json:"stoppedAt,omitempty"`
 	LastRevalidationAt *time.Time `json:"lastRevalidationAt,omitempty"` // última vez que a verificação ativa de hits já achados rodou de novo
@@ -58,13 +61,19 @@ const (
 	maxPageConcurrency     = 40
 	defaultPageConcurrency = 5
 
-	// GitHub permite até 10 páginas (1000 resultados) por busca, mas pra
-	// keyword genérica (tipo "AKIA") isso é 1000 resultados majoritariamente
-	// irrelevantes — o sinal real está quase sempre nas primeiras páginas.
-	// Default mais baixo corta bastante o tempo de scan sem perder muita coisa.
+	// GitHub permite até 10 páginas (1000 resultados) por busca. Default no
+	// teto: com o dateSplit ligado (o default) o teto de 1000/keyword não é
+	// mais um problema — cada janela de data é uma busca independente —, e
+	// páginas mais fundas ainda trazem repos que as primeiras 3 não cobrem.
 	minMaxPages     = 1
 	maxMaxPages     = 10
-	defaultMaxPages = 3
+	defaultMaxPages = 10
+
+	// Janela de anos de cada busca fatiada (created:) — menor janela = mais
+	// queries por keyword, mais cobertura além do teto de 1000/keyword.
+	minDateSplitYears     = 1
+	maxDateSplitYears     = 10
+	defaultDateSplitYears = 2
 )
 
 func clampKeywordWorkers(n int) int {
@@ -93,6 +102,16 @@ func clampMaxPages(n int) int {
 	}
 	if n > maxMaxPages {
 		return maxMaxPages
+	}
+	return n
+}
+
+func clampDateSplitYears(n int) int {
+	if n < minDateSplitYears {
+		return defaultDateSplitYears
+	}
+	if n > maxDateSplitYears {
+		return maxDateSplitYears
 	}
 	return n
 }
@@ -126,6 +145,7 @@ func NewStateManager() *StateManager {
 	sm.data.KeywordWorkers = clampKeywordWorkers(sm.data.KeywordWorkers)
 	sm.data.PageConcurrency = clampPageConcurrency(sm.data.PageConcurrency)
 	sm.data.MaxPages = clampMaxPages(sm.data.MaxPages)
+	sm.data.DateSplitYears = clampDateSplitYears(sm.data.DateSplitYears)
 	return sm
 }
 
@@ -180,6 +200,32 @@ func defaultKeywords() []string {
 		"dotfy_token",
 		"x-dotfy-api-key",
 		"DOTFY_WEBHOOK_SECRET",
+
+		// Prefixos de valor (token solto no arquivo, sem "NOME=valor") —
+		// reconhecidos pela valuePrefixRegex do verify.go: vk_test_/vk_live_
+		// já estão no bloco Dotfy acima, o resto é o catálogo do fingerprint.
+		"abc_dev_",    // verificado (AbacatePay sandbox)
+		"abc_live_",   // verificado (AbacatePay produção)
+		"sk-ant-",     // verificado (Anthropic)
+		"sk-proj-",    // verificado (OpenAI, chave de projeto)
+		"sk_live_",    // verificado (Stripe produção)
+		"sk_test_",    // verificado (Stripe sandbox)
+		"rk_live_",    // verificado (Stripe chave restrita)
+		"ghp_",        // verificado (GitHub PAT)
+		"gho_",        // verificado (GitHub OAuth token)
+		"github_pat_", // verificado (GitHub fine-grained PAT)
+		"xoxb-",       // verificado (Slack bot token)
+		"xoxp-",       // verificado (Slack user token)
+		"xoxa-",       // verificado (Slack app token)
+		"SG.",         // verificado (SendGrid)
+		"hf_",         // verificado (Hugging Face)
+		"r8_",         // verificado (Replicate)
+		"npm_",        // verificado (npm)
+		"dop_v1_",     // verificado (DigitalOcean)
+		"gsk_",        // verificado (Groq)
+		"AKIA",        // AWS Access Key ID (sem verificação ativa)
+		"ASIA",        // AWS Access Key temporária/STS (sem verificação ativa)
+		"AIza",        // Google API Key (sem verificação ativa)
 
 		// Pagamentos — Brasil
 		"APP_USR",

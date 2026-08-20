@@ -46,11 +46,18 @@ type Config struct {
 	// Notificações admin
 	AdminWhatsAppNumber string // E.164, ex: 5516991445664
 
+	// Pool de processamento em background dos webhooks (paralelismo + shutdown).
+	BGPoolSlots       int
+	BGShutdownTimeout time.Duration
+
 	// Worker
 	OutboxBatchSize      int
 	OutboxIdleIntervalMs int
 	OutboxMaxAttempts    int
-	FollowUpConcurrency  int
+	// OutboxClaimLease: por quanto tempo um evento drenado fica reservado para a
+	// réplica que o pegou. Vencido, volta à fila (cobre réplica morta no meio).
+	OutboxClaimLease    time.Duration
+	FollowUpConcurrency int
 
 	// Redis Stream de retries de webhook (reprocesso quase em tempo real).
 	// O polling do Postgres continua como safety net, mas com intervalo maior
@@ -70,9 +77,25 @@ type Config struct {
 
 	Production bool
 
+	// Rate limit do caminho de entrada (Redis). Cada mensagem recebida vira uma
+	// chamada ao LLM; sem teto, o webhook é um gerador de custo.
+	RateLimitEnabled bool
+	RatePhoneBurst   int
+	RatePhonePerMin  int
+	RateGlobalBurst  int
+	RateGlobalPerMin int
+	LLMDailyMax      int
+
 	// Dashboard
 	DashAPIKey     string
 	DashCORSOrigin string
+
+	// Auth central — o painel autentica por cookie de sessão (access_token),
+	// validado em /auth/me exigindo papel Admin. A DashAPIKey continua valendo
+	// para integrações server-to-server.
+	AuthMeURL    string
+	AuthTimeout  time.Duration
+	AuthCacheTTL time.Duration
 
 	// Coolify — webhook de falha de deploy
 	CoolifyWebhookSecret string
@@ -106,7 +129,7 @@ func LoadConfig() Config {
 		RedisURL:    mustEnv("REDIS_URL"),
 		TenantID:    mustEnv("TENANT_ID"),
 
-		MetaAppSecret:          getEnv("META_APP_SECRET", ""),
+		MetaAppSecret:          mustEnv("META_APP_SECRET"),
 		MetaWebhookVerifyToken: mustEnv("META_WEBHOOK_VERIFY_TOKEN"),
 		MetaPhoneNumberID:      getEnv("META_PHONE_NUMBER_ID", ""),
 		MetaAccessToken:        getEnv("META_ACCESS_TOKEN", ""),
@@ -127,9 +150,13 @@ func LoadConfig() Config {
 
 		AdminWhatsAppNumber: getEnv("ADMIN_WHATSAPP_NUMBER", ""),
 
+		BGPoolSlots:       envInt("BG_POOL_SLOTS", 32),
+		BGShutdownTimeout: time.Duration(envInt("BG_SHUTDOWN_TIMEOUT_SEC", 20)) * time.Second,
+
 		OutboxBatchSize:      envInt("OUTBOX_BATCH_SIZE", 50),
 		OutboxIdleIntervalMs: envInt("OUTBOX_IDLE_INTERVAL_MS", 500),
 		OutboxMaxAttempts:    envInt("OUTBOX_MAX_ATTEMPTS", 5),
+		OutboxClaimLease:     time.Duration(envInt("OUTBOX_CLAIM_LEASE_SEC", 300)) * time.Second,
 		FollowUpConcurrency:  envInt("FOLLOW_UP_CONCURRENCY", 5),
 
 		RetryStreamKey:      getEnv("RETRY_STREAM_KEY", "bot-go:webhook-retries"),
@@ -148,8 +175,19 @@ func LoadConfig() Config {
 
 		Production: getEnv("NODE_ENV", "development") == "production",
 
+		RateLimitEnabled: getEnv("RATE_LIMIT_ENABLED", "true") == "true",
+		RatePhoneBurst:   envInt("RATE_PHONE_BURST", 10),
+		RatePhonePerMin:  envInt("RATE_PHONE_PER_MIN", 10),
+		RateGlobalBurst:  envInt("RATE_GLOBAL_BURST", 120),
+		RateGlobalPerMin: envInt("RATE_GLOBAL_PER_MIN", 120),
+		LLMDailyMax:      envInt("LLM_DAILY_MAX", 5000),
+
 		DashAPIKey:     getEnv("DASH_API_KEY", ""),
 		DashCORSOrigin: getEnv("DASH_CORS_ORIGIN", "https://santos-tech.com"),
+
+		AuthMeURL:    getEnv("AUTH_ME_URL", "https://api.santos-tech.com/auth/me"),
+		AuthTimeout:  time.Duration(envInt("AUTH_TIMEOUT_MS", 3000)) * time.Millisecond,
+		AuthCacheTTL: time.Duration(envInt("AUTH_CACHE_TTL_SEC", 60)) * time.Second,
 
 		CoolifyWebhookSecret: getEnv("COOLIFY_WEBHOOK_SECRET", ""),
 		CoolifyAPIURL:        strings.TrimRight(getEnv("COOLIFY_API_URL", ""), "/"),

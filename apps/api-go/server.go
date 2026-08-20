@@ -36,15 +36,17 @@ type Server struct {
 	email     *emailClient
 	google    *oauth2.Config
 	r2        *R2              // uploads (Cloudflare R2); nil = desabilitado
+	drive     *DriveClient     // pastas de arquivos no Google Drive (Arquivos); nil = desabilitado
 	loki      *lokiClient      // consulta de logs (Loki); nil = desabilitado
 	sentry    *sentryClient    // consulta de issues (Sentry); nil = desabilitado
 	queue     *asynq.Client    // fila durável de emails; nil = sem fila (fallback fire-and-forget)
-	instagram *instagramClient // private reply automática (comentário -> DM); enabled()=false = desabilitado
+	instagram *instagramClient // private reply automática (comentário -> DM) + publicação de conteúdo; enabled()=false = desabilitado
+	facebook  *facebookClient  // publicação automática na Página (ver social_publish.go); enabled()=false = desabilitado
 	vault     *Vault           // cifra as chaves do roteador de APIs; nil = feature desabilitada (endpoints respondem 503)
 }
 
 func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), instagram: newInstagramClient(cfg), vault: newVault(cfg.VaultSecret)}
+	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), instagram: newInstagramClient(cfg), facebook: newFacebookClient(cfg), vault: newVault(cfg.VaultSecret, cfg.VaultSalt)}
 	if s.portalDB == nil {
 		s.portalDB = authDB
 	}
@@ -62,8 +64,10 @@ func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *S
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	// Endpoints operacionais PÚBLICOS (sem auth, fora do rate limit): liveness,
-	// readiness e métricas. Necessário para healthcheck/scrape não quebrarem.
+	// Endpoints operacionais fora do rate limit / ip-ban / anti-bot (probes e
+	// scrape são frequentes): liveness, readiness e métricas. /health e /ready
+	// são públicos; /metrics exige `Authorization: Bearer $METRICS_TOKEN`
+	// quando a env está definida (ver metricsHandler).
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
@@ -75,7 +79,91 @@ func (s *Server) Routes() http.Handler {
 	// padrão de rota casado (r.Pattern) e evitar explosão de cardinalidade.
 	// antiBotCheck fica DEPOIS do ipBanCheck (um IP já banido nem chega aqui) e
 	// ANTES do globalRateLimit (ver antibot.go).
-	return golog.RequestLogger(s.cors(s.ipBanCheck(s.antiBotCheck(s.globalRateLimit(metricsMiddleware(mux))))))
+	return golog.RequestLogger(securityHeaders(s.cors(s.ipBanCheck(s.antiBotCheck(s.globalRateLimit(metricsMiddleware(mux)))))))
+}
+
+// ── Cabeçalhos de segurança ──────────────────────────────────────────────────
+
+// securityHeaders adiciona cabeçalhos de segurança HTTP a todas as respostas
+// (portado de dashboard/api/internal/httpapi/middleware.go). Fica FORA do cors
+// para cobrir também o 204 do preflight.
+//
+// Os headers neutros vão sempre. Já `X-Frame-Options: DENY` e a CSP restritiva
+// só são aplicados quando a resposta NÃO é um arquivo servido inline (imagem,
+// vídeo, áudio, PDF de /drive-folders/{id}/files/{fileId}/download): nesses
+// casos eles quebrariam o preview no navegador. A proteção contra XSS
+// armazenado nesse caminho continua sendo a allowlist de tipos inline
+// (isInlineSafeContentType) + nosniff + fallback para attachment.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		h.Set("X-Permitted-Cross-Domain-Policies", "none")
+		h.Set("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+		sw := &securityHeadersWriter{ResponseWriter: w}
+		next.ServeHTTP(sw, r)
+		// Handler que não escreveu nada: o net/http ainda vai emitir 200 —
+		// aplica os headers restantes agora.
+		sw.applyFramingHeaders()
+	})
+}
+
+// securityHeadersWriter aplica os headers dependentes do Content-Type no
+// momento em que o status é escrito (depois disso o mapa de headers é ignorado).
+type securityHeadersWriter struct {
+	http.ResponseWriter
+	applied bool
+}
+
+// Unwrap permite que http.ResponseController alcance o writer original
+// (Flush/Hijack/SetWriteDeadline continuam funcionando para SSE e streaming).
+func (w *securityHeadersWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *securityHeadersWriter) applyFramingHeaders() {
+	if w.applied {
+		return
+	}
+	w.applied = true
+	if isInlineFileContentType(w.Header().Get("Content-Type")) {
+		return
+	}
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+}
+
+func (w *securityHeadersWriter) WriteHeader(code int) {
+	w.applyFramingHeaders()
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *securityHeadersWriter) Write(b []byte) (int, error) {
+	w.applyFramingHeaders()
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *securityHeadersWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// isInlineFileContentType reporta se ct é um tipo de arquivo que o navegador
+// renderiza direto (e que, portanto, pode ser embutido num preview) — nele não
+// entram X-Frame-Options nem a CSP `default-src 'none'`.
+func isInlineFileContentType(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	switch {
+	case strings.HasPrefix(ct, "image/"), strings.HasPrefix(ct, "video/"), strings.HasPrefix(ct, "audio/"):
+		return true
+	case ct == "application/pdf", ct == "application/octet-stream":
+		return true
+	}
+	return false
 }
 
 // ── CORS (com credenciais, igual ao Fastify) ─────────────────────────────────
@@ -83,7 +171,18 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" && s.allowedOrigin(origin) {
+		// Rotas /public/* não usam cookie/credencial (token na URL é a
+		// credencial) — liberadas pra qualquer origem, sem
+		// Allow-Credentials. Cobre o app desktop (Tauri: origem
+		// tauri://localhost/http://tauri.localhost), que nunca vai entrar
+		// na allowlist de origens do dashboard/auth-web.
+		if strings.HasPrefix(r.URL.Path, "/public/") {
+			if origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			} else {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			}
+		} else if origin != "" && s.allowedOrigin(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
@@ -123,6 +222,15 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 		}
 		if token == "" {
 			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Não autenticado"))
+			return
+		}
+		// Token do /oauth/token não é sessão do painel: ele sai com
+		// aud=<client_id> (ver oauthprovider.go). Atrás da flag
+		// OAUTH_AUD_ENFORCE porque hoje clients e app mobile ainda usam esse
+		// token nas rotas normais; o /oauth/userinfo continua aceitando (chama
+		// resolveToken direto, sem passar por aqui).
+		if s.cfg.OAuthAudEnforce && tokenAudience(token, s.cfg.JWTSecret) != "" {
+			writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado"))
 			return
 		}
 		uid, u, err := s.resolveToken(r.Context(), token)
@@ -171,7 +279,7 @@ func (s *Server) resolveToken(ctx context.Context, token string) (int64, *User, 
 		}
 		return uid, nil, nil
 	}
-	uid, _, err := verifyToken(token, s.cfg.JWTSecret)
+	uid, _, err := verifyToken(token, s.cfg.JWTSecret, tokenTypeAccess)
 	if err != nil {
 		return 0, nil, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado")
 	}
@@ -223,6 +331,25 @@ func (s *Server) clearAuthCookies(w http.ResponseWriter) {
 	s.setCookie(w, "refresh_token", "", -1)
 }
 
+// maxJSONBody é o teto padrão do corpo JSON aceito por decodeJSON.
+const maxJSONBody = 1 << 20 // 1 MB
+
+// decodeJSON decodifica o corpo JSON da requisição com um teto EMBUTIDO de 1 MB.
+// O limite é padrão, e não opt-in: antes, quem esquecesse o http.MaxBytesReader
+// antes da chamada ficava exposto a DoS de memória (corpo ilimitado). Handlers
+// que já limitam o corpo por conta própria continuam valendo — os MaxBytesReader
+// aninham e o MENOR dos limites prevalece. Quem precisa de mais que 1 MB usa
+// decodeJSONLimit.
 func decodeJSON(r *http.Request, v any) error {
+	return decodeJSONLimit(r, v, maxJSONBody)
+}
+
+// decodeJSONLimit é a variante explícita, para corpos legitimamente maiores que
+// o padrão (cena do board, payloads de áudio em base64 do roteador de APIs).
+// O w é nil de propósito: sem ele o net/http só deixa de marcar a conexão como
+// "requisição grande demais", e o erro de leitura (*http.MaxBytesError) chega
+// igual ao decoder.
+func decodeJSONLimit(r *http.Request, v any, max int64) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, max)
 	return json.NewDecoder(r.Body).Decode(v)
 }

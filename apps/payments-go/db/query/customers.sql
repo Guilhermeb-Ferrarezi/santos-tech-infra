@@ -47,4 +47,6 @@ SELECT (array_agg(cu.id ORDER BY cu.created_at DESC))[1]::bigint      AS id,
 FROM pay_customers cu
 LEFT JOIN pay_charges c ON c.customer_id = cu.id
 GROUP BY cu.tax_id
-ORDER BY MAX(c.created_at) DESC NULLS LAST, MIN(cu.created_at) DESC;
+ORDER BY MAX(c.created_at) DESC NULLS LAST, MIN(cu.created_at) DESC
+-- Agregado por CPF: não há cursor estável, então o teto é só o LIMIT.
+LIMIT $1;

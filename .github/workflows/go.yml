@@ -60,3 +60,13 @@ jobs:
         run: go build ./...
       - name: go test
         run: go test ./...
+      # govulncheck cruza o código com a base de vulnerabilidades da Go (só
+      # reporta CVE cujo símbolo é realmente alcançável a partir daqui, então
+      # tem pouco ruído). Entra como NÃO-BLOQUEANTE de propósito: primeiro se
+      # vê o passivo de cada serviço sem travar o pipeline; depois de zerar,
+      # remova o continue-on-error pra virar gate de verdade.
+      - name: govulncheck
+        continue-on-error: true
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...

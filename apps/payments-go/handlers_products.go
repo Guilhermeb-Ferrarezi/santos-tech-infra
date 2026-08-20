@@ -101,12 +101,44 @@ func (s *Server) handleDeleteProduct(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// público — usado pela tela de pagamento antes do login
+// handleGetProductBySlug (GET /products/by-slug/{slug}) — PÚBLICO, usado pela tela de
+// pagamento antes do login. Responde o DTO reduzido: serializar o Product inteiro
+// entregava o fileUrl (o produto comprado) a qualquer um que soubesse o slug.
 func (s *Server) handleGetProductBySlug(w http.ResponseWriter, r *http.Request) {
 	p, err := s.productStoreOf().GetProductBySlug(r.Context(), r.PathValue("slug"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "Produto não encontrado")
 		return
 	}
-	writeJSON(w, http.StatusOK, p)
+	writeJSON(w, http.StatusOK, publicProduct(*p))
+}
+
+// handleGetMeProductFile (GET /me/products/{id}/file) entrega o arquivo do produto
+// SOMENTE a quem tem cobrança paga dele. É a única rota que revela o file_url.
+func (s *Server) handleGetMeProductFile(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_param", "id inválido")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Arquivo não disponível")
+		return
+	}
+	owns, err := s.store.UserOwnsProduct(r.Context(), s.uid(r), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao verificar a compra")
+		return
+	}
+	if !owns {
+		// 404 (não 403) de propósito: não confirma sequer que o produto existe.
+		writeError(w, http.StatusNotFound, "not_found", "Arquivo não disponível")
+		return
+	}
+	p, err := s.store.GetProductByID(r.Context(), id)
+	if err != nil || strings.TrimSpace(p.FileURL) == "" {
+		writeError(w, http.StatusNotFound, "not_found", "Arquivo não disponível")
+		return
+	}
+	http.Redirect(w, r, p.FileURL, http.StatusFound)
 }

@@ -1,0 +1,18 @@
+[package]
+name = "watchdog"
+version = "0.1.0"
+description = "Watchdog do hour-timer-app: relança o app se não estiver rodando, sem abrir janela de console."
+edition = "2021"
+
+# Crate deliberadamente FORA de src-tauri/ e sem depender de tauri — se
+# ficasse dentro do pacote do app, o build.rs do tauri-build (que valida
+# bundle.resources em TODO cargo build daquele pacote) criaria uma
+# dependência circular: watchdog.exe precisa existir pra empacotar o app,
+# mas construir o pacote do app já falha antes por watchdog.exe não existir.
+
+[[bin]]
+name = "watchdog"
+path = "src/main.rs"
+
+[dependencies]
+sysinfo = "0.32"

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"net/http"
 )
 
@@ -37,9 +38,16 @@ func (s *Server) handleOAuthASMetadata(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /.well-known/openid-configuration — OIDC Discovery (OpenID Connect Core §4).
-// Permite que clientes OIDC (ex.: Better Auth SSO) descubram os endpoints sem
-// configuração manual. Mesmos dados do AS metadata + campos exigidos pelo OIDC.
+// GET /.well-known/openid-configuration — descoberta de endpoints para
+// clientes que procuram este caminho (ex.: Better Auth SSO).
+//
+// NÃO somos um provider OIDC: não existe id_token em lugar nenhum do fluxo, o
+// JWKS é vazio (HS256, chave simétrica, sem representação pública) e não há
+// negociação de escopo no /oauth/authorize. O documento anunciava jwks_uri,
+// id_token_signing_alg_values_supported e scopes_supported=[openid,...] —
+// três promessas que o servidor não cumpre, e que fazem um cliente OIDC
+// estrito montar um fluxo que só falha mais adiante. Removidos: o que sobra é
+// exatamente o que existe de verdade (authorization code + PKCE + userinfo).
 func (s *Server) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 	o := s.cfg.PublicOrigin
 	writePublicJSON(w, http.StatusOK, map[string]any{
@@ -47,22 +55,21 @@ func (s *Server) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"authorization_endpoint":                o + "/oauth/authorize",
 		"token_endpoint":                        o + "/oauth/token",
 		"userinfo_endpoint":                     o + "/oauth/userinfo",
-		"jwks_uri":                              o + "/.well-known/jwks.json",
 		"registration_endpoint":                 o + "/oauth/register",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"subject_types_supported":               []string{"public"},
-		"id_token_signing_alg_values_supported": []string{"HS256"},
 		"code_challenge_methods_supported":      []string{"S256"},
 		"token_endpoint_auth_methods_supported": []string{"none"},
-		"scopes_supported":                      []string{"openid", "email", "profile"},
 		"claims_supported":                      []string{"sub", "email", "name", "id"},
 	})
 }
 
-// GET /.well-known/jwks.json — JSON Web Key Set (RFC 7517).
-// Usamos HS256 (chave simétrica), que não tem representação pública em JWKS.
-// O endpoint existe para satisfazer clientes OIDC que exigem jwks_uri no discovery.
+// GET /.well-known/jwks.json — JSON Web Key Set (RFC 7517), sempre vazio:
+// assinamos com HS256 (chave simétrica), que não tem representação pública.
+// Já não é anunciado no discovery; a rota segue de pé só para clientes que
+// cachearam o jwks_uri antigo — pode ser removida quando não houver mais
+// acesso a ela nos logs.
 func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request) {
 	writePublicJSON(w, http.StatusOK, map[string]any{
 		"keys": []any{},
@@ -94,8 +101,14 @@ func dcrError(w http.ResponseWriter, code, desc string) {
 }
 
 // POST /oauth/register — Dynamic Client Registration (RFC 7591), público com
-// rate limit. Só clients públicos (PKCE, sem secret): registrar um client não
-// dá acesso a nada — o usuário ainda precisa autorizar no chooser.
+// rate limit. Só clients públicos (PKCE, sem secret).
+//
+// O client nasce INATIVO: registrar não dá acesso a nada e nem sequer permite
+// chegar na tela de consentimento (o /oauth/authorize recusa client inativo).
+// Sem isso, qualquer um registrava anonimamente um client com client_name
+// livre — o texto que o usuário lê na hora de autorizar — e só dependia de
+// convencer alguém a clicar. Liberar é ato de admin:
+// POST /auth/admin/oauth-clients/{id}/approve.
 func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
@@ -119,11 +132,13 @@ func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "App registrado dinamicamente"
 	}
-	c, err := s.insertOAuthClient(r.Context(), clientID, name, body.RedirectURIs)
+	c, err := s.insertPendingOAuthClient(r.Context(), clientID, name, body.RedirectURIs)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	slog.Info("oauth_dcr_register: client criado PENDENTE de aprovação",
+		"clientId", c.ClientID, "name", c.Name, "redirectUris", c.RedirectURIs, "ip", clientIP(r))
 	writePublicJSON(w, http.StatusCreated, map[string]any{
 		"client_id":                  c.ClientID,
 		"client_id_issued_at":        c.CreatedAt.Unix(),

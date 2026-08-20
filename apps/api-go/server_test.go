@@ -23,6 +23,25 @@ func testServerWithRedis(t *testing.T, cfg Config) *Server {
 	return s
 }
 
+// TestRoutesRegisterWithoutPanic exercita o registro de TODAS as rotas
+// (mux.HandleFunc), o único lugar onde o net/http.ServeMux detecta padrões
+// ambíguos (ex.: "DELETE /tasks/{id}/confirm" vs "DELETE /tasks/categories/{id}")
+// — um panic aí só acontece no boot real (main.go → s.Routes()), nunca em
+// go build/go vet/go test isolados, e já derrubou produção uma vez (18/08/2026,
+// container em crash-loop) porque nenhum teste chamava s.Routes(). Não precisa
+// de Postgres/Redis: registerPoolMetrics é nil-safe com s.db == nil.
+func TestRoutesRegisterWithoutPanic(t *testing.T) {
+	s := testServer(Config{})
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("s.Routes() entrou em panic — padrões de rota ambíguos: %v", r)
+		}
+	}()
+	if s.Routes() == nil {
+		t.Fatal("Routes() devolveu nil")
+	}
+}
+
 func TestClearAuthCookies(t *testing.T) {
 	s := testServer(Config{CookieDomain: "santos-tech.com"})
 	w := httptest.NewRecorder()
@@ -224,5 +243,38 @@ func TestHandleLogoutGet(t *testing.T) {
 	s.handleLogoutGet(w3, httptest.NewRequest("GET", "/auth/logout?redirect=https://evil.com", nil))
 	if loc := w3.Header().Get("Location"); loc != cfg.AuthWebOrigin {
 		t.Errorf("redirect proibido deveria cair no fallback, Location=%q", loc)
+	}
+}
+
+// OAUTH_AUD_ENFORCE: token emitido pelo /oauth/token (com aud) não vale como
+// sessão do painel quando a flag está ligada — e continua valendo quando não
+// está (default, retrocompatível).
+func TestAuthGuardOAuthAudEnforce(t *testing.T) {
+	oauthAccess, _, err := generateOAuthTokens("s-access", "s-refresh", 77, "a@b.com", "", "dcr_app")
+	if err != nil {
+		t.Fatalf("generateOAuthTokens: %v", err)
+	}
+	sessionAccess, _, _ := generateTokens("s-access", "s-refresh", 77, "a@b.com", "")
+
+	call := func(s *Server, token string) int {
+		h := s.authGuard(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+		r := httptest.NewRequest("GET", "/x", nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		h(w, r)
+		return w.Code
+	}
+
+	off := testServer(Config{JWTSecret: "s-access", JWTRefreshSecret: "s-refresh"})
+	if code := call(off, oauthAccess); code != http.StatusOK {
+		t.Errorf("flag desligada: token OAuth deveria continuar valendo, code=%d", code)
+	}
+
+	on := testServer(Config{JWTSecret: "s-access", JWTRefreshSecret: "s-refresh", OAuthAudEnforce: true})
+	if code := call(on, oauthAccess); code != http.StatusUnauthorized {
+		t.Errorf("flag ligada: token OAuth deveria ser recusado, code=%d", code)
+	}
+	if code := call(on, sessionAccess); code != http.StatusOK {
+		t.Errorf("flag ligada: sessão do painel deveria continuar valendo, code=%d", code)
 	}
 }

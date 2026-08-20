@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -62,8 +63,36 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "job não encontrado")
 		return
 	}
-	s.runJobOnce(r.Context(), job) // síncrono: o admin vê o resultado no histórico
-	writeJSON(w, http.StatusOK, map[string]string{"status": "executed"})
+	// A reserva do run é síncrona (dá o id e detecta sobreposição na hora), mas
+	// a EXECUÇÃO vai para uma goroutine com context.Background().
+	//
+	// Rodar em linha era uma armadilha: o retry interno dorme até 285s mais até
+	// 10× o timeout_secs do job, enquanto o http.Server tem WriteTimeout de 30s
+	// (main.go). Aos 30s a conexão fechava, o r.Context() era cancelado, o
+	// FinishRun ia junto — e a linha ficava presa em status='running'. Como o
+	// HasRunningRun considera runs de até 1h, o job agendado era pulado por até
+	// 60 minutos por causa de um clique em "rodar agora".
+	run, skipped, err := s.claimRunSlot(r.Context(), job.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "falha ao criar a execução")
+		return
+	}
+	if skipped {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"status": "skipped_overlap",
+			"runId":  run.ID,
+			"reason": "já existe uma execução em andamento para este job",
+		})
+		return
+	}
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.executeRun(context.Background(), job, run)
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "accepted", "runId": run.ID})
 }
 
 func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {

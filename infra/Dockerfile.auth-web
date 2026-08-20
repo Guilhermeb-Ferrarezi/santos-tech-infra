@@ -8,8 +8,14 @@ COPY apps/auth-web .
 
 ARG VITE_API_URL=https://api.santos-tech.com
 ARG VITE_REDIRECT_DEFAULT=https://santos-tech.com
+# Sem este ARG o Vite não enxerga a env do build e initSentry() (src/lib/sentry.ts)
+# vira no-op: a tela de login rodava sem telemetria de erro nenhuma, pagando o
+# custo do @sentry/react no bundle à toa. Vazio por padrão = no-op silencioso
+# (dev/preview), igual ao comportamento documentado no .env.example.
+ARG VITE_SENTRY_DSN=
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_REDIRECT_DEFAULT=$VITE_REDIRECT_DEFAULT
+ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
 
 RUN bun run build
 
@@ -20,6 +26,13 @@ COPY --from=builder /app/apps/auth-web/dist /usr/share/nginx/html
 # (workers caem para o usuário `nginx` automaticamente), igual ao comportamento
 # original. O non-root completo do master fica para um passo futuro com a imagem
 # nginxinc/nginx-unprivileged, validado com `docker run` (não só `docker build`).
+#
+# CSP: FONTE ÚNICA (apps/auth-web/Dockerfile + nginx.conf, que serviam a mesma
+# app SEM header de segurança nenhum, foram removidos). Notas de cada diretiva:
+#   style-src 'self' — verificado em produção: a tela não injeta nenhum bloco
+#     <style> em runtime (0 no DOM) e os gradientes de AuthLayout/BrandPanel
+#     são aplicados via propriedade DOM pelo React, que a CSP não governa.
+#     Se algum componente passar a injetar <style>, reavaliar esta diretiva.
 RUN set -eux; \
     printf '%s\n' \
       'server {' \
@@ -30,7 +43,7 @@ RUN set -eux; \
       '  add_header X-Content-Type-Options "nosniff" always;' \
       '  add_header X-Frame-Options "DENY" always;' \
       '  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' \
-      "  add_header Content-Security-Policy \"default-src 'self'; connect-src 'self' https://api.santos-tech.com; img-src 'self' data:; font-src 'self' data:\" always;" \
+      "  add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; connect-src 'self' https://api.santos-tech.com https://*.ingest.sentry.io https://*.ingest.us.sentry.io; img-src 'self' data: https://cdn.santos-tech.com; style-src 'self'; font-src 'self' data:; base-uri 'none'; form-action 'self' https://api.santos-tech.com; frame-ancestors 'none'\" always;" \
       '  location / {' \
       '    try_files $uri $uri/ /index.html;' \
       '  }' \

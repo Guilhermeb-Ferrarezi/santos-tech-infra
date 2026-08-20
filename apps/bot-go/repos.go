@@ -557,34 +557,68 @@ func (r *OutboxRepo) Emit(ctx context.Context, tx pgx.Tx, event DomainEvent) err
 	return nil
 }
 
-// Drain retorna até batchSize eventos não processados, travando com SKIP LOCKED.
-func (r *OutboxRepo) Drain(ctx context.Context, batchSize int) ([]DomainEvent, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT id, tenant_id, aggregate_id, event_type, payload, occurred_at
-		FROM domain_events
-		WHERE processed_at IS NULL
-		ORDER BY occurred_at
-		LIMIT $1
-		FOR UPDATE SKIP LOCKED
-	`, batchSize)
+// Drain reserva até batchSize eventos não processados para ESTA réplica.
+//
+// Antes o SELECT ... FOR UPDATE SKIP LOCKED rodava em autocommit (pool.Query):
+// o lock caía junto com a transação implícita, ao fim da leitura — muito antes
+// do processEvent. Com duas réplicas (ou durante rolling deploy) o mesmo evento
+// era drenado duas vezes: notificação duplicada, KB gravada em dobro.
+//
+// Agora o SELECT ... FOR UPDATE SKIP LOCKED e a marcação de claimed_at ficam na
+// MESMA transação. O claim é um lease: eventos com claim vencido voltam à fila,
+// então uma réplica que morrer no meio do processamento não some com o evento.
+func (r *OutboxRepo) Drain(ctx context.Context, batchSize int, lease time.Duration) ([]DomainEvent, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("OutboxRepo.Drain begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx, `
+		WITH reservados AS (
+			SELECT id
+			FROM domain_events
+			WHERE processed_at IS NULL
+			  AND (claimed_at IS NULL OR claimed_at < now() - $2::interval)
+			ORDER BY occurred_at
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE domain_events d
+		SET claimed_at = now()
+		FROM reservados r
+		WHERE d.id = r.id
+		RETURNING d.id, d.tenant_id, d.aggregate_id, d.event_type, d.payload, d.occurred_at
+	`, batchSize, lease.String())
 	if err != nil {
 		return nil, fmt.Errorf("OutboxRepo.Drain: %w", err)
 	}
-	defer rows.Close()
 
 	var events []DomainEvent
 	for rows.Next() {
 		var e DomainEvent
 		var payloadRaw []byte
 		if err := rows.Scan(&e.ID, &e.TenantID, &e.AggregateID, &e.Type, &payloadRaw, &e.OccurredAt); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		if err := json.Unmarshal(payloadRaw, &e.Payload); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("OutboxRepo.Drain unmarshal payload: %w", err)
 		}
 		events = append(events, e)
 	}
-	return events, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("OutboxRepo.Drain rows: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("OutboxRepo.Drain commit: %w", err)
+	}
+	// A ordem importa: só devolve os eventos depois do COMMIT do claim. Se o
+	// commit falhar, ninguém processa — o evento continua na fila.
+	return events, nil
 }
 
 // MarkProcessed marca um evento do outbox como processado.
@@ -598,11 +632,12 @@ func (r *OutboxRepo) MarkProcessed(ctx context.Context, id DomainEventID) error 
 	return nil
 }
 
-// MarkFailed registra falha no evento do outbox.
+// MarkFailed registra falha no evento do outbox e LIBERA o claim, para que a
+// próxima passada do poller (nesta ou em outra réplica) o pegue de novo.
 func (r *OutboxRepo) MarkFailed(ctx context.Context, id DomainEventID, errMsg string) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE domain_events
-		SET attempts = attempts + 1, last_error = $1
+		SET attempts = attempts + 1, last_error = $1, claimed_at = NULL
 		WHERE id = $2
 	`, errMsg, id)
 	if err != nil {

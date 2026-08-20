@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -124,9 +125,26 @@ func (w *Workers) HandleFixRun(ctx context.Context, t *asynq.Task) error {
 		return w.fail(ctx, in, "não consegui resolver o repositório/branch do app")
 	}
 
+	// Allow-list (#5): o repo vem do payload do webhook / da API da Coolify. Sem
+	// esta checagem, quem controlasse esse valor fazia o auto-fixer clonar
+	// qualquer repositório usando o token da organização.
+	if !w.cfg.repoAllowed(in.Repo) {
+		return w.fail(ctx, in, "repositório fora da allow-list (ALLOWED_REPOS): "+in.Repo)
+	}
+
 	token := w.repoToken(ctx, in.Repo)
 	cloneURL := repoCloneURL(in.Repo) // Coolify devolve "owner/repo" → URL https
-	workdir := workdirFor(w.cfg.WorkspaceRoot, in.App, in.ID)
+	workdir, err := workdirFor(w.cfg.WorkspaceRoot, in.App, in.ID)
+	if err != nil {
+		return w.fail(ctx, in, "workdir inválido: "+err.Error())
+	}
+	// (#10) O clone ficava no volume para sempre — um repo por incidente até o
+	// disco encher. Some ao fim do run, em qualquer caminho de saída.
+	defer func() {
+		if rerr := os.RemoveAll(workdir); rerr != nil {
+			slog.Warn("não consegui limpar o workdir do incidente", "err", rerr, "workdir", workdir)
+		}
+	}()
 	if err := cloneRepo(ctx, cloneURL, in.Branch, workdir, token); err != nil {
 		return w.fail(ctx, in, "falha ao clonar o repo: "+err.Error())
 	}

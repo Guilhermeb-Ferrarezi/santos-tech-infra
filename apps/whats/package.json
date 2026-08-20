@@ -12,7 +12,7 @@
   "dependencies": {
     "@sentry/bun": "^10.70.0",
     "baileys": "7.0.0-rc14",
-    "ioredis": "^5.4.0",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.22.0",
     "pino": "^10.3.1",

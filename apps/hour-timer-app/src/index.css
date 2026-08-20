@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+/* Overlay tem janela transparente (Rust: .transparent(true)) — sem isso o
+   retângulo do WebView aparece atrás dos cantos arredondados do card. Não
+   afeta a janela principal: ela já pinta o próprio fundo cheio (bg-[#04325A]
+   no App.tsx cobrindo min-h-screen). */
+html,
+body,
+#root {
+  background: transparent;
+}

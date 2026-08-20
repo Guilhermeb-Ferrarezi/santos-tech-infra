@@ -8,6 +8,38 @@ import (
 	"time"
 )
 
+// scanOptions são as decisões de scan tiradas do state no momento do Start.
+// Passadas por valor pra cada keyword — mudanças de config durante um scan
+// só valem no próximo.
+type scanOptions struct {
+	skipExamples    bool
+	pageConcurrency int
+	maxPages        int
+	includeForks    bool
+	dateSplit       bool
+	dateSplitYears  int
+}
+
+// dateSplitQueries fatia a busca de uma keyword em janelas de data
+// (qualifier created:) de 2015 até o fim do ano atual. A Search API do
+// GitHub tem teto duro de 1000 resultados por query — pra keyword popular
+// (OPENAI_API_KEY, AKIA...) isso deixa a maior parte dos repos invisível.
+// Cada janela é uma busca independente, então N janelas = até N×1000
+// resultados pra mesma keyword.
+func dateSplitQueries(keyword string, years int) []string {
+	const startYear = 2015 // GitHub já indexava código de sobra desde então
+	now := time.Now()
+	var queries []string
+	for from := startYear; from <= now.Year(); from += years {
+		to := from + years - 1
+		if to > now.Year() {
+			to = now.Year()
+		}
+		queries = append(queries, fmt.Sprintf("%s created:%d-01-01..%d-12-31", keyword, from, to))
+	}
+	return queries
+}
+
 // Crawler orquestra o scan com um pool de workers: várias keywords em
 // paralelo (cada worker pega uma da fila), cada uma verificando vários
 // arquivos em paralelo por página de busca. Todos os workers dividem o
@@ -101,8 +133,14 @@ func (c *Crawler) run(ctx context.Context) {
 
 	settings := c.state.Get()
 	numWorkers := clampKeywordWorkers(settings.KeywordWorkers)
-	pageConcurrency := clampPageConcurrency(settings.PageConcurrency)
-	maxPages := clampMaxPages(settings.MaxPages)
+	opts := scanOptions{
+		skipExamples:    settings.SkipExamples,
+		pageConcurrency: clampPageConcurrency(settings.PageConcurrency),
+		maxPages:        clampMaxPages(settings.MaxPages),
+		includeForks:    settings.IncludeForks,
+		dateSplit:       settings.DateSplit,
+		dateSplitYears:  clampDateSplitYears(settings.DateSplitYears),
+	}
 
 	kwChan := make(chan string)
 	go func() {
@@ -117,8 +155,8 @@ func (c *Crawler) run(ctx context.Context) {
 	}()
 
 	c.hub.Broadcast(Event{Type: "log", Data: fmt.Sprintf(
-		"iniciando: %d worker(s) de keyword, %d verificações em paralelo por página, máx %d página(s)/keyword",
-		numWorkers, pageConcurrency, maxPages,
+		"iniciando: %d worker(s) de keyword, %d verificações em paralelo por página, máx %d página(s)/keyword, forks: %v, split por data (%d ano(s)): %v",
+		numWorkers, opts.pageConcurrency, opts.maxPages, opts.includeForks, opts.dateSplitYears, opts.dateSplit,
 	)})
 
 	var wg sync.WaitGroup
@@ -130,51 +168,72 @@ func (c *Crawler) run(ctx context.Context) {
 				if ctx.Err() != nil {
 					return
 				}
-				c.processKeyword(ctx, kw, settings.SkipExamples, pageConcurrency, maxPages)
+				c.processKeyword(ctx, kw, opts)
 			}
 		}()
 	}
 	wg.Wait()
 }
 
-// processKeyword faz a busca completa (todas as páginas) de uma keyword e
-// indexa os hits. Chamado por qualquer worker do pool — várias keywords
-// diferentes podem estar aqui dentro ao mesmo tempo.
-func (c *Crawler) processKeyword(ctx context.Context, kw string, skipExamples bool, pageConcurrency, maxPages int) {
+// processKeyword faz a busca completa (todas as páginas e janelas de data)
+// de uma keyword e indexa os hits. Chamado por qualquer worker do pool —
+// várias keywords diferentes podem estar aqui dentro ao mesmo tempo.
+func (c *Crawler) processKeyword(ctx context.Context, kw string, opts scanOptions) {
 	s := c.state.Update(func(s *StateData) { s.CurrentKeywords = append(s.CurrentKeywords, kw) })
 	c.hub.Broadcast(Event{Type: "status", Data: s})
-	c.hub.Broadcast(Event{Type: "log", Data: "buscando: " + kw})
 
-	page := 0
-	err := c.gh.SearchCode(ctx, kw, maxPages, func(items []CodeSearchItem, total int) error {
-		// sem isso, uma keyword genérica com muitos resultados (ex: "AKIA")
-		// fica minutos sem dar sinal de vida — o rate limiter da Search API
-		// é compartilhado entre todos os workers, então com vários rodando
-		// em paralelo cada um avança bem mais devagar do que parece.
-		page++
-		c.hub.Broadcast(Event{Type: "log", Data: fmt.Sprintf(
-			"%s: página %d — %d/%d resultados", kw, page, min(page*100, total), total,
-		)})
+	queries := []string{kw}
+	if opts.dateSplit {
+		queries = dateSplitQueries(kw, opts.dateSplitYears)
+	}
 
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, pageConcurrency)
-
-		for _, item := range items {
-			item := item
-			if skipExamples && isExamplePath(item.Path) {
-				continue
-			}
-			wg.Add(1)
-			sem <- struct{}{}
-			go func() {
-				defer wg.Done()
-				defer func() { <-sem }()
-				c.processItem(ctx, kw, item)
-			}()
+	for _, q := range queries {
+		if ctx.Err() != nil {
+			break
 		}
-		wg.Wait()
-		return nil
-	})
+		fullQ := q
+		if opts.includeForks {
+			fullQ += " fork:true"
+		}
+		c.hub.Broadcast(Event{Type: "log", Data: "buscando: " + fullQ})
+
+		page := 0
+		err := c.gh.SearchCode(ctx, fullQ, opts.maxPages, func(items []CodeSearchItem, total int) error {
+			// sem isso, uma keyword genérica com muitos resultados (ex: "AKIA")
+			// fica minutos sem dar sinal de vida — o rate limiter da Search API
+			// é compartilhado entre todos os workers, então com vários rodando
+			// em paralelo cada um avança bem mais devagar do que parece.
+			page++
+			c.hub.Broadcast(Event{Type: "log", Data: fmt.Sprintf(
+				"%s: página %d — %d/%d resultados", q, page, min(page*100, total), total,
+			)})
+
+			var wg sync.WaitGroup
+			sem := make(chan struct{}, opts.pageConcurrency)
+
+			for _, item := range items {
+				item := item
+				if opts.skipExamples && isExamplePath(item.Path) {
+					continue
+				}
+				wg.Add(1)
+				sem <- struct{}{}
+				go func() {
+					defer wg.Done()
+					defer func() { <-sem }()
+					c.processItem(ctx, kw, item)
+				}()
+			}
+			wg.Wait()
+			return nil
+		})
+
+		if err != nil {
+			c.state.Update(func(s *StateData) { s.LastError = err.Error() })
+			c.hub.Broadcast(Event{Type: "log", Data: "erro em '" + q + "': " + err.Error()})
+			break
+		}
+	}
 
 	// removeu do "buscando agora" independente de sucesso/erro/cancelamento
 	s = c.state.Update(func(s *StateData) {
@@ -192,11 +251,6 @@ func (c *Crawler) processKeyword(ctx context.Context, kw string, skipExamples bo
 		// processada, o defer do run() cuida do total final.
 		c.hub.Broadcast(Event{Type: "status", Data: s})
 		return
-	}
-
-	if err != nil {
-		c.state.Update(func(s *StateData) { s.LastError = err.Error() })
-		c.hub.Broadcast(Event{Type: "log", Data: "erro em '" + kw + "': " + err.Error()})
 	}
 
 	total, _ := c.es.CountHits(ctx)

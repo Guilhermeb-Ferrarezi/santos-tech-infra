@@ -31,6 +31,26 @@ var (
 		},
 		[]string{"method", "path"},
 	)
+
+	// bgPoolRejected conta tarefas de webhook descartadas por falta de slot no
+	// pool de background — sinal de que BG_POOL_SLOTS está apertado demais.
+	bgPoolRejected = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bot_bg_pool_rejected_total",
+			Help: "Tarefas de background descartadas por falta de slot no pool.",
+		},
+		[]string{"task"},
+	)
+
+	// llmRateLimited conta mensagens descartadas no caminho de entrada por
+	// estouro de rate limit, por canal e motivo (phone | global | daily).
+	llmRateLimited = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bot_llm_rate_limited_total",
+			Help: "Mensagens de entrada descartadas por rate limit antes de chamar o LLM.",
+		},
+		[]string{"channel", "reason"},
+	)
 )
 
 // metricsMiddleware mede cada requisição e alimenta os coletores. Usa o padrão de

@@ -29,6 +29,32 @@ apps/
   agent-go/    ← orquestra o Claude Code em container (api.santos-tech.com/claude) — ver apps/agent-go/CLAUDE.md
   mcp-go/      ← servidor MCP (Streamable HTTP) — gateway das APIs p/ clientes MCP (api.santos-tech.com/mcp)
   auth-web/    ← Frontend de login (React 19 + Vite + TanStack Router/Query + Tailwind 4)
+  hour-timer-app/ ← App desktop (Tauri v2 + React) pros PCs do laboratório: exibe o
+                   cronômetro da sessão de horas do cliente (ver api-go, domínio
+                   hour-sessions). Três jeitos de parear: colar o link, digitar um
+                   código curto (6 dígitos, /public/hour-sessions/pair-by-code) ou
+                   escanear o QR da tela (o admin escaneia com o celular, confirma o
+                   cliente em dashboard/web:/admin/horas/parear/:deviceUuid, e o
+                   token chega sozinho no heartbeat seguinte). Sem cadastro manual de
+                   máquina — cada instalação gera um device_uuid sozinha e manda
+                   heartbeat pra /public/lab-devices/heartbeat; identificação (nome
+                   atribuído pelo admin) e controle (despairar remoto, aviso na tela)
+                   ficam em /hour-lab-devices, visão em
+                   dashboard/web:/admin/horas/dispositivos. Autostart no login +
+                   watchdog (Tarefa Agendada, ver installer-hooks.nsh) garantem que o
+                   app volta sozinho mesmo se o PC reiniciar ou o processo morrer. Sem
+                   deploy no Coolify — instalador Windows gerado via
+                   `cargo tauri build`, distribuído manualmente pros PCs.
+  santos-hub/  ← App desktop (Tauri v2 + React) "central de downloads" pros PCs da
+                   empresa: lista o catálogo (GET /public/downloads, sem login) e
+                   baixa/abre cada item no app padrão do Windows (instalador do
+                   controle de máquina, scripts internos, etc. — ver api-go,
+                   handlers_downloads.go). Sem tray/estado persistido (diferente do
+                   hour-timer-app) — é só um launcher, abre/fecha. Cadastro/edição
+                   do catálogo é admin-only em /auth/admin/downloads (upload
+                   presigned pro R2 pra kind=file, ou kind=link pra URL externa).
+                   Sem deploy no Coolify — instalador Windows gerado via
+                   `cargo tauri build`, distribuído manualmente pros PCs.
 infra/
   docker-compose.yml      ← Postgres 16 + Redis 7 + API + agent-go + mcp-go
   Dockerfile.api-go
@@ -184,6 +210,7 @@ responde 500).
 | `LOG_REDACT` | `1` | redige credenciais — **`0` loga cru, inclui senhas (não recomendado: LGPD)** |
 | `LOG_BODY_MAX_BYTES` | `16384` | bytes logados por payload (resto truncado) |
 | `LOG_BODY_HARD_CAP` | `1048576` | acima disso o request nem é bufferizado (anti-OOM) |
+| `LOG_REPEAT_WINDOW` | `5m` | agrupa **4xx idênticos** (método+rota+status+IP): o 1º sai na hora, os seguintes só quando a janela fecha, com `repeated=N`. `0` desliga. 5xx nunca é agrupado |
 
 `bot-go` e `auto-fixer` já configuravam o `slog`; os demais chamam `initLogging()` no
 `main`. **Ao criar um serviço Go novo:** copie `logging.go`, plugue `requestLogger(...)`

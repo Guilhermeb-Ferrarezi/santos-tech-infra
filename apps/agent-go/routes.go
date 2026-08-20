@@ -25,10 +25,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /claude/conversations/{id}/ws", s.handleConversationWS)
 
 	// Geração one-shot (stateless) — usada pelo painel de email (via PAT).
-	// Sandbox: qualquer usuário autenticado (não exige admin como o resto do /claude).
-	mux.HandleFunc("POST /claude/generate", s.rateLimit(10, min, s.authGuardUser(s.handleGenerate)))
+	// Exige admin (ou INTERNAL_SECRET): roda o CLI claude com ferramentas.
+	mux.HandleFunc("POST /claude/generate", s.rateLimit(10, min, s.authGuardAdminOrInternal(s.handleGenerate)))
 	// Variante streaming (SSE) da geração — mesmo sandbox.
-	mux.HandleFunc("POST /claude/generate/stream", s.rateLimit(10, min, s.authGuardUser(s.handleGenerateStream)))
+	mux.HandleFunc("POST /claude/generate/stream", s.rateLimit(10, min, s.authGuardAdminOrInternal(s.handleGenerateStream)))
 
 	// Controles na camada de orquestração.
 	mux.HandleFunc("POST /claude/conversations/{id}/model", s.authGuard(s.handleSetModel))
@@ -49,6 +49,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// Compatibilidade OpenAI — permite usar o agent-go como provider no Santosfy
 	// e ferramentas similares. URL base: https://api.santos-tech.com/claude
-	mux.HandleFunc("GET /claude/models", s.authGuardUser(s.handleOAIModels))
-	mux.HandleFunc("POST /claude/chat/completions", s.rateLimit(10, min, s.authGuardUser(s.handleOAIChatCompletions)))
+	mux.HandleFunc("GET /claude/models", s.authGuardAdminOrInternal(s.handleOAIModels))
+	mux.HandleFunc("POST /claude/chat/completions", s.rateLimit(10, min, s.authGuardAdminOrInternal(s.handleOAIChatCompletions)))
 }

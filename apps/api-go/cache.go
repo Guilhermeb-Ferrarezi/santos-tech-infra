@@ -24,10 +24,31 @@ const (
 	cacheUserTTL        = 30 * time.Second
 	cachePortalTTL      = 5 * time.Minute
 	cacheOpTimeout      = 2 * time.Second // teto por operação no Redis (não pendura a request)
+
+	// Arquivos (Google Drive): cada thumbnail/checagem de ancestralidade é uma
+	// (ou mais) chamada de rede à API do Drive, repetida a cada item visível
+	// na lista/grade e a cada ação (download/rename/delete) — cachear reduz
+	// bastante o tráfego contra a cota compartilhada da service account.
+	cacheDriveDescendantPrefix = "api-go:drive:descendant:"
+	cacheDriveDescendantTTL    = 5 * time.Minute
+	cacheDriveThumbnailPrefix  = "api-go:drive:thumb:"
+	cacheDriveThumbnailTTL     = time.Hour
 )
 
 func cacheUserKey(id int64) string {
 	return cacheUserPrefix + strconv.FormatInt(id, 10)
+}
+
+// cacheDriveDescendantKey: TTL curto (5min) é uma janela de staleness
+// aceitável — o pior caso é continuar aceitando um fileID como "dentro da
+// pasta" por até 5min depois dele ter sido movido pra fora dela no Drive real
+// (quem chamou já tinha acesso de escrita àquela pasta um instante antes).
+func cacheDriveDescendantKey(fileID, rootID string) string {
+	return cacheDriveDescendantPrefix + fileID + ":" + rootID
+}
+
+func cacheDriveThumbnailKey(fileID string) string {
+	return cacheDriveThumbnailPrefix + fileID
 }
 
 // getOrSetJSON é o helper genérico de cache-aside: tenta ler `key` do Redis e

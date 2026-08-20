@@ -164,3 +164,70 @@ func TestIsOwnRepo(t *testing.T) {
 		t.Fatalf("não deveria reconhecer repo de terceiro como próprio")
 	}
 }
+
+func TestValuePrefixRegex_PicksCanonicalPrefix(t *testing.T) {
+	cases := map[string]string{
+		// keyword exata → usa o prefixo dela
+		"sk_live_": `sk_live_[A-Za-z0-9_\-\.]{8,}`,
+		"AKIA":     `AKIA[A-Za-z0-9_\-\.]{8,}`,
+		// keyword parcial → usa o prefixo canônico mais curto que cobre ela
+		"sk_live": `sk_live_[A-Za-z0-9_\-\.]{8,}`,
+		"APP_USR": `APP_USR-[A-Za-z0-9_\-\.]{8,}`,
+	}
+	for kw, want := range cases {
+		rx := valuePrefixRegex(kw)
+		if rx == nil {
+			t.Fatalf("valuePrefixRegex(%q) = nil, esperava regex", kw)
+		}
+		if rx.String() != want {
+			t.Errorf("valuePrefixRegex(%q) = %q, esperava %q", kw, rx.String(), want)
+		}
+	}
+}
+
+func TestValuePrefixRegex_NilForVariableName(t *testing.T) {
+	for _, kw := range []string{"GITHUB_TOKEN", "OPENAI_API_KEY", "DOTFY_API_KEY"} {
+		if rx := valuePrefixRegex(kw); rx != nil {
+			t.Errorf("valuePrefixRegex(%q) deveria ser nil (é nome de variável, não prefixo), veio %q", kw, rx.String())
+		}
+	}
+}
+
+func TestVerifyContent_FindsTokenLooseInFile(t *testing.T) {
+	// token solto num .env — sem "NOME=" — só capturável pelo regex de
+	// prefixo de valor, o assignmentRegex não acha isso. Usa formato ghp_
+	// (não sk_live_): o Push Protection do GitHub bloqueia qualquer string
+	// no formato de chave Stripe, mesmo sintética.
+	content := `GHP_ABC
+GITHUB_TOKEN=ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123
+OTHER=123`
+	has, masked, _ := verifyContent("ghp_", content)
+	if !has {
+		t.Fatalf("esperava achar token ghp_ solto no arquivo")
+	}
+	if masked != "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123" {
+		t.Fatalf("esperava capturar o token GitHub completo, veio %q", masked)
+	}
+}
+
+func TestVerifyContent_PrefixKeywordStillAcceptsAssignment(t *testing.T) {
+	// keyword-prefixo não deve quebrar o caminho clássico de atribuição.
+	content := `GITHUB_TOKEN=ghp_16C7e42F292c6912E7710c838347A`
+	// GITHUB_TOKEN é nome de variável → assignment. ghp_ como keyword →
+	// prefixo: o token aparece solto no arquivo e deve ser capturado.
+	has, masked, _ := verifyContent("ghp_", content)
+	if !has {
+		t.Fatalf("esperava achar ghp_ token no conteúdo")
+	}
+	if masked != "ghp_16C7e42F292c6912E7710c838347A" {
+		t.Fatalf("esperava capturar o token GitHub completo, veio %q", masked)
+	}
+}
+
+func TestVerifyContent_PrefixKeywordRejectsPlaceholder(t *testing.T) {
+	content := `slack token: xoxb-your-slack-bot-token-here`
+	has, _, _ := verifyContent("xoxb-", content)
+	if has {
+		t.Fatalf("esperava rejeitar xoxb- com placeholder no valor")
+	}
+}

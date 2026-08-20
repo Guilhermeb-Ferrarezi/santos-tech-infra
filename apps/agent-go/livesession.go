@@ -132,7 +132,7 @@ func (ls *liveSession) start(ctx context.Context) error {
 	if ls.testEnv != nil {
 		cmd.Env = ls.testEnv
 	} else {
-		cmd.Env = ls.mgr.claudeEnv(ctx, ls.conv)
+		cmd.Env = ls.mgr.s.claudeEnv(ctx, ls.conv)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 

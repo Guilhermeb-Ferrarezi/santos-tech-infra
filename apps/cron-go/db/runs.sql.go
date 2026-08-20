@@ -118,3 +118,44 @@ func (q *Queries) ListRunsByJob(ctx context.Context, arg ListRunsByJobParams) ([
 	}
 	return items, nil
 }
+
+const lockJobForRun = `-- name: LockJobForRun :exec
+SELECT pg_advisory_xact_lock($1)
+`
+
+// Lock consultivo com escopo de transação, por job. Serializa "checar
+// sobreposição" + "criar run": sem ele a checagem e a inserção eram dois
+// statements soltos, e o tick do scheduler concorrendo com um disparo manual
+// (ou duas réplicas) criava dois runs para o mesmo job.
+func (q *Queries) LockJobForRun(ctx context.Context, pgAdvisoryXactLock int64) error {
+	_, err := q.db.Exec(ctx, lockJobForRun, pgAdvisoryXactLock)
+	return err
+}
+
+const purgeOldRuns = `-- name: PurgeOldRuns :execrows
+DELETE FROM cron_runs
+WHERE id IN (
+    SELECT id FROM cron_runs
+    WHERE status <> 'running'
+      AND started_at < now() - ($1::int * interval '1 day')
+    ORDER BY started_at
+    LIMIT $2
+)
+`
+
+type PurgeOldRunsParams struct {
+	RetentionDays int32 `json:"retention_days"`
+	MaxRows       int32 `json:"max_rows"`
+}
+
+// Retenção do histórico. O scheduler tica a cada 30s e cada execução grava uma
+// linha com response_excerpt TEXT: um job de 1/min gera ~525 mil linhas por
+// ano, e nada apagava nada. Apaga só o que já terminou (status != 'running'),
+// para nunca remover um run em andamento.
+func (q *Queries) PurgeOldRuns(ctx context.Context, arg PurgeOldRunsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeOldRuns, arg.RetentionDays, arg.MaxRows)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
