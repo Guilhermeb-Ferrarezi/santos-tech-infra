@@ -6,6 +6,7 @@ import { useTickingSeconds } from "./lib/useTickingSeconds";
 import { useLowBalanceNotifier } from "./lib/useLowBalanceNotifier";
 import { useDeviceHeartbeat } from "./lib/useDeviceHeartbeat";
 import { useTraySync } from "./lib/useTraySync";
+import { useAutoUpdate } from "./lib/useAutoUpdate";
 import { Titlebar } from "./components/Titlebar";
 import { OverlayPositionButton } from "./components/OverlayPositionButton";
 
@@ -256,6 +257,7 @@ function TimerScreen({
 export default function App() {
   const { token, loading, setToken, clearToken, purgeStoredToken } = useStoredToken();
   const { deviceName, deviceId, heartbeatOk } = useDeviceHeartbeat(token, clearToken, setToken);
+  useAutoUpdate();
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">

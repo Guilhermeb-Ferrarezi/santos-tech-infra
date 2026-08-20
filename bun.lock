@@ -32,13 +32,15 @@
     },
     "apps/hour-timer-app": {
       "name": "hour-timer-app",
-      "version": "0.1.0",
+      "version": "0.1.11",
       "dependencies": {
         "@phosphor-icons/react": "^2.1.10",
         "@tailwindcss/vite": "^4.3.3",
         "@tauri-apps/api": "^2",
         "@tauri-apps/plugin-opener": "^2",
+        "@tauri-apps/plugin-process": "^2",
         "@tauri-apps/plugin-store": "^2.4.4",
+        "@tauri-apps/plugin-updater": "^2",
         "qrcode.react": "^4.2.0",
         "react": "^19.1.0",
         "react-dom": "^19.1.0",
@@ -93,7 +95,7 @@
     },
     "apps/santos-hub": {
       "name": "santos-hub",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
         "@fontsource-variable/inter": "^5.3.0",
         "@phosphor-icons/react": "^2.1.10",
@@ -101,6 +103,8 @@
         "@tauri-apps/api": "^2",
         "@tauri-apps/plugin-http": "^2",
         "@tauri-apps/plugin-opener": "^2",
+        "@tauri-apps/plugin-process": "^2",
+        "@tauri-apps/plugin-updater": "^2",
         "qrcode.react": "^4.2.0",
         "react": "^19.1.0",
         "react-dom": "^19.1.0",
@@ -642,7 +646,11 @@
 
     "@tauri-apps/plugin-opener": ["@tauri-apps/plugin-opener@2.5.4", "", { "dependencies": { "@tauri-apps/api": "^2.11.0" } }, "sha512-1HnPkb+AmgO29HBazm4uPLKB+r7zzcTBW1d0fyYp1uP+jwtpoiNDGKMMzz58SFp49nOIrxdE3aUJtT57lfO9CQ=="],
 
+    "@tauri-apps/plugin-process": ["@tauri-apps/plugin-process@2.3.1", "", { "dependencies": { "@tauri-apps/api": "^2.8.0" } }, "sha512-nCa4fGVaDL/B9ai03VyPOjfAHRHSBz5v6F/ObsB73r/dA3MHHhZtldaDMIc0V/pnUw9ehzr2iEG+XkSEyC0JJA=="],
+
     "@tauri-apps/plugin-store": ["@tauri-apps/plugin-store@2.4.4", "", { "dependencies": { "@tauri-apps/api": "^2.11.0" } }, "sha512-oxSMaj/QpVfJcBMYX5aOQV94fWvga0MwQMfD6TLlbK2dh+ShPWAzefd8HWXhvOKjPRJdGVAkW7ZGO76JzzjaDA=="],
+
+    "@tauri-apps/plugin-updater": ["@tauri-apps/plugin-updater@2.10.1", "", { "dependencies": { "@tauri-apps/api": "^2.10.1" } }, "sha512-NFYMg+tWOZPJdzE/PpFj2qfqwAWwNS3kXrb1tm1gnBJ9mYzZ4WDRrwy8udzWoAnfGCHLuePNLY1WVCNHnh3eRA=="],
 
     "@tokenizer/inflate": ["@tokenizer/inflate@0.4.1", "", { "dependencies": { "debug": "^4.4.3", "token-types": "^6.1.1" } }, "sha512-2mAv+8pkG6GIZiF1kNg1jAjh27IDxEPKwdGul3snfztFerfPGI1LjDezZp3i7BElXompqEtPmoPx6c2wgtWsOA=="],
 

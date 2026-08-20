@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Santos Tech - Cronômetro",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "identifier": "com.santos-tech.hour-timer-app",
   "build": {
     "beforeDevCommand": "bun run dev",
@@ -30,12 +30,22 @@
       "iconPath": "icons/32x32.png"
     },
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.santos-tech.com; img-src 'self' data:"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.santos-tech.com https://cdn.santos-tech.com; img-src 'self' data:"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU1OTk0M0VCRjQ5Njk1MTAKUldRUWxaYjA2ME9aNVIyc0d3R0dvZWJvRWtXaFI1V3NkRFF0Wi9pRnoyM0dmbGtDVGhHdm04c2kK",
+      "endpoints": ["https://cdn.santos-tech.com/updates/hour-timer-app/latest.json"],
+      "windows": {
+        "installMode": "quiet"
+      }
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "resources": {
       "../watchdog/target/release/watchdog.exe": "watchdog.exe",
       "target/release/WebView2Loader.dll": "WebView2Loader.dll"

@@ -12,6 +12,7 @@ import {
 import { Titlebar } from "./components/Titlebar";
 import { AccountMenu } from "./components/AccountMenu";
 import { apiJSON, hubHeaders } from "./lib/api";
+import { useAutoUpdate } from "./lib/useAutoUpdate";
 
 interface DownloadItem {
   id: number;
@@ -85,17 +86,23 @@ function DownloadCard({ item }: { item: DownloadItem }) {
 
   return (
     <div className="flex flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
-      <div className="relative flex aspect-square items-center justify-center bg-white/5">
-        {item.imageUrl ? (
-          <img src={item.imageUrl} alt="" className="size-full object-cover" />
-        ) : (
-          <Package className="size-8 text-white/20" />
-        )}
-        {item.pinned && (
-          <PushPin className="absolute right-2 top-2 size-3.5 text-[#0DB88F] drop-shadow" weight="fill" />
-        )}
+      {/* padding-top:100% em vez de aspect-square: o WebView2 desta máquina não
+          respeita aspect-ratio dentro de flex-col+grid de forma confiável (a
+          caixa saía 3:4 mesmo com aspect-ratio:1 aplicado) — o truque do
+          padding percentual funciona em qualquer engine, sem depender disso. */}
+      <div className="relative w-full bg-white/5" style={{ paddingTop: "100%" }}>
+        <div className="absolute inset-0 flex items-center justify-center">
+          {item.imageUrl ? (
+            <img src={item.imageUrl} alt="" className="absolute inset-0 size-full object-cover" />
+          ) : (
+            <Package className="size-12 text-white/20" />
+          )}
+          {item.pinned && (
+            <PushPin className="absolute right-2 top-2 size-3.5 text-[#0DB88F] drop-shadow" weight="fill" />
+          )}
+        </div>
       </div>
-      <div className="flex flex-1 flex-col gap-1 p-3">
+      <div className="flex flex-1 flex-col gap-1.5 p-4">
         <div className="flex items-center gap-1.5">
           <p className="min-w-0 flex-1 truncate text-sm font-semibold text-white">{item.name}</p>
           {item.version && (
@@ -135,6 +142,7 @@ export default function App() {
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  useAutoUpdate();
 
   async function load() {
     setLoading(true);
@@ -229,7 +237,7 @@ export default function App() {
                   colunas fixas viravam cards gigantes numa tela larga — auto-fill
                   com um teto de largura mantém o card num tamanho razoável e só
                   acrescenta colunas conforme sobra espaço. */}
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-4">
                 {categoryItems.map((item) => (
                   <DownloadCard key={item.id} item={item} />
                 ))}
