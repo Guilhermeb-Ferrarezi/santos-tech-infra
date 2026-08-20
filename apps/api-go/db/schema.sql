@@ -309,7 +309,11 @@ CREATE TABLE IF NOT EXISTS hour_sessions (
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   short_code            TEXT UNIQUE,
-  short_code_expires_at TIMESTAMPTZ
+  short_code_expires_at TIMESTAMPTZ,
+  -- Fim agendado (opcional): admin escolhe duração ou horário fixo ao iniciar
+  -- (o front resolve os dois pra um timestamp absoluto antes de mandar).
+  -- NULL = sessão de duração livre, "até eu parar" (comportamento de sempre).
+  scheduled_end_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_hour_sessions_client ON hour_sessions(client_id);

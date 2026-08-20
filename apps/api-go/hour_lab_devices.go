@@ -437,7 +437,9 @@ func (s *Server) pairLabDeviceViaQR(ctx context.Context, deviceUUID, clientID st
 	// abaixo: janela de corrida (o PC some entre as duas queries) é
 	// improvável e inofensiva — na pior hipótese a sessão fica sem o token
 	// entregue, e o admin repete o pareamento.
-	h, token, _, err := s.startHourSession(ctx, clientID, createdBy)
+	// Pareamento via QR não tem UI pra escolher duração/horário — sessão
+	// sempre de duração livre (mesmo comportamento de antes desse campo existir).
+	h, token, _, err := s.startHourSession(ctx, clientID, createdBy, nil)
 	if err != nil {
 		return nil, err
 	}

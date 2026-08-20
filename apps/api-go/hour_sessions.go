@@ -35,6 +35,11 @@ type HourSession struct {
 	UpdatedAt        time.Time  `json:"updatedAt"`
 	ElapsedSeconds   int64      `json:"elapsedSeconds"`
 	BalanceMinutes   int        `json:"balanceMinutes"`
+	// ScheduledEndAt: fim agendado opcional (duração ou horário fixo, o front
+	// resolve os dois pra um timestamp absoluto antes de mandar). NULL =
+	// sessão de duração livre, "até o admin encerrar" (comportamento padrão).
+	// Ver autoEndIfDue — é isso que efetivamente encerra sozinha ao passar.
+	ScheduledEndAt *time.Time `json:"scheduledEndAt"`
 }
 
 type hourSessionEvent struct {
@@ -143,12 +148,12 @@ func (s *Server) addHourPurchase(ctx context.Context, clientID string, minutesAd
 // ── sessões ──────────────────────────────────────────────────────────────────
 
 const hourSessionCols = `s.id::text, s.client_id::text, c.name, s.status, s.pause_requested_at,
-	s.created_at, s.updated_at, c.balance_minutes`
+	s.created_at, s.updated_at, c.balance_minutes, s.scheduled_end_at`
 
 func scanHourSession(row pgx.Row) (*HourSession, error) {
 	var h HourSession
 	err := row.Scan(&h.ID, &h.ClientID, &h.ClientName, &h.Status, &h.PauseRequestedAt,
-		&h.CreatedAt, &h.UpdatedAt, &h.BalanceMinutes)
+		&h.CreatedAt, &h.UpdatedAt, &h.BalanceMinutes, &h.ScheduledEndAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -188,14 +193,16 @@ const startHourSessionAttempts = 3
 // startHourSession cria a sessão + evento "start" numa transação e devolve o
 // token em texto puro e o código curto (só existem neste retorno — o banco
 // guarda o hash do token e o próprio código, mas o código é zerado no
-// primeiro pareamento, ver pairHourSessionByCode).
-func (s *Server) startHourSession(ctx context.Context, clientID string, createdBy int64) (*HourSession, string, string, error) {
+// primeiro pareamento, ver pairHourSessionByCode). scheduledEndAt é opcional
+// (nil = duração livre, "até o admin encerrar") — o front resolve
+// duração/horário fixo pra um timestamp absoluto antes de mandar.
+func (s *Server) startHourSession(ctx context.Context, clientID string, createdBy int64, scheduledEndAt *time.Time) (*HourSession, string, string, error) {
 	if err := s.releaseStaleShortCodes(ctx); err != nil {
 		return nil, "", "", err
 	}
 	var lastErr error
 	for i := 0; i < startHourSessionAttempts; i++ {
-		h, token, shortCode, err := s.startHourSessionOnce(ctx, clientID, createdBy)
+		h, token, shortCode, err := s.startHourSessionOnce(ctx, clientID, createdBy, scheduledEndAt)
 		if err == nil {
 			return h, token, shortCode, nil
 		}
@@ -207,7 +214,7 @@ func (s *Server) startHourSession(ctx context.Context, clientID string, createdB
 	return nil, "", "", lastErr
 }
 
-func (s *Server) startHourSessionOnce(ctx context.Context, clientID string, createdBy int64) (*HourSession, string, string, error) {
+func (s *Server) startHourSessionOnce(ctx context.Context, clientID string, createdBy int64, scheduledEndAt *time.Time) (*HourSession, string, string, error) {
 	token := randomToken(32)
 	tokenHash := sha256Hex(token)
 	shortCode := randomDigits(6)
@@ -218,10 +225,10 @@ func (s *Server) startHourSessionOnce(ctx context.Context, clientID string, crea
 	defer tx.Rollback(ctx)
 	var sessionID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO hour_sessions (client_id, status, token_hash, short_code, short_code_expires_at, created_by)
-		VALUES ($1::uuid, 'active', $2, $3, now() + make_interval(mins => $4), $5)
+		INSERT INTO hour_sessions (client_id, status, token_hash, short_code, short_code_expires_at, created_by, scheduled_end_at)
+		VALUES ($1::uuid, 'active', $2, $3, now() + make_interval(mins => $4), $5, $6)
 		RETURNING id::text`,
-		clientID, tokenHash, shortCode, int(shortCodeTTL.Minutes()), createdBy).Scan(&sessionID)
+		clientID, tokenHash, shortCode, int(shortCodeTTL.Minutes()), createdBy, scheduledEndAt).Scan(&sessionID)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -312,6 +319,9 @@ func (s *Server) listActiveHourSessions(ctx context.Context) ([]HourSession, err
 	}
 	now := time.Now()
 	for i := range out {
+		if err := s.autoEndIfDue(ctx, &out[i]); err != nil {
+			return nil, err
+		}
 		elapsed, err := s.hourSessionElapsedSeconds(ctx, out[i].ID, now)
 		if err != nil {
 			return nil, err
@@ -327,6 +337,9 @@ func (s *Server) getHourSession(ctx context.Context, id string) (*HourSession, e
 		WHERE s.id = $1::uuid`, id))
 	if err != nil || h == nil {
 		return h, err
+	}
+	if err := s.autoEndIfDue(ctx, h); err != nil {
+		return nil, err
 	}
 	elapsed, err := s.hourSessionElapsedSeconds(ctx, h.ID, time.Now())
 	if err != nil {
@@ -345,12 +358,48 @@ func (s *Server) getHourSessionByTokenHash(ctx context.Context, tokenHash string
 	if err != nil || h == nil {
 		return h, err
 	}
+	if err := s.autoEndIfDue(ctx, h); err != nil {
+		return nil, err
+	}
 	elapsed, err := s.hourSessionElapsedSeconds(ctx, h.ID, time.Now())
 	if err != nil {
 		return nil, err
 	}
 	h.ElapsedSeconds = elapsed
 	return h, nil
+}
+
+// autoEndIfDue encerra a sessão sozinha (mesma lógica de endHourSession,
+// autor = quem criou a sessão) quando o fim agendado já passou — chamado em
+// TODO caminho de leitura de sessão ativa (painel admin, poll do app do PC,
+// heartbeat), então o atraso real é no máximo o intervalo entre polls, não
+// depende de nenhum worker/cron rodando à parte. Se outra leitura concorrente
+// já encerrou entre o scan e aqui (HOUR_SESSION_BAD_STATE), só recarrega o
+// estado atual — não é erro de verdade, é corrida inofensiva.
+func (s *Server) autoEndIfDue(ctx context.Context, h *HourSession) error {
+	if h == nil || h.Status != "active" || h.ScheduledEndAt == nil || h.ScheduledEndAt.After(time.Now()) {
+		return nil
+	}
+	var createdBy int64
+	if err := s.db.QueryRow(ctx, `SELECT created_by FROM hour_sessions WHERE id = $1::uuid`, h.ID).Scan(&createdBy); err != nil {
+		return err
+	}
+	ended, err := s.endHourSession(ctx, h.ID, createdBy)
+	if err != nil {
+		if ae, ok := err.(*AppError); ok && ae.Code == "HOUR_SESSION_BAD_STATE" {
+			fresh, ferr := scanHourSession(s.db.QueryRow(ctx, `
+				SELECT `+hourSessionCols+` FROM hour_sessions s JOIN hour_clients c ON c.id = s.client_id
+				WHERE s.id = $1::uuid`, h.ID))
+			if ferr != nil {
+				return ferr
+			}
+			*h = *fresh
+			return nil
+		}
+		return err
+	}
+	*h = *ended
+	return nil
 }
 
 // hourSessionElapsedSeconds soma os intervalos "rodando" (start/resume até o

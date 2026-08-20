@@ -532,6 +532,7 @@ CREATE INDEX IF NOT EXISTS idx_hour_sessions_status ON hour_sessions(status) WHE
 -- código já emitido ocuparia um dos 1M valores do UNIQUE pra sempre.
 ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code TEXT UNIQUE;
 ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code_expires_at TIMESTAMPTZ;
+ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS scheduled_end_at TIMESTAMPTZ;
 
 -- Índice do UPDATE que devolve códigos curtos expirados/encerrados ao espaço
 -- UNIQUE (ver releaseStaleShortCodes) — parcial, porque a esmagadora maioria

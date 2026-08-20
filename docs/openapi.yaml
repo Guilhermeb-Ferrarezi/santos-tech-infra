@@ -3444,6 +3444,16 @@ paths:
               type: object
               properties:
                 clientId: { type: string, format: uuid }
+                scheduledEndAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                  description: |
+                    Opcional — timestamp absoluto (RFC3339) em que a sessão encerra
+                    sozinha (mesmo efeito de POST /hour-sessions/{id}/end, autor =
+                    quem criou). Front resolve duração OU horário fixo pra esse
+                    timestamp antes de mandar. Omitido/null = duração livre, até o
+                    admin encerrar (comportamento padrão). Precisa ser no futuro.
               required: [clientId]
       responses:
         "201":
@@ -5739,6 +5749,7 @@ components:
         clientName: { type: string }
         status: { type: string, enum: [active, paused, ended] }
         pauseRequestedAt: { type: string, format: date-time, nullable: true }
+        scheduledEndAt: { type: string, format: date-time, nullable: true, description: "Fim agendado opcional — sessão encerra sozinha ao passar (ver POST /hour-sessions). Null = duração livre." }
         elapsedSeconds: { type: integer }
         balanceMinutes: { type: integer, description: "Saldo atual do cliente (antes de debitar o tempo desta sessão, que só é debitado no end)." }
         createdAt: { type: string, format: date-time }

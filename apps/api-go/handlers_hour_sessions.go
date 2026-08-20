@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // isValidHourSessionToken reporta se s é um token bem formado de sessão de
@@ -101,9 +102,17 @@ func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) 
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	var in struct {
 		ClientID string `json:"clientId"`
+		// ScheduledEndAt: opcional, timestamp absoluto (RFC3339) já resolvido
+		// pelo front a partir de duração OU horário fixo — ver
+		// autoEndIfDue em hour_sessions.go pra como isso encerra sozinho.
+		ScheduledEndAt *time.Time `json:"scheduledEndAt"`
 	}
 	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.ClientID) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "clientId inválido"))
+		return
+	}
+	if in.ScheduledEndAt != nil && !in.ScheduledEndAt.After(time.Now()) {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "scheduledEndAt precisa ser no futuro"))
 		return
 	}
 	client, err := s.getHourClient(r.Context(), in.ClientID)
@@ -115,7 +124,7 @@ func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, errHourClientNotFound)
 		return
 	}
-	h, token, shortCode, err := s.startHourSession(r.Context(), in.ClientID, userIDFrom(r))
+	h, token, shortCode, err := s.startHourSession(r.Context(), in.ClientID, userIDFrom(r), in.ScheduledEndAt)
 	if err != nil {
 		writeErr(w, err)
 		return
