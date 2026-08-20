@@ -43,6 +43,28 @@ func (s *Server) handleListLabDeviceScreenshots(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]any{"screenshots": shots})
 }
 
+// DELETE /hour-lab-devices/{id}/screenshots/{shotId} — apaga a captura.
+//
+// Apaga o registro E o arquivo no R2. Se o arquivo não sair, a resposta é erro:
+// dizer "apagado" com a imagem ainda no bucket seria pior que não ter o botão.
+func (s *Server) handleDeleteLabDeviceScreenshot(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errLabDeviceNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	shotID, err := hourUUIDFrom(r, "shotId", errScreenshotNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.deleteLabDeviceScreenshot(r.Context(), id, shotID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // ── público (segredo do dispositivo) ─────────────────────────────────────────
 
 // POST /public/lab-devices/screenshot — {deviceId, deviceSecret, jpeg, width, height}

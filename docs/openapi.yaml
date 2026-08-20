@@ -4159,6 +4159,31 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /hour-lab-devices/{id}/screenshots/{shotId}:
+    delete:
+      tags: [Horas]
+      summary: Apaga uma captura de tela
+      description: |
+        Admin-only. Rate limit 60/min. Apaga o registro **e** o arquivo no R2 —
+        se o arquivo não sair, a resposta é erro: responder "apagado" com a
+        imagem ainda no bucket seria pior que não ter o botão.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: shotId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Registro e arquivo apagados.
+        "404":
+          description: Captura não encontrada (SCREENSHOT_NOT_FOUND).
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /public/lab-devices/screenshot:
     post:
       tags: [Horas]

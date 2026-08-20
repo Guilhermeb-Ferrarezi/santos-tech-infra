@@ -398,6 +398,7 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	// PC (rota pública abaixo) e o histórico fica com quem pediu registrado.
 	mux.HandleFunc("POST /hour-lab-devices/{id}/screenshot", s.rateLimit(30, min, s.adminGuard(s.handleRequestLabDeviceScreenshot)))
 	mux.HandleFunc("GET /hour-lab-devices/{id}/screenshots", s.adminGuard(s.handleListLabDeviceScreenshots))
+	mux.HandleFunc("DELETE /hour-lab-devices/{id}/screenshots/{shotId}", s.rateLimit(60, min, s.adminGuard(s.handleDeleteLabDeviceScreenshot)))
 	// Imagem do ícone por hash de conteúdo — admin-only como o resto do
 	// domínio; a resposta é cacheável pra sempre (a URL é o próprio conteúdo).
 	mux.HandleFunc("GET /program-icons/{hash}", s.adminGuard(s.handleLabProgramIcon))

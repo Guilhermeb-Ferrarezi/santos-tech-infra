@@ -458,7 +458,12 @@ está sentado nele.
 - `GET /hour-lab-devices/{id}/screenshots` (admin) →
   `{screenshots:[{id, width, height, bytes, requestedBy, requestedAt, capturedAt, url}]}`
   · `url` é assinada e vale 10min. Só as 20 últimas por PC ficam guardadas — as
-  anteriores somem na captura seguinte.
+  anteriores somem na captura seguinte, **arquivo no R2 junto**.
+- `DELETE /hour-lab-devices/{id}/screenshots/{shotId}` (admin) → `{ok}` · rate
+  limit 60/min · apaga o registro E o arquivo. Se o arquivo não sair, responde
+  erro: dizer "apagado" com a imagem ainda no bucket seria pior que não ter o
+  botão. Toda captura tem que ser apagável pela interface — sem isso, "apaga
+  isso agora" vira acesso ao banco de produção.
 - `POST /public/lab-devices/screenshot {deviceId, deviceSecret, jpeg, width, height}`
   → `{ok, id}` · rate limit 10/min. `jpeg` é base64 puro, até 6 MB
   decodificados, e precisa começar com a assinatura JPEG (a imagem é servida de

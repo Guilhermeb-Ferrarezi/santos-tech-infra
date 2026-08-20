@@ -161,7 +161,10 @@ fn ensure_toast_window(app: &AppHandle) {
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
-        .shadow(true)
+        // shadow(false) igual ao overlay: com janela sem decoração e fundo
+        // transparente, a sombra do DWM aparece como uma moldura clara em
+        // volta do card — não é borda do CSS, é a própria janela.
+        .shadow(false)
         .transparent(true)
         .visible(false)
         .build();
@@ -291,9 +294,14 @@ fn capture_screen() -> Result<ScreenCapture, String> {
     let image = monitor.capture_image().map_err(|e| format!("captura: {e}"))?;
     let (width, height) = (image.width(), image.height());
 
+    // A captura vem em RGBA e o JPEG não tem canal alfa — codificar direto
+    // falha com "does not support the color type Rgba8". Descartar o alfa aqui
+    // é o certo: a tela é opaca, não há transparência real pra preservar.
+    let rgb = image::DynamicImage::ImageRgba8(image).to_rgb8();
+
     let mut jpeg = Vec::new();
     JpegEncoder::new_with_quality(&mut jpeg, SCREENSHOT_JPEG_QUALITY)
-        .encode(&image, width, height, image::ExtendedColorType::Rgba8)
+        .encode(&rgb, width, height, image::ExtendedColorType::Rgb8)
         .map_err(|e| format!("codificar jpeg: {e}"))?;
 
     Ok(ScreenCapture {

@@ -125,6 +125,17 @@ func (s *Server) storeLabDeviceScreenshot(ctx context.Context, deviceUUID, devic
 	if _, err := s.r2.Upload(ctx, key, "image/jpeg", jpeg); err != nil {
 		return nil, err
 	}
+	// A imagem já está no bucket, mas o registro que aponta pra ela ainda não
+	// existe. Se qualquer coisa daqui pra frente falhar, a transação volta
+	// atrás e o arquivo ficaria largado lá — imagem de tela sem nada
+	// referenciando, que ninguém sabe que existe nem consegue apagar pela
+	// interface. Este flag garante que ela sai junto.
+	uploaded := true
+	defer func() {
+		if uploaded {
+			_ = s.r2.Delete(context.WithoutCancel(ctx), key)
+		}
+	}()
 
 	var shot LabScreenshot
 	var by *string
@@ -141,22 +152,77 @@ func (s *Server) storeLabDeviceScreenshot(ctx context.Context, deviceUUID, devic
 	}
 	shot.RequestedBy = by
 
-	// Poda o histórico na mesma transação: sem isso a tabela (e o bucket) só
-	// crescem, e captura antiga de tela não serve pra nada.
-	if _, err := tx.Exec(ctx, `
+	// Poda o histórico na mesma transação. O RETURNING é o que importa: as
+	// linhas apagadas apontavam pra arquivos no bucket, e apagar só a linha
+	// deixaria a imagem lá pra sempre — vazamento silencioso a cada captura
+	// além do limite.
+	rows, err := tx.Query(ctx, `
 		DELETE FROM hour_lab_device_screenshots
 		WHERE device_id = $1::uuid AND id NOT IN (
 			SELECT id FROM hour_lab_device_screenshots
 			WHERE device_id = $1::uuid ORDER BY captured_at DESC LIMIT $2
-		)`, deviceID, screenshotsKeptPerDevice); err != nil {
+		)
+		RETURNING object_key`, deviceID, screenshotsKeptPerDevice)
+	if err != nil {
 		return nil, err
 	}
+	pruned := []string{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		pruned = append(pruned, k)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
+	uploaded = false // commitado: o arquivo agora tem dono
+
+	// Best-effort depois do commit: se um destes falhar, sobra um arquivo sem
+	// registro — nada que dependa dele quebra, e a captura já está gravada.
+	for _, k := range pruned {
+		_ = s.r2.Delete(context.WithoutCancel(ctx), k)
+	}
+
 	shot.URL = s.r2.PresignGet(key, screenshotURLTTL)
 	return &shot, nil
 }
+
+// deleteLabDeviceScreenshot apaga uma captura: primeiro a linha, depois o
+// arquivo. Existe porque a alternativa era mexer no banco na mão — e "apagar
+// isso agora" não pode depender de acesso ao Postgres de produção.
+func (s *Server) deleteLabDeviceScreenshot(ctx context.Context, deviceID, shotID string) error {
+	var key string
+	err := s.db.QueryRow(ctx, `
+		DELETE FROM hour_lab_device_screenshots
+		WHERE id = $1::uuid AND device_id = $2::uuid
+		RETURNING object_key`, shotID, deviceID).Scan(&key)
+	if err == pgx.ErrNoRows {
+		return errScreenshotNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if s.r2 != nil {
+		// O registro já foi apagado: a imagem não é mais alcançável pela
+		// interface mesmo se o bucket falhar aqui. Ainda assim isto não é
+		// best-effort silencioso — quem pediu para apagar precisa saber se o
+		// arquivo continua lá.
+		if err := s.r2.Delete(ctx, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var errScreenshotNotFound = appErr(http.StatusNotFound, "SCREENSHOT_NOT_FOUND", "Captura não encontrada")
 
 // screenshotPendingWindow é quanto tempo depois do pedido o PC ainda pode
 // mandar a imagem. Cobre o ciclo do heartbeat (~30s) mais a captura e o upload,
