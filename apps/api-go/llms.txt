@@ -425,6 +425,12 @@ Público (sem auth — `deviceId` é a identidade):
   Windows, então num PC compartilhado cada conta viraria um dispositivo.
   Segredo que não confere é ignorado em silêncio (saber o device_uuid, visível
   num QR na tela do PC, não pode bastar pra sequestrar outro registro).
+  Registro que ainda NÃO tem segredo migra sem prova, pela mesma política de
+  adoção aberta do primeiro heartbeat: exigir prova ali não protegeria nada
+  (quem migrasse poderia adotar direto) e travaria o upgrade dos PCs em 0.1.0,
+  anteriores ao segredo existir. Se a identidade nova já tiver registro
+  próprio, nada é movido — dois registros pro admin resolver é melhor que
+  dados perdidos.
 
   `openApps` (0.1.9+) são os NOMES dos aplicativos abertos naquele instante,
   máx. 100. Substituem a lista anterior a cada heartbeat e voltam em

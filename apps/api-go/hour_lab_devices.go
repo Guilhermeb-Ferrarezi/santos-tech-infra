@@ -152,11 +152,12 @@ const labDeviceSecretBytes = 32
 // entre contas de usuário) e manda o id ANTIGO junto, uma vez, para o servidor
 // costurar os dois.
 //
-// Só migra provando posse do segredo do registro antigo — sem isso, saber um
+// Registro que JÁ tem segredo só migra provando posse dele — sem isso, saber um
 // device_uuid (que fica visível num QR na tela do PC) bastaria para sequestrar
-// o registro de outra máquina.
+// o registro de outra máquina. Registro sem segredo migra livre, pela mesma
+// política de adoção aberta de authLabDeviceTx.
 func migrateLabDeviceUUIDTx(ctx context.Context, tx labDeviceQuerier, oldUUID, newUUID, deviceSecret string) error {
-	if oldUUID == "" || oldUUID == newUUID || deviceSecret == "" {
+	if oldUUID == "" || oldUUID == newUUID {
 		return nil
 	}
 	var storedHash *string
@@ -167,9 +168,16 @@ func migrateLabDeviceUUIDTx(ctx context.Context, tx labDeviceQuerier, oldUUID, n
 	if err != nil {
 		return err
 	}
-	if storedHash == nil || *storedHash == "" ||
-		subtle.ConstantTimeCompare([]byte(sha256Hex(deviceSecret)), []byte(*storedHash)) != 1 {
-		return nil // segredo não confere: ignora em silêncio, o heartbeat segue
+	// Registro SEM segredo é migrado sem prova, pela mesma política que
+	// authLabDeviceTx usa pra adoção: exigir prova aqui não protegeria nada
+	// (quem migrasse poderia adotar direto e ter o mesmo controle) e travaria
+	// justamente o upgrade dos PCs em 0.1.0, que são anteriores ao segredo
+	// existir e por isso não têm nenhum pra apresentar.
+	if storedHash != nil && *storedHash != "" {
+		if deviceSecret == "" ||
+			subtle.ConstantTimeCompare([]byte(sha256Hex(deviceSecret)), []byte(*storedHash)) != 1 {
+			return nil // segredo não confere: ignora em silêncio, o heartbeat segue
+		}
 	}
 	// WHERE NOT EXISTS: se a identidade nova já tem registro próprio (o PC já
 	// bateu heartbeat com ela), migrar apagaria esse — melhor deixar os dois e o

@@ -3966,8 +3966,12 @@ paths:
                     Identidade anterior do PC (app 0.1.10+), enviada uma vez quando o app
                     passa a derivar o id do MachineGuid do Windows. O servidor MOVE o
                     registro antigo (nome, sessão, inventário, capturas) para a identidade
-                    nova, exigindo o deviceSecret do registro antigo como prova de posse.
-                    Segredo que não confere é ignorado em silêncio.
+                    nova. Registro que já tem segredo exige o deviceSecret antigo como
+                    prova de posse; segredo que não confere é ignorado em silêncio.
+                    Registro ainda sem segredo migra livre, pela mesma política de adoção
+                    aberta do primeiro heartbeat (necessário pro upgrade dos PCs em 0.1.0,
+                    anteriores ao segredo existir). Se a identidade nova já tiver registro
+                    próprio, nada é movido.
                 openApps:
                   type: array
                   maxItems: 100

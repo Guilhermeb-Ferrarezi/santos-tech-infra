@@ -385,6 +385,33 @@ func TestMigracaoIgnoraCasosSemEfeito(t *testing.T) {
 	}
 }
 
+// Os PCs em 0.1.0 são anteriores ao segredo de dispositivo existir: nunca
+// gravaram nenhum e não têm o que apresentar. Se a migração exigisse prova, o
+// upgrade deles criaria um registro novo e deixaria o antigo — com nome e
+// sessão em andamento — órfão, que é exatamente o que a migração existe pra
+// evitar. Registro sem segredo migra livre, como authLabDeviceTx já faz na
+// adoção: exigir prova aqui não protegeria nada, porque quem pudesse migrar
+// poderia adotar direto e obter o mesmo controle.
+func TestMigracaoDeRegistroSemSegredoNaoExigeProva(t *testing.T) {
+	ctx := context.Background()
+	fake := &fakeLabDeviceDB{exists: true, name: ptrTo("Pc gui"), secretHash: nil}
+	if err := migrateLabDeviceUUIDTx(ctx, fake, "antigo", "novo", ""); err != nil {
+		t.Fatalf("migração de registro sem segredo: %v", err)
+	}
+	if fake.migrations != 1 {
+		t.Errorf("%d migrações, quer 1", fake.migrations)
+	}
+
+	// Hash vazio (em vez de NULL) conta como sem segredo pelo mesmo motivo.
+	vazio := &fakeLabDeviceDB{exists: true, secretHash: ptrTo("")}
+	if err := migrateLabDeviceUUIDTx(ctx, vazio, "antigo", "novo", ""); err != nil {
+		t.Fatalf("migração com hash vazio: %v", err)
+	}
+	if vazio.migrations != 1 {
+		t.Errorf("%d migrações com hash vazio, quer 1", vazio.migrations)
+	}
+}
+
 // appDisplayName cobre os PCs que ainda mandam o caminho: app empacotado da
 // Store devolve "C:\...\SnippingTool\SnippingTool.exe" no lugar do nome.
 func TestAppDisplayNameResolveCaminhoDeAppDaStore(t *testing.T) {
