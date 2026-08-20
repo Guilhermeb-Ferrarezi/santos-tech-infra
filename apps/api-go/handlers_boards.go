@@ -113,7 +113,8 @@ func (s *Server) handleUpdateBoard(w http.ResponseWriter, r *http.Request) {
 		Scene        json.RawMessage `json:"scene"`
 		SceneVersion *int            `json:"sceneVersion"`
 	}
-	if err := decodeJSON(r, &in); err != nil {
+	// > 1 MB: precisa da variante explícita (decodeJSON teto padrão de 1 MB).
+	if err := decodeJSONLimit(r, &in, maxBoardScene+4096); err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
 			writeErr(w, appErr(http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "Quadro grande demais (máx. 10MB)"))

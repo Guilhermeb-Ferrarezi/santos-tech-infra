@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -129,6 +130,28 @@ func (s *Server) handleUpdateOAuthClient(w http.ResponseWriter, r *http.Request)
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "Aplicação não encontrada"))
 		return
 	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+// POST /auth/admin/oauth-clients/{id}/approve — libera um client pendente
+// (tipicamente registrado por DCR anônimo em POST /oauth/register, que nasce
+// is_active=false). Ativa e carimba approved_at; idempotente.
+func (s *Server) handleApproveOAuthClient(w http.ResponseWriter, r *http.Request) {
+	if !isValidUUID(r.PathValue("id")) {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "id inválido"))
+		return
+	}
+	c, err := s.approveOAuthClient(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if c == nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "Aplicação não encontrada"))
+		return
+	}
+	slog.Warn("oauth_client_approve: client liberado por admin",
+		"uid", userIDFrom(r), "id", c.ID, "clientId", c.ClientID, "name", c.Name)
 	writeJSON(w, http.StatusOK, c)
 }
 

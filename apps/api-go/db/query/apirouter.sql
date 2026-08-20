@@ -56,6 +56,10 @@ UPDATE api_router_keys SET label = $3, priority = $4, updated_at = now()
 WHERE id = $1 AND provider_id = $2
 RETURNING id, provider_id, label, secret_enc, secret_tail, status, priority, failure_count, last_used_at, last_error_at, last_error_code, created_at, updated_at;
 
+-- name: SetAPIRouterKeySecret :exec
+UPDATE api_router_keys SET secret_enc = $2, updated_at = now()
+WHERE id = $1;
+
 -- name: SetAPIRouterKeyStatus :one
 UPDATE api_router_keys SET
   status = $3,

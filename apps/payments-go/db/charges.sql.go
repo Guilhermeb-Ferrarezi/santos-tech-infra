@@ -37,11 +37,16 @@ const expireOverdueCharges = `-- name: ExpireOverdueCharges :execrows
 UPDATE pay_charges
 SET status = 'expired'
 WHERE status = 'pending'
+  AND method = 'pix'
   AND (due_date + interval '23 hours') < now()
 `
 
-// Marca como expiradas as cobranças pendentes cujo QR já passou da validade
+// Marca como expiradas as cobranças PIX pendentes cujo QR já passou da validade
 // (vencimento + 23h, igual à expiração enviada à Efí em createAndPersistCharge).
+//
+// O filtro method = 'pix' é obrigatório: a janela de 23h é a do QR do PIX e não vale
+// para os outros meios. Sem ele, cartão (que nasce com due_date = hoje) expirava em
+// ~23h e boleto liquidado em D+1 já chegava expirado.
 func (q *Queries) ExpireOverdueCharges(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, expireOverdueCharges)
 	if err != nil {
@@ -54,7 +59,7 @@ const getCharge = `-- name: GetCharge :one
 SELECT id, kind, subscription_id, student_id, amount_cents, due_date::text, reference_month,
        status, provider, COALESCE(provider_charge_id, ''), correlation_id,
        method, COALESCE(br_code, ''), COALESCE(qr_code, ''),
-       COALESCE(pdf_url, ''), COALESCE(barcode, ''), paid_at, created_at
+       COALESCE(pdf_url, ''), COALESCE(barcode, ''), refunded_cents, paid_at, created_at
 FROM pay_charges
 WHERE id = $1
 `
@@ -76,6 +81,7 @@ type GetChargeRow struct {
 	QrCode           string
 	PdfUrl           string
 	Barcode          string
+	RefundedCents    int64
 	PaidAt           pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 }
@@ -100,6 +106,7 @@ func (q *Queries) GetCharge(ctx context.Context, id int64) (GetChargeRow, error)
 		&i.QrCode,
 		&i.PdfUrl,
 		&i.Barcode,
+		&i.RefundedCents,
 		&i.PaidAt,
 		&i.CreatedAt,
 	)
@@ -166,8 +173,8 @@ const insertCharge = `-- name: InsertCharge :one
 INSERT INTO pay_charges
   (kind, subscription_id, student_id, customer_id, amount_cents, due_date, reference_month,
    provider, provider_charge_id, correlation_id, public_token, payer_tax_id, method,
-   br_code, qr_code, pdf_url, barcode)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+   br_code, qr_code, pdf_url, barcode, status)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 RETURNING id, status, created_at
 `
 
@@ -189,6 +196,7 @@ type InsertChargeParams struct {
 	QrCode           *string
 	PdfUrl           *string
 	Barcode          *string
+	Status           string
 }
 
 type InsertChargeRow struct {
@@ -216,6 +224,7 @@ func (q *Queries) InsertCharge(ctx context.Context, arg InsertChargeParams) (Ins
 		arg.QrCode,
 		arg.PdfUrl,
 		arg.Barcode,
+		arg.Status,
 	)
 	var i InsertChargeRow
 	err := row.Scan(&i.ID, &i.Status, &i.CreatedAt)
@@ -367,8 +376,16 @@ SELECT id, kind, amount_cents, due_date::text, status,
        COALESCE(br_code, ''), correlation_id, paid_at, created_at
 FROM pay_charges
 WHERE customer_id = $1
-ORDER BY created_at DESC
+  AND ($2 = 0 OR id < $2)
+ORDER BY created_at DESC, id DESC
+LIMIT $3
 `
+
+type ListChargesByCustomerParams struct {
+	CustomerID *int64
+	BeforeID   int64
+	Limit      int32
+}
 
 type ListChargesByCustomerRow struct {
 	ID            int64
@@ -382,8 +399,8 @@ type ListChargesByCustomerRow struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
-func (q *Queries) ListChargesByCustomer(ctx context.Context, customerID *int64) ([]ListChargesByCustomerRow, error) {
-	rows, err := q.db.Query(ctx, listChargesByCustomer, customerID)
+func (q *Queries) ListChargesByCustomer(ctx context.Context, arg ListChargesByCustomerParams) ([]ListChargesByCustomerRow, error) {
+	rows, err := q.db.Query(ctx, listChargesByCustomer, arg.CustomerID, arg.BeforeID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -417,8 +434,16 @@ SELECT id, kind, amount_cents, due_date::text, reference_month, status,
        COALESCE(br_code, ''), correlation_id, paid_at, created_at
 FROM pay_charges
 WHERE recurrence_id = $1
-ORDER BY created_at DESC
+  AND ($2 = 0 OR id < $2)
+ORDER BY created_at DESC, id DESC
+LIMIT $3
 `
+
+type ListChargesByRecurrenceParams struct {
+	RecurrenceID *int64
+	BeforeID     int64
+	Limit        int32
+}
 
 type ListChargesByRecurrenceRow struct {
 	ID             int64
@@ -434,8 +459,8 @@ type ListChargesByRecurrenceRow struct {
 }
 
 // Ciclos (cobranças) de uma recorrência de PIX Automático, mais recentes primeiro.
-func (q *Queries) ListChargesByRecurrence(ctx context.Context, recurrenceID *int64) ([]ListChargesByRecurrenceRow, error) {
-	rows, err := q.db.Query(ctx, listChargesByRecurrence, recurrenceID)
+func (q *Queries) ListChargesByRecurrence(ctx context.Context, arg ListChargesByRecurrenceParams) ([]ListChargesByRecurrenceRow, error) {
+	rows, err := q.db.Query(ctx, listChargesByRecurrence, arg.RecurrenceID, arg.BeforeID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -531,9 +556,12 @@ func (q *Queries) MarkChargeExpired(ctx context.Context, correlationID string) e
 const markChargePaid = `-- name: MarkChargePaid :exec
 UPDATE pay_charges
 SET status = 'paid', paid_at = now()
-WHERE correlation_id = $1 AND status = 'pending'
+WHERE correlation_id = $1 AND status IN ('pending', 'expired')
 `
 
+// Aceita 'expired' além de 'pending': o pagamento vem CONFIRMADO pelo gateway, e uma
+// cobrança que o job de expiração já fechou (ou que foi paga no limite da janela) não
+// pode ficar sem baixa — o dinheiro está na Efí de qualquer jeito.
 func (q *Queries) MarkChargePaid(ctx context.Context, correlationID string) error {
 	_, err := q.db.Exec(ctx, markChargePaid, correlationID)
 	return err
@@ -542,11 +570,13 @@ func (q *Queries) MarkChargePaid(ctx context.Context, correlationID string) erro
 const markChargePaidByProviderID = `-- name: MarkChargePaidByProviderID :execrows
 UPDATE pay_charges
 SET status = 'paid', paid_at = now()
-WHERE provider_charge_id = $1 AND status = 'pending'
+WHERE provider_charge_id = $1 AND status IN ('pending', 'expired')
 `
 
 // Boleto (API Cobranças): a notificação casa pelo charge_id do Efí (provider_charge_id),
 // não pelo correlation_id. Devolve nº de linhas afetadas (>0 = realmente marcou paga agora).
+// Aceita 'expired' pelo mesmo motivo de MarkChargePaid: boleto liquida em D+1 e o
+// gateway já confirmou o pagamento.
 func (q *Queries) MarkChargePaidByProviderID(ctx context.Context, providerChargeID *string) (int64, error) {
 	result, err := q.db.Exec(ctx, markChargePaidByProviderID, providerChargeID)
 	if err != nil {

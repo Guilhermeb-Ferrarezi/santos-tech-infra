@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestOnlyDigits(t *testing.T) {
 	if got := onlyDigits("123.456.789-01"); got != "12345678901" {
@@ -12,14 +15,31 @@ func TestOnlyDigits(t *testing.T) {
 }
 
 func TestValidCPF(t *testing.T) {
-	if !validCPF("12345678901") {
-		t.Fatal("11 dígitos distintos deveriam ser válidos")
+	// CPFs com dígito verificador correto.
+	for _, ok := range []string{"12345678909", "39053344705", "94271564656", "11144477735"} {
+		if !validCPF(ok) {
+			t.Fatalf("CPF válido %s foi recusado", ok)
+		}
 	}
 	if validCPF("123") {
 		t.Fatal("menos de 11 dígitos deveria ser inválido")
 	}
 	if validCPF("11111111111") {
 		t.Fatal("todos os dígitos iguais deveria ser inválido")
+	}
+	// Regressão do IDOR: 11 dígitos quaisquer NÃO bastam — sem os dois dígitos
+	// verificadores, qualquer sequência virava um "cliente" com CPF arbitrário.
+	for _, bad := range []string{"12345678901", "12345678900", "39053344700", "00000000001"} {
+		if validCPF(bad) {
+			t.Fatalf("CPF com dígito verificador errado (%s) deveria ser inválido", bad)
+		}
+	}
+	// Um dígito verificador certo e o outro errado também é inválido.
+	if validCPF("12345678908") {
+		t.Fatal("segundo dígito verificador errado deveria ser inválido")
+	}
+	if validCPF("1234567890a") {
+		t.Fatal("caractere não numérico deveria ser inválido")
 	}
 }
 
@@ -71,5 +91,32 @@ func TestValidEmail(t *testing.T) {
 	}
 	if validEmail("sem@ponto") {
 		t.Fatal("sem ponto no domínio deveria ser inválido")
+	}
+}
+
+// TestValidProviderID: o id vem do path JÁ DESESCAPADO e é concatenado na URL da Efí
+// e num cabeçalho de resposta. Barra, ".." e CR/LF têm de ser recusados.
+func TestValidProviderID(t *testing.T) {
+	for _, ok := range []string{"abc123", "a-b_c.d", "0", strings.Repeat("a", 64)} {
+		if !validProviderID(ok) {
+			t.Fatalf("id legítimo %q foi recusado", ok)
+		}
+	}
+	ruins := []string{
+		"",                      // vazio
+		strings.Repeat("a", 65), // longo demais
+		"../../v2/gn/saldo",     // escapa do caminho da API
+		"a/b",                   // barra
+		"a b",                   // espaço
+		"a\r\nX-Injected: 1",    // injeção de cabeçalho
+		"a?b=1",                 // query
+		"a#frag",
+		"a%2Fb",
+		`a"b`,
+	}
+	for _, bad := range ruins {
+		if validProviderID(bad) {
+			t.Fatalf("id perigoso %q deveria ser recusado", bad)
+		}
 	}
 }

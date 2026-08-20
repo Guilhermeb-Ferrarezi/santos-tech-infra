@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
-import { Clock, HandPalm, ArrowCounterClockwise } from "@phosphor-icons/react";
+import { Clock, ArrowCounterClockwise } from "@phosphor-icons/react";
 import { QRCodeSVG } from "qrcode.react";
 import { useStoredToken } from "./lib/useStoredToken";
 import { useTickingSeconds } from "./lib/useTickingSeconds";
 import { useLowBalanceNotifier } from "./lib/useLowBalanceNotifier";
 import { useDeviceHeartbeat } from "./lib/useDeviceHeartbeat";
+import { useTraySync } from "./lib/useTraySync";
 import { Titlebar } from "./components/Titlebar";
+import { OverlayPositionButton } from "./components/OverlayPositionButton";
 
 const API_ORIGIN = "https://api.santos-tech.com";
 const DASHBOARD_ORIGIN = "https://santos-tech.com/dashboard";
@@ -41,10 +43,39 @@ const statusText: Record<PublicHourSession["status"], string> = {
   ended: "Sessão encerrada",
 };
 
-function PairScreen({ deviceId, onConfirm }: { deviceId: string | null; onConfirm: (token: string) => void }) {
+// Traduz o estado atual (heartbeat + sessão) pra cor+tooltip da bandeja (ver
+// update_tray_status em lib.rs): "offline" sempre vence (sem conexão é mais
+// urgente que qualquer outra coisa), senão segue o saldo restante.
+function trayStatusFor(
+  heartbeatOk: boolean,
+  data: PublicHourSession | null,
+  remainingMinutes: number,
+): [status: string, tooltip: string] {
+  if (!heartbeatOk) return ["offline", "Santos Tech — sem conexão com o servidor"];
+  if (!data) return ["no-session", "Santos Tech — carregando..."];
+  if (data.status === "ended") return ["no-session", "Santos Tech — sessão encerrada"];
+  if (remainingMinutes <= 0) return ["empty", `${data.clientName} — saldo esgotado`];
+  if (remainingMinutes <= 10) return ["low", `${data.clientName} — ${remainingMinutes} min restantes`];
+  return ["ok", `${data.clientName} — ${remainingMinutes} min restantes`];
+}
+
+function PairScreen({
+  deviceId,
+  heartbeatOk,
+  onConfirm,
+}: {
+  deviceId: string | null;
+  heartbeatOk: boolean;
+  onConfirm: (token: string) => void;
+}) {
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
   const [pairing, setPairing] = useState(false);
+
+  const [pairScreenTrayStatus, pairScreenTrayTooltip] = heartbeatOk
+    ? ["no-session", "Santos Tech — sem sessão pareada"]
+    : ["offline", "Santos Tech — sem conexão com o servidor"];
+  useTraySync(pairScreenTrayStatus, pairScreenTrayTooltip);
 
   // Detecta pelo formato do que foi digitado: 6 dígitos = código curto (troca
   // por um token novo no backend, ver POST /public/hour-sessions/pair-by-code);
@@ -62,7 +93,7 @@ function PairScreen({ deviceId, onConfirm }: { deviceId: string | null; onConfir
           body: JSON.stringify({ code: trimmed }),
         });
         if (!res.ok) {
-          setError("Código inválido ou expirado — peça um código novo no painel admin.");
+          setError("Código inválido ou expirado — peça um código novo pro colaborador.");
           return;
         }
         const data: { token: string } = await res.json();
@@ -76,7 +107,7 @@ function PairScreen({ deviceId, onConfirm }: { deviceId: string | null; onConfir
     }
     const token = extractToken(trimmed);
     if (!token) {
-      setError("Link, token ou código inválido — cole o link (ou digite o código de 6 dígitos) do painel admin.");
+      setError("Link, token ou código inválido — cole o link (ou digite o código de 6 dígitos) que o colaborador te passou.");
       return;
     }
     setError("");
@@ -88,10 +119,10 @@ function PairScreen({ deviceId, onConfirm }: { deviceId: string | null; onConfir
       <div className="w-full max-w-sm space-y-5">
         <div className="text-center">
           <p className="text-lg font-bold">Santos Tech</p>
-          <p className="text-sm text-white/70">Escaneie o QR com o celular do admin</p>
+          <p className="text-sm text-white/70">Escaneie o QR com o celular do colaborador</p>
         </div>
 
-        <div className="flex flex-col items-center gap-2 rounded-lg bg-white p-3">
+        <div className="flex flex-col items-center gap-2 rounded-2xl bg-white p-4 shadow-lg shadow-black/30">
           {deviceId ? (
             <QRCodeSVG value={`${DASHBOARD_ORIGIN}/admin/horas/parear/${deviceId}`} size={168} />
           ) : (
@@ -128,10 +159,19 @@ function PairScreen({ deviceId, onConfirm }: { deviceId: string | null; onConfir
   );
 }
 
-function TimerScreen({ token, onChangeSession }: { token: string; onChangeSession: () => void }) {
+function TimerScreen({
+  token,
+  onChangeSession,
+  onSessionEnded,
+  heartbeatOk,
+}: {
+  token: string;
+  onChangeSession: () => void;
+  onSessionEnded: () => void;
+  heartbeatOk: boolean;
+}) {
   const [data, setData] = useState<PublicHourSession | null>(null);
   const [error, setError] = useState(false);
-  const [requesting, setRequesting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -156,19 +196,20 @@ function TimerScreen({ token, onChangeSession }: { token: string; onChangeSessio
     };
   }, [token]);
 
+  // Sessão encerrada: tira o token do disco na hora. Ele fica em claro no
+  // config.json e este PC atende vários clientes por dia — não pode continuar
+  // ali esperando o próximo turno. A tela segue mostrando "Sessão encerrada"
+  // porque o valor continua em memória (ver purgeStoredToken).
+  useEffect(() => {
+    if (data?.status === "ended") onSessionEnded();
+  }, [data?.status, onSessionEnded]);
+
   const displaySeconds = useTickingSeconds(data?.elapsedSeconds ?? 0, data?.status === "active");
   const tickedMinutes = Math.floor(displaySeconds / 60) - Math.floor((data?.elapsedSeconds ?? 0) / 60);
   const remainingMinutes = (data?.remainingMinutes ?? 0) - tickedMinutes;
   useLowBalanceNotifier(data ? remainingMinutes : null, data?.status === "active");
 
-  async function requestPause() {
-    setRequesting(true);
-    try {
-      await fetch(`${API_ORIGIN}/public/hour-sessions/${token}/request-pause`, { method: "POST" });
-    } finally {
-      setRequesting(false);
-    }
-  }
+  useTraySync(...trayStatusFor(heartbeatOk, data, remainingMinutes));
 
   return (
     <div className="flex flex-1 flex-col justify-between bg-[#04325A] px-4 py-6 text-white">
@@ -207,22 +248,14 @@ function TimerScreen({ token, onChangeSession }: { token: string; onChangeSessio
         )}
       </div>
 
-      <button
-        type="button"
-        disabled={!data || data.status !== "active" || data.pauseRequested || requesting}
-        onClick={requestPause}
-        className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#0DB88F] py-3 text-sm font-semibold text-white transition-colors hover:bg-[#0DB88F]/90 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        <HandPalm className="size-5" />
-        {data?.pauseRequested ? "Pedido de pausa enviado — aguarde" : "Pedir pausa"}
-      </button>
+      <OverlayPositionButton />
     </div>
   );
 }
 
 export default function App() {
-  const { token, loading, setToken, clearToken } = useStoredToken();
-  const { deviceName, deviceId } = useDeviceHeartbeat(token, clearToken, setToken);
+  const { token, loading, setToken, clearToken, purgeStoredToken } = useStoredToken();
+  const { deviceName, deviceId, heartbeatOk } = useDeviceHeartbeat(token, clearToken, setToken);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
@@ -230,8 +263,15 @@ export default function App() {
       {loading && (
         <div className="grid flex-1 place-items-center bg-[#04325A] text-white/60">Carregando...</div>
       )}
-      {!loading && !token && <PairScreen deviceId={deviceId} onConfirm={setToken} />}
-      {!loading && token && <TimerScreen token={token} onChangeSession={clearToken} />}
+      {!loading && !token && <PairScreen deviceId={deviceId} heartbeatOk={heartbeatOk} onConfirm={setToken} />}
+      {!loading && token && (
+        <TimerScreen
+          token={token}
+          onChangeSession={clearToken}
+          onSessionEnded={purgeStoredToken}
+          heartbeatOk={heartbeatOk}
+        />
+      )}
     </div>
   );
 }

@@ -61,6 +61,8 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /auth/admin/oauth-clients", s.adminGuard(s.handleListOAuthClients))
 	mux.HandleFunc("POST /auth/admin/oauth-clients", s.rateLimit(10, min, s.adminGuard(s.handleCreateOAuthClient)))
 	mux.HandleFunc("PATCH /auth/admin/oauth-clients/{id}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateOAuthClient)))
+	// Libera um client pendente (DCR anônimo nasce inativo — ver handlers_oauth_discovery.go).
+	mux.HandleFunc("POST /auth/admin/oauth-clients/{id}/approve", s.rateLimit(20, min, s.adminGuard(s.sudoGuard(s.handleApproveOAuthClient))))
 	mux.HandleFunc("DELETE /auth/admin/oauth-clients/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteOAuthClient)))
 
 	// Gestão admin de IPs banidos
@@ -77,12 +79,16 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Roteador de chaves de API: cadastro de credenciais reais de provedores
 	// externos, com failover automático em 401/sem-créditos (ver apirouter.go).
 	// Admin-only, sem cargo personalizado (mesmo critério de ip-bans/oauth-clients).
-	// Ler não é sensível; criar/apagar chave manipula credencial real -> sudo.
+	// Listar não expõe segredo (só secretTail); criar/apagar/revelar chave
+	// manipula ou expõe credencial real -> sudo.
 	mux.HandleFunc("GET /auth/admin/api-router/providers", s.adminGuard(s.handleListAPIRouterProviders))
 	mux.HandleFunc("POST /auth/admin/api-router/providers", s.rateLimit(10, min, s.adminGuard(s.handleCreateAPIRouterProvider)))
 	mux.HandleFunc("PATCH /auth/admin/api-router/providers/{id}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateAPIRouterProvider)))
 	mux.HandleFunc("DELETE /auth/admin/api-router/providers/{id}", s.adminGuard(s.sudoGuard(s.handleDeleteAPIRouterProvider)))
 	mux.HandleFunc("GET /auth/admin/api-router/providers/{id}/keys", s.adminGuard(s.handleListAPIRouterKeys))
+	// Revelar o segredo cru de UMA chave: sudo + auditoria. A listagem acima
+	// devolve só secretTail — o valor completo só sai por aqui.
+	mux.HandleFunc("GET /auth/admin/api-router/providers/{id}/keys/{keyId}/reveal", s.rateLimit(10, min, s.adminGuard(s.sudoGuard(s.handleRevealAPIRouterKey))))
 	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/keys", s.rateLimit(10, min, s.adminGuard(s.sudoGuard(s.handleCreateAPIRouterKey))))
 	mux.HandleFunc("PATCH /auth/admin/api-router/providers/{id}/keys/{keyId}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateAPIRouterKey)))
 	mux.HandleFunc("DELETE /auth/admin/api-router/providers/{id}/keys/{keyId}", s.adminGuard(s.sudoGuard(s.handleDeleteAPIRouterKey)))
@@ -198,12 +204,14 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// /public/downloads (o app não pede autenticação nenhuma).
 	s.registerDownloadsRoutes(mux)
 
-	// Login por QR code / código curto (estilo WhatsApp Web, mas invertido: quem
-	// gera precisa estar logado, quem troca não). /auth/qr-login/start exige
-	// sessão (é ela que autoriza o dispositivo novo); /public/qr-login/exchange
-	// é público — o próprio token/código é a credencial, uso único, 2min de vida.
-	mux.HandleFunc("POST /auth/qr-login/start", s.rateLimit(20, min, s.authGuard(s.handleQRLoginStart)))
-	mux.HandleFunc("POST /public/qr-login/exchange", s.rateLimit(20, min, s.handleQRLoginExchange))
+	// Login por QR code / código curto (estilo WhatsApp Web, igual ao pareamento
+	// dos PCs do laboratório): o Santos Hub (sem sessão) gera e MOSTRA o QR/
+	// código; quem já está logado (celular escaneando, ou outra aba) confirma
+	// em /auth/qr-login/confirm; o Hub só fica com poll em /public/qr-login/poll
+	// até aprovar. Uso único, 5min de vida.
+	mux.HandleFunc("POST /public/qr-login/create", s.rateLimit(20, min, s.handleQRLoginCreate))
+	mux.HandleFunc("POST /auth/qr-login/confirm", s.rateLimit(20, min, s.authGuard(s.handleQRLoginConfirm)))
+	mux.HandleFunc("GET /public/qr-login/poll", s.rateLimit(60, min, s.handleQRLoginPoll))
 
 	// Automação de resposta a comentário do Instagram (private reply,
 	// substitui o ManyChat) — webhook público autenticado por assinatura
@@ -257,6 +265,8 @@ func (s *Server) registerSocialRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /social/platform-owners", s.permGuard("social", "read", false, s.handleListSocialPlatformOwners))
 	mux.HandleFunc("PUT /social/platform-owners/{platform}", s.rateLimit(30, min, s.adminGuard(s.handleSetSocialPlatformOwner)))
 	mux.HandleFunc("DELETE /social/platform-owners/{platform}", s.adminGuard(s.handleDeleteSocialPlatformOwner))
+	mux.HandleFunc("GET /social/settings", s.permGuard("social", "read", false, s.handleGetSocialSettings))
+	mux.HandleFunc("PUT /social/settings", s.rateLimit(30, min, s.adminGuard(s.handleUpdateSocialSettings)))
 	mux.HandleFunc("GET /tasks", s.permGuard("tarefas", "read", true, s.handleListTasks))
 	mux.HandleFunc("GET /tasks/{id}", s.permGuard("tarefas", "read", true, s.handleGetTask))
 	mux.HandleFunc("POST /tasks", s.rateLimit(30, min, s.permGuard("tarefas", "write", true, s.handleCreateTask)))
@@ -359,6 +369,10 @@ func (s *Server) registerHourSessionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /hour-sessions/{id}/end", s.rateLimit(60, min, s.adminGuard(s.handleEndHourSession)))
 	mux.HandleFunc("POST /hour-sessions/{id}/deny-pause", s.rateLimit(60, min, s.adminGuard(s.handleDenyHourSessionPause)))
 	mux.HandleFunc("POST /hour-sessions/{id}/link", s.rateLimit(30, min, s.adminGuard(s.handleReissueHourSessionLink)))
+	// Histórico (quem pausou/retomou, quando) e correção manual de tempo — o
+	// ajuste entra como evento, então aparece no próprio histórico.
+	mux.HandleFunc("GET /hour-sessions/{id}/events", s.adminGuard(s.handleListHourSessionEvents))
+	mux.HandleFunc("POST /hour-sessions/{id}/adjust", s.rateLimit(30, min, s.adminGuard(s.handleAdjustHourSession)))
 
 	// Público — identificado pelo token da sessão (posse == acesso), não por
 	// cookie/sessão. GET tem rate limit folgado (o front faz polling); o
@@ -379,17 +393,45 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /hour-lab-devices", s.adminGuard(s.handleListLabDevices))
 	mux.HandleFunc("POST /hour-lab-devices/pair", s.rateLimit(30, min, s.adminGuard(s.handlePairLabDevice)))
 	mux.HandleFunc("PATCH /hour-lab-devices/{id}", s.rateLimit(30, min, s.adminGuard(s.handleRenameLabDevice)))
+	mux.HandleFunc("DELETE /hour-lab-devices/{id}", s.rateLimit(30, min, s.adminGuard(s.handleDeleteLabDevice)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/unpair", s.rateLimit(30, min, s.adminGuard(s.handleUnpairLabDevice)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/message", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceMessage)))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/reset-secret", s.rateLimit(30, min, s.adminGuard(s.handleResetLabDeviceSecret)))
+	mux.HandleFunc("GET /hour-lab-devices/{id}/programs", s.adminGuard(s.handleGetLabDevicePrograms))
+	// Captura de tela sob demanda: pedir é admin, a imagem chega pelo próprio
+	// PC (rota pública abaixo) e o histórico fica com quem pediu registrado.
+	mux.HandleFunc("POST /hour-lab-devices/{id}/screenshot", s.rateLimit(30, min, s.adminGuard(s.handleRequestLabDeviceScreenshot)))
+	mux.HandleFunc("GET /hour-lab-devices/{id}/screenshots", s.adminGuard(s.handleListLabDeviceScreenshots))
+	mux.HandleFunc("DELETE /hour-lab-devices/{id}/screenshots/{shotId}", s.rateLimit(60, min, s.adminGuard(s.handleDeleteLabDeviceScreenshot)))
+	// Imagem do ícone por hash de conteúdo — admin-only como o resto do
+	// domínio; a resposta é cacheável pra sempre (a URL é o próprio conteúdo).
+	mux.HandleFunc("GET /program-icons/{hash}", s.adminGuard(s.handleLabProgramIcon))
+
+	// Programas esperados nos PCs do lab (cadastro do admin) — o cruzamento com
+	// o inventário de cada PC sai em /hour-lab-devices/{id}/programs.
+	mux.HandleFunc("GET /hour-lab-expected-programs", s.adminGuard(s.handleListExpectedPrograms))
+	mux.HandleFunc("POST /hour-lab-expected-programs", s.rateLimit(30, min, s.adminGuard(s.handleCreateExpectedProgram)))
+	mux.HandleFunc("PATCH /hour-lab-expected-programs/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateExpectedProgram)))
+	mux.HandleFunc("DELETE /hour-lab-expected-programs/{id}", s.rateLimit(30, min, s.adminGuard(s.handleDeleteExpectedProgram)))
 
 	// Heartbeat a cada ~30s por PC — limite folgado pra cobrir reconexões/retries.
 	mux.HandleFunc("POST /public/lab-devices/heartbeat", s.rateLimit(120, min, s.handleLabDeviceHeartbeat))
+	// Inventário é raro (muda quando alguém instala algo): o app manda no boot e
+	// uma vez por dia, então 10/min por IP já cobre reinstalação e retry.
+	mux.HandleFunc("POST /public/lab-devices/inventory", s.rateLimit(10, min, s.handleLabDeviceInventory))
+	// Segundo passo da coleta (só os ícones que o servidor ainda não tem) —
+	// mesmo orçamento do inventário, já que sempre vem logo depois dele.
+	mux.HandleFunc("POST /public/lab-devices/icons", s.rateLimit(10, min, s.handleLabDeviceIcons))
+	// Imagem da captura — só entra com pedido recente do admin (a rota é
+	// pública, autenticada pelo segredo do dispositivo).
+	mux.HandleFunc("POST /public/lab-devices/screenshot", s.rateLimit(10, min, s.handleLabDeviceScreenshot))
 }
 
 // registerDownloadsRoutes: catálogo de downloads do Santos Hub. Cadastro/edição/
 // remoção são admin-only (mesmo critério de model3d — biblioteca gerida à mão,
-// sem cargo personalizado dedicado); leitura pública em /public/downloads
-// alimenta o app Tauri instalado nos PCs da empresa, sem exigir login.
+// sem cargo personalizado dedicado); /public/downloads alimenta o app Tauri
+// instalado nos PCs da empresa — sem login de usuário, mas exigindo o PAT do
+// Hub (santosHubGuard): o catálogo entrega instaladores .exe/.msi/.ps1/.bat.
 func (s *Server) registerDownloadsRoutes(mux *http.ServeMux) {
 	const min = time.Minute
 	mux.HandleFunc("GET /auth/admin/downloads", s.adminGuard(s.handleListDownloadsAdmin))
@@ -398,7 +440,7 @@ func (s *Server) registerDownloadsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /auth/admin/downloads/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateDownload)))
 	mux.HandleFunc("DELETE /auth/admin/downloads/{id}", s.adminGuard(s.handleDeleteDownload))
 
-	mux.HandleFunc("GET /public/downloads", s.rateLimit(120, min, s.handleListPublicDownloads))
+	mux.HandleFunc("GET /public/downloads", s.rateLimit(120, min, s.santosHubGuard(s.handleListPublicDownloads)))
 }
 
 func (s *Server) registerInstagramRoutes(mux *http.ServeMux) {

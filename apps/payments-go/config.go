@@ -36,6 +36,12 @@ type Config struct {
 	// LinkMaxCents é o teto de valor para cobranças via link com valor livre (em centavos).
 	// Default 1000000 = R$ 10.000,00.
 	LinkMaxCents int64
+	// CouponMaxDiscountCents é o teto ABSOLUTO de desconto de um cupom, em centavos.
+	// Default 100000 = R$ 1.000,00. Existe porque um cupom percentual aplicado a um
+	// link de valor livre não tem limite natural: 90% de R$ 10.000 são R$ 9.000 de
+	// desconto. O mesmo teto vale no preview (/coupons/apply) e na cobrança, para o
+	// cliente nunca ver um valor e pagar outro. 0 ou negativo desliga o teto.
+	CouponMaxDiscountCents int64
 }
 
 func LoadConfig() Config {
@@ -62,6 +68,8 @@ func LoadConfig() Config {
 		PayoutEnabled:    getEnv("PAYOUT_ENABLED", "false") == "true",
 		PayoutMaxCents:   parseInt64Env("PAYOUT_MAX_CENTS", 50000),
 		LinkMaxCents:     parseInt64Env("LINK_MAX_CENTS", 1000000),
+
+		CouponMaxDiscountCents: parseInt64Env("COUPON_MAX_DISCOUNT_CENTS", 100000),
 	}
 }
 

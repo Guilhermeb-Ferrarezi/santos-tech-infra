@@ -58,15 +58,21 @@ func (s *Server) Routes() http.Handler {
 	// container — mesmo padrão de payments-go (registra "/students", não
 	// "/payments/students"). O frontend chama authApi("/secrets/status"), o
 	// Traefik entrega só "/status" aqui.
-	mux.HandleFunc("/status", s.requireAdmin(s.handleStatus))
-	mux.HandleFunc("/start", s.requireAdmin(s.handleStart))
-	mux.HandleFunc("/stop", s.requireAdmin(s.handleStop))
-	mux.HandleFunc("/settings", s.requireAdmin(s.handleSettings))
+	mux.HandleFunc("GET /status", s.requireAdmin(s.handleStatus))
+	// Ações que mudam estado: POST no padrão do mux (GET vira 405 sozinho) E
+	// header não-simples (ver requireNonSimple) — um GET/formulário disparado
+	// de outro site não consegue nenhum dos dois.
+	mux.HandleFunc("POST /start", s.requireAdmin(s.requireNonSimple(s.handleStart)))
+	mux.HandleFunc("POST /stop", s.requireAdmin(s.requireNonSimple(s.handleStop)))
+	mux.HandleFunc("/settings", s.requireAdmin(s.requireNonSimple(s.handleSettings)))
 	mux.HandleFunc("/keywords", s.requireAdmin(s.handleKeywords))
 	mux.HandleFunc("/keywords/stats", s.requireAdmin(s.handleKeywordStats))
 	mux.HandleFunc("/repos", s.requireAdmin(s.handleRepos))
-	mux.HandleFunc("/clear", s.requireAdmin(s.handleClear))
-	mux.HandleFunc("/revalidate", s.requireAdmin(s.handleRevalidate))
+	// Revelar o valor de UMA chave (a listagem só devolve prefixo + hash).
+	// POST de propósito, e com auditoria no handler.
+	mux.HandleFunc("POST /reveal", s.requireAdmin(s.requireNonSimple(s.handleReveal)))
+	mux.HandleFunc("POST /clear", s.requireAdmin(s.requireNonSimple(s.handleClear)))
+	mux.HandleFunc("/revalidate", s.requireAdmin(s.requireNonSimple(s.handleRevalidate)))
 	mux.HandleFunc("/events", s.requireAdmin(s.hub.ServeSSE))
 	mux.HandleFunc("/keyword-presets", s.requireAdmin(s.handlePresets))
 	mux.HandleFunc("/keyword-presets/{id}", s.requireAdmin(s.handlePresetByID))
@@ -114,13 +120,46 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			}
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// requireNonSimple exige que a requisição carregue algo que um formulário
+// cross-site NÃO consegue mandar. Um <form> ou <img> em outro domínio só produz
+// "simple requests" (sem header custom, e Content-Type limitado a
+// form-urlencoded/multipart/text-plain); qualquer um dos sinais abaixo força um
+// preflight CORS, que o middleware cors() só aprova para origem na allowlist:
+//
+//   - X-Requested-With preenchido (o sinal explícito, recomendado para clientes);
+//   - Authorization (o navegador nunca anexa isso sozinho num request cross-site);
+//   - Content-Type application/json.
+//
+// Junto com o SameSite=Lax do cookie de sessão, fecha o buraco de CSRF que
+// existia enquanto /clear, /start e /stop respondiam a GET: bastava um admin
+// clicar num link para o índice inteiro ser apagado (horas/dias de rate limit
+// da Search API do GitHub para refazer).
+func (s *Server) requireNonSimple(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			next(w, r)
+			return
+		}
+		ct := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))
+		ok := r.Header.Get("X-Requested-With") != "" ||
+			r.Header.Get("Authorization") != "" ||
+			ct == "application/json"
+		if !ok {
+			writeError(w, http.StatusForbidden, "csrf_blocked",
+				"envie o header X-Requested-With (ou Authorization, ou Content-Type: application/json) nesta ação")
+			return
+		}
+		next(w, r)
+	}
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────

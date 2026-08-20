@@ -345,7 +345,10 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	}
 
 	// Persiste entrada de KB quando admin forneceu informação (após commit).
-	if output.KBEntry != nil && output.KBEntry.Content != "" && e.deps.TenantCfgRepo != nil {
+	// SÓ em conversa admin: o parser extrai kbEntry de qualquer resposta do
+	// modelo, então sem esta guarda um cliente injeta o campo na mensagem e
+	// escreve direto na base de conhecimento.
+	if cfg.IsAdminConversation && output.KBEntry != nil && output.KBEntry.Content != "" && e.deps.TenantCfgRepo != nil {
 		output.KBEntry.ID = fmt.Sprintf("admin-%d", time.Now().UnixMilli())
 		if kbErr := e.deps.TenantCfgRepo.AppendKBEntry(ctx, inbound.TenantID, *output.KBEntry); kbErr != nil {
 			log.Warn("engine: falha ao persistir kbEntry do admin", "err", kbErr)
@@ -458,11 +461,19 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	// -----------------------------------------------------------------------
 	// Fase 2.5: modo admin — rascunha/envia respostas a clientes pendentes
 	// -----------------------------------------------------------------------
-	if len(output.ClientActions) > 0 {
-		e.executeClientActions(ctx, inbound, output.ClientActions)
-	}
-	if len(output.BookingActions) > 0 {
-		e.executeBookingActions(ctx, inbound, output.BookingActions)
+	// Mesma guarda do kbEntry: clientActions/bookingActions são ferramentas de
+	// admin e o parser as aceita de qualquer resposta do modelo.
+	if cfg.IsAdminConversation {
+		if len(output.ClientActions) > 0 {
+			e.executeClientActions(ctx, inbound, output.ClientActions)
+		}
+		if len(output.BookingActions) > 0 {
+			e.executeBookingActions(ctx, inbound, output.BookingActions)
+		}
+	} else if len(output.ClientActions) > 0 || len(output.BookingActions) > 0 {
+		log.Warn("engine: ações de admin ignoradas fora de conversa admin",
+			"clientActions", len(output.ClientActions),
+			"bookingActions", len(output.BookingActions))
 	}
 
 	// -----------------------------------------------------------------------

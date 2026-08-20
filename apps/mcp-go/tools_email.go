@@ -38,13 +38,13 @@ func (s *Server) addEmailTools(srv *mcp.Server) {
 			"Com uid: lê uma mensagem específica.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in mailboxReadInput) (*mcp.CallToolResult, any, error) {
 		if in.UID != "" {
-			return s.proxy(ctx, req, "GET", s.cfg.EmailAPIURL+"/mailbox/me/messages/"+url.PathEscape(in.UID), nil)
+			return s.proxyUntrusted(ctx, req, "GET", s.cfg.EmailAPIURL+"/mailbox/me/messages/"+url.PathEscape(in.UID), nil)
 		}
 		u := s.cfg.EmailAPIURL + "/mailbox/me/messages"
 		if in.Limit > 0 {
 			u += fmt.Sprintf("?limit=%d", in.Limit)
 		}
-		return s.proxy(ctx, req, "GET", u, nil)
+		return s.proxyUntrusted(ctx, req, "GET", u, nil)
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -72,6 +72,6 @@ func (s *Server) addEmailTools(srv *mcp.Server) {
 		if in.Page > 0 {
 			u += fmt.Sprintf("?page=%d", in.Page)
 		}
-		return s.proxy(ctx, req, "GET", u, nil)
+		return s.proxyUntrusted(ctx, req, "GET", u, nil)
 	})
 }

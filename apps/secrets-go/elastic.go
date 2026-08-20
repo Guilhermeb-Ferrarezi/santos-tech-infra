@@ -6,9 +6,11 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -18,10 +20,17 @@ const hitsIndex = "dotfy-hits"
 type ElasticClient struct {
 	baseURL string
 	http    *http.Client
+	// vault cifra/decifra o matchedValue em repouso. nil = cofre desabilitado:
+	// nesse caso o valor NÃO é gravado (só prefixo + hash), nunca em claro.
+	vault *Vault
 }
 
-func NewElasticClient(baseURL string) *ElasticClient {
-	return &ElasticClient{baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 10 * time.Second}}
+func NewElasticClient(baseURL string, vault *Vault) *ElasticClient {
+	return &ElasticClient{
+		baseURL: strings.TrimRight(baseURL, "/"),
+		http:    &http.Client{Timeout: 10 * time.Second},
+		vault:   vault,
+	}
 }
 
 // Ping confere se o Elasticsearch está respondendo — usado pelo readiness
@@ -55,6 +64,17 @@ func (e *ElasticClient) EnsureIndex(ctx context.Context) error {
 				"fileUrl":      map[string]any{"type": "keyword"},
 				"private":      map[string]any{"type": "boolean"},
 				"indexedAt":    map[string]any{"type": "date"},
+				// Valor da chave: cifrado e explicitamente NÃO indexado. Sem
+				// declarar, o mapeamento dinâmico fazia dele um "text"
+				// pesquisável — era assim que o valor em claro virava
+				// consultável por qualquer um com acesso ao cluster.
+				"matchedValueEnc": map[string]any{"type": "keyword", "index": false},
+				// Legado: documentos indexados antes da cifragem guardam o valor
+				// em claro aqui. Declarado index:false para que num índice novo o
+				// campo nunca seja pesquisável.
+				"matchedValue":       map[string]any{"type": "keyword", "index": false},
+				"matchedValuePrefix": map[string]any{"type": "keyword"},
+				"matchedValueHash":   map[string]any{"type": "keyword"},
 			},
 		},
 	}
@@ -75,6 +95,7 @@ func (e *ElasticClient) EnsureIndex(ctx context.Context) error {
 }
 
 type Hit struct {
+	ID              string     `json:"id,omitempty"` // _id do documento no ES (usado pelo POST /reveal)
 	Keyword         string     `json:"keyword"`
 	RepoFullName    string     `json:"repoFullName"`
 	RepoURL         string     `json:"repoUrl"`
@@ -82,7 +103,6 @@ type Hit struct {
 	FileURL         string     `json:"fileUrl"`
 	Private         bool       `json:"private"`
 	HasCandidate    bool       `json:"hasCandidate"`             // achou um VALOR (não só o nome da variável) no conteúdo real
-	MatchedValue    string     `json:"matchedValue"`             // valor completo capturado (sem máscara)
 	GuessedProvider string     `json:"guessedProvider"`          // provedor sugerido pelo prefixo (só reconhecimento de padrão, sem chamada de rede)
 	VerifierFamily  string     `json:"verifierFamily"`           // family usada pra chamar o verificador — guardada pra revalidar depois sem redescobrir
 	OwnRepo         bool       `json:"ownRepo"`                  // repo está na allowlist (verificação ativa permitida)
@@ -91,6 +111,68 @@ type Hit struct {
 	LiveSandbox     bool       `json:"liveSandbox"`              // confirmado ativa, mas é credencial de teste/sandbox (não move dado/dinheiro real)
 	LastVerifiedAt  *time.Time `json:"lastVerifiedAt,omitempty"` // última vez que a verificação ativa rodou de verdade
 	IndexedAt       time.Time  `json:"indexedAt"`
+
+	// MatchedValue é o valor completo da chave vazada. `json:"-"` de propósito:
+	// NUNCA sai daqui serializado — não vai pro Elasticsearch, não vai pro SSE
+	// (/events) e não vai pra listagem (/repos). Só dois caminhos dedicados o
+	// expõem: POST /reveal (admin, uma chave por vez, com auditoria) e
+	// /internal/sync-hits (service-to-service, token compartilhado).
+	MatchedValue string `json:"-"`
+
+	// Persistidos no lugar dele:
+	MatchedValueEnc    string `json:"matchedValueEnc,omitempty"`    // AES-256-GCM (ver vault.go)
+	MatchedValuePrefix string `json:"matchedValuePrefix,omitempty"` // primeiros caracteres — identifica o provedor na UI
+	MatchedValueHash   string `json:"matchedValueHash,omitempty"`   // sha256 hex — correlaciona/deduplica sem revelar
+
+	// MatchedValueLegacy lê os documentos indexados ANTES da cifragem, que têm o
+	// valor em claro no campo "matchedValue". Só leitura: a escrita sempre o
+	// deixa vazio (omitempty), então reindexar um hit antigo apaga o texto claro.
+	MatchedValueLegacy string `json:"matchedValue,omitempty"`
+}
+
+// sealValue prepara o hit para gravação: calcula prefixo/hash, cifra o valor e
+// garante que nem o texto claro nem o campo legado vão para o índice.
+func (e *ElasticClient) sealValue(hit Hit, id string) (Hit, error) {
+	hit.ID = ""                 // o id é a chave do documento, não conteúdo dele
+	hit.MatchedValueLegacy = "" // nunca reescreve valor em claro
+	if hit.MatchedValue == "" {
+		hit.MatchedValueEnc, hit.MatchedValuePrefix, hit.MatchedValueHash = "", "", ""
+		return hit, nil
+	}
+	hit.MatchedValuePrefix = valuePrefix(hit.MatchedValue)
+	hit.MatchedValueHash = valueHash(hit.MatchedValue)
+	enc, err := e.vault.Encrypt(hit.MatchedValue, hitAAD(id))
+	if err != nil {
+		// Sem cofre não existe "grava em claro": o valor simplesmente não é
+		// persistido. O hit continua útil (prefixo, hash, provedor, status).
+		hit.MatchedValueEnc = ""
+		if errors.Is(err, errVaultDisabled) {
+			return hit, nil
+		}
+		return hit, err
+	}
+	hit.MatchedValueEnc = enc
+	return hit, nil
+}
+
+// openValue é o inverso: preenche MatchedValue a partir do ciphertext (ou do
+// campo legado em claro, para documentos antigos ainda não recifrados).
+func (e *ElasticClient) openValue(hit Hit, id string) Hit {
+	hit.ID = id
+	if hit.MatchedValueLegacy != "" {
+		hit.MatchedValue = hit.MatchedValueLegacy
+		hit.MatchedValueLegacy = ""
+	} else if hit.MatchedValueEnc != "" {
+		if v, err := e.vault.Decrypt(hit.MatchedValueEnc, hitAAD(id)); err == nil {
+			hit.MatchedValue = v
+		}
+	}
+	// Documento antigo sem fingerprint: deriva na hora para a UI não ficar vazia.
+	if hit.MatchedValue != "" && hit.MatchedValuePrefix == "" {
+		hit.MatchedValuePrefix = valuePrefix(hit.MatchedValue)
+		hit.MatchedValueHash = valueHash(hit.MatchedValue)
+	}
+	return hit
 }
 
 func docID(repoFullName, filePath, keyword string) string {
@@ -98,11 +180,70 @@ func docID(repoFullName, filePath, keyword string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// decodeHits lê a resposta de _search e devolve os hits já com o matchedValue
+// decifrado em memória (nunca serializado de volta — ver Hit).
+func (e *ElasticClient) decodeHits(body io.Reader) ([]Hit, error) {
+	var out struct {
+		Hits struct {
+			Hits []struct {
+				ID     string `json:"_id"`
+				Source Hit    `json:"_source"`
+			} `json:"hits"`
+		} `json:"hits"`
+	}
+	if err := json.NewDecoder(body).Decode(&out); err != nil {
+		return nil, err
+	}
+	hits := make([]Hit, 0, len(out.Hits.Hits))
+	for _, h := range out.Hits.Hits {
+		hits = append(hits, e.openValue(h.Source, h.ID))
+	}
+	return hits, nil
+}
+
+// errHitNotFound é devolvido por GetHit quando o documento não existe.
+var errHitNotFound = errors.New("hit não encontrado")
+
+// GetHit busca UM documento pelo _id. Usado só pelo POST /reveal — revelar o
+// valor de uma chave por vez, nunca em lote.
+func (e *ElasticClient) GetHit(ctx context.Context, id string) (Hit, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/%s/_doc/%s", e.baseURL, hitsIndex, url.PathEscape(id)), nil)
+	resp, err := e.http.Do(req)
+	if err != nil {
+		return Hit{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return Hit{}, errHitNotFound
+	}
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return Hit{}, fmt.Errorf("get hit falhou (%s): %s", resp.Status, string(b))
+	}
+	var out struct {
+		ID     string `json:"_id"`
+		Found  bool   `json:"found"`
+		Source Hit    `json:"_source"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return Hit{}, err
+	}
+	if !out.Found {
+		return Hit{}, errHitNotFound
+	}
+	return e.openValue(out.Source, out.ID), nil
+}
+
 // IndexHit usa PUT com ID determinístico (hash de repo+path+keyword), então
 // rodar o mesmo scan de novo não duplica documentos — funciona como cache.
 func (e *ElasticClient) IndexHit(ctx context.Context, hit Hit) error {
-	body, _ := json.Marshal(hit)
 	id := docID(hit.RepoFullName, hit.FilePath, hit.Keyword)
+	sealed, err := e.sealValue(hit, id)
+	if err != nil {
+		return fmt.Errorf("cifrando matchedValue: %w", err)
+	}
+	body, _ := json.Marshal(sealed)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPut, fmt.Sprintf("%s/%s/_doc/%s", e.baseURL, hitsIndex, id), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := e.http.Do(req)
@@ -179,21 +320,7 @@ func (e *ElasticClient) ListHits(ctx context.Context, keyword string, onlyCandid
 		return nil, fmt.Errorf("list hits falhou (%s): %s", resp.Status, string(b))
 	}
 
-	var out struct {
-		Hits struct {
-			Hits []struct {
-				Source Hit `json:"_source"`
-			} `json:"hits"`
-		} `json:"hits"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
-	}
-	hits := make([]Hit, 0, len(out.Hits.Hits))
-	for _, h := range out.Hits.Hits {
-		hits = append(hits, h.Source)
-	}
-	return hits, nil
+	return e.decodeHits(resp.Body)
 }
 
 // ListVerifiableHits busca TODOS os hits com valor real capturado — é a
@@ -220,21 +347,7 @@ func (e *ElasticClient) ListVerifiableHits(ctx context.Context) ([]Hit, error) {
 		return nil, fmt.Errorf("list verifiable hits falhou (%s): %s", resp.Status, string(b))
 	}
 
-	var out struct {
-		Hits struct {
-			Hits []struct {
-				Source Hit `json:"_source"`
-			} `json:"hits"`
-		} `json:"hits"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
-	}
-	hits := make([]Hit, 0, len(out.Hits.Hits))
-	for _, h := range out.Hits.Hits {
-		hits = append(hits, h.Source)
-	}
-	return hits, nil
+	return e.decodeHits(resp.Body)
 }
 
 // KeywordStats agrega quantos hits cada keyword rendeu — é a "lista pra ver

@@ -353,7 +353,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Refresh token ausente"))
 		return
 	}
-	uid, _, err := verifyToken(raw, s.cfg.JWTRefreshSecret)
+	uid, _, err := verifyToken(raw, s.cfg.JWTRefreshSecret, tokenTypeRefresh)
 	if err != nil {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Refresh token inválido"))
 		return

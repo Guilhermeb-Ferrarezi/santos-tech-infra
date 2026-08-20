@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	qrcode "github.com/skip2/go-qrcode"
@@ -60,14 +61,13 @@ func (s *Server) handlePayEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Cobrança não encontrada")
 		return
 	}
-	flusher, ok := w.(http.Flusher)
+	// startSSE remove o write deadline desta conexão: o WriteTimeout de 60s do
+	// servidor vale para a resposta INTEIRA e matava o stream antes do 'paid'.
+	flusher, ok := startSSE(w)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "sse_unsupported", "Streaming indisponível")
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
 
 	// estado atual já resolve quem chega depois do pagamento
 	fmt.Fprintf(w, "event: status\ndata: %s\n\n", status)
@@ -91,10 +91,16 @@ func (s *Server) handlePayEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ping periódico: sem tráfego, proxies derrubam a conexão ociosa antes do evento.
+	ping := time.NewTicker(sseKeepAliveInterval)
+	defer ping.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-ping.C:
+			sseKeepAlive(w, flusher)
 		case msg := <-ch:
 			// Qualquer evento terminal publicado (paid/canceled) encerra o stream.
 			if msg != nil && msg.Payload != "" {

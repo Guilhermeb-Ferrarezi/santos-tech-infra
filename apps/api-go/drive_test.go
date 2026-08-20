@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path"
 	"testing"
 )
 
@@ -33,7 +34,67 @@ func fakeDriveClient(t *testing.T, handler http.HandlerFunc) *DriveClient {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &DriveClient{http: &http.Client{Transport: &redirectTransport{base: base}}}
+	cli := &http.Client{Transport: &redirectTransport{base: base}}
+	return &DriveClient{http: cli, stream: cli}
+}
+
+// TestDriveDoRetryTransitorio: 429 e 5xx do Drive são transitórios (o Google
+// rate-limita com alguma frequência) — antes qualquer status != 200 subia como
+// erro na primeira tentativa.
+func TestDriveDoRetryTransitorio(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway} {
+		var calls int
+		d := fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if calls < driveMaxAttempts {
+				w.WriteHeader(status)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"files": []map[string]any{{"id": "f1", "name": "a.txt"}}})
+		})
+		files, err := d.ListFiles(context.Background(), "root")
+		if err != nil {
+			t.Fatalf("status %d: %v", status, err)
+		}
+		if len(files) != 1 {
+			t.Errorf("status %d: %d arquivos, quer 1", status, len(files))
+		}
+		if calls != driveMaxAttempts {
+			t.Errorf("status %d: %d tentativas, quer %d", status, calls, driveMaxAttempts)
+		}
+	}
+}
+
+// TestDriveDoNaoRepeteErroDefinitivo: 4xx (fora 429) é definitivo — repetir só
+// gasta quota da service account.
+func TestDriveDoNaoRepeteErroDefinitivo(t *testing.T) {
+	var calls int
+	d := fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusForbidden)
+	})
+	if _, err := d.ListFiles(context.Background(), "root"); err == nil {
+		t.Fatal("esperava erro em 403")
+	}
+	if calls != 1 {
+		t.Errorf("%d tentativas em 403, quer 1", calls)
+	}
+}
+
+// TestDriveDoDesisteAposMaxAttempts garante que o retry tem fim.
+func TestDriveDoDesisteAposMaxAttempts(t *testing.T) {
+	var calls int
+	d := fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	if _, err := d.ListFiles(context.Background(), "root"); err == nil {
+		t.Fatal("esperava erro depois de esgotar as tentativas")
+	}
+	if calls != driveMaxAttempts {
+		t.Errorf("%d tentativas, quer %d", calls, driveMaxAttempts)
+	}
 }
 
 // TestListFilesFollowsPagination cobre a paginação adicionada em ListFiles —
@@ -187,5 +248,59 @@ func TestMoveFile(t *testing.T) {
 	}
 	if f.ID != "f1" {
 		t.Fatalf("resultado inesperado: %+v", f)
+	}
+}
+
+// TestIsDescendantErroTransitorioNaoViraNegado: antes, qualquer status != 200 na
+// consulta de `parents` era tratado como "não é ancestral" — um 429 do Google
+// (rate limit da service account) virava 403 "acesso negado", e o false ainda
+// era cacheado por 5 minutos.
+func TestIsDescendantErroTransitorioNaoViraNegado(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		d := fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+		})
+		ok, err := d.IsDescendant(context.Background(), "filho", "raiz")
+		if err == nil {
+			t.Errorf("status %d: err = nil, quer erro (senão vira acesso negado)", status)
+		}
+		if ok {
+			t.Errorf("status %d: ok = true num erro", status)
+		}
+	}
+}
+
+// TestIsDescendantItemSumidoNaoEhErro: 404/403 num dos pais é definitivo (item
+// na lixeira, ou a service account não enxerga) — não conta como ancestral, mas
+// não pode abortar a busca pelos outros pais.
+func TestIsDescendantItemSumidoNaoEhErro(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusForbidden} {
+		d := fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+		})
+		ok, err := d.IsDescendant(context.Background(), "filho", "raiz")
+		if err != nil {
+			t.Errorf("status %d: err = %v, quer nil", status, err)
+		}
+		if ok {
+			t.Errorf("status %d: ok = true", status)
+		}
+	}
+}
+
+// TestIsDescendantAchaAncestral cobre o caminho feliz de vários níveis.
+func TestIsDescendantAchaAncestral(t *testing.T) {
+	parents := map[string][]string{"neto": {"filho"}, "filho": {"raiz"}}
+	d := fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+		id := path.Base(r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"parents": parents[id]})
+	})
+	ok, err := d.IsDescendant(context.Background(), "neto", "raiz")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !ok {
+		t.Error("neto deveria ser descendente de raiz")
 	}
 }

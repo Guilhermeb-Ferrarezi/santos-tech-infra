@@ -11,6 +11,19 @@ export function apiFetch(path: string, init?: RequestInit) {
   return nativeFetch(`${API_ORIGIN}${path}`, init);
 }
 
+// PAT do Hub, embarcado no build (VITE_SANTOS_HUB_TOKEN). GET /public/downloads
+// não pede login de usuário, mas exige este header desde que o catálogo passou
+// a listar instaladores .exe/.msi — ver santosHubGuard em api-go
+// (handlers_downloads.go). Sem o header a rota responde 401; o valor tem que
+// ser o MESMO da env SANTOS_HUB_TOKEN do api-go.
+//
+// Só vai nas rotas do catálogo: mandar o PAT em toda chamada o espalharia por
+// requests que não têm nada a ver com ele (login, /auth/me).
+export function hubHeaders(): Record<string, string> {
+  const token = import.meta.env.VITE_SANTOS_HUB_TOKEN;
+  return token ? { "X-Santos-Hub-Token": token } : {};
+}
+
 export class ApiError extends Error {
   status: number;
   code?: string;

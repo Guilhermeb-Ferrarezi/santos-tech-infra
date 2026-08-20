@@ -8,8 +8,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
 	"testing"
 )
@@ -314,5 +316,95 @@ func TestHandleMoveDriveFileDriveDisabled(t *testing.T) {
 	s.handleMoveDriveFile(w, reqAs(r, 1))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("code=%d", w.Code)
+	}
+}
+
+// ── aninhamento de pastas cadastradas ───────────────────────────────────────
+//
+// A ACL é por pasta raiz e vale pra árvore toda: se "Escola/" é legível por
+// aluno e "Escola/Financeiro/" só por admin, o aluno lê o Financeiro navegando
+// pelo id da Escola. Cadastrar pastas aninhadas tem que ser recusado.
+
+// driveTreeServer monta um Server com um DriveClient falso que responde
+// `parents` a partir de uma árvore em memória (s.rdb == nil, então
+// getOrSetJSON vai direto ao fetch).
+func driveTreeServer(t *testing.T, parents map[string][]string) *Server {
+	t.Helper()
+	s := testServer(Config{})
+	s.drive = fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+		id := path.Base(r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"parents": parents[id]})
+	})
+	return s
+}
+
+func TestCheckDriveFolderNestingRecusaDescendente(t *testing.T) {
+	// financeiro está dentro de escola
+	s := driveTreeServer(t, map[string][]string{"financeiro": {"escola"}})
+	existing := []DriveFolder{{ID: "uuid-escola", Name: "Escola", DriveFolderID: "escola"}}
+
+	err := s.checkDriveFolderNesting(context.Background(), "financeiro", "", existing)
+	if err == nil {
+		t.Fatal("cadastrar uma subpasta de pasta já cadastrada deveria ser recusado")
+	}
+	if !strings.Contains(err.Error(), "Escola") {
+		t.Errorf("mensagem não cita a pasta conflitante: %v", err)
+	}
+}
+
+func TestCheckDriveFolderNestingRecusaAncestral(t *testing.T) {
+	// tentar cadastrar "escola" quando "financeiro" (dentro dela) já existe
+	s := driveTreeServer(t, map[string][]string{"financeiro": {"escola"}})
+	existing := []DriveFolder{{ID: "uuid-fin", Name: "Financeiro", DriveFolderID: "financeiro"}}
+
+	if err := s.checkDriveFolderNesting(context.Background(), "escola", "", existing); err == nil {
+		t.Fatal("cadastrar uma pasta que CONTÉM outra já cadastrada deveria ser recusado")
+	}
+}
+
+func TestCheckDriveFolderNestingRecusaDuplicada(t *testing.T) {
+	s := driveTreeServer(t, map[string][]string{})
+	existing := []DriveFolder{{ID: "uuid-escola", Name: "Escola", DriveFolderID: "escola"}}
+
+	if err := s.checkDriveFolderNesting(context.Background(), "escola", "", existing); err == nil {
+		t.Fatal("cadastrar a mesma pasta do Drive duas vezes deveria ser recusado")
+	}
+}
+
+func TestCheckDriveFolderNestingAceitaArvoresDisjuntas(t *testing.T) {
+	s := driveTreeServer(t, map[string][]string{
+		"escola":     {"raizA"},
+		"financeiro": {"raizB"},
+	})
+	existing := []DriveFolder{{ID: "uuid-escola", Name: "Escola", DriveFolderID: "escola"}}
+
+	if err := s.checkDriveFolderNesting(context.Background(), "financeiro", "", existing); err != nil {
+		t.Fatalf("árvores disjuntas deveriam ser aceitas: %v", err)
+	}
+}
+
+// TestCheckDriveFolderNestingIgnoraPropriaPastaNaEdicao: editar só o nome/
+// descrição mantendo o mesmo driveFolderId não pode conflitar consigo mesma.
+func TestCheckDriveFolderNestingIgnoraPropriaPastaNaEdicao(t *testing.T) {
+	s := driveTreeServer(t, map[string][]string{})
+	existing := []DriveFolder{{ID: "uuid-escola", Name: "Escola", DriveFolderID: "escola"}}
+
+	if err := s.checkDriveFolderNesting(context.Background(), "escola", "uuid-escola", existing); err != nil {
+		t.Fatalf("a própria pasta não pode conflitar consigo mesma: %v", err)
+	}
+}
+
+// TestCheckDriveFolderNestingErroTransitorioNaoLibera: se o Drive está fora do
+// ar, o cadastro é recusado (502) em vez de passar sem checagem.
+func TestCheckDriveFolderNestingErroTransitorioNaoLibera(t *testing.T) {
+	s := testServer(Config{})
+	s.drive = fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	existing := []DriveFolder{{ID: "uuid-escola", Name: "Escola", DriveFolderID: "escola"}}
+
+	if err := s.checkDriveFolderNesting(context.Background(), "financeiro", "", existing); err == nil {
+		t.Fatal("falha transitória do Drive não pode liberar o cadastro sem checagem")
 	}
 }

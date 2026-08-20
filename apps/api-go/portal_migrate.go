@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -23,9 +26,75 @@ CREATE TABLE IF NOT EXISTS portal_point (
 );
 CREATE INDEX IF NOT EXISTS idx_portal_point_user ON portal_point(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_point_user_reason ON portal_point(user_id, reason);
+
+-- class_teacher: vínculo professor ↔ turma. A tabela class não tem dono no
+-- schema legado, então até aqui não existia como escopar "as minhas turmas".
+-- Criada vazia e SEM efeito enquanto PORTAL_CLASS_SCOPE estiver desligada
+-- (ver portal_class_scope.go): ligar a flag antes de popular esta tabela
+-- trancaria todo professor fora das próprias turmas.
+CREATE TABLE IF NOT EXISTS class_teacher (
+	class_id INTEGER NOT NULL,
+	user_id INTEGER NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	PRIMARY KEY (class_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_class_teacher_user ON class_teacher(user_id);
 `
 
+// portalLegacyIndexes: índices sobre as tabelas do schema legado do portal
+// (enrollment, answer, progress_student_phase, container_tasks, question) —
+// colunas que aparecem em quase todo WHERE/JOIN deste código e que não tinham
+// cobertura porque a DDL dessas tabelas não é nossa.
+//
+// Cada statement roda ISOLADO e é tolerante a falha, por dois motivos:
+//   - a tabela pode não existir neste banco (42P01) — é DDL de terceiro;
+//   - CREATE INDEX (sem CONCURRENTLY, que não pode rodar em transação) pega
+//     lock de escrita na tabela. Cada um roda na própria transação com
+//     lock_timeout curto, então no pior caso o boot desiste do índice em vez de
+//     ficar preso atrás de uma transação longa. O índice entra no próximo boot.
+var portalLegacyIndexes = []string{
+	`CREATE INDEX IF NOT EXISTS idx_enrollment_class_user ON enrollment(class_id, user_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_enrollment_user ON enrollment(user_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_answer_exercise_user ON answer(exercise_id, user_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_answer_user ON answer(user_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_psp_user_phase ON progress_student_phase(user_id, phase_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_psp_phase ON progress_student_phase(phase_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_container_tasks_phase_exercise ON container_tasks(phase_id, exercise_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_container_tasks_exercise ON container_tasks(exercise_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_question_exercise ON question(exercise_id)`,
+}
+
 func migratePortal(ctx context.Context, pool *pgxpool.Pool) error {
-	_, err := pool.Exec(ctx, portalMigration)
-	return err
+	if _, err := pool.Exec(ctx, portalMigration); err != nil {
+		return err
+	}
+	for _, stmt := range portalLegacyIndexes {
+		if err := createPortalLegacyIndex(ctx, pool, stmt); err != nil {
+			// Nunca derruba o boot: o índice é otimização, não pré-requisito.
+			slog.Warn("portal: índice legado não criado", "err", err, "stmt", stmt)
+		}
+	}
+	return nil
+}
+
+// createPortalLegacyIndex roda um CREATE INDEX na própria transação, com
+// lock_timeout curto. Tabela inexistente (42P01) é ignorada em silêncio — o
+// banco simplesmente não tem esse pedaço do schema do portal.
+func createPortalLegacyIndex(ctx context.Context, pool *pgxpool.Pool, stmt string) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '3s'`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, stmt); err != nil {
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "42P01" { // undefined_table
+			return nil
+		}
+		return err
+	}
+	return tx.Commit(ctx)
 }

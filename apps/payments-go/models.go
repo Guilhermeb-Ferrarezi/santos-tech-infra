@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type Student struct {
 	ID        int64     `json:"id"`
@@ -29,31 +32,35 @@ type Subscription struct {
 }
 
 type Charge struct {
-	ID               int64            `json:"id"`
-	Kind             string           `json:"kind"`
-	SubscriptionID   *int64           `json:"subscriptionId,omitempty"`
-	RecurrenceID     *int64           `json:"recurrenceId,omitempty"`
-	StudentID        *int64           `json:"studentId,omitempty"`
-	CustomerID       *int64           `json:"customerId,omitempty"`
-	AmountCents      int64            `json:"amountCents"`
-	DueDate          string           `json:"dueDate"`                  // YYYY-MM-DD
-	ReferenceMonth   *string          `json:"referenceMonth,omitempty"` // YYYY-MM
-	Status           string           `json:"status"`
-	Provider         string           `json:"provider"`
-	ProviderChargeID string           `json:"providerChargeId"`
-	CorrelationID    string           `json:"correlationId"`
-	PublicToken      string           `json:"publicToken,omitempty"`
-	Method           string           `json:"method"` // pix | boleto
-	BRCode           string           `json:"brCode"` // pix: copia-e-cola · boleto: linha digitável
-	QRCode           string           `json:"qrCode"`
-	PDFURL           string           `json:"pdfUrl,omitempty"`  // boleto: link do PDF
-	Barcode          string           `json:"barcode,omitempty"` // boleto: código de barras
-	PaidAt           *time.Time       `json:"paidAt,omitempty"`
-	CreatedAt        time.Time        `json:"createdAt"`
-	PayerName        string           `json:"payerName,omitempty"`
-	PayerEmail       string           `json:"payerEmail,omitempty"` // só preenchido na listagem (busca)
-	Refusal          *CardRefusalInfo `json:"refusal,omitempty"`    // cartão: motivo de recusa (status unpaid)
-	LinkID           *int64           `json:"linkId,omitempty"`     // link de pagamento de origem (opcional)
+	ID               int64   `json:"id"`
+	Kind             string  `json:"kind"`
+	SubscriptionID   *int64  `json:"subscriptionId,omitempty"`
+	RecurrenceID     *int64  `json:"recurrenceId,omitempty"`
+	StudentID        *int64  `json:"studentId,omitempty"`
+	CustomerID       *int64  `json:"customerId,omitempty"`
+	AmountCents      int64   `json:"amountCents"`
+	DueDate          string  `json:"dueDate"`                  // YYYY-MM-DD
+	ReferenceMonth   *string `json:"referenceMonth,omitempty"` // YYYY-MM
+	Status           string  `json:"status"`
+	Provider         string  `json:"provider"`
+	ProviderChargeID string  `json:"providerChargeId"`
+	CorrelationID    string  `json:"correlationId"`
+	PublicToken      string  `json:"publicToken,omitempty"`
+	Method           string  `json:"method"` // pix | boleto
+	BRCode           string  `json:"brCode"` // pix: copia-e-cola · boleto: linha digitável
+	QRCode           string  `json:"qrCode"`
+	PDFURL           string  `json:"pdfUrl,omitempty"`  // boleto: link do PDF
+	Barcode          string  `json:"barcode,omitempty"` // boleto: código de barras
+	// RefundedCents acumula o total já estornado. Um estorno PARCIAL soma aqui e a
+	// cobrança VOLTA para 'paid' — antes qualquer estorno marcava a cobrança inteira
+	// como 'refunded', o que fazia o extrato mentir sobre o que de fato saiu.
+	RefundedCents int64            `json:"refundedCents,omitempty"`
+	PaidAt        *time.Time       `json:"paidAt,omitempty"`
+	CreatedAt     time.Time        `json:"createdAt"`
+	PayerName     string           `json:"payerName,omitempty"`
+	PayerEmail    string           `json:"payerEmail,omitempty"` // só preenchido na listagem (busca)
+	Refusal       *CardRefusalInfo `json:"refusal,omitempty"`    // cartão: motivo de recusa (status unpaid)
+	LinkID        *int64           `json:"linkId,omitempty"`     // link de pagamento de origem (opcional)
 
 	payerTaxID string // snapshot p/ insert; não serializa
 }
@@ -111,8 +118,49 @@ type Product struct {
 	// false = a 1ª parcela cai no due_day.
 	ChargeOnSubscribe bool `json:"chargeOnSubscribe"`
 	// ImageURL: imagem de capa do produto. FileURL: arquivo entregável (ex. PDF).
+	// ATENÇÃO: FileURL é o que o cliente COMPRA. Nunca serialize um Product inteiro
+	// numa rota pública ou pré-pagamento — use PublicProduct.
 	ImageURL string `json:"imageUrl"`
 	FileURL  string `json:"fileUrl"`
+}
+
+// PublicProduct é a visão do produto exposta antes do pagamento (vitrine, checkout
+// público, carrinho). Deliberadamente SEM FileURL: a rota pública /products/by-slug
+// serializava o Product inteiro e entregava o arquivo de graça a quem soubesse o slug.
+// O entregável só sai por GET /me/products/{id}/file, que confere cobrança paga.
+type PublicProduct struct {
+	ID                int64  `json:"id"`
+	Slug              string `json:"slug"`
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	PriceCents        int64  `json:"priceCents"`
+	Active            bool   `json:"active"`
+	Recurring         bool   `json:"recurring"`
+	Periodicity       string `json:"periodicity,omitempty"`
+	DueDay            *int   `json:"dueDay,omitempty"`
+	ChargeOnSubscribe bool   `json:"chargeOnSubscribe"`
+	ImageURL          string `json:"imageUrl"`
+	// HasFile diz que existe entregável, sem revelar onde ele está — a UI usa isso
+	// para mostrar o botão de download depois da compra.
+	HasFile bool `json:"hasFile"`
+}
+
+// publicProduct reduz um Product à visão pública (sem FileURL).
+func publicProduct(p Product) PublicProduct {
+	return PublicProduct{
+		ID:                p.ID,
+		Slug:              p.Slug,
+		Name:              p.Name,
+		Description:       p.Description,
+		PriceCents:        p.PriceCents,
+		Active:            p.Active,
+		Recurring:         p.Recurring,
+		Periodicity:       p.Periodicity,
+		DueDay:            p.DueDay,
+		ChargeOnSubscribe: p.ChargeOnSubscribe,
+		ImageURL:          p.ImageURL,
+		HasFile:           strings.TrimSpace(p.FileURL) != "",
+	}
 }
 
 type Customer struct {

@@ -35,7 +35,9 @@ SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        COALESCE(efi_id_rec, ''), COALESCE(br_code, ''), COALESCE(qr_code, ''), COALESCE(public_token, '')::text AS public_token,
        status, created_at
 FROM pay_recurrences
-ORDER BY created_at DESC;
+WHERE ($1 = 0 OR id < $1)
+ORDER BY created_at DESC, id DESC
+LIMIT $2;
 
 -- name: ListRecurrencesByTaxID :many
 -- Recorrências de um cliente, consolidadas pelo CPF (igual ao histórico de compras).
@@ -45,7 +47,24 @@ SELECT id, subscription_id, product_id, customer_id, payer_tax_id, payer_name,
        status, created_at
 FROM pay_recurrences
 WHERE payer_tax_id = $1
-ORDER BY created_at DESC;
+  AND ($2 = 0 OR id < $2)
+ORDER BY created_at DESC, id DESC
+LIMIT $3;
+
+-- name: ListRecurrencesByUserID :many
+-- Recorrências do usuário logado, amarradas pelo customer_id (JOIN em pay_customers).
+-- NUNCA filtrar só por payer_tax_id aqui: o CPF não é segredo e não prova posse da
+-- conta — quem soubesse um CPF lia as assinaturas alheias (valor, copia-e-cola, token).
+SELECT r.id, r.subscription_id, r.product_id, r.customer_id, r.payer_tax_id, r.payer_name,
+       r.amount_cents, r.periodicity, r.due_day, r.start_date::text, COALESCE(r.end_date::text, '')::text AS end_date, r.journey,
+       COALESCE(r.efi_id_rec, ''), COALESCE(r.br_code, ''), COALESCE(r.qr_code, ''), COALESCE(r.public_token, '')::text AS public_token,
+       r.status, r.created_at
+FROM pay_recurrences r
+JOIN pay_customers cu ON cu.id = r.customer_id
+WHERE cu.user_id = $1
+  AND ($2 = 0 OR r.id < $2)
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT $3;
 
 -- name: SetRecurrenceStatus :exec
 UPDATE pay_recurrences SET status = $2 WHERE id = $1;

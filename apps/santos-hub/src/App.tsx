@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ArrowClockwise, DownloadSimple, LinkSimple, MagnifyingGlass, PushPin, WarningCircle } from "@phosphor-icons/react";
+import {
+  ArrowClockwise,
+  DownloadSimple,
+  LinkSimple,
+  MagnifyingGlass,
+  Package,
+  PushPin,
+  WarningCircle,
+} from "@phosphor-icons/react";
 import { Titlebar } from "./components/Titlebar";
 import { AccountMenu } from "./components/AccountMenu";
-import { apiJSON } from "./lib/api";
+import { apiJSON, hubHeaders } from "./lib/api";
 
 interface DownloadItem {
   id: number;
@@ -16,6 +24,23 @@ interface DownloadItem {
   sizeBytes?: number;
   pinned: boolean;
   updatedAt: string;
+  imageUrl?: string;
+}
+
+// O catálogo (/public/downloads) é dado remoto: `url` vem do banco e o app
+// mandava direto pro openUrl. Como o escopo do opener era http://*/https://*
+// (opener:default), um item adulterado abria qualquer coisa em TODOS os PCs da
+// empresa. O escopo real agora vive em src-tauri/capabilities/default.json —
+// esta lista precisa espelhá-lo, e só existe pra dar mensagem de erro decente:
+// sem ela o openUrl seria rejeitado pelo Tauri sem nenhum sinal na tela.
+const ALLOWED_DOWNLOAD_ORIGINS = ["https://cdn.santos-tech.com", "https://santos-tech.com"];
+
+function isAllowedDownloadUrl(raw: string) {
+  try {
+    return ALLOWED_DOWNLOAD_ORIGINS.includes(new URL(raw).origin);
+  } catch {
+    return false;
+  }
 }
 
 function formatSize(bytes?: number) {
@@ -32,44 +57,67 @@ function formatSize(bytes?: number) {
 
 function DownloadCard({ item }: { item: DownloadItem }) {
   const [opening, setOpening] = useState(false);
+  const [blocked, setBlocked] = useState(false);
 
   async function handleOpen() {
+    if (!isAllowedDownloadUrl(item.url)) {
+      setBlocked(true);
+      return;
+    }
     setOpening(true);
+    setBlocked(false);
     try {
       await openUrl(item.url);
+    } catch {
+      setBlocked(true);
     } finally {
       setOpening(false);
     }
   }
 
   return (
-    <div className="flex items-start justify-between gap-3 rounded-xl bg-white/5 p-4 ring-1 ring-white/10">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          {item.pinned && <PushPin className="size-3.5 shrink-0 text-[#0DB88F]" weight="fill" />}
-          <p className="truncate text-sm font-semibold text-white">{item.name}</p>
+    <div className="flex flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
+      <div className="relative flex aspect-[3/4] items-center justify-center bg-white/5">
+        {item.imageUrl ? (
+          <img src={item.imageUrl} alt="" className="size-full object-cover" />
+        ) : (
+          <Package className="size-8 text-white/20" />
+        )}
+        {item.pinned && (
+          <PushPin className="absolute right-2 top-2 size-3.5 text-[#0DB88F] drop-shadow" weight="fill" />
+        )}
+      </div>
+      <div className="flex flex-1 flex-col gap-1 p-3">
+        <div className="flex items-center gap-1.5">
+          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-white">{item.name}</p>
           {item.version && (
             <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium text-white/70">
               v{item.version}
             </span>
           )}
         </div>
-        {item.description && <p className="mt-1 text-xs text-white/60">{item.description}</p>}
-        <div className="mt-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-white/40">
+        {item.description && <p className="line-clamp-2 text-xs text-white/60">{item.description}</p>}
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-white/40">
           {item.category && <span>{item.category}</span>}
           {item.sizeBytes ? <span>· {formatSize(item.sizeBytes)}</span> : null}
         </div>
+        <button
+          type="button"
+          onClick={handleOpen}
+          disabled={opening}
+          title={item.kind === "file" ? "Baixar" : "Abrir link"}
+          className="mt-2 flex items-center justify-center gap-1.5 rounded-lg bg-[#0DB88F] py-2 text-xs font-semibold text-white transition-colors hover:bg-[#0DB88F]/90 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {item.kind === "file" ? <DownloadSimple className="size-4" /> : <LinkSimple className="size-4" />}
+          {item.kind === "file" ? "Baixar" : "Abrir"}
+        </button>
+        {blocked && (
+          <p className="mt-1 flex items-start gap-1 text-[10px] leading-tight text-red-300">
+            <WarningCircle className="mt-px size-3 shrink-0" />
+            Link fora dos domínios permitidos — bloqueado por segurança.
+          </p>
+        )}
       </div>
-      <button
-        type="button"
-        onClick={handleOpen}
-        disabled={opening}
-        title={item.kind === "file" ? "Baixar" : "Abrir link"}
-        className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[#0DB88F] px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#0DB88F]/90 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {item.kind === "file" ? <DownloadSimple className="size-4" /> : <LinkSimple className="size-4" />}
-        {item.kind === "file" ? "Baixar" : "Abrir"}
-      </button>
     </div>
   );
 }
@@ -83,7 +131,9 @@ export default function App() {
   async function load() {
     setLoading(true);
     try {
-      const json = await apiJSON<{ items: DownloadItem[] }>("/public/downloads");
+      const json = await apiJSON<{ items: DownloadItem[] }>("/public/downloads", {
+        headers: hubHeaders(),
+      });
       setItems(json.items);
       setError(false);
     } catch {
@@ -163,7 +213,7 @@ export default function App() {
           {grouped.map(([category, categoryItems]) => (
             <div key={category}>
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">{category}</p>
-              <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-3">
                 {categoryItems.map((item) => (
                   <DownloadCard key={item.id} item={item} />
                 ))}

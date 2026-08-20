@@ -62,17 +62,60 @@ func onlyDigits(s string) string {
 	return b.String()
 }
 
-// validCPF: exatamente 11 dígitos (já normalizado), e não todos iguais.
+// cpfCheckDigit calcula um dígito verificador de CPF pelo módulo 11: soma os n
+// primeiros dígitos com pesos decrescentes começando em n+1 e devolve o resto
+// convencionado (10 e 11 viram 0).
+func cpfCheckDigit(digits string, n int) byte {
+	sum := 0
+	for i := 0; i < n; i++ {
+		sum += int(digits[i]-'0') * (n + 1 - i)
+	}
+	r := sum * 10 % 11
+	if r >= 10 {
+		r = 0
+	}
+	return byte('0' + r)
+}
+
+// validCPF: 11 dígitos (já normalizado), não todos iguais E com os dois dígitos
+// verificadores corretos. Só contar dígitos deixava passar qualquer sequência de 11
+// números — e o CPF é o que amarra o cliente às cobranças/assinaturas.
 func validCPF(digits string) bool {
 	if len(digits) != 11 {
 		return false
 	}
+	allEqual := true
 	for i := 1; i < len(digits); i++ {
 		if digits[i] != digits[0] {
-			return true
+			allEqual = false
+			break
 		}
 	}
-	return false // todos iguais (000..., 111...) → inválido
+	if allEqual {
+		return false // todos iguais (000..., 111...) → inválido
+	}
+	return digits[9] == cpfCheckDigit(digits, 9) && digits[10] == cpfCheckDigit(digits, 10)
+}
+
+// validProviderID: identificador opaco vindo do path (id de relatorio da Efi, por
+// exemplo) que sera concatenado numa URL do gateway e num cabecalho de resposta.
+// Aceita so [A-Za-z0-9._-], ate 64 caracteres: sem barra, sem "..", sem CR/LF.
+// r.PathValue vem DESESCAPADO, entao um id como "..%2F.." chega como "../.." e
+// escaparia do caminho da API da Efi.
+func validProviderID(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // validPhone: vazio (opcional) ou 10–11 dígitos (fixo/celular BR), já normalizado.

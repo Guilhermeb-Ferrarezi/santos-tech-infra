@@ -85,46 +85,71 @@ func (s *Server) tick(ctx context.Context) {
 	}
 }
 
-func (s *Server) runJobOnce(ctx context.Context, job db.CronJob) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("panic em runJobOnce", "job", job.ID, "panic", rec)
-		}
-	}()
-
-	// Skip de sobreposição: já existe run 'running' para este job.
-	running, err := s.q.HasRunningRun(ctx, job.ID)
+// claimRunSlot reserva a vaga de execução do job: pega o lock consultivo do
+// job, checa sobreposição e cria o cron_run — tudo na MESMA transação.
+//
+// Antes, HasRunningRun e o CreateRun seguinte eram dois statements soltos: o
+// tick do scheduler e um "rodar agora" simultâneos (ou duas réplicas) passavam
+// os dois pela checagem e criavam dois runs para o mesmo job — o skip de
+// sobreposição não segurava nada. O pg_advisory_xact_lock(job_id) serializa a
+// janela inteira e é liberado sozinho no commit/rollback.
+//
+// skipped=true significa que já havia run em andamento: a linha 'skipped_overlap'
+// é gravada aqui mesmo e não há nada a executar.
+func (s *Server) claimRunSlot(ctx context.Context, jobID int64) (run db.CronRun, skipped bool, err error) {
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		slog.Error("runJobOnce: erro ao checar overlap", "job", job.ID, "err", err)
-		return
+		return db.CronRun{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op depois do commit
+	qtx := s.q.WithTx(tx)
+
+	if err := qtx.LockJobForRun(ctx, jobID); err != nil {
+		return db.CronRun{}, false, err
+	}
+	running, err := qtx.HasRunningRun(ctx, jobID)
+	if err != nil {
+		return db.CronRun{}, false, err
+	}
+
+	run, err = qtx.CreateRun(ctx, db.CreateRunParams{JobID: jobID, Status: "running", Attempt: 1})
+	if err != nil {
+		return db.CronRun{}, false, err
 	}
 	if running {
-		run, err := s.q.CreateRun(ctx, db.CreateRunParams{
-			JobID:   job.ID,
-			Status:  "running",
-			Attempt: 1,
-		})
-		if err == nil {
-			_ = s.q.FinishRun(ctx, db.FinishRunParams{
-				ID:      run.ID,
-				Status:  "skipped_overlap",
-				Attempt: 1,
-			})
+		if err := qtx.FinishRun(ctx, db.FinishRunParams{ID: run.ID, Status: "skipped_overlap", Attempt: 1}); err != nil {
+			return db.CronRun{}, false, err
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.CronRun{}, false, err
+	}
+	return run, running, nil
+}
+
+func (s *Server) runJobOnce(ctx context.Context, job db.CronJob) {
+	run, skipped, err := s.claimRunSlot(ctx, job.ID)
+	if err != nil {
+		slog.Error("runJobOnce: falha ao reservar a execução", "job", job.ID, "err", err)
+		return
+	}
+	if skipped {
 		cronRunsTotal.WithLabelValues("skipped_overlap").Inc()
 		slog.Warn("runJobOnce: overlap detectado, pulando", "job", job.ID)
 		return
 	}
+	s.executeRun(ctx, job, run)
+}
 
-	run, err := s.q.CreateRun(ctx, db.CreateRunParams{
-		JobID:   job.ID,
-		Status:  "running",
-		Attempt: 1,
-	})
-	if err != nil {
-		slog.Error("falha ao criar run", "job", job.ID, "err", err)
-		return
-	}
+// executeRun faz o dispatch (com os retries do job) e fecha o cron_run. Recebe
+// o run já criado por claimRunSlot — quem chama decide se roda em linha (tick
+// do scheduler) ou numa goroutine própria (disparo manual, ver handleRunJob).
+func (s *Server) executeRun(ctx context.Context, job db.CronJob, run db.CronRun) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic em executeRun", "job", job.ID, "run", run.ID, "panic", rec)
+		}
+	}()
 
 	start := time.Now()
 	var last dispatchResult
@@ -168,5 +193,70 @@ func (s *Server) runJobOnce(ctx context.Context, job db.CronJob) {
 		Attempt:         int32(min(attempt, maxRetries)),
 	}); err != nil {
 		slog.Error("falha ao finalizar run", "job", job.ID, "run", run.ID, "err", err)
+	}
+}
+
+// ── Retenção do histórico ────────────────────────────────────────────────
+
+const (
+	// purgeInterval: de quanto em quanto tempo a rotina de purga acorda.
+	purgeInterval = 6 * time.Hour
+	// purgeBatch: teto de linhas por passada, para a purga nunca virar um
+	// DELETE gigante segurando lock em cima de uma tabela quente. Se sobrar
+	// coisa, a próxima passada continua.
+	purgeBatch = 5000
+)
+
+// RunRetention apaga periodicamente os cron_runs mais velhos que
+// cfg.RunRetentionDays. Sem isso nada nunca era apagado: o scheduler tica a
+// cada 30s e cada execução grava uma linha com response_excerpt TEXT, então um
+// job de 1/min sozinho gera ~525 mil linhas por ano.
+//
+// RunRetentionDays <= 0 desliga a purga (retenção infinita, explicitamente).
+func (s *Server) RunRetention(ctx context.Context) {
+	if s.cfg.RunRetentionDays <= 0 {
+		slog.Warn("retenção de cron_runs desligada (CRON_RUN_RETENTION_DAYS<=0) — a tabela cresce sem limite")
+		return
+	}
+	// Uma passada no boot para não esperar o primeiro tick de 6h.
+	s.purgeOldRuns(ctx)
+	t := time.NewTicker(purgeInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.purgeOldRuns(ctx)
+		}
+	}
+}
+
+func (s *Server) purgeOldRuns(ctx context.Context) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic na purga de cron_runs", "panic", rec)
+		}
+	}()
+	for {
+		n, err := s.q.PurgeOldRuns(ctx, db.PurgeOldRunsParams{
+			RetentionDays: int32(s.cfg.RunRetentionDays),
+			MaxRows:       purgeBatch,
+		})
+		if err != nil {
+			slog.Error("purga de cron_runs falhou", "err", err)
+			return
+		}
+		if n > 0 {
+			slog.Info("cron_runs purgados", "linhas", n, "retencao_dias", s.cfg.RunRetentionDays)
+		}
+		if n < purgeBatch {
+			return // acabou (ou não havia nada)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 	}
 }

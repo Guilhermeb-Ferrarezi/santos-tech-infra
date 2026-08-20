@@ -218,10 +218,17 @@ func (c TenantConfig) AdminNumbers() []string {
 }
 
 // KBEntry — entrada de base de conhecimento usada para extração e persistência.
+//
+// PendingReview marca entradas geradas automaticamente a partir de texto de
+// cliente (kb.gap_detected). Elas NÃO entram no prompt — a KB é declarada como
+// fonte primária de verdade factual, então um cliente não pode escrever nela
+// sem passar por um admin. O painel lista a entrada; aprovar = salvar a config
+// com pendingReview ausente/false.
 type KBEntry struct {
-	ID      string `json:"id"`
-	Title   string `json:"title,omitempty"`
-	Content string `json:"content"`
+	ID            string `json:"id"`
+	Title         string `json:"title,omitempty"`
+	Content       string `json:"content"`
+	PendingReview bool   `json:"pendingReview,omitempty"`
 }
 
 // KnowledgeBaseEntry — entrada da base de conhecimento para o prompt.
