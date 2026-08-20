@@ -28,9 +28,10 @@ type fakeLabDeviceDB struct {
 	screenshotRequested bool
 	secretHash          *string
 
-	upserts int
-	clears  int
-	mints   int
+	upserts    int
+	clears     int
+	mints      int
+	migrations int
 }
 
 type fakeLabDeviceRow struct {
@@ -96,6 +97,10 @@ func (f *fakeLabDeviceDB) QueryRow(_ context.Context, sql string, args ...any) p
 }
 
 func (f *fakeLabDeviceDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "SET device_uuid =") {
+		f.migrations++
+		return pgconn.NewCommandTag("UPDATE 1"), nil
+	}
 	if !strings.Contains(sql, "UPDATE hour_lab_devices SET unpair_requested = false") {
 		return pgconn.CommandTag{}, nil
 	}
@@ -126,7 +131,7 @@ func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil)
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "")
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -140,7 +145,7 @@ func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 		t.Errorf("primeiro heartbeat: %d UPDATEs de limpeza, quer 1", fake.clears)
 	}
 
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil)
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "")
 	if err != nil {
 		t.Fatalf("segundo heartbeat: %v", err)
 	}
@@ -163,7 +168,7 @@ func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 func TestHeartbeatNaoLimpaQuandoNaoHaComando(t *testing.T) {
 	const segredo = "segredo-do-pc"
 	fake := &fakeLabDeviceDB{exists: true, name: ptrTo("PC-02"), secretHash: ptrTo(sha256Hex(segredo))}
-	if _, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil); err != nil {
+	if _, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, ""); err != nil {
 		t.Fatalf("heartbeat: %v", err)
 	}
 	if fake.clears != 0 {
@@ -193,7 +198,7 @@ func TestHeartbeatEmiteSegredoUmaVez(t *testing.T) {
 	fake := &fakeLabDeviceDB{}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil)
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil, "")
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -208,7 +213,7 @@ func TestHeartbeatEmiteSegredoUmaVez(t *testing.T) {
 		t.Errorf("%d emissões de segredo, quer 1", fake.mints)
 	}
 
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", secret, "1.2.3.4", "1.0.0", nil, nil)
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", secret, "1.2.3.4", "1.0.0", nil, nil, "")
 	if err != nil {
 		t.Fatalf("segundo heartbeat com o segredo: %v", err)
 	}
@@ -233,7 +238,7 @@ func TestHeartbeatSemSegredoNaoVazaPairToken(t *testing.T) {
 	ctx := context.Background()
 
 	for _, tentativa := range []string{"", "segredo-errado", sha256Hex("segredo-do-pc")} {
-		res, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", tentativa, "9.9.9.9", "1.0.0", nil, nil)
+		res, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", tentativa, "9.9.9.9", "1.0.0", nil, nil, "")
 		if !errors.Is(err, errLabDeviceUnauthorized) {
 			t.Fatalf("segredo %q: err = %v, quer errLabDeviceUnauthorized", tentativa, err)
 		}
@@ -258,7 +263,7 @@ func TestHeartbeatAdocaoNaoEntregaPairToken(t *testing.T) {
 		name:             ptrTo("PC-legado"),
 		pendingPairToken: ptrTo("tok-secreto"),
 	}
-	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil)
+	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil, "")
 	if err != nil {
 		t.Fatalf("adoção de legado: %v", err)
 	}
@@ -287,7 +292,7 @@ func TestHeartbeatEntregaCapturaDeTelaUmaVezSo(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil)
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "")
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -295,7 +300,7 @@ func TestHeartbeatEntregaCapturaDeTelaUmaVezSo(t *testing.T) {
 		t.Fatal("primeiro heartbeat deveria pedir a captura")
 	}
 
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil)
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "")
 	if err != nil {
 		t.Fatalf("segundo heartbeat: %v", err)
 	}
@@ -332,5 +337,66 @@ func TestEncodeOpenAppsLimpaELimita(t *testing.T) {
 	}
 	if len(decoded) != maxOpenApps {
 		t.Fatalf("%d apps gravados, teto é %d", len(decoded), maxOpenApps)
+	}
+}
+
+// A identidade do PC deixou de morar só no config.json (0.1.10+): quando ela
+// muda, o registro antigo é MOVIDO, não duplicado — foi o bug que fez o mesmo
+// computador aparecer duas vezes no dashboard.
+func TestMigracaoDeIdentidadeExigeOSegredoAntigo(t *testing.T) {
+	const segredo = "segredo-do-pc"
+	ctx := context.Background()
+
+	// Com o segredo certo: migra.
+	fake := &fakeLabDeviceDB{exists: true, name: ptrTo("PC-01"), secretHash: ptrTo(sha256Hex(segredo))}
+	if err := migrateLabDeviceUUIDTx(ctx, fake, "antigo", "novo", segredo); err != nil {
+		t.Fatalf("migração com segredo certo: %v", err)
+	}
+	if fake.migrations != 1 {
+		t.Errorf("%d migrações, quer 1", fake.migrations)
+	}
+
+	// Sem o segredo certo: NÃO migra. Saber o device_uuid (que fica visível num
+	// QR na tela do PC) não pode bastar pra sequestrar o registro de outra
+	// máquina.
+	outro := &fakeLabDeviceDB{exists: true, secretHash: ptrTo(sha256Hex("outro-segredo"))}
+	if err := migrateLabDeviceUUIDTx(ctx, outro, "antigo", "novo", segredo); err != nil {
+		t.Fatalf("migração com segredo errado devolveu erro: %v", err)
+	}
+	if outro.migrations != 0 {
+		t.Errorf("migrou com segredo errado (%d)", outro.migrations)
+	}
+}
+
+func TestMigracaoIgnoraCasosSemEfeito(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct{ old, new_, secret string }{
+		{"", "novo", "s"},       // sem id antigo (instalação nova)
+		{"igual", "igual", "s"}, // mesma identidade
+		{"antigo", "novo", ""},  // sem segredo pra provar posse
+	} {
+		fake := &fakeLabDeviceDB{exists: true, secretHash: ptrTo(sha256Hex("s"))}
+		if err := migrateLabDeviceUUIDTx(ctx, fake, c.old, c.new_, c.secret); err != nil {
+			t.Fatalf("caso %v: %v", c, err)
+		}
+		if fake.migrations != 0 {
+			t.Errorf("caso %v migrou sem precisar", c)
+		}
+	}
+}
+
+// appDisplayName cobre os PCs que ainda mandam o caminho: app empacotado da
+// Store devolve "C:\...\SnippingTool\SnippingTool.exe" no lugar do nome.
+func TestAppDisplayNameResolveCaminhoDeAppDaStore(t *testing.T) {
+	casos := map[string]string{
+		`C:\Program Files\WindowsApps\Microsoft.ScreenSketch_11.2602.49.0_x64__8wekyb3d8bbwe\SnippingTool\SnippingTool.exe`: "SnippingTool",
+		`C:/Users/x/app.EXE`: "app",
+		"Zen":                "Zen",
+		"NVIDIA App":         "NVIDIA App",
+	}
+	for entrada, esperado := range casos {
+		if got := appDisplayName(entrada); got != esperado {
+			t.Errorf("appDisplayName(%q) = %q, quer %q", entrada, got, esperado)
+		}
 	}
 }

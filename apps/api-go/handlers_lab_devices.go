@@ -30,6 +30,10 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		DeviceSecret string  `json:"deviceSecret"`
 		Token        *string `json:"token"`
 		AppVersion   string  `json:"appVersion"`
+		// PreviousDeviceId: identidade anterior do PC (0.1.10+, uma vez após a
+		// troca para o id derivado do MachineGuid). O servidor costura o registro
+		// antigo na nova identidade em vez de deixar o mesmo PC duplicado.
+		PreviousDeviceID string `json:"previousDeviceId"`
 		// Nomes dos aplicativos abertos agora (0.1.9+). Ausente = app antigo, e
 		// aí a última lista conhecida é mantida em vez de apagada.
 		OpenApps []string `json:"openApps"`
@@ -59,7 +63,7 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		}
 	}
 	res, err := s.upsertLabDeviceHeartbeat(r.Context(), in.DeviceID, in.DeviceSecret, clientIP(r),
-		in.AppVersion, sessionID, encodeOpenApps(in.OpenApps))
+		in.AppVersion, sessionID, encodeOpenApps(in.OpenApps), previousUUID(in.PreviousDeviceID))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -246,4 +250,14 @@ func (s *Server) handleSendLabDeviceMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// previousUUID valida a identidade anterior antes de chegar na query: valor
+// fora do formato UUID é ignorado, não vira erro — o heartbeat é a função
+// crítica do app e não pode falhar por causa de um campo de migração.
+func previousUUID(s string) string {
+	if !uuidRe.MatchString(s) {
+		return ""
+	}
+	return s
 }

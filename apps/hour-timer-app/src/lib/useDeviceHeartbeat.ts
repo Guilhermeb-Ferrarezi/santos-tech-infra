@@ -57,11 +57,25 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
 
     async function beat() {
       const store = await getStore();
-      let deviceId = await store.get<string>(DEVICE_ID_KEY);
-      if (!deviceId) {
-        deviceId = crypto.randomUUID();
-        await store.set(DEVICE_ID_KEY, deviceId);
+      const storedId = await store.get<string>(DEVICE_ID_KEY);
+
+      // Identidade derivada do MachineGuid do Windows (0.1.10+): sobrevive a
+      // reinstalação do app e é a mesma em qualquer conta de usuário da
+      // máquina. Antes o id era sorteado e guardado só aqui — perder o
+      // config.json fazia o mesmo PC virar dois dispositivos no dashboard.
+      let stableId = "";
+      try {
+        stableId = await invoke<string>("stable_device_id");
+      } catch {
+        // registro ilegível: segue com o id do store (comportamento antigo)
       }
+
+      let deviceId = stableId || storedId || crypto.randomUUID();
+      // previousDeviceId vai UMA vez, no heartbeat da troca: o servidor usa
+      // para mover o registro antigo (nome, sessão, inventário, capturas) para
+      // a identidade nova, em vez de criar um dispositivo duplicado.
+      const previousDeviceId = storedId && storedId !== deviceId ? storedId : undefined;
+      if (deviceId !== storedId) await store.set(DEVICE_ID_KEY, deviceId);
       if (!cancelled) setDeviceId(deviceId);
       const deviceSecret = await store.get<string>(DEVICE_SECRET_KEY);
       const appVersion = await getVersion();
@@ -82,7 +96,7 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
         res = await fetch(`${API_ORIGIN}/public/lab-devices/heartbeat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deviceId, deviceSecret, token: tokenRef.current, appVersion, openApps }),
+          body: JSON.stringify({ deviceId, deviceSecret, token: tokenRef.current, appVersion, openApps, previousDeviceId }),
         });
       } catch {
         if (!cancelled) setHeartbeatOk(false);

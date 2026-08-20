@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -140,17 +141,58 @@ const labDeviceSecretMintSQL = `
 // labDeviceSecretBytes é o tamanho do segredo em bytes (vira o dobro em hex).
 const labDeviceSecretBytes = 32
 
+// migrateLabDeviceUUIDTx move um registro para uma identidade nova, preservando
+// nome, sessão, inventário e histórico de capturas.
+//
+// Existe porque a identidade do PC morava só no config.json do app: perder esse
+// arquivo numa reinstalação gerava um device_uuid novo, e o mesmo computador
+// aparecia duas vezes no dashboard — aconteceu de verdade, com um registro
+// virando fantasma e o outro tendo que ser renomeado na mão. A partir da 0.1.10
+// o app deriva o id do MachineGuid do Windows (estável entre reinstalações e
+// entre contas de usuário) e manda o id ANTIGO junto, uma vez, para o servidor
+// costurar os dois.
+//
+// Só migra provando posse do segredo do registro antigo — sem isso, saber um
+// device_uuid (que fica visível num QR na tela do PC) bastaria para sequestrar
+// o registro de outra máquina.
+func migrateLabDeviceUUIDTx(ctx context.Context, tx labDeviceQuerier, oldUUID, newUUID, deviceSecret string) error {
+	if oldUUID == "" || oldUUID == newUUID || deviceSecret == "" {
+		return nil
+	}
+	var storedHash *string
+	err := tx.QueryRow(ctx, labDeviceSecretLookupSQL, oldUUID).Scan(&storedHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // registro antigo já não existe: nada a migrar
+	}
+	if err != nil {
+		return err
+	}
+	if storedHash == nil || *storedHash == "" ||
+		subtle.ConstantTimeCompare([]byte(sha256Hex(deviceSecret)), []byte(*storedHash)) != 1 {
+		return nil // segredo não confere: ignora em silêncio, o heartbeat segue
+	}
+	// WHERE NOT EXISTS: se a identidade nova já tem registro próprio (o PC já
+	// bateu heartbeat com ela), migrar apagaria esse — melhor deixar os dois e o
+	// admin resolver do que perder dados.
+	_, err = tx.Exec(ctx, `
+		UPDATE hour_lab_devices SET device_uuid = $2
+		WHERE device_uuid = $1
+		  AND NOT EXISTS (SELECT 1 FROM hour_lab_devices WHERE device_uuid = $2)`,
+		oldUUID, newUUID)
+	return err
+}
+
 // upsertLabDeviceHeartbeat autentica o dispositivo, grava/atualiza o heartbeat e
 // devolve os comandos pendentes, zerando unpair_requested/pending_pair_token na
 // mesma transação — assim cada comando é entregue exatamente uma vez.
 // message_id/text não são zerados: o app deduplica localmente pelo id.
-func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte) (*LabDeviceHeartbeatResult, error) {
+func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte, previousUUID string) (*LabDeviceHeartbeatResult, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op depois do Commit
-	res, err := upsertLabDeviceHeartbeatTx(ctx, tx, deviceUUID, deviceSecret, ip, appVersion, sessionID, openApps)
+	res, err := upsertLabDeviceHeartbeatTx(ctx, tx, deviceUUID, deviceSecret, ip, appVersion, sessionID, openApps, previousUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +242,12 @@ func authLabDeviceTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, devic
 	return &secret, nil
 }
 
-func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte) (*LabDeviceHeartbeatResult, error) {
+func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte, previousUUID string) (*LabDeviceHeartbeatResult, error) {
+	// Antes de autenticar: se o app trocou de identidade (0.1.10+), costura o
+	// registro antigo na nova em vez de deixar o PC duplicado.
+	if err := migrateLabDeviceUUIDTx(ctx, tx, previousUUID, deviceUUID, deviceSecret); err != nil {
+		return nil, err
+	}
 	minted, err := authLabDeviceTx(ctx, tx, deviceUUID, deviceSecret)
 	if err != nil {
 		return nil, err
@@ -412,7 +459,7 @@ func encodeOpenApps(apps []string) []byte {
 	}
 	clean := make([]string, 0, len(apps))
 	for _, a := range apps {
-		name := sanitizeInventoryField(a)
+		name := appDisplayName(sanitizeInventoryField(a))
 		if name == "" {
 			continue
 		}
@@ -429,4 +476,25 @@ func encodeOpenApps(apps []string) []byte {
 		return nil
 	}
 	return out
+}
+
+// appDisplayName resolve o nome que vai pra tela. Programa comum devolve o nome
+// ("Zen", "NVIDIA App"), mas app empacotado da Microsoft Store devolve o
+// CAMINHO do executável — e a lista mostrava
+// "C:\Program Files\WindowsApps\Microsoft.ScreenSketch_11.26...\SnippingTool\Sni",
+// cortado no meio pelo teto de tamanho. O app 0.1.10+ já manda resolvido; isto
+// cobre os PCs que ainda estão na 0.1.9.
+func appDisplayName(s string) string {
+	if !strings.ContainsAny(s, `\/`) {
+		return s
+	}
+	base := s
+	if i := strings.LastIndexAny(base, `\/`); i >= 0 {
+		base = base[i+1:]
+	}
+	base = strings.TrimSpace(base)
+	if ext := strings.ToLower(base); strings.HasSuffix(ext, ".exe") {
+		base = base[:len(base)-4]
+	}
+	return base
 }

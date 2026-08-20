@@ -3959,6 +3959,15 @@ paths:
                 deviceId: { type: string, format: uuid }
                 token: { type: string, description: "Token da sessão pareada localmente, se houver (64 chars hex)." , nullable: true }
                 appVersion: { type: string, maxLength: 50 }
+                previousDeviceId:
+                  type: string
+                  format: uuid
+                  description: >
+                    Identidade anterior do PC (app 0.1.10+), enviada uma vez quando o app
+                    passa a derivar o id do MachineGuid do Windows. O servidor MOVE o
+                    registro antigo (nome, sessão, inventário, capturas) para a identidade
+                    nova, exigindo o deviceSecret do registro antigo como prova de posse.
+                    Segredo que não confere é ignorado em silêncio.
                 openApps:
                   type: array
                   maxItems: 100

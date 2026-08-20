@@ -327,6 +327,81 @@ fn capture_screen() -> Result<ScreenCapture, String> {
 // Vai junto do heartbeat (a cada ~30s), então é sempre a foto do momento — sem
 // histórico: o que estava aberto meia hora atrás não ajuda a decidir nada e
 // viraria um rastro de uso por pessoa.
+// Identidade ESTÁVEL do PC, derivada do MachineGuid do Windows.
+//
+// Antes o device_uuid era sorteado no primeiro boot e vivia só no config.json:
+// perder esse arquivo numa reinstalação criava um dispositivo NOVO no
+// dashboard, e o mesmo computador aparecia duas vezes — aconteceu de verdade,
+// com um registro virando fantasma. Pior no caso de uso real: o config é por
+// usuário do Windows, então num PC de laboratório cada conta viraria um
+// dispositivo diferente.
+//
+// O MachineGuid é criado na instalação do Windows e não muda com reinstalação
+// de programa nem com troca de conta. Não vai cru: o id é o sha256 dele com um
+// prefixo do app, formatado como UUID — assim não dá pra correlacionar esta
+// máquina com nada fora daqui a partir do id.
+#[cfg(windows)]
+#[tauri::command]
+fn stable_device_id() -> String {
+    use sha2::{Digest, Sha256};
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
+    use winreg::RegKey;
+
+    // KEY_WOW64_64KEY: sem isso um processo 32 bits leria a view redirecionada
+    // e acharia outro valor (ou nenhum).
+    let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(r"SOFTWARE\Microsoft\Cryptography", KEY_READ | KEY_WOW64_64KEY)
+    else {
+        return String::new();
+    };
+    let Ok(guid) = key.get_value::<String, _>("MachineGuid") else {
+        return String::new();
+    };
+    let guid = clean_reg_string(&guid);
+    if guid.is_empty() {
+        return String::new();
+    }
+
+    let mut h = Sha256::new();
+    h.update(b"santos-tech:hour-timer-app:device:");
+    h.update(guid.as_bytes());
+    let d = h.finalize();
+    let hex: String = d.iter().take(16).map(|b| format!("{b:02x}")).collect();
+    // Formato UUID (o servidor valida com regex de uuid), com versão 4 e
+    // variante RFC 4122 — é um id derivado, não um UUID sorteado, mas precisa
+    // passar pela mesma validação.
+    format!(
+        "{}-{}-4{}-a{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[13..16],
+        &hex[17..20],
+        &hex[20..32]
+    )
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn stable_device_id() -> String {
+    String::new()
+}
+
+// Nome de exibição do app. Para programa comum o Windows devolve o nome
+// ("Zen", "NVIDIA App"), mas para app empacotado da Store devolve o CAMINHO do
+// executável — e aí a lista mostrava
+// "C:\Program Files\WindowsApps\Microsoft.ScreenSketch_11.26...\SnippingTool\Sni",
+// cortado no meio pelo limite de tamanho. Nesses casos fica só o nome do
+// arquivo, sem a extensão.
+#[cfg(windows)]
+fn app_display_name(raw: &str) -> String {
+    let cleaned = clean_reg_string(raw);
+    if !cleaned.contains('\\') && !cleaned.contains('/') {
+        return cleaned;
+    }
+    let base = cleaned.rsplit(['\\', '/']).next().unwrap_or(&cleaned);
+    base.trim_end_matches(".exe").trim_end_matches(".EXE").trim().to_string()
+}
+
 #[cfg(windows)]
 #[tauri::command]
 fn list_open_apps() -> Vec<String> {
@@ -338,7 +413,7 @@ fn list_open_apps() -> Vec<String> {
     let mut names: Vec<String> = windows
         .iter()
         .filter_map(|w| w.app_name().ok())
-        .map(|n| clean_reg_string(&n))
+        .map(|n| app_display_name(&n))
         .filter(|n| !n.is_empty())
         .collect();
     names.sort_by_key(|n| n.to_lowercase());
@@ -585,7 +660,8 @@ pub fn run() {
             update_tray_status,
             list_installed_programs,
             capture_screen,
-            list_open_apps
+            list_open_apps,
+            stable_device_id
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

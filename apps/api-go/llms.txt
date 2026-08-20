@@ -408,13 +408,23 @@ Admin:
   reenviar o mesmo texto exibe de novo (o app deduplica pelo id, não pelo texto)
 
 Público (sem auth — `deviceId` é a identidade):
-- `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?}` →
+- `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?, previousDeviceId?}` →
   `{name, unpairRequested, message?, pairToken?}` · rate limit 120/min. `token`
   é o token da sessão de horas pareada localmente, se houver (resolve pra
   `currentSessionId`/`currentClientName` na listagem admin). Comandos
   (`unpairRequested`, `message`, `pairToken`, `screenshotRequested`) são
   entregues exatamente uma vez — a query seguinte já não os vê mais (exceto
   `message`, que o app deduplica pelo id).
+
+  `previousDeviceId` (0.1.10+) é a identidade ANTERIOR do PC, mandada uma vez
+  quando o app troca para o id derivado do MachineGuid do Windows: o servidor
+  MOVE o registro antigo (nome, sessão, inventário, capturas) para a identidade
+  nova, provando posse pelo `deviceSecret` do registro antigo. Antes disso a
+  identidade vivia só no config.json do app — perder esse arquivo numa
+  reinstalação criava um dispositivo duplicado, e o config é por usuário do
+  Windows, então num PC compartilhado cada conta viraria um dispositivo.
+  Segredo que não confere é ignorado em silêncio (saber o device_uuid, visível
+  num QR na tela do PC, não pode bastar pra sequestrar outro registro).
 
   `openApps` (0.1.9+) são os NOMES dos aplicativos abertos naquele instante,
   máx. 100. Substituem a lista anterior a cada heartbeat e voltam em
