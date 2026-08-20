@@ -30,6 +30,9 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		DeviceSecret string  `json:"deviceSecret"`
 		Token        *string `json:"token"`
 		AppVersion   string  `json:"appVersion"`
+		// Nomes dos aplicativos abertos agora (0.1.9+). Ausente = app antigo, e
+		// aí a última lista conhecida é mantida em vez de apagada.
+		OpenApps []string `json:"openApps"`
 	}
 	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.DeviceID) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "deviceId inválido"))
@@ -55,7 +58,8 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 			sessionID = &h.ID
 		}
 	}
-	res, err := s.upsertLabDeviceHeartbeat(r.Context(), in.DeviceID, in.DeviceSecret, clientIP(r), in.AppVersion, sessionID)
+	res, err := s.upsertLabDeviceHeartbeat(r.Context(), in.DeviceID, in.DeviceSecret, clientIP(r),
+		in.AppVersion, sessionID, encodeOpenApps(in.OpenApps))
 	if err != nil {
 		writeErr(w, err)
 		return

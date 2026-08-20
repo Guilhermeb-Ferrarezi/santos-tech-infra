@@ -3959,6 +3959,15 @@ paths:
                 deviceId: { type: string, format: uuid }
                 token: { type: string, description: "Token da sessão pareada localmente, se houver (64 chars hex)." , nullable: true }
                 appVersion: { type: string, maxLength: 50 }
+                openApps:
+                  type: array
+                  maxItems: 100
+                  items: { type: string, maxLength: 100 }
+                  description: >
+                    Nomes dos aplicativos abertos neste instante (app 0.1.9+). Substituem a
+                    lista anterior. Ausente ≠ vazio: campo omitido mantém a última lista
+                    conhecida (app antigo), enquanto [] significa "nada aberto". Só nomes —
+                    título de janela carregaria conteúdo e fica de fora de propósito.
               required: [deviceId]
       responses:
         "200":
@@ -5725,6 +5734,15 @@ components:
         currentClientName: { type: string, nullable: true }
         currentStatus: { type: string, enum: [active, paused, ended], nullable: true }
         createdAt: { type: string, format: date-time }
+        openApps:
+          type: array
+          items: { type: string }
+          description: "Nomes dos aplicativos abertos no último heartbeat (app 0.1.9+)."
+        openAppsAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: "Quando a lista de abertos foi vista; null = o PC nunca reportou."
       required: [id, deviceUuid, createdAt]
 
     ExpectedProgram:

@@ -408,13 +408,21 @@ Admin:
   reenviar o mesmo texto exibe de novo (o app deduplica pelo id, não pelo texto)
 
 Público (sem auth — `deviceId` é a identidade):
-- `POST /public/lab-devices/heartbeat {deviceId, token?, appVersion?}` →
+- `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?}` →
   `{name, unpairRequested, message?, pairToken?}` · rate limit 120/min. `token`
   é o token da sessão de horas pareada localmente, se houver (resolve pra
   `currentSessionId`/`currentClientName` na listagem admin). Comandos
-  (`unpairRequested`, `message`, `pairToken`) são entregues exatamente uma vez
-  — a query seguinte já não os vê mais (exceto `message`, que o app deduplica
-  pelo id).
+  (`unpairRequested`, `message`, `pairToken`, `screenshotRequested`) são
+  entregues exatamente uma vez — a query seguinte já não os vê mais (exceto
+  `message`, que o app deduplica pelo id).
+
+  `openApps` (0.1.9+) são os NOMES dos aplicativos abertos naquele instante,
+  máx. 100. Substituem a lista anterior a cada heartbeat e voltam em
+  `openApps`/`openAppsAt` no `LabDevice` da listagem admin. **Ausente ≠ vazio**:
+  app antigo não manda o campo e a última lista conhecida é mantida; `[]`
+  explícito significa "nada aberto". Sem histórico e sem título de janela de
+  propósito — o título carrega conteúdo ("Conversa com Fulano", "contrato.docx")
+  e o nome do app já responde o que a máquina está rodando.
 
 #### Inventário de software do PC
 

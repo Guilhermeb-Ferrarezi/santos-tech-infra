@@ -1,6 +1,6 @@
 [package]
 name = "hour-timer-app"
-version = "0.1.8"
+version = "0.1.9"
 description = "Cronômetro do controle de horas de clientes (Santos Tech) — exibe a sessão em andamento num PC do laboratório."
 authors = ["Santos Tech"]
 edition = "2021"

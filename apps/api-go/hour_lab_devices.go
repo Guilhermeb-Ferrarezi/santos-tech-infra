@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -33,6 +34,10 @@ type LabDevice struct {
 	// que todos os PCs já adotaram depois do rollout.
 	HasSecret bool      `json:"hasSecret"`
 	CreatedAt time.Time `json:"createdAt"`
+	// OpenApps: nomes dos aplicativos abertos no último heartbeat (0.1.9+).
+	// Vazio = app antigo ou nada aberto; OpenAppsAt diz quando foi visto.
+	OpenApps   []string   `json:"openApps"`
+	OpenAppsAt *time.Time `json:"openAppsAt"`
 }
 
 // LabDeviceHeartbeatResult é o que o app precisa saber a cada heartbeat: nome
@@ -90,10 +95,15 @@ type labDeviceQuerier interface {
 const pairTokenTTL = 10 * time.Minute
 
 const labDeviceHeartbeatUpsertSQL = `
-	INSERT INTO hour_lab_devices (device_uuid, last_seen_at, last_ip, app_version, current_session_id)
-	VALUES ($1, now(), $2, $3, $4::uuid)
+	INSERT INTO hour_lab_devices (device_uuid, last_seen_at, last_ip, app_version, current_session_id,
+		open_apps, open_apps_at)
+	VALUES ($1, now(), $2, $3, $4::uuid, $5::jsonb, CASE WHEN $5::jsonb IS NULL THEN NULL ELSE now() END)
 	ON CONFLICT (device_uuid) DO UPDATE SET
-		last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid
+		last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid,
+		-- App antigo não manda a lista: manter a última conhecida é melhor que
+		-- apagar e deixar a tela dizendo "nada aberto" numa máquina em uso.
+		open_apps = CASE WHEN $5::jsonb IS NULL THEN hour_lab_devices.open_apps ELSE $5::jsonb END,
+		open_apps_at = CASE WHEN $5::jsonb IS NULL THEN hour_lab_devices.open_apps_at ELSE now() END
 	RETURNING name, unpair_requested, message_id::text, message_text,
 		CASE WHEN pending_pair_token_expires_at > now() THEN pending_pair_token ELSE NULL END AS pending_pair_token,
 		screenshot_requested_at IS NOT NULL AS screenshot_requested`
@@ -134,13 +144,13 @@ const labDeviceSecretBytes = 32
 // devolve os comandos pendentes, zerando unpair_requested/pending_pair_token na
 // mesma transação — assim cada comando é entregue exatamente uma vez.
 // message_id/text não são zerados: o app deduplica localmente pelo id.
-func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string) (*LabDeviceHeartbeatResult, error) {
+func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte) (*LabDeviceHeartbeatResult, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op depois do Commit
-	res, err := upsertLabDeviceHeartbeatTx(ctx, tx, deviceUUID, deviceSecret, ip, appVersion, sessionID)
+	res, err := upsertLabDeviceHeartbeatTx(ctx, tx, deviceUUID, deviceSecret, ip, appVersion, sessionID, openApps)
 	if err != nil {
 		return nil, err
 	}
@@ -190,14 +200,14 @@ func authLabDeviceTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, devic
 	return &secret, nil
 }
 
-func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string) (*LabDeviceHeartbeatResult, error) {
+func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte) (*LabDeviceHeartbeatResult, error) {
 	minted, err := authLabDeviceTx(ctx, tx, deviceUUID, deviceSecret)
 	if err != nil {
 		return nil, err
 	}
 
 	var res LabDeviceHeartbeatResult
-	if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, deviceUUID, ip, appVersion, sessionID).
+	if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, deviceUUID, ip, appVersion, sessionID, openApps).
 		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken,
 			&res.ScreenshotRequested); err != nil {
 		return nil, err
@@ -249,12 +259,14 @@ func (s *Server) resetLabDeviceSecret(ctx context.Context, id string) error {
 
 const labDeviceCols = `d.id::text, d.device_uuid, d.name, d.last_seen_at, d.last_ip, d.app_version,
 	d.current_session_id::text, c.name, s.status,
-	(d.device_secret_hash IS NOT NULL AND d.device_secret_hash != '') AS has_secret, d.created_at`
+	(d.device_secret_hash IS NOT NULL AND d.device_secret_hash != '') AS has_secret, d.created_at,
+	coalesce(d.open_apps, '[]'::jsonb), d.open_apps_at`
 
 func scanLabDevice(row pgx.Row) (*LabDevice, error) {
 	var d LabDevice
 	err := row.Scan(&d.ID, &d.DeviceUUID, &d.Name, &d.LastSeenAt, &d.LastIP, &d.AppVersion,
-		&d.CurrentSessionID, &d.CurrentClientName, &d.CurrentStatus, &d.HasSecret, &d.CreatedAt)
+		&d.CurrentSessionID, &d.CurrentClientName, &d.CurrentStatus, &d.HasSecret, &d.CreatedAt,
+		&d.OpenApps, &d.OpenAppsAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -380,4 +392,41 @@ func (s *Server) sendLabDeviceMessage(ctx context.Context, id, text string) erro
 		return errLabDeviceNotFound
 	}
 	return nil
+}
+
+// Tetos da lista de apps abertos: o PC manda a cada heartbeat (2/min), então o
+// payload precisa de limite. Uma máquina em uso tem 10-30 janelas; 100 cobre
+// qualquer cenário real e barra quem tente inflar a coluna.
+const (
+	maxOpenApps          = 100
+	maxOpenAppNameLength = 100
+)
+
+// encodeOpenApps prepara a lista para a coluna jsonb. Devolve nil quando o app
+// não mandou nada (versão antiga) — o SQL do heartbeat trata nil como "mantém a
+// última lista conhecida", em vez de apagar e dizer "nada aberto" numa máquina
+// que está em uso.
+func encodeOpenApps(apps []string) []byte {
+	if apps == nil {
+		return nil
+	}
+	clean := make([]string, 0, len(apps))
+	for _, a := range apps {
+		name := sanitizeInventoryField(a)
+		if name == "" {
+			continue
+		}
+		if len([]rune(name)) > maxOpenAppNameLength {
+			name = truncRunes(name, maxOpenAppNameLength)
+		}
+		clean = append(clean, name)
+		if len(clean) >= maxOpenApps {
+			break
+		}
+	}
+	out, err := json.Marshal(clean)
+	if err != nil {
+		return nil
+	}
+	return out
 }

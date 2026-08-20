@@ -317,6 +317,41 @@ fn capture_screen() -> Result<ScreenCapture, String> {
     Err("captura de tela só no Windows".to_string())
 }
 
+// Aplicativos abertos agora no PC, pelo NOME — nunca o título da janela.
+//
+// O título carrega conteúdo ("Conversa com Fulano", "contrato.docx", a URL da
+// aba) e o que o admin precisa saber é o que a máquina está rodando, não o que
+// a pessoa está escrevendo. O nome do app entrega isso inteiro sem carregar
+// junto o que não é da conta de ninguém.
+//
+// Vai junto do heartbeat (a cada ~30s), então é sempre a foto do momento — sem
+// histórico: o que estava aberto meia hora atrás não ajuda a decidir nada e
+// viraria um rastro de uso por pessoa.
+#[cfg(windows)]
+#[tauri::command]
+fn list_open_apps() -> Vec<String> {
+    use xcap::Window;
+
+    let Ok(windows) = Window::all() else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = windows
+        .iter()
+        .filter_map(|w| w.app_name().ok())
+        .map(|n| clean_reg_string(&n))
+        .filter(|n| !n.is_empty())
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    names
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn list_open_apps() -> Vec<String> {
+    Vec::new()
+}
+
 // sha256 dos BYTES do PNG (não do base64) — o servidor recalcula igual, a
 // partir do que recebe, e recusa quando não bate. Ícone vazio não tem hash.
 #[cfg(windows)]
@@ -549,7 +584,8 @@ pub fn run() {
             set_overlay_position,
             update_tray_status,
             list_installed_programs,
-            capture_screen
+            capture_screen,
+            list_open_apps
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

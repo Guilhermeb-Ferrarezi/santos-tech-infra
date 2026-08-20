@@ -642,6 +642,14 @@ ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS screenshot_requested_by IN
 -- ela, o upload chegaria sempre com o pedido já apagado.
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS screenshot_delivered_at TIMESTAMPTZ;
 
+-- Aplicativos abertos no PC, só os NOMES, substituídos a cada heartbeat. Sem
+-- histórico de propósito: o que estava aberto meia hora atrás não ajuda a
+-- decidir nada e viraria um registro de uso por pessoa. Título de janela também
+-- fica de fora — carrega conteúdo ("Conversa com Fulano", "contrato.docx"), e
+-- pra saber o que a máquina roda o nome do app basta.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS open_apps JSONB;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS open_apps_at TIMESTAMPTZ;
+
 -- Histórico das capturas. requested_by fica registrado de propósito: a tela de
 -- um PC do laboratório pode ter dado de quem está sentado nele, então tem que
 -- existir trilha de quem pediu e quando. A imagem mora no R2 (object_key), não

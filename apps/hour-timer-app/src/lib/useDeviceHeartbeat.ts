@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { load, type Store } from "@tauri-apps/plugin-store";
 import { getVersion } from "@tauri-apps/api/app";
 import { syncInventory } from "./inventory";
@@ -65,12 +66,23 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
       const deviceSecret = await store.get<string>(DEVICE_SECRET_KEY);
       const appVersion = await getVersion();
 
+      // Aplicativos abertos AGORA, pelo nome — o admin vê no dashboard o que a
+      // máquina está rodando. Vai junto do heartbeat porque é dado que só vale
+      // fresco: pedir sob demanda daria uma foto de 30s atrás do mesmo jeito.
+      // Falha aqui não pode derrubar o heartbeat, que é a função principal.
+      let openApps: string[] = [];
+      try {
+        openApps = await invoke<string[]>("list_open_apps");
+      } catch {
+        // sem lista: o servidor mantém a última conhecida
+      }
+
       let res: Response;
       try {
         res = await fetch(`${API_ORIGIN}/public/lab-devices/heartbeat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deviceId, deviceSecret, token: tokenRef.current, appVersion }),
+          body: JSON.stringify({ deviceId, deviceSecret, token: tokenRef.current, appVersion, openApps }),
         });
       } catch {
         if (!cancelled) setHeartbeatOk(false);

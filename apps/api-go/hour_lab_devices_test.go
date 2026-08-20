@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -124,7 +126,7 @@ func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil)
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil)
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -138,7 +140,7 @@ func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 		t.Errorf("primeiro heartbeat: %d UPDATEs de limpeza, quer 1", fake.clears)
 	}
 
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil)
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil)
 	if err != nil {
 		t.Fatalf("segundo heartbeat: %v", err)
 	}
@@ -161,7 +163,7 @@ func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 func TestHeartbeatNaoLimpaQuandoNaoHaComando(t *testing.T) {
 	const segredo = "segredo-do-pc"
 	fake := &fakeLabDeviceDB{exists: true, name: ptrTo("PC-02"), secretHash: ptrTo(sha256Hex(segredo))}
-	if _, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil); err != nil {
+	if _, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil); err != nil {
 		t.Fatalf("heartbeat: %v", err)
 	}
 	if fake.clears != 0 {
@@ -191,7 +193,7 @@ func TestHeartbeatEmiteSegredoUmaVez(t *testing.T) {
 	fake := &fakeLabDeviceDB{}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil)
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil)
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -206,7 +208,7 @@ func TestHeartbeatEmiteSegredoUmaVez(t *testing.T) {
 		t.Errorf("%d emissões de segredo, quer 1", fake.mints)
 	}
 
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", secret, "1.2.3.4", "1.0.0", nil)
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", secret, "1.2.3.4", "1.0.0", nil, nil)
 	if err != nil {
 		t.Fatalf("segundo heartbeat com o segredo: %v", err)
 	}
@@ -231,7 +233,7 @@ func TestHeartbeatSemSegredoNaoVazaPairToken(t *testing.T) {
 	ctx := context.Background()
 
 	for _, tentativa := range []string{"", "segredo-errado", sha256Hex("segredo-do-pc")} {
-		res, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", tentativa, "9.9.9.9", "1.0.0", nil)
+		res, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", tentativa, "9.9.9.9", "1.0.0", nil, nil)
 		if !errors.Is(err, errLabDeviceUnauthorized) {
 			t.Fatalf("segredo %q: err = %v, quer errLabDeviceUnauthorized", tentativa, err)
 		}
@@ -256,7 +258,7 @@ func TestHeartbeatAdocaoNaoEntregaPairToken(t *testing.T) {
 		name:             ptrTo("PC-legado"),
 		pendingPairToken: ptrTo("tok-secreto"),
 	}
-	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil)
+	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil)
 	if err != nil {
 		t.Fatalf("adoção de legado: %v", err)
 	}
@@ -285,7 +287,7 @@ func TestHeartbeatEntregaCapturaDeTelaUmaVezSo(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil)
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil)
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -293,11 +295,42 @@ func TestHeartbeatEntregaCapturaDeTelaUmaVezSo(t *testing.T) {
 		t.Fatal("primeiro heartbeat deveria pedir a captura")
 	}
 
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil)
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil)
 	if err != nil {
 		t.Fatalf("segundo heartbeat: %v", err)
 	}
 	if second.ScreenshotRequested {
 		t.Error("segundo heartbeat NÃO pode pedir captura de novo")
+	}
+}
+
+// A lista de apps abertos é substituída a cada heartbeat, mas app antigo não
+// manda nada — e "nada" não pode virar "nada aberto" numa máquina em uso.
+func TestEncodeOpenAppsMantemAusenteDistintoDeVazio(t *testing.T) {
+	if got := encodeOpenApps(nil); got != nil {
+		t.Errorf("app que não mandou a lista deve virar nil (mantém a anterior), veio %q", got)
+	}
+	if got := encodeOpenApps([]string{}); string(got) != "[]" {
+		t.Errorf("lista vazia explícita deve virar [] (nada aberto), veio %q", got)
+	}
+}
+
+func TestEncodeOpenAppsLimpaELimita(t *testing.T) {
+	// NUL vem do Windows em nomes de janela, igual ao inventário.
+	got := encodeOpenApps([]string{"Chrome\x00", "  ", "Unity"})
+	if string(got) != `["Chrome","Unity"]` {
+		t.Fatalf("esperava nomes limpos e sem vazios, veio %q", got)
+	}
+
+	muitos := make([]string, maxOpenApps+50)
+	for i := range muitos {
+		muitos[i] = "app" + strconv.Itoa(i)
+	}
+	var decoded []string
+	if err := json.Unmarshal(encodeOpenApps(muitos), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != maxOpenApps {
+		t.Fatalf("%d apps gravados, teto é %d", len(decoded), maxOpenApps)
 	}
 }
