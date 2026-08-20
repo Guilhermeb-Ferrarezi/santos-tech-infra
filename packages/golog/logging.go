@@ -238,8 +238,12 @@ func RequestLogger(next http.Handler) http.Handler {
 				level = slog.LevelDebug // GET 2xx rápido: sem valor diagnóstico
 			case lw.status >= 200 && lw.status < 300 &&
 				(r.URL.Path == "/auth/me" || r.URL.Path == "/auth/refresh" ||
-					r.URL.Path == "/public/lab-devices/heartbeat"):
-				level = slog.LevelDebug // polling frequente do frontend: só interessa quando falha
+					// Telemetria dos PCs do laboratório: heartbeat (2/min por
+					// PC), inventário, ícones e captura de tela. Tudo automático
+					// e sem valor diagnóstico quando dá certo — só interessa
+					// quando falha, e aí o status já joga pra WARN/ERROR.
+					strings.HasPrefix(r.URL.Path, "/public/lab-devices/")):
+				level = slog.LevelDebug // polling frequente: só interessa quando falha
 			}
 
 			attrs := []slog.Attr{
