@@ -210,6 +210,7 @@ responde 500).
 | `LOG_REDACT` | `1` | redige credenciais — **`0` loga cru, inclui senhas (não recomendado: LGPD)** |
 | `LOG_BODY_MAX_BYTES` | `16384` | bytes logados por payload (resto truncado) |
 | `LOG_BODY_HARD_CAP` | `1048576` | acima disso o request nem é bufferizado (anti-OOM) |
+| `LOG_REPEAT_WINDOW` | `5m` | agrupa **4xx idênticos** (método+rota+status+IP): o 1º sai na hora, os seguintes só quando a janela fecha, com `repeated=N`. `0` desliga. 5xx nunca é agrupado |
 
 `bot-go` e `auto-fixer` já configuravam o `slog`; os demais chamam `initLogging()` no
 `main`. **Ao criar um serviço Go novo:** copie `logging.go`, plugue `requestLogger(...)`

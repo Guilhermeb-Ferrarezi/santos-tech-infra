@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // captureSlog redireciona o slog default p/ um buffer JSON e restaura no fim.
@@ -196,5 +198,74 @@ func TestBody_RespeitaLogBodiesDesligado(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if strings.Contains(buf.String(), "req_body") {
 		t.Error("com LOG_BODIES desligado não deve haver req_body")
+	}
+}
+
+// O agrupamento existe pra um caso concreto: um PC com credencial velha
+// batendo 401 a cada 30s gerava 120 linhas/hora idênticas — 91% de tudo que o
+// serviço logava. A primeira precisa sair na hora (senão o problema demora a
+// aparecer) e a contagem não pode se perder (senão "aconteceu 87 vezes" vira
+// "aconteceu").
+func TestShouldLogRepeatAgrupaDentroDaJanela(t *testing.T) {
+	repeatSeen = map[string]*repeatState{}
+	const janela = time.Minute
+	t0 := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+
+	if ok, n := shouldLogRepeat("k", t0, janela); !ok || n != 0 {
+		t.Fatalf("primeira ocorrência: ok=%v n=%d, quer true/0", ok, n)
+	}
+	// Repetições dentro da janela não viram linha.
+	for i := 1; i <= 5; i++ {
+		if ok, _ := shouldLogRepeat("k", t0.Add(time.Duration(i)*time.Second), janela); ok {
+			t.Fatalf("repetição %d dentro da janela virou linha", i)
+		}
+	}
+	// Fechada a janela, sai UMA linha com o que ficou pra trás.
+	ok, n := shouldLogRepeat("k", t0.Add(janela+time.Second), janela)
+	if !ok {
+		t.Fatal("depois da janela a linha tem que sair")
+	}
+	if n != 5 {
+		t.Fatalf("repeated=%d, quer 5 (as suprimidas)", n)
+	}
+	// E a contagem zera para o próximo ciclo.
+	if ok, n := shouldLogRepeat("k", t0.Add(2*janela+2*time.Second), janela); !ok || n != 0 {
+		t.Fatalf("segundo ciclo: ok=%v n=%d, quer true/0", ok, n)
+	}
+}
+
+// Assinaturas diferentes (outro PC, outra rota, outro status) não podem se
+// agrupar entre si — senão um problema esconde o outro.
+func TestShouldLogRepeatNaoMisturaAssinaturas(t *testing.T) {
+	repeatSeen = map[string]*repeatState{}
+	t0 := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	for _, k := range []string{"POST /a 401 1.1.1.1", "POST /a 401 2.2.2.2", "POST /b 401 1.1.1.1", "POST /a 403 1.1.1.1"} {
+		if ok, _ := shouldLogRepeat(k, t0, time.Minute); !ok {
+			t.Errorf("%q deveria sair: é a primeira dessa assinatura", k)
+		}
+	}
+}
+
+// Janela 0 = agrupamento desligado: tudo passa.
+func TestShouldLogRepeatDesligado(t *testing.T) {
+	repeatSeen = map[string]*repeatState{}
+	t0 := time.Now()
+	for i := 0; i < 3; i++ {
+		if ok, _ := shouldLogRepeat("k", t0, 0); !ok {
+			t.Fatal("com janela 0 nada pode ser suprimido")
+		}
+	}
+}
+
+// O mapa não pode crescer sem teto: a chave inclui o IP, então uma varredura
+// de rotas por IPs aleatórios encheria a memória do processo.
+func TestShouldLogRepeatNaoCresceSemLimite(t *testing.T) {
+	repeatSeen = map[string]*repeatState{}
+	t0 := time.Now()
+	for i := 0; i < repeatSeenMax+500; i++ {
+		shouldLogRepeat("chave-"+strconv.Itoa(i), t0, time.Minute)
+	}
+	if len(repeatSeen) > repeatSeenMax {
+		t.Fatalf("mapa com %d entradas, teto é %d", len(repeatSeen), repeatSeenMax)
 	}
 }
