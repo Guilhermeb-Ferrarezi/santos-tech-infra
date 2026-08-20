@@ -202,11 +202,12 @@ const startHourSessionAttempts = 3
 //
 // scheduledEndAt é opcional (nil = duração livre, "até o admin encerrar") —
 // o front resolve duração/horário fixo pra um timestamp absoluto antes de
-// mandar. scheduledStartAt também é opcional e segue o mesmo princípio: nil
-// (ou um horário que já passou/é agora) cria a sessão já "active" com evento
-// 'start' na hora, igual sempre foi; um horário FUTURO cria como
+// mandar. scheduledStartAt também é opcional: nil cria a sessão já "active"
+// com evento 'start' agora, igual sempre foi; um horário FUTURO cria como
 // "scheduled" (sem evento 'start' ainda — ver autoStartIfDue, que é quem de
-// fato inicia sozinha ao chegar a hora).
+// fato inicia sozinha ao chegar a hora); um horário PASSADO cria já "active"
+// mas com o evento 'start' backdatado pra esse horário — início retroativo,
+// pro admin que esqueceu de abrir a sessão e o cliente já tinha começado.
 func (s *Server) startHourSession(ctx context.Context, clientID string, createdBy int64, scheduledEndAt, scheduledStartAt *time.Time) (*HourSession, string, string, error) {
 	if err := s.releaseStaleShortCodes(ctx); err != nil {
 		return nil, "", "", err
@@ -249,10 +250,18 @@ func (s *Server) startHourSessionOnce(ctx context.Context, clientID string, crea
 		return nil, "", "", err
 	}
 	if startsImmediately {
+		// scheduledStartAt no passado = início retroativo (admin esqueceu de
+		// abrir a sessão e o cliente já tinha começado): o evento 'start' nasce
+		// com esse horário passado em vez de now(), então o tempo decorrido já
+		// conta desde lá — não precisa de ajuste manual depois.
+		startEventAt := time.Now()
+		if scheduledStartAt != nil {
+			startEventAt = *scheduledStartAt
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO hour_session_events (session_id, event_type, actor_user_id)
-			VALUES ($1::uuid, 'start', $2)`,
-			sessionID, createdBy); err != nil {
+			INSERT INTO hour_session_events (session_id, event_type, actor_user_id, created_at)
+			VALUES ($1::uuid, 'start', $2, $3)`,
+			sessionID, createdBy, startEventAt); err != nil {
 			return nil, "", "", err
 		}
 	}
@@ -266,6 +275,11 @@ func (s *Server) startHourSessionOnce(ctx context.Context, clientID string, crea
 		return nil, "", "", err
 	}
 	h.ElapsedSeconds = 0
+	if startsImmediately && scheduledStartAt != nil {
+		// Início retroativo: o evento 'start' já nasceu no passado, então o
+		// tempo decorrido não começa em zero.
+		h.ElapsedSeconds = computeElapsedSeconds([]hourSessionEvent{{EventType: "start", CreatedAt: *scheduledStartAt}}, time.Now())
+	}
 	return h, token, shortCode, nil
 }
 

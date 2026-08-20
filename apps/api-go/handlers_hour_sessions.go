@@ -108,7 +108,10 @@ func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) 
 		ScheduledEndAt *time.Time `json:"scheduledEndAt"`
 		// ScheduledStartAt: opcional, timestamp absoluto (RFC3339). Futuro =
 		// sessão nasce "scheduled" e inicia sozinha na hora (ver
-		// autoStartIfDue); ausente/passado = começa na hora, como sempre.
+		// autoStartIfDue); ausente = começa agora, elapsed=0; PASSADO = início
+		// retroativo — sessão já nasce "active" mas o evento 'start' é
+		// backdatado pra esse horário, então o tempo decorrido já conta desde
+		// lá (admin esqueceu de abrir a sessão e o cliente já tinha começado).
 		ScheduledStartAt *time.Time `json:"scheduledStartAt"`
 	}
 	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.ClientID) {

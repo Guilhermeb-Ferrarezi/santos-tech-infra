@@ -360,8 +360,10 @@ Admin (role admin, sem cargo personalizado):
     efeito de `/end`, autor = quem criou); omitido/null = duração livre.
   - `scheduledStartAt` — se futuro, sessão nasce status `scheduled` (sem
     evento start, elapsedSeconds=0, cliente não usa ainda) e vira `active`
-    sozinha ao chegar nesse horário; omitido/passado = começa na hora, como
-    sempre.
+    sozinha ao chegar nesse horário; omitido = começa agora, elapsedSeconds=0;
+    PASSADO = início retroativo — sessão nasce `active` direto, mas o evento
+    start é backdatado pra esse horário, então elapsedSeconds já vem maior
+    que zero.
 - `POST /hour-sessions/{id}/pause` — só de `active` → `paused`; limpa pedido de pausa pendente
 - `POST /hour-sessions/{id}/resume` — só de `paused` → `active`
 - `POST /hour-sessions/{id}/end` — debita o tempo decorrido do saldo do cliente → `ended`

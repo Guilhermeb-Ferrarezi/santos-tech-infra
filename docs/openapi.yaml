@@ -3462,10 +3462,12 @@ paths:
                     Opcional — timestamp absoluto (RFC3339) em que a sessão inicia
                     sozinha. Se futuro, a sessão nasce com status `scheduled` (sem
                     evento start, elapsedSeconds=0, cliente não consegue usar ainda)
-                    e vira `active` sozinha ao chegar nesse horário. Omitido/passado
-                    = começa na hora, como sempre (status `active` direto). Se os
-                    dois campos forem dados, scheduledEndAt precisa ser depois de
-                    scheduledStartAt.
+                    e vira `active` sozinha ao chegar nesse horário. Omitido = começa
+                    agora, elapsedSeconds=0. PASSADO = início retroativo: a sessão
+                    nasce `active` direto, mas o evento start é backdatado pra esse
+                    horário — elapsedSeconds já vem maior que zero (admin esqueceu de
+                    abrir a sessão e o cliente já tinha começado). Se os dois campos
+                    forem dados, scheduledEndAt precisa ser depois de scheduledStartAt.
               required: [clientId]
       responses:
         "201":
