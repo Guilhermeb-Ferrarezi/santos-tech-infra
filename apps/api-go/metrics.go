@@ -27,13 +27,16 @@ var (
 	}, []string{"method", "path"})
 )
 
-// metricsResponseWriter captura o status para a métrica. Implementa Flush/Hijack
-// via interfaces opcionais checadas em runtime (preserva SSE/WebSocket).
+// metricsResponseWriter captura o status para a métrica. Unwrap() permite que
+// http.ResponseController alcance o writer interno (Flush/Hijack/SetWriteDeadline),
+// espelhando o padrão de securityHeadersWriter em server.go.
 type metricsResponseWriter struct {
 	http.ResponseWriter
 	status int
 	wrote  bool
 }
+
+func (w *metricsResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *metricsResponseWriter) WriteHeader(code int) {
 	if !w.wrote {
