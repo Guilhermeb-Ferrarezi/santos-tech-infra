@@ -85,6 +85,34 @@ func (s *Server) handleAddHourPurchase(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"client": c})
 }
 
+// PATCH /hour-clients/{id} — {discountPercent}: desconto padrão (0-100)
+// aplicado no faturamento avulso deste cliente (ver GET /hour-billing).
+func (s *Server) handleUpdateHourClientDiscount(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errHourClientNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var in struct {
+		DiscountPercent int `json:"discountPercent"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	if in.DiscountPercent < 0 || in.DiscountPercent > 100 {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "discountPercent precisa estar entre 0 e 100"))
+		return
+	}
+	c, err := s.updateHourClientDiscount(r.Context(), id, in.DiscountPercent)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"client": c})
+}
+
 // ── admin: sessões ───────────────────────────────────────────────────────────
 
 // GET /hour-sessions — painel "ao vivo" (sessões ainda não encerradas)
@@ -378,4 +406,40 @@ func (s *Server) handleAdjustHourSession(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"session": h})
+}
+
+// ── admin: faturamento avulso ────────────────────────────────────────────────
+
+// GET /hour-billing?from=RFC3339&to=RFC3339 — quanto cada cliente usou avulso
+// (sem saldo pré-pago suficiente) no período, já convertido em R$ (bruto e
+// líquido, com o desconto padrão do cliente). Sem from/to: últimos 30 dias.
+func (s *Server) handleGetHourBilling(w http.ResponseWriter, r *http.Request) {
+	to := time.Now()
+	from := to.Add(-30 * 24 * time.Hour)
+	if v := r.URL.Query().Get("to"); v != "" {
+		parsed, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "to inválido (use RFC3339)"))
+			return
+		}
+		to = parsed
+	}
+	if v := r.URL.Query().Get("from"); v != "" {
+		parsed, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "from inválido (use RFC3339)"))
+			return
+		}
+		from = parsed
+	}
+	if !to.After(from) {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "to precisa ser depois de from"))
+		return
+	}
+	rows, err := s.listHourBilling(r.Context(), from, to)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "from": from, "to": to})
 }

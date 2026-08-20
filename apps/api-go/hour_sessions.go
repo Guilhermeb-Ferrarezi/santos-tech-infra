@@ -19,8 +19,11 @@ type HourClient struct {
 	Name           string    `json:"name"`
 	Phone          *string   `json:"phone"`
 	BalanceMinutes int       `json:"balanceMinutes"`
-	CreatedAt      time.Time `json:"createdAt"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	// DiscountPercent: desconto padrão (0-100) aplicado no faturamento avulso
+	// deste cliente — ver listHourBilling.
+	DiscountPercent int       `json:"discountPercent"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
 // HourSession é a view completa (admin) ou pública, dependendo do handler que
@@ -70,23 +73,29 @@ var errHourSessionNotFound = appErr(http.StatusNotFound, "HOUR_SESSION_NOT_FOUND
 
 // ── clientes ─────────────────────────────────────────────────────────────────
 
-func (s *Server) insertHourClient(ctx context.Context, name string, phone *string) (*HourClient, error) {
+const hourClientCols = `id::text, name, phone, balance_minutes, discount_percent, created_at, updated_at`
+
+func scanHourClient(row pgx.Row) (*HourClient, error) {
 	var c HourClient
-	err := s.db.QueryRow(ctx, `
-		INSERT INTO hour_clients (name, phone) VALUES ($1, $2)
-		RETURNING id::text, name, phone, balance_minutes, created_at, updated_at`,
-		name, phone).
-		Scan(&c.ID, &c.Name, &c.Phone, &c.BalanceMinutes, &c.CreatedAt, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.Name, &c.Phone, &c.BalanceMinutes, &c.DiscountPercent, &c.CreatedAt, &c.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	return &c, nil
 }
 
+func (s *Server) insertHourClient(ctx context.Context, name string, phone *string) (*HourClient, error) {
+	return scanHourClient(s.db.QueryRow(ctx, `
+		INSERT INTO hour_clients (name, phone) VALUES ($1, $2)
+		RETURNING `+hourClientCols,
+		name, phone))
+}
+
 func (s *Server) listHourClients(ctx context.Context) ([]HourClient, error) {
-	rows, err := s.db.Query(ctx, `
-		SELECT id::text, name, phone, balance_minutes, created_at, updated_at
-		FROM hour_clients ORDER BY name`)
+	rows, err := s.db.Query(ctx, `SELECT `+hourClientCols+` FROM hour_clients ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +103,7 @@ func (s *Server) listHourClients(ctx context.Context) ([]HourClient, error) {
 	out := []HourClient{}
 	for rows.Next() {
 		var c HourClient
-		if err := rows.Scan(&c.ID, &c.Name, &c.Phone, &c.BalanceMinutes, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Phone, &c.BalanceMinutes, &c.DiscountPercent, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -103,18 +112,22 @@ func (s *Server) listHourClients(ctx context.Context) ([]HourClient, error) {
 }
 
 func (s *Server) getHourClient(ctx context.Context, id string) (*HourClient, error) {
-	var c HourClient
-	err := s.db.QueryRow(ctx, `
-		SELECT id::text, name, phone, balance_minutes, created_at, updated_at
-		FROM hour_clients WHERE id = $1::uuid`, id).
-		Scan(&c.ID, &c.Name, &c.Phone, &c.BalanceMinutes, &c.CreatedAt, &c.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+	return scanHourClient(s.db.QueryRow(ctx, `SELECT `+hourClientCols+` FROM hour_clients WHERE id = $1::uuid`, id))
+}
+
+// updateHourClientDiscount ajusta o desconto padrão (0-100) aplicado no
+// faturamento avulso deste cliente — ver listHourBilling. Validação do range
+// fica no handler; aqui só o CHECK do banco como rede de segurança.
+func (s *Server) updateHourClientDiscount(ctx context.Context, id string, discountPercent int) (*HourClient, error) {
+	c, err := scanHourClient(s.db.QueryRow(ctx, `
+		UPDATE hour_clients SET discount_percent = $2, updated_at = now()
+		WHERE id = $1::uuid
+		RETURNING `+hourClientCols,
+		id, discountPercent))
+	if c == nil && err == nil {
+		return nil, errHourClientNotFound
 	}
-	if err != nil {
-		return nil, err
-	}
-	return &c, nil
+	return c, err
 }
 
 // addHourPurchase registra a compra (auditoria) e credita o saldo do cliente
@@ -131,14 +144,12 @@ func (s *Server) addHourPurchase(ctx context.Context, clientID string, minutesAd
 		clientID, minutesAdded, note, createdBy); err != nil {
 		return nil, err
 	}
-	var c HourClient
-	err = tx.QueryRow(ctx, `
+	c, err := scanHourClient(tx.QueryRow(ctx, `
 		UPDATE hour_clients SET balance_minutes = balance_minutes + $2, updated_at = now()
 		WHERE id = $1::uuid
-		RETURNING id::text, name, phone, balance_minutes, created_at, updated_at`,
-		clientID, minutesAdded).
-		Scan(&c.ID, &c.Name, &c.Phone, &c.BalanceMinutes, &c.CreatedAt, &c.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+		RETURNING `+hourClientCols,
+		clientID, minutesAdded))
+	if c == nil && err == nil {
 		return nil, errHourClientNotFound
 	}
 	if err != nil {
@@ -147,7 +158,7 @@ func (s *Server) addHourPurchase(ctx context.Context, clientID string, minutesAd
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return &c, nil
+	return c, nil
 }
 
 // ── sessões ──────────────────────────────────────────────────────────────────
@@ -556,6 +567,18 @@ func computeElapsedSeconds(events []hourSessionEvent, now time.Time) int64 {
 	return int64(total.Seconds())
 }
 
+// computeBillableMinutes é quanto do tempo decorrido passou do saldo
+// pré-pago disponível ANTES do débito — a parte "avulsa" da sessão, cobrada
+// a avulsoRatePerHourCents no faturamento (ver listHourBilling). Cliente com
+// saldo suficiente pra cobrir a sessão inteira dá 0 (já pagou antecipado).
+func computeBillableMinutes(elapsedMinutes, balanceBeforeMinutes int) int {
+	billable := elapsedMinutes - balanceBeforeMinutes
+	if billable < 0 {
+		return 0
+	}
+	return billable
+}
+
 // maxAdjustSeconds limita um ajuste isolado a 24h pra cada lado. Não é
 // desconfiança do admin: é rede de proteção contra dígito a mais numa correção
 // digitada na mão, que sairia do saldo do cliente no encerramento.
@@ -687,14 +710,26 @@ func (s *Server) endHourSession(ctx context.Context, id string, actorID int64) (
 		return nil, err
 	}
 	elapsedMinutes := int(elapsed / 60)
+	// Saldo ANTES do débito: é o que sobra pra calcular quanto desta sessão
+	// passou do saldo pré-pago (billableMinutes, cliente avulso — ver
+	// listHourBilling). Depois do UPDATE essa referência se perde (GREATEST
+	// trava em 0, não guarda o quanto passou). FOR UPDATE trava a linha
+	// contra outro encerramento concorrente do mesmo cliente.
+	var balanceBefore int
+	if err := tx.QueryRow(ctx, `SELECT balance_minutes FROM hour_clients WHERE id = $1::uuid FOR UPDATE`, clientID).
+		Scan(&balanceBefore); err != nil {
+		return nil, err
+	}
+	billableMinutes := computeBillableMinutes(elapsedMinutes, balanceBefore)
 	// short_code volta pro espaço UNIQUE junto com o encerramento: sessão
 	// encerrada não pode mais ser pareada, então guardar o código só gastaria
 	// um dos 1M valores pra sempre.
 	if _, err := tx.Exec(ctx, `
 		UPDATE hour_sessions
-		SET status = 'ended', short_code = NULL, short_code_expires_at = NULL, updated_at = now()
+		SET status = 'ended', short_code = NULL, short_code_expires_at = NULL,
+		    billable_minutes = $2, updated_at = now()
 		WHERE id = $1::uuid`,
-		id); err != nil {
+		id, billableMinutes); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -751,4 +786,63 @@ func (s *Server) denyHourSessionPauseRequest(ctx context.Context, id string) err
 		return errHourSessionNotFound
 	}
 	return nil
+}
+
+// ── faturamento avulso ──────────────────────────────────────────────────────
+
+// avulsoRatePerHourCents: preço da hora avulsa (sem pacote), em centavos.
+// Constante de negócio simples — mude aqui se o valor mudar.
+const avulsoRatePerHourCents = 2000
+
+// HourBillingRow é uma linha do relatório de faturamento (GET /hour-billing):
+// quanto um cliente usou avulso (sem saldo pré-pago suficiente) num período,
+// e quanto isso dá em dinheiro — bruto e já com o desconto padrão do cliente.
+type HourBillingRow struct {
+	ClientID         string `json:"clientId"`
+	ClientName       string `json:"clientName"`
+	BillableMinutes  int    `json:"billableMinutes"`
+	DiscountPercent  int    `json:"discountPercent"`
+	RatePerHourCents int    `json:"ratePerHourCents"`
+	GrossCents       int    `json:"grossCents"`
+	NetCents         int    `json:"netCents"`
+}
+
+// centsForMinutes converte minutos em centavos à razão avulsoRatePerHourCents
+// por hora, arredondando pro centavo mais próximo em vez de truncar.
+func centsForMinutes(minutes int) int {
+	return (minutes*avulsoRatePerHourCents + 30) / 60
+}
+
+// listHourBilling agrega billable_minutes por cliente num período (sessões
+// encerradas com updated_at em [from, to)) — só clientes com algum tempo
+// avulso aparecem. discountPercent vem do cliente NO MOMENTO da consulta
+// (não é um snapshot histórico): mudar o desconto muda o valor de sessões
+// já encerradas também, é intencional (é o desconto padrão do cliente, não
+// um desconto por sessão).
+func (s *Server) listHourBilling(ctx context.Context, from, to time.Time) ([]HourBillingRow, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT c.id::text, c.name, c.discount_percent, SUM(s.billable_minutes)::int
+		FROM hour_sessions s
+		JOIN hour_clients c ON c.id = s.client_id
+		WHERE s.status = 'ended' AND s.billable_minutes > 0
+		  AND s.updated_at >= $1 AND s.updated_at < $2
+		GROUP BY c.id, c.name, c.discount_percent
+		ORDER BY SUM(s.billable_minutes) DESC`,
+		from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HourBillingRow{}
+	for rows.Next() {
+		var r HourBillingRow
+		if err := rows.Scan(&r.ClientID, &r.ClientName, &r.DiscountPercent, &r.BillableMinutes); err != nil {
+			return nil, err
+		}
+		r.RatePerHourCents = avulsoRatePerHourCents
+		r.GrossCents = centsForMinutes(r.BillableMinutes)
+		r.NetCents = r.GrossCents * (100 - r.DiscountPercent) / 100
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

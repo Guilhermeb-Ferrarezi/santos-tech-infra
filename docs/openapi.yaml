@@ -3373,6 +3373,92 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /hour-clients/{id}:
+    patch:
+      tags: [Horas]
+      summary: Ajusta o desconto padrão do cliente
+      description: |
+        Admin-only. `discountPercent` (0-100) é o desconto padrão aplicado no
+        faturamento avulso deste cliente (ver GET /hour-billing) — não é um
+        desconto por sessão, é o percentual usado sempre que esse cliente
+        aparece no relatório. Rate limit 30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                discountPercent: { type: integer, minimum: 0, maximum: 100 }
+              required: [discountPercent]
+      responses:
+        "200":
+          description: Cliente com o desconto atualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  client: { $ref: "#/components/schemas/HourClient" }
+                required: [client]
+        "400":
+          description: discountPercent fora de 0-100.
+        "404":
+          description: Cliente não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-billing:
+    get:
+      tags: [Horas]
+      summary: Relatório de faturamento avulso, agregado por cliente
+      description: |
+        Admin-only. Soma `billableMinutes` (tempo que passou do saldo
+        pré-pago — cliente com pacote suficiente não gera nada aqui) de todas
+        as sessões encerradas de cada cliente no período `[from, to)`, e
+        converte pro valor a cobrar (bruto e líquido com o desconto padrão do
+        cliente) à razão de R$20/h. Só clientes com algum tempo avulso no
+        período aparecem. Sem `from`/`to`: últimos 30 dias.
+      parameters:
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Linhas de faturamento por cliente, ordenadas por tempo avulso decrescente.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        clientId: { type: string, format: uuid }
+                        clientName: { type: string }
+                        billableMinutes: { type: integer, description: "Minutos avulsos (sem saldo pré-pago) no período." }
+                        discountPercent: { type: integer }
+                        ratePerHourCents: { type: integer, description: "Preço da hora avulsa em centavos (constante de negócio)." }
+                        grossCents: { type: integer, description: "billableMinutes convertido em R$, sem desconto." }
+                        netCents: { type: integer, description: "grossCents com discountPercent aplicado — valor a cobrar." }
+                  from: { type: string, format: date-time }
+                  to: { type: string, format: date-time }
+                required: [rows, from, to]
+        "400":
+          description: from/to inválidos, ou to não é depois de from.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /hour-clients/{id}/purchases:
     post:
       tags: [Horas]
@@ -5747,10 +5833,11 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         phone: { type: string, nullable: true }
-        balanceMinutes: { type: integer, description: "Pode ficar negativo (sem corte automático)." }
+        balanceMinutes: { type: integer, description: "Nunca fica negativo — trava em 0 no encerramento da sessão (o excedente vira tempo avulso, ver GET /hour-billing)." }
+        discountPercent: { type: integer, description: "Desconto padrão (0-100) aplicado no faturamento avulso deste cliente — ver GET /hour-billing e PATCH /hour-clients/{id}." }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
-      required: [id, name, balanceMinutes, createdAt, updatedAt]
+      required: [id, name, balanceMinutes, discountPercent, createdAt, updatedAt]
 
     HourSession:
       type: object

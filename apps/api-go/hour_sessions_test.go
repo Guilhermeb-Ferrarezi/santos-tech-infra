@@ -64,6 +64,28 @@ func TestComputeElapsedNuncaFicaNegativo(t *testing.T) {
 	}
 }
 
+// Cliente com saldo suficiente pra cobrir a sessão inteira não gera tempo
+// avulso — já pagou antecipado (billable = 0, não negativo).
+func TestComputeBillableMinutesSaldoCobreTudo(t *testing.T) {
+	if got := computeBillableMinutes(45, 60); got != 0 {
+		t.Fatalf("billable = %d, quer 0 (saldo de 60min cobre os 45min usados)", got)
+	}
+}
+
+// Saldo insuficiente: só o excedente é avulso, cobrável.
+func TestComputeBillableMinutesSaldoParcial(t *testing.T) {
+	if got := computeBillableMinutes(90, 30); got != 60 {
+		t.Fatalf("billable = %d, quer 60 (90min usados - 30min de saldo)", got)
+	}
+}
+
+// Cliente sem saldo nenhum (avulso puro): o tempo inteiro é cobrável.
+func TestComputeBillableMinutesSemSaldo(t *testing.T) {
+	if got := computeBillableMinutes(50, 0); got != 50 {
+		t.Fatalf("billable = %d, quer 50 (sem saldo, tudo é avulso)", got)
+	}
+}
+
 // Ajuste de zero ou fora de ±24h é recusado: o valor é digitado na mão e sai
 // do saldo do cliente no encerramento, então um dígito a mais não pode passar.
 func TestAdjustHourSessionRecusaValorForaDoLimite(t *testing.T) {

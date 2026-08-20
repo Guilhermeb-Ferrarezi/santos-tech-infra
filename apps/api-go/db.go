@@ -566,6 +566,18 @@ ALTER TABLE hour_session_events DROP CONSTRAINT IF EXISTS hour_session_events_ev
 ALTER TABLE hour_session_events ADD CONSTRAINT hour_session_events_event_type_check
   CHECK (event_type IN ('start', 'pause', 'resume', 'end', 'adjust'));
 
+-- Faturamento de cliente avulso (sem saldo pré-pago suficiente pra cobrir a
+-- sessão inteira): billable_minutes é a parte do tempo decorrido que passou
+-- do saldo disponível na hora do encerramento — calculado uma vez em
+-- endHourSession, não recalculado depois (o saldo já foi debitado e a
+-- referência se perde). discount_percent é um desconto padrão por cliente,
+-- aplicado no relatório de faturamento (GET /hour-billing).
+ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS billable_minutes INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE hour_clients ADD COLUMN IF NOT EXISTS discount_percent SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE hour_clients DROP CONSTRAINT IF EXISTS hour_clients_discount_percent_check;
+ALTER TABLE hour_clients ADD CONSTRAINT hour_clients_discount_percent_check
+  CHECK (discount_percent BETWEEN 0 AND 100);
+
 -- PCs do laboratório: cada instalação do app desktop (hour-timer-app) gera um
 -- device_uuid estável e manda heartbeat periódico. Nome é atribuído pelo admin
 -- (nunca pelo próprio PC) para não bagunçar com quem estiver sentado nele.

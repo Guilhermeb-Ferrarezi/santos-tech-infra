@@ -344,9 +344,16 @@ negativo (trava em 0, GREATEST no débito). status: `scheduled` (ainda não
 começou, ver `scheduledStartAt`) | `active` | `paused` | `ended`.
 
 Admin (role admin, sem cargo personalizado):
-- `GET /hour-clients` — `{clients:[HourClient]}`
+- `GET /hour-clients` — `{clients:[HourClient]}`, `HourClient` inclui `discountPercent` (0-100, desconto padrão no faturamento avulso)
 - `POST /hour-clients {name, phone?}` → 201 `{client}`
+- `PATCH /hour-clients/{id} {discountPercent}` → ajusta o desconto padrão (0-100) → `{client}`
 - `POST /hour-clients/{id}/purchases {minutesAdded, note?}` → credita o saldo → `{client}`
+- `GET /hour-billing?from?&to?` (RFC3339, default últimos 30 dias) — faturamento
+  avulso agregado por cliente: soma `billableMinutes` (tempo que passou do saldo
+  pré-pago em sessões encerradas — cliente com pacote suficiente não gera nada
+  aqui) e converte a R$20/h (`ratePerHourCents`), bruto e líquido com o
+  `discountPercent` do cliente → `{rows:[{clientId, clientName, billableMinutes,
+  discountPercent, ratePerHourCents, grossCents, netCents}], from, to}`
 - `GET /hour-sessions` — sessões não encerradas (inclui `scheduled`), com `elapsedSeconds` calculado → `{sessions:[HourSession]}`
 - `POST /hour-sessions {clientId, scheduledEndAt?, scheduledStartAt?}` → cria
   e devolve o token E um código curto de 6 dígitos em texto puro (só aqui —
