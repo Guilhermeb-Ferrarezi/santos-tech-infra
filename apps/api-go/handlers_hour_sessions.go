@@ -289,8 +289,11 @@ func (s *Server) handleGetPublicHourSession(w http.ResponseWriter, r *http.Reque
 	}
 	remainingMinutes := h.BalanceMinutes - int(h.ElapsedSeconds/60)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"clientName":       h.ClientName,
-		"status":           h.Status,
+		"clientName": h.ClientName,
+		"status":     h.Status,
+		// scheduledStartAt: só relevante pro app do PC quando status é
+		// "scheduled" (mostra "começa às HH:MM" em vez do cronômetro).
+		"scheduledStartAt": h.ScheduledStartAt,
 		"elapsedSeconds":   h.ElapsedSeconds,
 		"remainingMinutes": remainingMinutes,
 		"pauseRequested":   h.PauseRequestedAt != nil,

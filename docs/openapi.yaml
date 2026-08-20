@@ -3723,7 +3723,8 @@ paths:
                 type: object
                 properties:
                   clientName: { type: string }
-                  status: { type: string, enum: [active, paused, ended] }
+                  status: { type: string, enum: [scheduled, active, paused, ended], description: "scheduled = início agendado ainda não chegou (ver scheduledStartAt); cronômetro não corre." }
+                  scheduledStartAt: { type: string, format: date-time, nullable: true, description: "Preenchido quando status é scheduled — horário em que inicia sozinha." }
                   elapsedSeconds: { type: integer }
                   remainingMinutes: { type: integer, description: "Saldo do cliente menos o tempo decorrido nesta sessão; pode ser negativo." }
                   pauseRequested: { type: boolean }

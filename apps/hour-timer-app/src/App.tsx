@@ -15,7 +15,10 @@ const DASHBOARD_ORIGIN = "https://santos-tech.com/dashboard";
 
 interface PublicHourSession {
   clientName: string;
-  status: "active" | "paused" | "ended";
+  status: "scheduled" | "active" | "paused" | "ended";
+  // Só vem preenchido quando status é "scheduled" — horário em que a sessão
+  // inicia sozinha (servidor decide, ver autoStartIfDue no api-go).
+  scheduledStartAt: string | null;
   elapsedSeconds: number;
   remainingMinutes: number;
   pauseRequested: boolean;
@@ -30,6 +33,10 @@ function formatDuration(totalSeconds: number) {
   return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
 }
 
+function formatClock(iso: string) {
+  return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
 // Aceita tanto o link completo (copiado do painel admin) quanto o token cru.
 function extractToken(input: string): string | null {
   const trimmed = input.trim();
@@ -39,6 +46,7 @@ function extractToken(input: string): string | null {
 }
 
 const statusText: Record<PublicHourSession["status"], string> = {
+  scheduled: "Sessão agendada",
   active: "Jogando",
   paused: "Pausado",
   ended: "Sessão encerrada",
@@ -55,6 +63,10 @@ function trayStatusFor(
   if (!heartbeatOk) return ["offline", "Santos Tech — sem conexão com o servidor"];
   if (!data) return ["no-session", "Santos Tech — carregando..."];
   if (data.status === "ended") return ["no-session", "Santos Tech — sessão encerrada"];
+  if (data.status === "scheduled") {
+    const when = data.scheduledStartAt ? formatClock(data.scheduledStartAt) : "em breve";
+    return ["no-session", `${data.clientName} — começa às ${when}`];
+  }
   if (remainingMinutes <= 0) return ["empty", `${data.clientName} — saldo esgotado`];
   if (remainingMinutes <= 10) return ["low", `${data.clientName} — ${remainingMinutes} min restantes`];
   return ["ok", `${data.clientName} — ${remainingMinutes} min restantes`];
@@ -230,7 +242,19 @@ function TimerScreen({
       <div className="rounded-2xl bg-white/5 p-6 text-center shadow-sm ring-1 ring-white/10">
         {error && !data && <p className="text-sm text-red-300">Falha ao conectar — tentando de novo...</p>}
         {!data && !error && <p className="py-10 text-white/70">Carregando sessão...</p>}
-        {data && (
+        {data && data.status === "scheduled" && (
+          <>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#0DB88F]">
+              {statusText[data.status]}
+            </p>
+            <p className="mt-2 flex items-center justify-center gap-2 font-mono text-4xl font-bold tabular-nums">
+              <Clock className="size-8 text-white/50" />
+              {data.scheduledStartAt ? formatClock(data.scheduledStartAt) : "--:--"}
+            </p>
+            <p className="mt-4 text-sm text-white/70">Aguarde — a sessão começa sozinha nesse horário.</p>
+          </>
+        )}
+        {data && data.status !== "scheduled" && (
           <>
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#0DB88F]">
               {statusText[data.status]}
