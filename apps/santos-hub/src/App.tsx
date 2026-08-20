@@ -85,7 +85,7 @@ function DownloadCard({ item }: { item: DownloadItem }) {
 
   return (
     <div className="flex flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
-      <div className="relative flex aspect-[3/4] items-center justify-center bg-white/5">
+      <div className="relative flex aspect-square items-center justify-center bg-white/5">
         {item.imageUrl ? (
           <img src={item.imageUrl} alt="" className="size-full object-cover" />
         ) : (
@@ -157,9 +157,13 @@ export default function App() {
 
   const filtered = useMemo(() => {
     if (!items) return [];
+    // O próprio Hub não precisa se listar pra download — quem está vendo essa
+    // lista já está rodando o Hub. (O item continua aparecendo em /hub e no
+    // admin, só não aqui dentro.)
+    const withoutSelf = items.filter((i) => i.category !== "Santos Hub");
     const q = query.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(
+    if (!q) return withoutSelf;
+    return withoutSelf.filter(
       (i) => i.name.toLowerCase().includes(q) || i.category.toLowerCase().includes(q) || i.description.toLowerCase().includes(q),
     );
   }, [items, query]);
@@ -221,7 +225,11 @@ export default function App() {
           {grouped.map(([category, categoryItems]) => (
             <div key={category}>
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">{category}</p>
-              <div className="grid grid-cols-2 gap-3">
+              {/* auto-fill em vez de grid-cols-2 fixo: com a janela maximizável, 2
+                  colunas fixas viravam cards gigantes numa tela larga — auto-fill
+                  com um teto de largura mantém o card num tamanho razoável e só
+                  acrescenta colunas conforme sobra espaço. */}
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">
                 {categoryItems.map((item) => (
                   <DownloadCard key={item.id} item={item} />
                 ))}
