@@ -13,12 +13,23 @@ interface InstalledProgram {
   name: string;
   version: string;
   publisher: string;
+  /** PNG 48x48 em base64 puro; vazio quando o programa não declara ícone. */
+  icon: string;
 }
+
+// Versão do FORMATO do payload, não do app. Entra no hash pra que uma mudança
+// de esquema force um reenvio: quando o ícone passou a ser coletado, a lista de
+// programas continuou idêntica — sem isto, o hash gravado bateria e nenhum PC
+// jamais mandaria os ícones novos.
+const PAYLOAD_SCHEMA = "v2-icon"
 
 // Hash barato (djb2) só pra decidir "mudou desde a última vez?". Não é
 // segurança: colisão aqui atrasa um envio, não expõe nada.
 function hashPrograms(programs: InstalledProgram[]) {
-  const text = programs.map((p) => `${p.name}@${p.version}`).join("\n");
+  const text =
+    PAYLOAD_SCHEMA +
+    "\n" +
+    programs.map((p) => `${p.name}@${p.version}@${p.icon ? 1 : 0}`).join("\n");
   let h = 5381;
   for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
   return String(h);
