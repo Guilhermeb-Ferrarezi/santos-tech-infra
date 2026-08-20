@@ -413,17 +413,29 @@ remover programas") e manda **inteira**; quem sabe o que é esperado é o
 servidor, então mudar a expectativa é editar no dashboard, sem instalador novo.
 Cada envio **substitui** o inventário anterior: é uma foto do estado atual.
 
-- `POST /public/lab-devices/inventory {deviceId, deviceSecret, programs:[{name, version?, publisher?, icon?}]}`
-  → `{ok, count}` · rate limit 10/min · máx. 1000 programas
+- `POST /public/lab-devices/inventory {deviceId, deviceSecret, programs:[{name, version?, publisher?, iconHash?}]}`
+  → `{ok, count, missingIcons:[hash]}` · rate limit 10/min · máx. 1000 programas
   (`INVENTORY_TOO_LARGE`). Exige o mesmo `deviceSecret` do heartbeat e, ao
   contrário dele, **não adota** dispositivo novo — `deviceId` que nunca bateu
   heartbeat leva 404. O app manda depois de um heartbeat bem-sucedido, só
   quando a lista muda ou passa 24h (0.1.2+).
-  `icon` é o PNG 48x48 do programa em base64 puro (o app extrai do executável
-  apontado em DisplayIcon), teto de 32 KB; valor que não for base64 válido é
-  descartado — o programa entra sem ícone e a coleta continua (0.1.4+).
+
+  **Ícones são endereçados pelo conteúdo.** `iconHash` é o sha256 do PNG; os
+  BYTES não vão nesta chamada, porque o ícone do Blender é o mesmo arquivo em
+  todo PC — mandá-lo por máquina repetiria ~200 KB que o servidor já tem.
+  `missingIcons` traz os hashes desconhecidos, e só esses sobem em seguida:
+- `POST /public/lab-devices/icons {deviceId, deviceSecret, icons:[{hash, png}]}`
+  → `{ok, saved}` · rate limit 10/min · máx. 200 por lote, 32 KB por imagem.
+  `png` é base64 puro. O servidor **recalcula** o sha256 do que recebe e
+  descarta quando não bate com o `hash` declarado — sem isso um PC poderia
+  gravar qualquer imagem sob o hash de outro programa, já que o armazenamento é
+  compartilhado entre todas as máquinas. (`icon` em base64 direto na lista do
+  inventário ainda é aceito: é o formato da 0.1.5; 0.1.6+ manda hash.)
+- `GET /program-icons/{hash}` (admin) → PNG cru, `Cache-Control: immutable` de
+  um ano. A URL é o próprio conteúdo, então o navegador busca cada ícone uma
+  vez só e o JSON do inventário não carrega imagem nenhuma.
 - `GET /hour-lab-devices/{id}/programs` (admin) →
-  `{collectedAt, expected:[{id, label, matchPattern, installed, matchedName?, matchedVersion?, matchedIcon?}], installed:[{name, version, publisher, icon?}]}`
+  `{collectedAt, expected:[{id, label, matchPattern, installed, matchedName?, matchedVersion?, matchedIconHash?}], installed:[{name, version, publisher, iconHash?}]}`
   · `collectedAt` nulo = PC nunca reportou.
 - `GET|POST /hour-lab-expected-programs` e `PATCH|DELETE /hour-lab-expected-programs/{id}`
   (admin, rate limit 30/min no que escreve) — cadastro do que se espera achar.

@@ -3932,19 +3932,28 @@ paths:
                       name: { type: string, maxLength: 200 }
                       version: { type: string, maxLength: 200 }
                       publisher: { type: string, maxLength: 200 }
+                      iconHash:
+                        type: string
+                        pattern: "^[0-9a-f]{64}$"
+                        description: >
+                          sha256 do PNG do ícone. Os bytes NÃO vão aqui: a mesma imagem
+                          vale para todos os PCs, então sobe uma vez só em
+                          POST /public/lab-devices/icons. Os hashes que o servidor ainda
+                          não conhece voltam em missingIcons.
                       icon:
                         type: string
-                        maxLength: 32768
+                        maxLength: 44000
                         description: >
-                          PNG 48x48 em base64 puro (sem o prefixo data:), extraído
-                          pelo app do executável que o registro aponta em DisplayIcon.
-                          Valor que não seja base64 válido é descartado — o programa
-                          entra sem ícone, a coleta não é recusada.
+                          Formato do app 0.1.5 (PNG em base64 na própria lista), ainda
+                          aceito — o servidor calcula o hash e guarda a imagem.
                     required: [name]
               required: [deviceId]
       responses:
         "200":
-          description: Inventário substituído.
+          description: >
+            Inventário substituído. missingIcons traz os hashes cujas imagens o
+            servidor ainda não tem — o app envia só essas em
+            POST /public/lab-devices/icons.
           content:
             application/json:
               schema:
@@ -3952,6 +3961,9 @@ paths:
                 properties:
                   ok: { type: boolean }
                   count: { type: integer }
+                  missingIcons:
+                    type: array
+                    items: { type: string, pattern: "^[0-9a-f]{64}$" }
         "400":
           description: deviceId inválido ou mais de 1000 programas (INVENTORY_TOO_LARGE).
         "401":
@@ -3960,6 +3972,81 @@ paths:
           description: Dispositivo desconhecido (nunca mandou heartbeat).
         "429":
           $ref: "#/components/responses/RateLimited"
+
+  /public/lab-devices/icons:
+    post:
+      tags: [Horas]
+      summary: Envia as imagens de ícone que faltavam no servidor
+      description: |
+        Segundo passo da coleta: só os hashes que vieram em `missingIcons`. O
+        armazenamento é por conteúdo e compartilhado entre todas as máquinas —
+        por isso o servidor **recalcula** o sha256 do que recebe e descarta
+        quando não bate com o `hash` declarado; sem essa checagem um PC poderia
+        gravar qualquer imagem sob o hash de outro programa e trocar o ícone
+        para todo mundo.
+
+        Autenticado pelo mesmo `deviceSecret` do heartbeat. Rate limit 10/min.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceId: { type: string, format: uuid }
+                deviceSecret: { type: string }
+                icons:
+                  type: array
+                  maxItems: 200
+                  items:
+                    type: object
+                    properties:
+                      hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+                      png: { type: string, description: "PNG em base64 puro, até 32 KB decodificados." }
+                    required: [hash, png]
+              required: [deviceId]
+      responses:
+        "200":
+          description: Quantas imagens foram gravadas (as que não conferiram são ignoradas em silêncio).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  saved: { type: integer }
+        "400":
+          description: deviceId inválido ou lote acima de 200 ícones (TOO_MANY_ICONS).
+        "401":
+          description: Segredo do dispositivo ausente ou inválido (LAB_DEVICE_UNAUTHORIZED).
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /program-icons/{hash}:
+    get:
+      tags: [Horas]
+      summary: PNG do ícone de um programa
+      description: |
+        Admin-only. A URL é o próprio conteúdo (sha256), então a imagem nunca
+        muda: `Cache-Control: public, max-age=31536000, immutable` deixa o
+        navegador buscar cada ícone uma única vez, e o JSON do inventário não
+        precisa carregar imagem nenhuma.
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+      responses:
+        "200":
+          description: Imagem PNG.
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+        "404":
+          description: Hash desconhecido ou fora do formato (ICON_NOT_FOUND).
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /hour-lab-devices/{id}/programs:
     get:
@@ -3995,7 +4082,7 @@ paths:
                         installed: { type: boolean }
                         matchedName: { type: string }
                         matchedVersion: { type: string }
-                        matchedIcon: { type: string, description: "PNG base64 do programa que casou (ver icon)." }
+                        matchedIconHash: { type: string, description: "Hash do ícone do programa que casou (ver iconHash)." }
                   installed:
                     type: array
                     items:
@@ -4004,7 +4091,7 @@ paths:
                         name: { type: string }
                         version: { type: string }
                         publisher: { type: string }
-                        icon: { type: string, description: "PNG 48x48 base64 puro; ausente quando o programa não declara ícone." }
+                        iconHash: { type: string, description: "sha256 do PNG; monte a URL /program-icons/{hash}. Ausente quando o programa não declara ícone." }
         "404":
           description: Dispositivo não encontrado.
         "401":

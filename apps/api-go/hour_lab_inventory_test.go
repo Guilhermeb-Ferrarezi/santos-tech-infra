@@ -112,24 +112,27 @@ func TestSanitizeInventoryFieldTiraNulEControles(t *testing.T) {
 	}
 }
 
-// O ícone vai direto num src="data:image/png;base64,..." — o que não for
-// base64 puro precisa virar vazio, não conteúdo solto dentro do atributo.
-func TestSanitizeIconSoAceitaBase64Puro(t *testing.T) {
-	valid := "iVBORw0KGgo="
-	if got := sanitizeIcon(valid); got != valid {
-		t.Fatalf("base64 válido deveria passar, veio %q", got)
+// O hash vira segmento de URL (/program-icons/{hash}) e chave de busca no
+// banco: só sha256 em hex minúsculo passa daqui.
+func TestSanitizeIconHashSoAceitaSha256Hex(t *testing.T) {
+	valid := strings.Repeat("a1b2c3d4", 8) // 64 chars hex
+	if got := sanitizeIconHash(valid); got != valid {
+		t.Fatalf("hash válido deveria passar, veio %q", got)
+	}
+	if got := sanitizeIconHash(strings.ToUpper(valid)); got != valid {
+		t.Errorf("maiúsculas deveriam ser normalizadas, veio %q", got)
 	}
 	for _, bad := range []string{
-		"data:image/png;base64,iVBORw0KGgo=", // prefixo colado
-		`" onerror="alert(1)`,                // tentativa de sair do atributo
-		"não é base64!",
+		"",
+		strings.Repeat("a", 63),          // curto
+		strings.Repeat("a", 65),          // longo
+		strings.Repeat("z", 64),          // fora do alfabeto hex
+		"../../etc/passwd",               // travessia de caminho
+		strings.Repeat("a", 60) + "'--x", // tentativa de sair da query
 	} {
-		if got := sanitizeIcon(bad); got != "" {
+		if got := sanitizeIconHash(bad); got != "" {
 			t.Errorf("%q deveria ser descartado, veio %q", bad, got)
 		}
-	}
-	if got := sanitizeIcon(strings.Repeat("A", maxInventoryIconBytes+1)); got != "" {
-		t.Error("ícone acima do teto deveria ser descartado")
 	}
 }
 

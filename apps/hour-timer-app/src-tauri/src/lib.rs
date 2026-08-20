@@ -206,10 +206,16 @@ pub struct InstalledProgram {
     name: String,
     version: String,
     publisher: String,
-    // PNG 32x32 em base64 (sem o prefixo data:), extraído do executável que o
-    // registro aponta em DisplayIcon. Vazio quando o programa não declara ícone
-    // ou o arquivo sumiu — o dashboard cai num placeholder.
+    // PNG do ícone em base64 (sem o prefixo data:), extraído do executável que
+    // o registro aponta em DisplayIcon. Vazio quando o programa não declara
+    // ícone ou o arquivo sumiu — o dashboard cai num placeholder.
+    //
+    // Não vai pro servidor no inventário: o front separa hash e bytes e só
+    // envia as imagens que o servidor pedir (ver inventory.ts).
     icon: String,
+    // sha256 do PNG acima. É o que identifica o ícone no servidor: o Blender é
+    // o mesmo arquivo em todo PC, então o conteúdo só sobe uma vez.
+    icon_hash: String,
 }
 
 // Tira caracteres de controle e espaços das pontas de um valor do registro.
@@ -247,6 +253,24 @@ fn extract_icon_base64(display_icon: &str) -> String {
     }
     windows_icons::get_icon_base64_by_path_with_size(path, windows_icons::IconSize::Medium)
         .unwrap_or_default()
+}
+
+// sha256 dos BYTES do PNG (não do base64) — o servidor recalcula igual, a
+// partir do que recebe, e recusa quando não bate. Ícone vazio não tem hash.
+#[cfg(windows)]
+fn icon_sha256(icon_base64: &str) -> String {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    if icon_base64.is_empty() {
+        return String::new();
+    }
+    let Ok(png) = base64::engine::general_purpose::STANDARD.decode(icon_base64) else {
+        return String::new();
+    };
+    let mut h = Sha256::new();
+    h.update(&png);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 // Lê as três chaves Uninstall do registro: HKLM (64 bits), HKLM\WOW6432Node
@@ -304,6 +328,7 @@ fn list_installed_programs() -> Vec<InstalledProgram> {
                 continue;
             }
             let display_icon: String = entry.get_value("DisplayIcon").unwrap_or_default();
+            let icon = extract_icon_base64(&clean_reg_string(&display_icon));
             out.push(InstalledProgram {
                 name,
                 version: clean_reg_string(
@@ -312,7 +337,8 @@ fn list_installed_programs() -> Vec<InstalledProgram> {
                 publisher: clean_reg_string(
                     &entry.get_value::<String, _>("Publisher").unwrap_or_default(),
                 ),
-                icon: extract_icon_base64(&clean_reg_string(&display_icon)),
+                icon_hash: icon_sha256(&icon),
+                icon,
             });
         }
     }

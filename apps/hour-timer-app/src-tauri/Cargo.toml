@@ -1,6 +1,6 @@
 [package]
 name = "hour-timer-app"
-version = "0.1.5"
+version = "0.1.6"
 description = "Cronômetro do controle de horas de clientes (Santos Tech) — exibe a sessão em andamento num PC do laboratório."
 authors = ["Santos Tech"]
 edition = "2021"
@@ -27,6 +27,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target."cfg(windows)".dependencies]
+base64 = "0.23.1"
+sha2 = "0.11.0"
 windows-icons = "0.4.0"
 winreg = "0.56.0"
 

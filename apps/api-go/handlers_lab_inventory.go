@@ -40,11 +40,70 @@ func (s *Server) handleLabDeviceInventory(w http.ResponseWriter, r *http.Request
 		writeErr(w, errTooManyPrograms)
 		return
 	}
-	if err := s.replaceLabDeviceInventory(r.Context(), in.DeviceID, in.DeviceSecret, in.Programs); err != nil {
+	missing, err := s.replaceLabDeviceInventory(r.Context(), in.DeviceID, in.DeviceSecret, in.Programs)
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(in.Programs)})
+	// missingIcons diz ao app quais imagens o servidor ainda não tem. Do
+	// segundo PC em diante costuma vir vazio — os ícones já subiram.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "count": len(in.Programs), "missingIcons": missing,
+	})
+}
+
+// POST /public/lab-devices/icons — {deviceId, deviceSecret, icons:[{hash, png}]}
+//
+// Segundo passo da coleta: só as imagens que vieram em missingIcons. É o que
+// evita reenviar ~200 KB de ícone a cada PC e a cada coleta.
+func (s *Server) handleLabDeviceIcons(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
+	var in struct {
+		DeviceID     string          `json:"deviceId"`
+		DeviceSecret string          `json:"deviceSecret"`
+		Icons        []LabIconUpload `json:"icons"`
+	}
+	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.DeviceID) {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "deviceId inválido"))
+		return
+	}
+	if len(in.DeviceSecret) > 2*labDeviceSecretBytes {
+		writeErr(w, errLabDeviceUnauthorized)
+		return
+	}
+	if len(in.Icons) > maxIconsPerBatch {
+		writeErr(w, appErr(http.StatusBadRequest, "TOO_MANY_ICONS", "Lote de ícones grande demais"))
+		return
+	}
+	saved, err := s.storeLabProgramIcons(r.Context(), in.DeviceID, in.DeviceSecret, in.Icons)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "saved": saved})
+}
+
+// GET /program-icons/{hash} — PNG do ícone, pro <img> do dashboard.
+//
+// A URL é o próprio conteúdo (sha256), então o arquivo nunca muda: cache
+// immutable de um ano deixa o navegador buscar cada ícone UMA vez, e o JSON do
+// inventário fica pequeno em vez de carregar as imagens embutidas.
+func (s *Server) handleLabProgramIcon(w http.ResponseWriter, r *http.Request) {
+	hash := sanitizeIconHash(r.PathValue("hash"))
+	if hash == "" {
+		writeErr(w, errIconNotFound)
+		return
+	}
+	png, err := s.labProgramIcon(r.Context(), hash)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(png)
 }
 
 // ── admin ────────────────────────────────────────────────────────────────────

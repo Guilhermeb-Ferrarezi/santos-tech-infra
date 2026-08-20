@@ -394,6 +394,9 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /hour-lab-devices/{id}/message", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceMessage)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/reset-secret", s.rateLimit(30, min, s.adminGuard(s.handleResetLabDeviceSecret)))
 	mux.HandleFunc("GET /hour-lab-devices/{id}/programs", s.adminGuard(s.handleGetLabDevicePrograms))
+	// Imagem do ícone por hash de conteúdo — admin-only como o resto do
+	// domínio; a resposta é cacheável pra sempre (a URL é o próprio conteúdo).
+	mux.HandleFunc("GET /program-icons/{hash}", s.adminGuard(s.handleLabProgramIcon))
 
 	// Programas esperados nos PCs do lab (cadastro do admin) — o cruzamento com
 	// o inventário de cada PC sai em /hour-lab-devices/{id}/programs.
@@ -407,6 +410,9 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	// Inventário é raro (muda quando alguém instala algo): o app manda no boot e
 	// uma vez por dia, então 10/min por IP já cobre reinstalação e retry.
 	mux.HandleFunc("POST /public/lab-devices/inventory", s.rateLimit(10, min, s.handleLabDeviceInventory))
+	// Segundo passo da coleta (só os ícones que o servidor ainda não tem) —
+	// mesmo orçamento do inventário, já que sempre vem logo depois dele.
+	mux.HandleFunc("POST /public/lab-devices/icons", s.rateLimit(10, min, s.handleLabDeviceIcons))
 }
 
 // registerDownloadsRoutes: catálogo de downloads do Santos Hub. Cadastro/edição/

@@ -610,12 +610,20 @@ CREATE TABLE IF NOT EXISTS hour_lab_device_programs (
 );
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS inventory_collected_at TIMESTAMPTZ;
 
--- icon: PNG 48x48 em base64 (sem prefixo data:), extraído pelo app do
--- executável apontado em DisplayIcon no registro. Vazio = programa sem ícone
--- declarado ou arquivo sumido; a tela cai num placeholder. Fica na linha do
--- programa e não numa tabela própria porque o inventário é substituído inteiro
--- a cada coleta — não há o que reaproveitar entre versões.
-ALTER TABLE hour_lab_device_programs ADD COLUMN IF NOT EXISTS icon TEXT NOT NULL DEFAULT '';
+-- Ícones dos programas, endereçados pelo CONTEÚDO (sha256 do PNG). O ícone do
+-- Blender é byte a byte o mesmo em todo PC do laboratório: guardar por
+-- dispositivo gravaria a mesma imagem N vezes e, pior, faria cada coleta
+-- reenviar ~200 KB que o servidor já tem. Aqui a imagem entra uma única vez e
+-- as linhas de programa só apontam pro hash.
+CREATE TABLE IF NOT EXISTS hour_lab_program_icons (
+  hash       TEXT PRIMARY KEY,
+  png        BYTEA NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE hour_lab_device_programs ADD COLUMN IF NOT EXISTS icon_hash TEXT;
+-- Coluna da 1a versão (base64 na própria linha do programa), substituída pelo
+-- icon_hash acima. Some junto com a próxima coleta de cada PC.
+ALTER TABLE hour_lab_device_programs DROP COLUMN IF EXISTS icon;
 
 -- Programas esperados nos PCs do laboratório (cadastro do admin em
 -- /admin/horas/programas). match_pattern casa por substring, sem diferenciar
