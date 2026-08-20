@@ -15,7 +15,8 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://cdn.santos-tech.com/*" },
-        { "url": "https://santos-tech.com/*" }
+        { "url": "https://santos-tech.com/*" },
+        { "url": "https://ac17de2ec0cc4e48dc21ddf2eeb5a879.r2.cloudflarestorage.com/*" }
       ]
     },
     {

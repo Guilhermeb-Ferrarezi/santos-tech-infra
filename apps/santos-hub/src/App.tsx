@@ -33,7 +33,15 @@ interface DownloadItem {
 // empresa. O escopo real agora vive em src-tauri/capabilities/default.json —
 // esta lista precisa espelhá-lo, e só existe pra dar mensagem de erro decente:
 // sem ela o openUrl seria rejeitado pelo Tauri sem nenhum sinal na tela.
-const ALLOWED_DOWNLOAD_ORIGINS = ["https://cdn.santos-tech.com", "https://santos-tech.com"];
+//
+// r2.cloudflarestorage.com: desde que downloadURL passou a devolver um link
+// SigV4 assinado (não mais a URL pública permanente do CDN), o host mudou —
+// ver downloadURL/PresignGet em handlers_downloads.go/r2.go.
+const ALLOWED_DOWNLOAD_ORIGINS = [
+  "https://cdn.santos-tech.com",
+  "https://santos-tech.com",
+  "https://ac17de2ec0cc4e48dc21ddf2eeb5a879.r2.cloudflarestorage.com",
+];
 
 function isAllowedDownloadUrl(raw: string) {
   try {
