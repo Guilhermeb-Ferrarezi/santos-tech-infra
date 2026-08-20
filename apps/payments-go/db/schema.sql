@@ -35,6 +35,8 @@ CREATE TABLE pay_webhook_events (
   id           TEXT PRIMARY KEY,
   type         TEXT NOT NULL,
   payload      JSONB NOT NULL,
+  -- 'pending' = evento reivindicado, efeito AINDA NÃO aplicado; 'done' = concluído.
+  status       TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('pending','done')),
   processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -65,6 +67,8 @@ CREATE TABLE pay_customers (
   CONSTRAINT uq_pay_customers_user_tax UNIQUE (user_id, tax_id)
 );
 
+CREATE INDEX idx_pay_customers_tax_id ON pay_customers(tax_id);
+
 CREATE TABLE pay_recurrences (
   id              BIGSERIAL PRIMARY KEY,
   subscription_id BIGINT REFERENCES pay_subscriptions(id) ON DELETE SET NULL,
@@ -90,6 +94,9 @@ CREATE TABLE pay_recurrences (
 CREATE UNIQUE INDEX uq_pay_recurrences_public_token ON pay_recurrences(public_token) WHERE public_token IS NOT NULL;
 
 CREATE INDEX idx_pay_recurrences_status ON pay_recurrences(status);
+CREATE INDEX idx_pay_recurrences_efi_id_rec   ON pay_recurrences(efi_id_rec) WHERE efi_id_rec IS NOT NULL;
+CREATE INDEX idx_pay_recurrences_payer_tax_id ON pay_recurrences(payer_tax_id);
+CREATE INDEX idx_pay_recurrences_customer     ON pay_recurrences(customer_id) WHERE customer_id IS NOT NULL;
 
 CREATE TABLE pay_charges (
   id                 BIGSERIAL PRIMARY KEY,
@@ -101,17 +108,24 @@ CREATE TABLE pay_charges (
   amount_cents       BIGINT NOT NULL CHECK (amount_cents > 0),
   due_date           DATE NOT NULL,
   reference_month    TEXT,
-  status             TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','paid','expired','canceled')),
+  -- 'creating' = linha reservada antes de existir no gateway; 'refunding' = estorno
+  -- reservado antes de chamar o gateway. Ver db.go (migration) e store.go.
+  status             TEXT NOT NULL DEFAULT 'pending'
+                       CHECK (status IN ('creating','pending','paid','expired','canceled','refunding','refunded')),
   provider           TEXT NOT NULL DEFAULT 'efi',
   provider_charge_id TEXT,
   correlation_id     TEXT NOT NULL UNIQUE,
   public_token       TEXT,
   payer_tax_id       TEXT,
-  method             TEXT NOT NULL DEFAULT 'pix' CHECK (method IN ('pix','boleto')),
+  method             TEXT NOT NULL DEFAULT 'pix' CHECK (method IN ('pix','boleto','card')),
   br_code            TEXT,
   qr_code            TEXT,
   pdf_url            TEXT,
   barcode            TEXT,
+  -- refunded_cents acumula o total estornado; só quando alcança amount_cents o
+  -- status vira 'refunded' (estorno parcial mantém a cobrança em 'paid').
+  refunded_cents     BIGINT NOT NULL DEFAULT 0,
+  link_id            BIGINT,
   paid_at            TIMESTAMPTZ,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -122,6 +136,9 @@ CREATE UNIQUE INDEX uq_pay_charges_sub_month
 
 CREATE INDEX idx_pay_charges_student ON pay_charges(student_id);
 CREATE INDEX idx_pay_charges_status ON pay_charges(status);
+CREATE INDEX idx_pay_charges_provider_charge_id ON pay_charges(provider_charge_id) WHERE provider_charge_id IS NOT NULL;
+CREATE INDEX idx_pay_charges_customer   ON pay_charges(customer_id)   WHERE customer_id IS NOT NULL;
+CREATE INDEX idx_pay_charges_recurrence ON pay_charges(recurrence_id) WHERE recurrence_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_pay_charges_public_token ON pay_charges(public_token) WHERE public_token IS NOT NULL;
 
 CREATE TABLE pay_charge_items (

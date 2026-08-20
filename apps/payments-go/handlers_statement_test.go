@@ -17,7 +17,7 @@ type fakeStatementStore struct {
 	err       error
 }
 
-func (f *fakeStatementStore) ListMovements(_ context.Context, from, to time.Time) ([]Movement, error) {
+func (f *fakeStatementStore) ListMovements(_ context.Context, from, to time.Time, _ listPage) ([]Movement, error) {
 	if f.err != nil {
 		return nil, f.err
 	}

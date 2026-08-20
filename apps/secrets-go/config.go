@@ -28,13 +28,32 @@ type Config struct {
 	// = endpoint desabilitado (503). Nunca é um JWT de usuário — quem chama é
 	// outro backend, não um admin no navegador.
 	InternalSyncToken string
+	// VaultSecret/VaultSalt derivam a chave AES-256-GCM que cifra o valor bruto
+	// das chaves vazadas (matchedValue) antes de ir pro Elasticsearch — ver
+	// vault.go. Preferir uma env DEDICADA (SECRETS_VAULT_SECRET); sem ela, a
+	// chave é derivada do JWT_SECRET com outro rótulo HKDF (funciona, mas não
+	// separa domínios de chave — o boot avisa).
+	//
+	// ATENÇÃO: trocar secret ou salt torna ilegível tudo que já foi cifrado.
+	VaultSecret string
+	VaultSalt   string
+	// VaultFromJWT indica que caiu no fallback (usado só pelo aviso de boot).
+	VaultFromJWT bool
 }
 
 func LoadConfig() Config {
+	jwtSecret := mustEnv("JWT_SECRET")
+	vaultSecret, vaultFromJWT := getEnv("SECRETS_VAULT_SECRET", ""), false
+	if vaultSecret == "" {
+		vaultSecret, vaultFromJWT = jwtSecret, true
+	}
 	return Config{
 		Port:              getEnv("PORT", "3338"),
 		DatabaseURL:       mustEnv("DATABASE_URL"),
-		JWTSecret:         mustEnv("JWT_SECRET"),
+		JWTSecret:         jwtSecret,
+		VaultSecret:       vaultSecret,
+		VaultSalt:         getEnv("SECRETS_VAULT_SALT", ""),
+		VaultFromJWT:      vaultFromJWT,
 		CORSOrigins:       splitCSV(getEnv("CORS_ORIGIN", "")),
 		GitHubTokens:      loadGitHubTokens(),
 		ElasticsearchURL:  strings.TrimRight(mustEnv("ELASTICSEARCH_URL"), "/"),

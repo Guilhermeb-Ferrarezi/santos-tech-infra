@@ -6,9 +6,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -98,8 +100,11 @@ func (e *ElasticClient) ListPresets(ctx context.Context) ([]KeywordPreset, error
 }
 
 func (e *ElasticClient) PutPreset(ctx context.Context, p KeywordPreset) error {
+	if !validPresetID(p.ID) {
+		return errInvalidPresetID
+	}
 	body, _ := json.Marshal(p)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPut, fmt.Sprintf("%s/%s/_doc/%s", e.baseURL, presetsIndex, p.ID), bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPut, fmt.Sprintf("%s/%s/_doc/%s", e.baseURL, presetsIndex, url.PathEscape(p.ID)), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := e.http.Do(req)
 	if err != nil {
@@ -114,7 +119,10 @@ func (e *ElasticClient) PutPreset(ctx context.Context, p KeywordPreset) error {
 }
 
 func (e *ElasticClient) DeletePreset(ctx context.Context, id string) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/%s/_doc/%s", e.baseURL, presetsIndex, id), nil)
+	if !validPresetID(id) {
+		return errInvalidPresetID
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/%s/_doc/%s", e.baseURL, presetsIndex, url.PathEscape(id)), nil)
 	resp, err := e.http.Do(req)
 	if err != nil {
 		return err
@@ -131,4 +139,27 @@ func newPresetID() string {
 	b := make([]byte, 12)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// errInvalidPresetID barra id fora do formato gerado por newPresetID.
+var errInvalidPresetID = errors.New("id de preset inválido")
+
+// validPresetID exige exatamente o que newPresetID produz: 24 caracteres hex
+// minúsculos.
+//
+// O id vem de r.PathValue("id") e era interpolado cru na URL do Elasticsearch.
+// Um DELETE em /keyword-presets/x%3Frefresh%3Dtrue injetava query string na
+// chamada ao cluster, e com %2F dava para alcançar outro caminho da API de um
+// cluster que é compartilhado. Validar o formato (mais url.PathEscape como
+// segunda barreira) fecha os dois.
+func validPresetID(id string) bool {
+	if len(id) != 24 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }

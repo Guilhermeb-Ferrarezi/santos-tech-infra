@@ -20,14 +20,26 @@ type portalPagination struct {
 	Query  string
 }
 
+// portalMaxPage — teto de página. Sem ele, ?page=9000000000000000 fazia
+// (page-1)*limit estourar o int, o offset virava negativo e o Postgres
+// devolvia erro de sintaxe → 500 em vez de uma página vazia.
+const portalMaxPage = 100000
+
 func portalPaginationFrom(r *http.Request) portalPagination {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	page := atoiMin(r.URL.Query().Get("page"), 1, 1)
+	if page > portalMaxPage {
+		page = portalMaxPage
+	}
 	limit := atoiMin(r.URL.Query().Get("limit"), 20, 1)
 	if limit > 100 {
 		limit = 100
 	}
-	return portalPagination{Page: page, Limit: limit, Offset: (page - 1) * limit, Query: q}
+	offset := (page - 1) * limit
+	if offset < 0 {
+		offset = 0
+	}
+	return portalPagination{Page: page, Limit: limit, Offset: offset, Query: q}
 }
 
 // atoiMin lê um inteiro da query; vazio → fallback; inválido ou < min → min.
@@ -231,6 +243,31 @@ func (in *portalClassInput) validateCreate() error {
 
 type portalAddStudentsInput struct {
 	StudentIDs []int64 `json:"studentIds"`
+}
+
+// portalMaxIDsPerRequest — teto de ids numa lista de entrada. Sem teto, o
+// limite efetivo era o corpo de 64 KiB, que comporta ~6 mil ids — cada um
+// virando uma linha (e, antes, um round-trip) no banco.
+const portalMaxIDsPerRequest = 500
+
+// portalValidateIDs recusa lista vazia, ids não positivos e lote acima do teto.
+func portalValidateIDs(field string, ids []int64) error {
+	if len(ids) == 0 {
+		return validationErr(field + " obrigatório")
+	}
+	if len(ids) > portalMaxIDsPerRequest {
+		return validationErr(fmt.Sprintf("no máximo %d ids por requisição (recebidos %d)", portalMaxIDsPerRequest, len(ids)))
+	}
+	for _, id := range ids {
+		if id <= 0 {
+			return validationErr(field + " contém id inválido")
+		}
+	}
+	return nil
+}
+
+func (in *portalAddStudentsInput) validate() error {
+	return portalValidateIDs("studentIds", in.StudentIDs)
 }
 
 // portalParseDate aceita "YYYY-MM-DD"; vazio → hoje (UTC, à meia-noite).

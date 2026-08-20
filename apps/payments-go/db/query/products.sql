@@ -25,3 +25,21 @@ WHERE id = $1;
 
 -- name: DeleteProduct :execrows
 DELETE FROM pay_products WHERE id = $1;
+
+-- name: UserOwnsProduct :one
+-- Direito de acesso ao entregável (file_url): existe alguma cobrança PAGA do usuário
+-- que inclua este produto, seja como item de compra avulsa, seja como ciclo de uma
+-- assinatura dele. Nunca sirva o arquivo sem passar por aqui.
+SELECT EXISTS (
+  SELECT 1
+  FROM pay_charge_items ci
+  JOIN pay_charges   c  ON c.id = ci.charge_id
+  JOIN pay_customers cu ON cu.id = c.customer_id
+  WHERE cu.user_id = $1 AND ci.product_id = $2 AND c.status = 'paid'
+  UNION ALL
+  SELECT 1
+  FROM pay_recurrences r
+  JOIN pay_customers cu ON cu.id = r.customer_id
+  JOIN pay_charges   c  ON c.recurrence_id = r.id
+  WHERE cu.user_id = $1 AND r.product_id = $2 AND c.status = 'paid'
+)::bool AS owns;

@@ -38,7 +38,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	page, err := s.loki.lokiQuery(r.Context(), buildLokiQL(lq, appLabel), lokiPageParams{
 		Start:  end.Add(-dur),
 		End:    end,
-		Limit:  lokiAtoiOr(q.Get("limit"), 50),
+		Limit:  clampLimit(q.Get("limit"), 50, lokiMaxPageLimit),
 		Before: strings.TrimSpace(q.Get("before")),
 		After:  strings.TrimSpace(q.Get("after")),
 	})
@@ -115,6 +115,26 @@ func (s *Server) handleTopIPs(w http.ResponseWriter, r *http.Request) {
 		out = out[:limit]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ips": out})
+}
+
+// lokiMaxPageLimit é o teto de entradas por página que aceitamos do cliente
+// (mesmo teto que o lokiClient aplica internamente).
+const lokiMaxPageLimit = 500
+
+// clampLimit lê o ?limit= do cliente e o encaixa em [1, max], caindo no default
+// quando ausente ou inválido. Os clientes de Loki/Sentry já recusam valores fora
+// da faixa, mas caindo no DEFAULT — ou seja, um ?limit=1000000 devolvia 50 itens
+// em silêncio, em vez do máximo pedido. Clampar aqui deixa o teto explícito e o
+// comportamento previsível, e garante o limite mesmo se o cliente mudar.
+func clampLimit(raw string, def, max int) int {
+	n := lokiAtoiOr(raw, def)
+	switch {
+	case n <= 0:
+		return def
+	case n > max:
+		return max
+	}
+	return n
 }
 
 func lokiAtoiOr(s string, def int) int {

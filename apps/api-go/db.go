@@ -100,6 +100,17 @@ CREATE TABLE IF NOT EXISTS board_members (
 );
 CREATE INDEX IF NOT EXISTS idx_board_members_user ON board_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+-- sessions.refresh_token_hash é lido em TODO /auth/refresh, /auth/accounts e
+-- logout; sem índice era seq scan na tabela inteira. user_id cobre o
+-- DELETE FROM sessions WHERE user_id=$1 (logout global, suspensão, exclusão).
+-- Índice NÃO-único de propósito: o refresh JWT só carrega sub/iat/exp, então
+-- dois refresh do mesmo usuário no MESMO segundo (abas em paralelo, duplo
+-- clique no login) geram um token idêntico e, portanto, o mesmo hash. Com
+-- UNIQUE, o segundo INSERT quebraria — e a criação do índice falharia se já
+-- houvesse duplicata, derrubando a migração inteira (migrate roda tudo num
+-- Exec só) e com ela o boot da API. Para a performance da busca dá no mesmo.
+CREATE INDEX IF NOT EXISTS idx_sessions_refresh_hash ON sessions(refresh_token_hash);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS name        TEXT NOT NULL DEFAULT '';
 ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE custom_roles ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '{}';
@@ -512,6 +523,22 @@ CREATE TABLE IF NOT EXISTS hour_sessions (
 CREATE INDEX IF NOT EXISTS idx_hour_sessions_client ON hour_sessions(client_id);
 CREATE INDEX IF NOT EXISTS idx_hour_sessions_status ON hour_sessions(status) WHERE status != 'ended';
 
+-- Código curto (6 dígitos) como alternativa a colar o link de 64 chars no PC
+-- do laboratório: mesmo token por baixo, só um jeito mais fácil de digitar.
+-- Uso único — zerado no primeiro pareamento bem-sucedido (ver
+-- pairHourSessionByCode) — e com validade curta, pra limitar a janela de
+-- força-bruta sobre um espaço tão pequeno (1M combinações). Também é zerado ao
+-- encerrar a sessão e quando expira (ver releaseStaleShortCodes): senão cada
+-- código já emitido ocuparia um dos 1M valores do UNIQUE pra sempre.
+ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code TEXT UNIQUE;
+ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code_expires_at TIMESTAMPTZ;
+
+-- Índice do UPDATE que devolve códigos curtos expirados/encerrados ao espaço
+-- UNIQUE (ver releaseStaleShortCodes) — parcial, porque a esmagadora maioria
+-- das linhas tem short_code NULL.
+CREATE INDEX IF NOT EXISTS idx_hour_sessions_short_code_stale
+  ON hour_sessions(short_code_expires_at) WHERE short_code IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS hour_session_events (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id    UUID NOT NULL REFERENCES hour_sessions(id) ON DELETE CASCADE,
@@ -520,6 +547,142 @@ CREATE TABLE IF NOT EXISTS hour_session_events (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_hour_session_events_session ON hour_session_events(session_id, created_at);
+
+-- Ajuste manual de tempo: o admin corrige a duração de uma sessão (esqueceu de
+-- pausar, o PC caiu, cliente saiu antes). Entra como EVENTO, não como acerto no
+-- total — o tempo continua derivado do histórico, e o ajuste fica visível com
+-- autor, horário e motivo em vez de o número simplesmente mudar sozinho.
+ALTER TABLE hour_session_events ADD COLUMN IF NOT EXISTS delta_seconds INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE hour_session_events ADD COLUMN IF NOT EXISTS note TEXT;
+ALTER TABLE hour_session_events DROP CONSTRAINT IF EXISTS hour_session_events_event_type_check;
+ALTER TABLE hour_session_events ADD CONSTRAINT hour_session_events_event_type_check
+  CHECK (event_type IN ('start', 'pause', 'resume', 'end', 'adjust'));
+
+-- PCs do laboratório: cada instalação do app desktop (hour-timer-app) gera um
+-- device_uuid estável e manda heartbeat periódico. Nome é atribuído pelo admin
+-- (nunca pelo próprio PC) para não bagunçar com quem estiver sentado nele.
+-- unpair_requested e message_id/text são comandos de admin entregues no
+-- próximo heartbeat: unpair_requested volta true uma única vez (o UPDATE que
+-- zera roda como comando separado, na mesma transação do upsert, ver
+-- upsertLabDeviceHeartbeat) e message_id troca a cada envio para o app
+-- conseguir deduplicar no cliente.
+CREATE TABLE IF NOT EXISTS hour_lab_devices (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  device_uuid         TEXT NOT NULL UNIQUE,
+  name                TEXT,
+  last_seen_at        TIMESTAMPTZ,
+  last_ip             TEXT,
+  app_version         TEXT,
+  current_session_id  UUID REFERENCES hour_sessions(id) ON DELETE SET NULL,
+  unpair_requested    BOOLEAN NOT NULL DEFAULT FALSE,
+  message_id          UUID,
+  message_text        TEXT,
+  message_sent_at     TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_last_seen ON hour_lab_devices(last_seen_at);
+
+-- pending_pair_token: pareamento via QR (admin escaneia com o celular e
+-- escolhe o cliente em /admin/horas/parear/:deviceId). Token em texto puro
+-- (o app precisa dele cru pra completar o pareamento sozinho) entregue uma
+-- única vez no heartbeat seguinte e zerado na mesma transação (ver
+-- upsertLabDeviceHeartbeat) — mesma janela de exposição de digitar o token
+-- na mão, só que automático.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS pending_pair_token TEXT;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS pending_pair_token_expires_at TIMESTAMPTZ;
+
+-- device_secret_hash: o heartbeat é público (o PC não faz login), então o
+-- device_uuid era a identidade inteira — e ele fica visível num QR na tela do
+-- próprio PC, o que deixava qualquer um pedir o heartbeat e receber o
+-- pending_pair_token em texto puro. Agora o servidor gera um segredo no
+-- primeiro heartbeat de um device_uuid, devolve UMA vez, e exige nos seguintes;
+-- aqui fica só o sha256. Coluna nula = PC ainda não adotado (o admin vê isso em
+-- hasSecret na listagem e pode forçar nova adoção zerando a coluna).
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS device_secret_hash TEXT;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS device_secret_set_at TIMESTAMPTZ;
+
+-- Índice do ORDER BY da listagem de PCs (ver listLabDevices): o heartbeat cria
+-- uma linha por device_uuid visto e a tabela só cresce.
+CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_order
+  ON hour_lab_devices(name NULLS LAST, device_uuid);
+
+-- Inventário de software do PC: o app lê o registro do Windows (a mesma lista
+-- de "Adicionar ou remover programas") e manda inteira; o servidor é quem sabe
+-- o que É esperado, então mudar a expectativa não exige instalador novo.
+-- Substituído por completo a cada coleta (DELETE + INSERT na mesma transação) —
+-- é uma foto do estado atual, não um histórico.
+CREATE TABLE IF NOT EXISTS hour_lab_device_programs (
+  device_id  UUID NOT NULL REFERENCES hour_lab_devices(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  version    TEXT NOT NULL DEFAULT '',
+  publisher  TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (device_id, name, version)
+);
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS inventory_collected_at TIMESTAMPTZ;
+
+-- Ícones dos programas, endereçados pelo CONTEÚDO (sha256 do PNG). O ícone do
+-- Blender é byte a byte o mesmo em todo PC do laboratório: guardar por
+-- dispositivo gravaria a mesma imagem N vezes e, pior, faria cada coleta
+-- reenviar ~200 KB que o servidor já tem. Aqui a imagem entra uma única vez e
+-- as linhas de programa só apontam pro hash.
+CREATE TABLE IF NOT EXISTS hour_lab_program_icons (
+  hash       TEXT PRIMARY KEY,
+  png        BYTEA NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE hour_lab_device_programs ADD COLUMN IF NOT EXISTS icon_hash TEXT;
+
+-- Captura de tela sob demanda. screenshot_requested_at é o comando pendente,
+-- entregue no próximo heartbeat e zerado na mesma transação (mesma regra do
+-- unpair_requested) — o PC não fica capturando sozinho.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS screenshot_requested_at TIMESTAMPTZ;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS screenshot_requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+-- Quando o comando foi ENTREGUE ao PC (o heartbeat zera o requested_at ao
+-- entregar). É essa marca que define a janela em que a imagem é aceita: sem
+-- ela, o upload chegaria sempre com o pedido já apagado.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS screenshot_delivered_at TIMESTAMPTZ;
+
+-- Aplicativos abertos no PC, só os NOMES, substituídos a cada heartbeat. Sem
+-- histórico de propósito: o que estava aberto meia hora atrás não ajuda a
+-- decidir nada e viraria um registro de uso por pessoa. Título de janela também
+-- fica de fora — carrega conteúdo ("Conversa com Fulano", "contrato.docx"), e
+-- pra saber o que a máquina roda o nome do app basta.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS open_apps JSONB;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS open_apps_at TIMESTAMPTZ;
+
+-- Histórico das capturas. requested_by fica registrado de propósito: a tela de
+-- um PC do laboratório pode ter dado de quem está sentado nele, então tem que
+-- existir trilha de quem pediu e quando. A imagem mora no R2 (object_key), não
+-- aqui — são centenas de KB cada.
+CREATE TABLE IF NOT EXISTS hour_lab_device_screenshots (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  device_id    UUID NOT NULL REFERENCES hour_lab_devices(id) ON DELETE CASCADE,
+  object_key   TEXT NOT NULL,
+  width        INTEGER NOT NULL DEFAULT 0,
+  height       INTEGER NOT NULL DEFAULT 0,
+  bytes        INTEGER NOT NULL DEFAULT 0,
+  requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  requested_at TIMESTAMPTZ,
+  captured_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hour_lab_screenshots_device
+  ON hour_lab_device_screenshots(device_id, captured_at DESC);
+-- Coluna da 1a versão (base64 na própria linha do programa), substituída pelo
+-- icon_hash acima. Some junto com a próxima coleta de cada PC.
+ALTER TABLE hour_lab_device_programs DROP COLUMN IF EXISTS icon;
+
+-- Programas esperados nos PCs do laboratório (cadastro do admin em
+-- /admin/horas/programas). match_pattern casa por substring, sem diferenciar
+-- maiúscula, contra o nome que o Windows exibe: "unity" pega "Unity 6000.0.23f1"
+-- e "Unity Hub". É substring de propósito — o nome exibido carrega a versão e
+-- muda a cada atualização, então igualdade exata quebraria toda semana.
+CREATE TABLE IF NOT EXISTS hour_lab_expected_programs (
+  id            BIGSERIAL PRIMARY KEY,
+  label         TEXT NOT NULL,
+  match_pattern TEXT NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- Arquivos (Google Drive): o conteúdo real mora no Drive; aqui só guardamos
 -- metadados de pasta e a ACL de quem enxerga/envia arquivo em cada uma — por
@@ -559,6 +722,77 @@ CREATE INDEX IF NOT EXISTS idx_drive_folder_members_user ON drive_folder_members
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_folder_id UUID REFERENCES drive_folders(id) ON DELETE SET NULL;
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_file_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_file_name TEXT NOT NULL DEFAULT '';
+
+-- Catálogo de downloads do Santos Hub (app Tauri Windows distribuído nos PCs da
+-- empresa): itens "file" (instalador hospedado no R2, object_key preenchido) ou
+-- "link" (aponta pra URL externa, external_url preenchido) — nunca os dois.
+-- Leitura pública (GET /public/downloads, sem login — o app não pede auth
+-- nenhuma); cadastro/edição/remoção são admin-only (mesmo padrão de model3d_file).
+CREATE TABLE IF NOT EXISTS downloads (
+  id           BIGSERIAL PRIMARY KEY,
+  name         TEXT NOT NULL,
+  description  TEXT NOT NULL DEFAULT '',
+  category     TEXT NOT NULL DEFAULT '',
+  version      TEXT NOT NULL DEFAULT '',
+  kind         TEXT NOT NULL CHECK (kind IN ('file', 'link')),
+  object_key   TEXT,
+  external_url TEXT,
+  filename     TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL DEFAULT '',
+  size_bytes   BIGINT,
+  pinned       BOOLEAN NOT NULL DEFAULT false,
+  uploaded_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (
+    (kind = 'file' AND object_key IS NOT NULL AND external_url IS NULL) OR
+    (kind = 'link' AND external_url IS NOT NULL AND object_key IS NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_downloads_category ON downloads(category);
+CREATE INDEX IF NOT EXISTS idx_downloads_pinned_created ON downloads(pinned DESC, created_at DESC);
+-- Foto/ícone do item pro catálogo (Santos Hub e admin do dashboard mostram
+-- em grid) — URL livre (o admin cola de onde já estiver hospedada), não
+-- upload pelo backend.
+ALTER TABLE downloads ADD COLUMN IF NOT EXISTS image_url TEXT;
+
+-- Configurações extras do publicador universal (ver social_publish.go):
+-- capa customizada de Reel (mesmo padrão drive_folder_id/file_id/file_name
+-- do arquivo principal, só que pra outro arquivo — a capa), texto
+-- alternativo de acessibilidade (só imagem estática), e itens extras de um
+-- carrossel (o item 1 continua usando drive_folder_id/file_id/file_name
+-- acima; carousel_items guarda os itens 2..10, mesmo shape em JSON).
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_cover_folder_id UUID REFERENCES drive_folders(id) ON DELETE SET NULL;
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_cover_file_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS drive_cover_file_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS alt_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS carousel_items JSONB NOT NULL DEFAULT '[]';
+
+-- Configuração fixa (não por post) de localização automática do publicador
+-- universal — marcada em TODA publicação, ver social_publish.go. Linha única
+-- (o truque "id BOOLEAN PRIMARY KEY CHECK(id)" garante isso: só o valor
+-- true é uma PK válida). Editável via GET/PUT /social/settings, tela
+-- Configurações do Calendário Editorial (admin-only) — não é mais env var.
+CREATE TABLE IF NOT EXISTS social_settings (
+  id                    BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+  instagram_location_id TEXT NOT NULL DEFAULT '',
+  facebook_place_id     TEXT NOT NULL DEFAULT '',
+  updated_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO social_settings (id) VALUES (true) ON CONFLICT (id) DO NOTHING;
+-- OAuth clients: aprovação explícita. O POST /oauth/register (DCR, RFC 7591)
+-- é anônimo e criava client is_active=true, com client_name livre já visível
+-- na tela de consentimento. Agora ele nasce inativo e depende de um admin.
+ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+-- Clients criados pelo painel (qualquer um que não veio do DCR) já estavam em
+-- uso: marca como aprovados para não derrubar ninguém.
+UPDATE oauth_clients SET approved_at = created_at
+ WHERE approved_at IS NULL AND client_id NOT LIKE 'dcr\_%';
+-- Clients de DCR anônimo que ninguém nunca aprovou: desativa. Rodar de novo é
+-- no-op (ou já estão inativos, ou ganharam approved_at ao serem aprovados).
+UPDATE oauth_clients SET is_active = false
+ WHERE approved_at IS NULL AND is_active AND client_id LIKE 'dcr\_%';
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
@@ -1029,13 +1263,17 @@ type OAuthClient struct {
 	RedirectURIs []string  `json:"redirectUris"`
 	IsActive     bool      `json:"isActive"`
 	CreatedAt    time.Time `json:"createdAt"`
+	// ApprovedAt: quando um admin liberou o client. Clients criados pelo painel
+	// nascem aprovados; os do DCR anônimo (POST /oauth/register) nascem inativos
+	// e sem aprovação até alguém apertar o botão. Nil = nunca aprovado.
+	ApprovedAt *time.Time `json:"approvedAt"`
 }
 
-const oauthClientCols = `id::text, client_id, name, redirect_uris, is_active, created_at`
+const oauthClientCols = `id::text, client_id, name, redirect_uris, is_active, created_at, approved_at`
 
 func scanOAuthClient(row pgx.Row) (*OAuthClient, error) {
 	var c OAuthClient
-	err := row.Scan(&c.ID, &c.ClientID, &c.Name, &c.RedirectURIs, &c.IsActive, &c.CreatedAt)
+	err := row.Scan(&c.ID, &c.ClientID, &c.Name, &c.RedirectURIs, &c.IsActive, &c.CreatedAt, &c.ApprovedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -1068,10 +1306,32 @@ func (s *Server) listOAuthClients(ctx context.Context) ([]OAuthClient, error) {
 	return out, rows.Err()
 }
 
+// insertOAuthClient cria um client já APROVADO e ativo — caminho do painel,
+// onde um admin está do outro lado. O DCR anônimo usa insertPendingOAuthClient.
 func (s *Server) insertOAuthClient(ctx context.Context, clientID, name string, uris []string) (*OAuthClient, error) {
 	return scanOAuthClient(s.db.QueryRow(ctx,
-		`INSERT INTO oauth_clients (client_id, name, redirect_uris) VALUES ($1,$2,$3)
+		`INSERT INTO oauth_clients (client_id, name, redirect_uris, is_active, approved_at)
+		 VALUES ($1,$2,$3,true,now())
 		 RETURNING `+oauthClientCols, clientID, name, uris))
+}
+
+// insertPendingOAuthClient cria um client INATIVO e sem aprovação: é o que o
+// POST /oauth/register (RFC 7591, anônimo) produz. Registrar deixa de ser o
+// bastante para aparecer na tela de consentimento com um client_name escolhido
+// pelo próprio registrante — o /oauth/authorize recusa client inativo.
+func (s *Server) insertPendingOAuthClient(ctx context.Context, clientID, name string, uris []string) (*OAuthClient, error) {
+	return scanOAuthClient(s.db.QueryRow(ctx,
+		`INSERT INTO oauth_clients (client_id, name, redirect_uris, is_active)
+		 VALUES ($1,$2,$3,false)
+		 RETURNING `+oauthClientCols, clientID, name, uris))
+}
+
+// approveOAuthClient libera um client pendente (ativa + carimba approved_at).
+// Idempotente: reaprovar mantém o approved_at original.
+func (s *Server) approveOAuthClient(ctx context.Context, id string) (*OAuthClient, error) {
+	return scanOAuthClient(s.db.QueryRow(ctx,
+		`UPDATE oauth_clients SET is_active = true, approved_at = COALESCE(approved_at, now())
+		 WHERE id = $1::uuid RETURNING `+oauthClientCols, id))
 }
 
 // updateOAuthClient atualiza campos não-nil (COALESCE, padrão updateUserAdmin).
@@ -1080,7 +1340,10 @@ func (s *Server) updateOAuthClient(ctx context.Context, id string, name *string,
 		`UPDATE oauth_clients SET
 		   name = COALESCE($2, name),
 		   redirect_uris = COALESCE($3, redirect_uris),
-		   is_active = COALESCE($4, is_active)
+		   is_active = COALESCE($4, is_active),
+		   -- ativar pelo PATCH também conta como aprovação (senão a migração
+		   -- de desativação de clients DCR pendentes voltaria a derrubá-lo).
+		   approved_at = CASE WHEN $4 IS TRUE THEN COALESCE(approved_at, now()) ELSE approved_at END
 		 WHERE id = $1::uuid RETURNING `+oauthClientCols,
 		id, name, uris, active))
 }

@@ -40,6 +40,19 @@ type HourSession struct {
 type hourSessionEvent struct {
 	EventType string
 	CreatedAt time.Time
+	// DeltaSeconds só é usado por 'adjust' (positivo soma, negativo desconta).
+	DeltaSeconds int64
+}
+
+// HourSessionEvent é uma linha do histórico da sessão, como o admin vê:
+// start/pause/resume/end e os ajustes manuais, com quem fez cada um.
+type HourSessionEvent struct {
+	ID           string    `json:"id"`
+	EventType    string    `json:"eventType"`
+	DeltaSeconds int64     `json:"deltaSeconds"`
+	Note         *string   `json:"note"`
+	ActorName    *string   `json:"actorName"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 var errHourClientNotFound = appErr(http.StatusNotFound, "HOUR_CLIENT_NOT_FOUND", "Cliente não encontrado")
@@ -145,42 +158,90 @@ func scanHourSession(row pgx.Row) (*HourSession, error) {
 	return &h, nil
 }
 
+// shortCodeTTL é a validade do código curto de pareamento (6 dígitos). 15min
+// era curto demais pro uso real (admin pode preparar sessões bem antes do
+// cliente sentar no PC) — 24h cobre um dia de operação. Ainda é uso único
+// (zerado no primeiro pareamento) e o rate limit de POST /pair-by-code é
+// 15/min por IP: força-bruta nas 1M combinações levaria ~46 dias contínuos
+// de uma IP só, então o risco não escala muito ao alongar a janela.
+const shortCodeTTL = 24 * time.Hour
+
+// releaseStaleShortCodes devolve ao espaço UNIQUE os códigos curtos que já não
+// servem pra nada: expirados, ou de sessões encerradas. Sem isto todo código
+// já emitido ocupava um dos 1M valores pra sempre — com o tempo, colisão no
+// INSERT viraria 500 na cara do admin. Roda antes de sortear um código novo;
+// é um UPDATE indexado (idx_hour_sessions_short_code_stale) e a rota é
+// admin-only, então o custo é irrelevante.
+func (s *Server) releaseStaleShortCodes(ctx context.Context) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE hour_sessions SET short_code = NULL, short_code_expires_at = NULL
+		WHERE short_code IS NOT NULL AND (short_code_expires_at <= now() OR status = 'ended')`)
+	return err
+}
+
+// startHourSessionAttempts: o código curto é sorteado (randomDigits) e tem
+// UNIQUE no banco, então uma colisão é possível. Sem retry ela virava 500;
+// com o espaço já liberado por releaseStaleShortCodes, 3 tentativas cobrem
+// qualquer cenário realista.
+const startHourSessionAttempts = 3
+
 // startHourSession cria a sessão + evento "start" numa transação e devolve o
-// token em texto puro (só existe neste retorno — o banco guarda o hash).
-func (s *Server) startHourSession(ctx context.Context, clientID string, createdBy int64) (*HourSession, string, error) {
+// token em texto puro e o código curto (só existem neste retorno — o banco
+// guarda o hash do token e o próprio código, mas o código é zerado no
+// primeiro pareamento, ver pairHourSessionByCode).
+func (s *Server) startHourSession(ctx context.Context, clientID string, createdBy int64) (*HourSession, string, string, error) {
+	if err := s.releaseStaleShortCodes(ctx); err != nil {
+		return nil, "", "", err
+	}
+	var lastErr error
+	for i := 0; i < startHourSessionAttempts; i++ {
+		h, token, shortCode, err := s.startHourSessionOnce(ctx, clientID, createdBy)
+		if err == nil {
+			return h, token, shortCode, nil
+		}
+		if !isUniqueViolation(err) {
+			return nil, "", "", err
+		}
+		lastErr = err // colisão de short_code: sorteia outro
+	}
+	return nil, "", "", lastErr
+}
+
+func (s *Server) startHourSessionOnce(ctx context.Context, clientID string, createdBy int64) (*HourSession, string, string, error) {
 	token := randomToken(32)
 	tokenHash := sha256Hex(token)
+	shortCode := randomDigits(6)
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	defer tx.Rollback(ctx)
 	var sessionID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO hour_sessions (client_id, status, token_hash, created_by)
-		VALUES ($1::uuid, 'active', $2, $3)
+		INSERT INTO hour_sessions (client_id, status, token_hash, short_code, short_code_expires_at, created_by)
+		VALUES ($1::uuid, 'active', $2, $3, now() + make_interval(mins => $4), $5)
 		RETURNING id::text`,
-		clientID, tokenHash, createdBy).Scan(&sessionID)
+		clientID, tokenHash, shortCode, int(shortCodeTTL.Minutes()), createdBy).Scan(&sessionID)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO hour_session_events (session_id, event_type, actor_user_id)
 		VALUES ($1::uuid, 'start', $2)`,
 		sessionID, createdBy); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	h, err := scanHourSession(tx.QueryRow(ctx, `
 		SELECT `+hourSessionCols+` FROM hour_sessions s JOIN hour_clients c ON c.id = s.client_id
 		WHERE s.id = $1::uuid`, sessionID))
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	h.ElapsedSeconds = 0
-	return h, token, nil
+	return h, token, shortCode, nil
 }
 
 // reissueHourSessionToken gera um novo token pro link público de uma sessão
@@ -199,6 +260,29 @@ func (s *Server) reissueHourSessionToken(ctx context.Context, id string) (string
 	}
 	if tag.RowsAffected() == 0 {
 		return "", errHourSessionNotFound
+	}
+	return token, nil
+}
+
+var errHourSessionCodeInvalid = appErr(http.StatusNotFound, "HOUR_SESSION_CODE_INVALID", "Código inválido ou expirado")
+
+// pairHourSessionByCode troca um código curto ainda válido por um token novo
+// — reemite (como reissueHourSessionToken) em vez de devolver o token
+// original, que nunca fica guardado em texto puro depois da criação. O
+// código é zerado na mesma UPDATE: uso único, mesmo se ainda não tivesse
+// expirado.
+func (s *Server) pairHourSessionByCode(ctx context.Context, code string) (string, error) {
+	token := randomToken(32)
+	tokenHash := sha256Hex(token)
+	tag, err := s.db.Exec(ctx, `
+		UPDATE hour_sessions SET token_hash = $2, short_code = NULL, short_code_expires_at = NULL, updated_at = now()
+		WHERE short_code = $1 AND status != 'ended' AND short_code_expires_at > now()`,
+		code, tokenHash)
+	if err != nil {
+		return "", err
+	}
+	if tag.RowsAffected() == 0 {
+		return "", errHourSessionCodeInvalid
 	}
 	return token, nil
 }
@@ -274,7 +358,7 @@ func (s *Server) getHourSessionByTokenHash(ctx context.Context, tokenHash string
 // de eventos — nunca de um contador guardado.
 func (s *Server) hourSessionElapsedSeconds(ctx context.Context, sessionID string, now time.Time) (int64, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT event_type, created_at FROM hour_session_events
+		SELECT event_type, created_at, delta_seconds FROM hour_session_events
 		WHERE session_id = $1::uuid ORDER BY created_at`, sessionID)
 	if err != nil {
 		return 0, err
@@ -283,7 +367,7 @@ func (s *Server) hourSessionElapsedSeconds(ctx context.Context, sessionID string
 	events := []hourSessionEvent{}
 	for rows.Next() {
 		var e hourSessionEvent
-		if err := rows.Scan(&e.EventType, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.EventType, &e.CreatedAt, &e.DeltaSeconds); err != nil {
 			return 0, err
 		}
 		events = append(events, e)
@@ -308,15 +392,78 @@ func computeElapsedSeconds(events []hourSessionEvent, now time.Time) int64 {
 				total += e.CreatedAt.Sub(since)
 				running = false
 			}
+		case "adjust":
+			// Correção manual do admin. Entra na mesma conta dos intervalos
+			// para que o total continue sendo derivado do histórico inteiro —
+			// nunca um número guardado à parte, que dessincroniza.
+			total += time.Duration(e.DeltaSeconds) * time.Second
 		}
 	}
 	if running {
 		total += now.Sub(since)
 	}
 	if total < 0 {
+		// Ajuste negativo maior que o tempo corrido: o cliente não fica
+		// devendo tempo pra sessão, o piso é zero.
 		return 0
 	}
 	return int64(total.Seconds())
+}
+
+// maxAdjustSeconds limita um ajuste isolado a 24h pra cada lado. Não é
+// desconfiança do admin: é rede de proteção contra dígito a mais numa correção
+// digitada na mão, que sairia do saldo do cliente no encerramento.
+const maxAdjustSeconds = 24 * 60 * 60
+
+var errAdjustTooLarge = appErr(http.StatusBadRequest, "ADJUST_TOO_LARGE",
+	"Ajuste deve estar entre -24h e +24h")
+
+// adjustHourSession registra uma correção manual de tempo como EVENTO.
+//
+// Não mexe num total acumulado (não existe): o tempo continua derivado do
+// histórico, e o ajuste fica lá com autor, horário e motivo. Assim "por que
+// essa sessão tem 3h se o cliente ficou 2h?" tem resposta na própria tela, em
+// vez de um número que mudou sem explicação.
+func (s *Server) adjustHourSession(ctx context.Context, id string, actorID int64, deltaSeconds int64, note *string) (*HourSession, error) {
+	if deltaSeconds == 0 || deltaSeconds > maxAdjustSeconds || deltaSeconds < -maxAdjustSeconds {
+		return nil, errAdjustTooLarge
+	}
+	tag, err := s.db.Exec(ctx, `
+		INSERT INTO hour_session_events (session_id, event_type, actor_user_id, delta_seconds, note)
+		SELECT $1::uuid, 'adjust', $2, $3, $4
+		WHERE EXISTS (SELECT 1 FROM hour_sessions WHERE id = $1::uuid)`,
+		id, actorID, deltaSeconds, note)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, errHourSessionNotFound
+	}
+	return s.getHourSession(ctx, id)
+}
+
+// listHourSessionEvents devolve o histórico da sessão em ordem cronológica —
+// é o que responde "quem pausou, quando, e por quanto tempo ficou parada".
+func (s *Server) listHourSessionEvents(ctx context.Context, sessionID string) ([]HourSessionEvent, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT e.id::text, e.event_type, e.delta_seconds, e.note, u.name, e.created_at
+		FROM hour_session_events e
+		LEFT JOIN users u ON u.id = e.actor_user_id
+		WHERE e.session_id = $1::uuid
+		ORDER BY e.created_at`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HourSessionEvent{}
+	for rows.Next() {
+		var e HourSessionEvent
+		if err := rows.Scan(&e.ID, &e.EventType, &e.DeltaSeconds, &e.Note, &e.ActorName, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // transitionHourSession aplica pause/resume: valida a troca de estado, grava
@@ -369,7 +516,8 @@ func (s *Server) transitionHourSession(ctx context.Context, id string, actorID i
 
 // endHourSession encerra a sessão e debita o tempo usado do saldo do cliente
 // — cálculo do decorrido, evento "end", status e débito de saldo na mesma
-// transação. Saldo pode ficar negativo (sem corte automático, por design).
+// transação. Saldo nunca fica negativo (GREATEST trava em 0): se a sessão
+// passou do saldo disponível, o excedente não vira dívida — só zera.
 func (s *Server) endHourSession(ctx context.Context, id string, actorID int64) (*HourSession, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -393,8 +541,13 @@ func (s *Server) endHourSession(ctx context.Context, id string, actorID int64) (
 		return nil, err
 	}
 	elapsedMinutes := int(elapsed / 60)
+	// short_code volta pro espaço UNIQUE junto com o encerramento: sessão
+	// encerrada não pode mais ser pareada, então guardar o código só gastaria
+	// um dos 1M valores pra sempre.
 	if _, err := tx.Exec(ctx, `
-		UPDATE hour_sessions SET status = 'ended', updated_at = now() WHERE id = $1::uuid`,
+		UPDATE hour_sessions
+		SET status = 'ended', short_code = NULL, short_code_expires_at = NULL, updated_at = now()
+		WHERE id = $1::uuid`,
 		id); err != nil {
 		return nil, err
 	}
@@ -405,7 +558,7 @@ func (s *Server) endHourSession(ctx context.Context, id string, actorID int64) (
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE hour_clients SET balance_minutes = balance_minutes - $2, updated_at = now()
+		UPDATE hour_clients SET balance_minutes = GREATEST(balance_minutes - $2, 0), updated_at = now()
 		WHERE id = $1::uuid`,
 		clientID, elapsedMinutes); err != nil {
 		return nil, err

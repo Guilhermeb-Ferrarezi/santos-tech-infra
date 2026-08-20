@@ -63,7 +63,7 @@ func parseStatementRange(s string) AnalyticsRange {
 
 // statementStore isola as operações de extrato (o *Store em prod, fake nos testes).
 type statementStore interface {
-	ListMovements(ctx context.Context, from, to time.Time) ([]Movement, error)
+	ListMovements(ctx context.Context, from, to time.Time, page listPage) ([]Movement, error)
 }
 
 // statementStoreOf devolve o store de extrato efetivo: usa s.statement quando injetado
@@ -91,7 +91,7 @@ func (s *Server) handleStatement(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rng := parseStatementRange(r.URL.Query().Get("range"))
-	mvs, err := st.ListMovements(r.Context(), rng.From, rng.To)
+	mvs, err := st.ListMovements(r.Context(), rng.From, rng.To, pageFromRequest(r))
 	if err != nil {
 		slog.Warn("statement: falha ao listar movimentos", "err", err)
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao consultar extrato")

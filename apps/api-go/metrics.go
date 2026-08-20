@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/subtle"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -88,4 +90,27 @@ func registerPoolMetrics(pool *pgxpool.Pool) {
 }
 
 // metricsHandler serve o /metrics no formato Prometheus.
-func metricsHandler() http.Handler { return promhttp.Handler() }
+//
+// Quando METRICS_TOKEN esta definida, exige "Authorization: Bearer <token>" no
+// scrape. Sem isso o /metrics publica para qualquer um na internet o mapa
+// completo das rotas (inclusive as administrativas), o volume por rota/status e
+// o estado do pool do Postgres. Com a env vazia o endpoint segue aberto, para
+// nao derrubar o scrape existente antes de o token ser configurado no coletor.
+func metricsHandler() http.Handler {
+	inner := promhttp.Handler()
+	token := os.Getenv("METRICS_TOKEN")
+	if token == "" {
+		return inner
+	}
+	want := []byte("Bearer " + token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// ConstantTimeCompare para nao vazar o token por timing.
+		got := []byte(r.Header.Get("Authorization"))
+		if subtle.ConstantTimeCompare(got, want) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="metrics"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
+}

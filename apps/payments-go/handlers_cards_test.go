@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // ── helpers de teste para cartão ─────────────────────────────────────────────
@@ -506,6 +509,7 @@ func TestHandleRefundCard_NoProviderID(t *testing.T) {
 		ID:               55,
 		Method:           "card",
 		Status:           "paid",
+		AmountCents:      10000,
 		ProviderChargeID: "", // vazio — deve gerar 409 no_provider_id
 		CorrelationID:    "corr-55",
 	}}
@@ -534,6 +538,7 @@ func TestHandleRefundCard_AlreadyRefunded(t *testing.T) {
 		ID:               66,
 		Method:           "card",
 		Status:           "refunded", // já estornado
+		AmountCents:      10000,
 		ProviderChargeID: "ch_66",
 		CorrelationID:    "corr-66",
 	}}
@@ -568,6 +573,7 @@ func TestHandleRefundCard_MarksRefunded(t *testing.T) {
 		ID:               77,
 		Method:           "card",
 		Status:           "paid",
+		AmountCents:      10000,
 		ProviderChargeID: "ch_77",
 		CorrelationID:    "corr-77",
 	}}
@@ -584,8 +590,11 @@ func TestHandleRefundCard_MarksRefunded(t *testing.T) {
 		t.Fatal("[Fix8] endpoint de estorno não foi chamado no gateway")
 	}
 	if fakeStore.refundedCorrelationID != "corr-77" {
-		t.Fatalf("[Fix8] MarkChargeRefunded não foi chamado com correlationID correto, veio %q",
+		t.Fatalf("[Fix8] a reserva do estorno não usou o correlationID correto, veio %q",
 			fakeStore.refundedCorrelationID)
+	}
+	if got := fakeStore.chargeStatus(); got != "refunded" {
+		t.Fatalf("[Fix8] estorno total deveria deixar a cobrança 'refunded', veio %q", got)
 	}
 }
 
@@ -639,12 +648,20 @@ func TestHandleGetInstallments_ValidBrands(t *testing.T) {
 }
 
 // fakeStoreForRefund implementa a interface mínima para handleRefundCard.
+// fakeStoreForRefund reproduz a máquina de estados real do estorno:
+// 'paid' → 'refunding' (reserva) → 'paid' (parcial) | 'refunded' (total).
 type fakeStoreForRefund struct {
+	mu                    sync.Mutex
 	charge                *Charge
 	refundedCorrelationID string
+	beginCalls            atomic.Int32
+	rollbackCalls         atomic.Int32
+	finishCalls           atomic.Int32
 }
 
 func (f *fakeStoreForRefund) GetCharge(_ context.Context, _ int64) (*Charge, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.charge == nil {
 		return nil, nil
 	}
@@ -652,9 +669,52 @@ func (f *fakeStoreForRefund) GetCharge(_ context.Context, _ int64) (*Charge, err
 	return &c, nil
 }
 
-func (f *fakeStoreForRefund) MarkChargeRefunded(_ context.Context, correlationID string) error {
+func (f *fakeStoreForRefund) BeginChargeRefund(_ context.Context, correlationID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.beginCalls.Add(1)
+	if f.charge == nil || f.charge.Status != "paid" {
+		return false, nil
+	}
+	f.charge.Status = "refunding"
 	f.refundedCorrelationID = correlationID
+	return true, nil
+}
+
+func (f *fakeStoreForRefund) RollbackChargeRefund(_ context.Context, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rollbackCalls.Add(1)
+	if f.charge != nil && f.charge.Status == "refunding" {
+		f.charge.Status = "paid"
+	}
 	return nil
+}
+
+func (f *fakeStoreForRefund) FinishChargeRefund(_ context.Context, _ string, refundedCents int64) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.finishCalls.Add(1)
+	if f.charge == nil || f.charge.Status != "refunding" {
+		return "", pgx.ErrNoRows
+	}
+	f.charge.RefundedCents += refundedCents
+	if f.charge.RefundedCents > f.charge.AmountCents {
+		f.charge.RefundedCents = f.charge.AmountCents
+	}
+	if f.charge.RefundedCents >= f.charge.AmountCents {
+		f.charge.Status = "refunded"
+	} else {
+		f.charge.Status = "paid"
+	}
+	return f.charge.Status, nil
+}
+
+// chargeStatus devolve o status atual da cobrança do fake.
+func (f *fakeStoreForRefund) chargeStatus() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.charge.Status
 }
 
 // TestHandleCreateCardCharge_RejectNestedPAN verifica que PAN aninhado em "card.number"
@@ -677,5 +737,176 @@ func TestHandleCreateCardCharge_RejectNestedPAN(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &out)
 	if out["code"] != "sensitive_fields" {
 		t.Fatalf("code esperado sensitive_fields, veio %q", out["code"])
+	}
+}
+
+// ── Estorno: atomicidade, teto e parcial ─────────────────────────────────────
+
+// refundServer monta um servidor de estorno com um gateway que conta as chamadas.
+func refundServer(t *testing.T, chargeID string, c *Charge, gwFail bool) (*Server, *fakeStoreForRefund, *atomic.Int32) {
+	t.Helper()
+	var calls atomic.Int32
+	srv := cobrMux(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("/v1/charge/card/"+chargeID+"/refund", func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			if gwFail {
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"code": 422, "error_description": "recusado"})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"code": 200})
+		})
+	})
+	t.Cleanup(srv.Close)
+	st := &fakeStoreForRefund{charge: c}
+	return &Server{efiCobr: newTestCobrCard(srv.URL), refund: st}, st, &calls
+}
+
+func postRefund(s *Server, id, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("POST", "/charges/card/"+id+"/refund", strings.NewReader(body))
+	req.SetPathValue("id", id)
+	w := httptest.NewRecorder()
+	s.handleRefundCard(w, req)
+	return w
+}
+
+// TestRefundCard_SemDoubleRefundConcorrente: o check-then-act antigo deixava duas
+// requisições simultâneas lerem status='paid' e estornarem DUAS vezes no gateway.
+// Com a reserva 'paid' → 'refunding' antes da chamada, só uma passa.
+func TestRefundCard_SemDoubleRefundConcorrente(t *testing.T) {
+	s, st, calls := refundServer(t, "ch_90", &Charge{
+		ID: 90, Method: "card", Status: "paid", AmountCents: 10000,
+		ProviderChargeID: "ch_90", CorrelationID: "corr-90",
+	}, false)
+
+	const n = 8
+	var ok, conflito atomic.Int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			switch code := postRefund(s, "90", "{}").Code; code {
+			case http.StatusOK:
+				ok.Add(1)
+			case http.StatusConflict:
+				conflito.Add(1)
+			default:
+				t.Errorf("status inesperado %d", code)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if ok.Load() != 1 {
+		t.Fatalf("apenas 1 estorno deveria ter sido aceito, foram %d", ok.Load())
+	}
+	if conflito.Load() != n-1 {
+		t.Fatalf("esperado %d conflitos, veio %d", n-1, conflito.Load())
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("o gateway deveria ter sido chamado 1 vez, foram %d (double-refund)", calls.Load())
+	}
+	if got := st.chargeStatus(); got != "refunded" {
+		t.Fatalf("cobrança deveria terminar 'refunded', veio %q", got)
+	}
+}
+
+// TestRefundCard_ValorAcimaDoTotal: pedir mais do que a cobrança vale devolveria
+// dinheiro que nunca entrou. Recusado ANTES de tocar no gateway.
+func TestRefundCard_ValorAcimaDoTotal(t *testing.T) {
+	s, st, calls := refundServer(t, "ch_91", &Charge{
+		ID: 91, Method: "card", Status: "paid", AmountCents: 10000,
+		ProviderChargeID: "ch_91", CorrelationID: "corr-91",
+	}, false)
+
+	w := postRefund(s, "91", `{"amountCents":15000}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("estorno acima do valor deveria dar 400, veio %d: %s", w.Code, w.Body.String())
+	}
+	if calls.Load() != 0 {
+		t.Fatal("o gateway não deveria ter sido chamado")
+	}
+	if got := st.chargeStatus(); got != "paid" {
+		t.Fatalf("cobrança deveria continuar 'paid', veio %q", got)
+	}
+
+	// Valor zero ou negativo também é recusado.
+	if w := postRefund(s, "91", `{"amountCents":0}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("amountCents=0 deveria dar 400, veio %d", w.Code)
+	}
+	if w := postRefund(s, "91", `{"amountCents":-100}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("amountCents negativo deveria dar 400, veio %d", w.Code)
+	}
+}
+
+// TestRefundCard_ParcialNaoMarcaTudoEstornado: um estorno de R$ 30 numa cobrança de
+// R$ 100 marcava a cobrança INTEIRA como 'refunded' — o extrato passava a mentir
+// sobre quanto dinheiro saiu.
+func TestRefundCard_ParcialNaoMarcaTudoEstornado(t *testing.T) {
+	s, st, _ := refundServer(t, "ch_92", &Charge{
+		ID: 92, Method: "card", Status: "paid", AmountCents: 10000,
+		ProviderChargeID: "ch_92", CorrelationID: "corr-92",
+	}, false)
+
+	w := postRefund(s, "92", `{"amountCents":3000}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("estorno parcial deveria dar 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]any
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["status"] != "paid" {
+		t.Fatalf("estorno parcial deveria manter a cobrança 'paid', veio %v", out["status"])
+	}
+	if got := st.chargeStatus(); got != "paid" {
+		t.Fatalf("status no store deveria ser 'paid', veio %q", got)
+	}
+	st.mu.Lock()
+	refunded := st.charge.RefundedCents
+	st.mu.Unlock()
+	if refunded != 3000 {
+		t.Fatalf("refundedCents deveria ser 3000, veio %d", refunded)
+	}
+
+	// O 2º parcial fecha o valor → aí sim vira 'refunded'.
+	w = postRefund(s, "92", `{"amountCents":7000}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("2º parcial deveria dar 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	if got := st.chargeStatus(); got != "refunded" {
+		t.Fatalf("acumulado fechou o valor: deveria virar 'refunded', veio %q", got)
+	}
+
+	// E um 3º estorno não pode mais passar.
+	if w := postRefund(s, "92", `{"amountCents":100}`); w.Code != http.StatusConflict {
+		t.Fatalf("cobrança já totalmente estornada deveria dar 409, veio %d", w.Code)
+	}
+}
+
+// TestRefundCard_GatewayRecusaDesfazReserva: se a Efí recusa, a cobrança não pode
+// ficar travada em 'refunding' — volta para 'paid' e aceita nova tentativa.
+func TestRefundCard_GatewayRecusaDesfazReserva(t *testing.T) {
+	s, st, calls := refundServer(t, "ch_93", &Charge{
+		ID: 93, Method: "card", Status: "paid", AmountCents: 10000,
+		ProviderChargeID: "ch_93", CorrelationID: "corr-93",
+	}, true)
+
+	w := postRefund(s, "93", "{}")
+	if w.Code < 400 {
+		t.Fatalf("gateway recusando deveria devolver erro, veio %d", w.Code)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("gateway deveria ter sido chamado 1 vez, foram %d", calls.Load())
+	}
+	if st.rollbackCalls.Load() != 1 {
+		t.Fatalf("a reserva deveria ter sido desfeita, rollbacks=%d", st.rollbackCalls.Load())
+	}
+	if got := st.chargeStatus(); got != "paid" {
+		t.Fatalf("cobrança deveria voltar a 'paid' para permitir nova tentativa, veio %q", got)
+	}
+	if st.finishCalls.Load() != 0 {
+		t.Fatal("não deveria registrar valor estornado quando o gateway recusa")
 	}
 }

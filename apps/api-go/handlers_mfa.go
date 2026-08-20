@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -281,6 +282,17 @@ func (s *Server) handleMFAEmail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido"))
 		return
 	}
+	// O 2º fator é escolha da CONTA, não de quem está tentando entrar. Sem esta
+	// checagem, uma conta protegida só por TOTP era rebaixada para OTP por email
+	// só porque o atacante (de posse da senha) pediu — bastava ter o email
+	// verificado em algum momento. Erro genérico de propósito: não revela quais
+	// fatores a conta tem.
+	if !slices.Contains(mfaMethods(u), "email") {
+		slog.Warn("mfa_email: pedido de OTP por email numa conta sem esse fator",
+			"uid", uid, "methods", mfaMethods(u), "ip", clientIP(r))
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CHALLENGE", "Desafio inválido ou expirado"))
+		return
+	}
 	if err := s.sendChallengeEmailCode(r.Context(), body.Challenge, u.Email); err != nil {
 		// Desfaz o cooldown para que o usuário possa retentar imediatamente.
 		_ = s.rdb.Del(r.Context(), cdKey)
@@ -340,17 +352,17 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	// rejeitar é mais seguro do que deixar passar (OTP de e-mail tem apenas 10⁶ combinações).
 	attemptsCmd := s.rdb.Incr(r.Context(), "api-go:mfa_attempts:"+body.Challenge)
 	if attemptsCmd.Err() != nil {
-		slog.Warn("mfa_attempts: redis error; rejecting to fail closed", "challenge", body.Challenge, "err", attemptsCmd.Err())
+		slog.Warn("mfa_attempts: redis error; rejecting to fail closed", "challenge", maskForLog(body.Challenge), "err", attemptsCmd.Err())
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
 		return
 	}
 	attempts := attemptsCmd.Val()
 	if err := s.rdb.ExpireNX(r.Context(), "api-go:mfa_attempts:"+body.Challenge, 10*time.Minute).Err(); err != nil {
-		slog.Warn("mfa_attempts: ExpireNX falhou; contador pode não expirar", "challenge", body.Challenge, "err", err)
+		slog.Warn("mfa_attempts: ExpireNX falhou; contador pode não expirar", "challenge", maskForLog(body.Challenge), "err", err)
 	}
 	if attempts > 5 {
 		if err := s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "api-go:mfa_attempts:"+body.Challenge).Err(); err != nil {
-			slog.Warn("mfa_verify: falha ao invalidar desafio após excesso de tentativas", "challenge", body.Challenge, "err", err)
+			slog.Warn("mfa_verify: falha ao invalidar desafio após excesso de tentativas", "challenge", maskForLog(body.Challenge), "err", err)
 		}
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Faça login novamente."))
 		return
@@ -359,7 +371,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	if u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret) {
 		alreadyUsed, rdErr := s.checkAndMarkTOTPUsed(r.Context(), uid, code)
 		if rdErr != nil {
-			slog.Warn("mfa_verify: redis error ao verificar replay TOTP; rejeitando (fail-closed)", "challenge", body.Challenge, "err", rdErr)
+			slog.Warn("mfa_verify: redis error ao verificar replay TOTP; rejeitando (fail-closed)", "challenge", maskForLog(body.Challenge), "err", rdErr)
 			writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
 			return
 		}
@@ -388,7 +400,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	// que ainda não foi removido). Padrão consistente com o fail-closed do Incr
 	// acima (linha ~216): Redis instável → rejeitar é mais seguro que deixar passar.
 	if err := s.rdb.Del(r.Context(), "mfa_challenge:"+body.Challenge, "mfa_email:"+body.Challenge, "api-go:mfa_attempts:"+body.Challenge).Err(); err != nil {
-		slog.Error("mfa_verify: falha ao invalidar desafio após autenticação bem-sucedida", "challenge", body.Challenge, "err", err)
+		slog.Error("mfa_verify: falha ao invalidar desafio após autenticação bem-sucedida", "challenge", maskForLog(body.Challenge), "err", err)
 		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao finalizar autenticação. Tente novamente."))
 		return
 	}

@@ -70,6 +70,12 @@ func (s *Server) syncAPIRouterFromSecrets(ctx context.Context) error {
 		byName[p.Name] = p
 	}
 
+	// Segredos já cadastrados, por provider. Antes isso era uma consulta +
+	// decifragem de TODAS as chaves do provider a CADA hit (N+1): com 50 hits
+	// no mesmo provider eram 50 listagens e 50×N decifragens AES. Agora carrega
+	// uma vez por provider e o próprio laço mantém o conjunto atualizado.
+	knownSecrets := make(map[int64]map[string]struct{}, len(providers))
+
 	var createdProviders, createdKeys, skippedUnknown, skippedDup int
 	for _, hit := range hits {
 		if !hit.LiveActive || hit.MatchedValue == "" || hit.VerifierFamily == "" {
@@ -123,17 +129,22 @@ func (s *Server) syncAPIRouterFromSecrets(ctx context.Context) error {
 			byName[def.Name] = p
 		}
 
-		exists, err := s.apirouterSecretExists(ctx, provider.ID, hit.MatchedValue)
-		if err != nil {
-			slog.Warn("sync: falha ao checar chave existente", "provider", provider.Name, "err", err)
-			continue
+		known, ok := knownSecrets[provider.ID]
+		if !ok {
+			known, err = s.apirouterProviderSecrets(ctx, provider.ID)
+			if err != nil {
+				slog.Warn("sync: falha ao carregar chaves existentes", "provider", provider.Name, "err", err)
+				continue
+			}
+			knownSecrets[provider.ID] = known
 		}
-		if exists {
+		if _, dup := known[hit.MatchedValue]; dup {
 			skippedDup++
 			continue
 		}
 
-		enc, err := s.vault.Encrypt(hit.MatchedValue)
+		tail := maskSecret(hit.MatchedValue)
+		enc, err := s.vault.EncryptKeySecret(hit.MatchedValue, provider.ID, tail)
 		if err != nil {
 			slog.Warn("sync: falha ao cifrar chave", "provider", provider.Name, "err", err)
 			continue
@@ -142,12 +153,13 @@ func (s *Server) syncAPIRouterFromSecrets(ctx context.Context) error {
 			ProviderID: provider.ID,
 			Label:      syncKeyLabel(hit),
 			SecretEnc:  enc,
-			SecretTail: maskSecret(hit.MatchedValue),
+			SecretTail: tail,
 			Priority:   0,
 		}); err != nil {
 			slog.Warn("sync: falha ao inserir chave", "provider", provider.Name, "err", err)
 			continue
 		}
+		known[hit.MatchedValue] = struct{}{}
 		createdKeys++
 	}
 
@@ -254,26 +266,29 @@ func (s *Server) fetchActiveSecretsHits(ctx context.Context) ([]secretsSyncHit, 
 	return out.Hits, nil
 }
 
-// apirouterSecretExists confere se o valor de uma chave já está cadastrada no
-// provider. Compara o plaintext decifrado de todas as chaves existentes — o
-// secret_tail não basta (não é único). AES-GCM usa nonce aleatório, então o
-// mesmo secret gera ciphertexts diferentes a cada cifragem; comparar o
-// plaintext é a única forma confiável de deduplicar.
-func (s *Server) apirouterSecretExists(ctx context.Context, providerID int64, secret string) (bool, error) {
+// apirouterProviderSecrets devolve, em claro, os segredos já cadastrados num
+// provider — o conjunto usado para deduplicar os hits do scanner. O
+// secret_tail não basta (não é único), e como o AES-GCM usa nonce aleatório o
+// mesmo segredo gera ciphertexts diferentes: comparar o plaintext é a única
+// forma confiável. Chaves indecifráveis (vault trocado?) são ignoradas — não
+// bloqueiam o sync.
+//
+// Chamado UMA vez por provider por passada de sync; o laço mantém o conjunto
+// atualizado com o que ele mesmo insere.
+func (s *Server) apirouterProviderSecrets(ctx context.Context, providerID int64) (map[string]struct{}, error) {
 	keys, err := s.q.ListAPIRouterKeys(ctx, providerID)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
+	out := make(map[string]struct{}, len(keys))
 	for _, k := range keys {
-		plain, err := s.vault.Decrypt(k.SecretEnc)
+		plain, err := s.decryptAPIRouterKeySecret(ctx, k)
 		if err != nil {
-			continue // indecifrável (vault trocado?) — não bloqueia o sync
+			continue
 		}
-		if plain == secret {
-			return true, nil
-		}
+		out[plain] = struct{}{}
 	}
-	return false, nil
+	return out, nil
 }
 
 // syncKeyLabel monta o rótulo da chave importada: repo + keyword, deixando

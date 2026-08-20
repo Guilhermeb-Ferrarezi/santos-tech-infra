@@ -32,6 +32,14 @@ type Config struct {
 	SocialAlertEmail   string // email para notificar quando post vai para revisão
 	Production         bool
 
+	// OAuthAudEnforce (OAUTH_AUD_ENFORCE=1): recusa, nas rotas de sessão do
+	// painel (authGuard e derivados), access tokens emitidos pelo /oauth/token —
+	// reconhecidos pelo claim aud=<client_id>. Default DESLIGADO: os tokens já
+	// saem marcados, mas ligar a recusa quebra clients OAuth e o app mobile que
+	// hoje usam o token do /oauth/token como sessão completa. Ligue só depois de
+	// migrar todos eles pro /oauth/userinfo.
+	OAuthAudEnforce bool
+
 	// Gateway de notificações do portal do aluno (templates/dispatches). Vazio =
 	// rotas de template/dispatch respondem 502 "gateway não configurado".
 	NotificationsGatewayURL   string // ex: https://portal.santos-tech.com (base, sem barra final)
@@ -52,6 +60,12 @@ type Config struct {
 	R2SecretKey string
 	R2Bucket    string
 	R2PublicURL string // base pública (CDN), ex: https://cdn.santos-tech.com
+
+	// Santos Hub (app Tauri dos PCs da empresa): PAT embarcado no build do app,
+	// exigido em GET /public/downloads. VAZIO = a rota responde 503 — o
+	// catálogo lista instaladores .exe/.msi/.ps1/.bat e não pode ficar aberto
+	// à internet por falta de configuração (fail-closed de propósito).
+	SantosHubToken string
 
 	// Arquivos (pastas de admin vinculadas ao Google Drive, ver drive.go): JSON
 	// da service account em base64. Vazio = feature desabilitada, rotas de
@@ -76,10 +90,20 @@ type Config struct {
 	FacebookAccessToken string
 	FacebookPageID      string
 
+	// Localização automática (Instagram location_id / Facebook place) NÃO é
+	// env var — é config fixa no banco (social_settings), editável pelo
+	// admin em Configurações do Calendário Editorial (GET/PUT /social/settings,
+	// ver social.go/handlers_social.go). Cresceria sem redeploy toda vez que
+	// alguém quisesse trocar o local, então não faz sentido como env.
+
 	// Roteador de chaves de API (failover automático em 401/sem-créditos de
 	// provedores externos). Deriva a chave AES-256 que cifra as chaves antes de
 	// persistir. Vazio = feature desabilitada, endpoints respondem 503.
 	VaultSecret string
+	// VaultSalt: salt do HKDF que deriva a chave do cofre (API_VAULT_SALT).
+	// Vazio cai num default fixo. ATENÇÃO: trocar o salt depois de cadastrar
+	// chaves torna ilegível tudo que foi cifrado no formato v2.
+	VaultSalt string
 
 	// Web Push (notificações do navegador — nova tarefa, novo email). Par de
 	// chaves VAPID (gerado uma vez, ex. `npx web-push generate-vapid-keys`).
@@ -124,6 +148,7 @@ func LoadConfig() Config {
 		SocialAlertEmail:   getEnv("SOCIAL_ALERT_EMAIL", ""),
 		EmailAPIKey:        mustEnv("EMAIL_API_KEY"),
 		Production:         getEnv("NODE_ENV", "development") == "production",
+		OAuthAudEnforce:    getEnv("OAUTH_AUD_ENFORCE", "") == "1",
 
 		NotificationsGatewayURL:   strings.TrimRight(getEnv("NOTIFICATIONS_PORTAL_API_URL", ""), "/"),
 		NotificationsSharedSecret: getEnv("NOTIFICATIONS_SHARED_SECRET", ""),
@@ -139,6 +164,8 @@ func LoadConfig() Config {
 		R2Bucket:    getEnv("CF_R2_BUCKET_NAME", ""),
 		R2PublicURL: strings.TrimRight(getEnv("CF_R2_PUBLIC_URL", ""), "/"),
 
+		SantosHubToken: getEnv("SANTOS_HUB_TOKEN", ""),
+
 		GoogleDriveSAJSONB64: getEnv("GOOGLE_DRIVE_SA_JSON_B64", ""),
 
 		InstagramAppSecret:          getEnv("INSTAGRAM_APP_SECRET", ""),
@@ -150,6 +177,7 @@ func LoadConfig() Config {
 		FacebookPageID:      getEnv("FACEBOOK_PAGE_ID", ""),
 
 		VaultSecret: getEnv("API_VAULT_SECRET", ""),
+		VaultSalt:   getEnv("API_VAULT_SALT", ""),
 
 		VAPIDPublicKey:  getEnv("VAPID_PUBLIC_KEY", ""),
 		VAPIDPrivateKey: getEnv("VAPID_PRIVATE_KEY", ""),

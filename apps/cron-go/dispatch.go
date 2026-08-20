@@ -53,12 +53,20 @@ func hostAllowed(host string, allowlist []string) bool {
 		}
 	}
 
-	// Match por sufixo (ex.: ".santos-tech.com" cobre subdomínios).
+	// Match por sufixo, sempre com FRONTEIRA DE PONTO (ex.: "santos-tech.com" e
+	// ".santos-tech.com" cobrem o domínio e seus subdomínios, e nada além).
+	//
+	// O HasSuffix cru de antes casava por substring: configurar
+	// CRON_HOST_ALLOWLIST=santos-tech.com (a forma natural de escrever) deixava
+	// "evilsantos-tech.com" passar — e todo dispatch leva
+	// "Authorization: Bearer <CRON_SERVICE_PAT>", então era entregar o PAT de
+	// serviço a um domínio de terceiro.
 	for _, suf := range allowlist {
-		if suf == "" {
+		bare := strings.TrimPrefix(suf, ".")
+		if bare == "" {
 			continue
 		}
-		if h == strings.TrimPrefix(suf, ".") || strings.HasSuffix(h, suf) {
+		if h == bare || strings.HasSuffix(h, "."+bare) {
 			return true
 		}
 	}

@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -203,32 +205,130 @@ func TestHandleCobrWebhook_CorpoVazio(t *testing.T) {
 	}
 }
 
-// TestCobrWebhookIdempotencia_StoreSeen verifica que Store.MarkWebhookSeen retorna
-// fresh=true na 1ª chamada e fresh=false no replay — lógica central do Fix 2.
-// Como *Store é concreto (não interface), não é possível injetar um fake diretamente
-// no campo s.store sem banco real. Testamos o comportamento via Store.MarkWebhookSeen
-// diretamente (unit test da lógica), documentando a integração com o handler.
-func TestCobrWebhookIdempotencia_StoreSeen(t *testing.T) {
-	// Simula o comportamento esperado de MarkWebhookSeen com um map simples.
-	seen := map[string]bool{}
-	markWebhookSeen := func(id string) bool {
-		if seen[id] {
-			return false
+// fakeCobrWHStore implementa cobrWebhookStore para testes sem DB, reproduzindo a
+// máquina de estados 'pending'/'done' do pay_webhook_events.
+type fakeCobrWHStore struct {
+	mu     sync.Mutex
+	events map[string]string // id → "pending" | "done"
+
+	markPaidCalls atomic.Int32
+	markPaidErr   error
+}
+
+func (f *fakeCobrWHStore) ClaimWebhookEvent(_ context.Context, id, _ string, _ []byte) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.events == nil {
+		f.events = map[string]string{}
+	}
+	if f.events[id] == "done" {
+		return false, nil
+	}
+	f.events[id] = "pending"
+	return true, nil
+}
+
+func (f *fakeCobrWHStore) MarkWebhookDone(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.events == nil {
+		f.events = map[string]string{}
+	}
+	f.events[id] = "done"
+	return nil
+}
+
+func (f *fakeCobrWHStore) eventState(id string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.events[id]
+}
+
+func (f *fakeCobrWHStore) MarkChargePaidByProviderID(_ context.Context, _ string) (bool, error) {
+	f.markPaidCalls.Add(1)
+	if f.markPaidErr != nil {
+		return false, f.markPaidErr
+	}
+	return true, nil
+}
+
+func (f *fakeCobrWHStore) PublicTokenByProviderID(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+// TestCobrWebhook_FalhaNaEfiNaoConsomeEvento verifica o núcleo do processamento em
+// duas fases: se a consulta à Efí falha, o evento NÃO é encerrado e a reentrega
+// processa de verdade. Antes o ID era consumido antes do efeito, então o 502 pedia
+// um retry que era no-op garantido — o pagamento sumia.
+func TestCobrWebhook_FalhaNaEfiNaoConsomeEvento(t *testing.T) {
+	var falhar atomic.Bool
+	falhar.Store(true)
+	var notifCalls atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/authorize", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"access_token": "tok", "expires_in": 600})
+	})
+	mux.HandleFunc("/v1/notification/notif-falha", func(w http.ResponseWriter, r *http.Request) {
+		notifCalls.Add(1)
+		if falhar.Load() {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"code": 500})
+			return
 		}
-		seen[id] = true
-		return true
+		writeJSON(w, http.StatusOK, map[string]any{"code": 200, "data": []any{
+			map[string]any{
+				"identifiers": map[string]any{"charge_id": 4242},
+				"status":      map[string]any{"current": "paid"},
+			},
+		}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	const secret = "secret-cobr-retry"
+	st := &fakeCobrWHStore{}
+	s := &Server{cfg: Config{EFIWebhookSecret: secret}, efiCobr: newTestCobr(srv.URL), cobrWH: st, provider: efiStub{}}
+	body := `notification=notif-falha`
+
+	post := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/webhooks/efi/cobr?token="+secret, strings.NewReader(body))
+		w := httptest.NewRecorder()
+		s.handleCobrWebhook(w, req)
+		return w
 	}
 
-	const tok = "notif-idem-test"
-	if !markWebhookSeen(tok) {
-		t.Fatal("1ª chamada: fresh deveria ser true")
+	// 1ª entrega: a Efí falha → 5xx e o evento continua 'pending' (NÃO consumido).
+	if w := post(); w.Code < 500 {
+		t.Fatalf("falha na Efí deveria devolver 5xx, veio %d: %s", w.Code, w.Body.String())
 	}
-	if markWebhookSeen(tok) {
-		t.Fatal("2ª chamada (replay): fresh deveria ser false")
+	if got := st.eventState("notif-falha"); got != "pending" {
+		t.Fatalf("evento deveria continuar 'pending' após a falha, está %q", got)
 	}
-	// 3ª chamada: também replay.
-	if markWebhookSeen(tok) {
-		t.Fatal("3ª chamada (replay): fresh deveria ser false")
+	if st.markPaidCalls.Load() != 0 {
+		t.Fatalf("nada deveria ter sido marcado pago na falha, foram %d", st.markPaidCalls.Load())
+	}
+
+	// 2ª entrega (reentrega da Efí), agora com sucesso: o pagamento é aplicado.
+	falhar.Store(false)
+	if w := post(); w.Code != http.StatusOK {
+		t.Fatalf("reentrega deveria dar 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	if st.markPaidCalls.Load() != 1 {
+		t.Fatalf("reentrega deveria ter marcado a cobrança paga 1 vez, foram %d", st.markPaidCalls.Load())
+	}
+	if got := st.eventState("notif-falha"); got != "done" {
+		t.Fatalf("evento deveria estar 'done' após o sucesso, está %q", got)
+	}
+
+	// 3ª entrega: agora sim é no-op (idempotência preservada).
+	if w := post(); w.Code != http.StatusOK {
+		t.Fatalf("3ª entrega deveria dar 200, veio %d", w.Code)
+	}
+	if st.markPaidCalls.Load() != 1 {
+		t.Fatalf("3ª entrega não deveria remarcar como paga, foram %d", st.markPaidCalls.Load())
+	}
+	if notifCalls.Load() != 2 {
+		t.Fatalf("a Efí deveria ter sido consultada 2 vezes (falha + reentrega), foram %d", notifCalls.Load())
 	}
 }
 
@@ -289,9 +389,15 @@ func (p *efiProviderStub) ParseWebhook(_ map[string][]string, body []byte) ([]We
 	return nil, nil
 }
 
-// fakePixWHStore implementa pixWebhookStore para testes sem DB.
+// fakePixWHStore implementa pixWebhookStore para testes sem DB. Reproduz a máquina
+// de estados real do pay_webhook_events: reivindicado ('pending') vs concluído ('done').
 type fakePixWHStore struct {
+	mu     sync.Mutex
+	events map[string]string // id → "pending" | "done"
+
 	markPaidCalled atomic.Int32
+	// markPaidErr, quando != nil, faz MarkChargePaid falhar (simula erro de banco).
+	markPaidErr error
 	// captura de SetWithdrawalStatus (ramo PAYOUT_RESULT).
 	wdStatusCalls atomic.Int32
 	lastWDIDEnvio string
@@ -299,12 +405,39 @@ type fakePixWHStore struct {
 	lastWDStatus  string
 }
 
-func (f *fakePixWHStore) MarkWebhookSeen(_ context.Context, _, _ string, _ []byte) (bool, error) {
-	return true, nil // sempre fresh (novo evento)
+func (f *fakePixWHStore) ClaimWebhookEvent(_ context.Context, id, _ string, _ []byte) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.events == nil {
+		f.events = map[string]string{}
+	}
+	if f.events[id] == "done" {
+		return false, nil // já concluído: reentrega é no-op de propósito
+	}
+	f.events[id] = "pending" // 'pending' pode ser reivindicado de novo (retry)
+	return true, nil
 }
+
+func (f *fakePixWHStore) MarkWebhookDone(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.events == nil {
+		f.events = map[string]string{}
+	}
+	f.events[id] = "done"
+	return nil
+}
+
+// eventState devolve o estado do evento ("" se nunca visto).
+func (f *fakePixWHStore) eventState(id string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.events[id]
+}
+
 func (f *fakePixWHStore) MarkChargePaid(_ context.Context, _ string) error {
 	f.markPaidCalled.Add(1)
-	return nil
+	return f.markPaidErr
 }
 func (f *fakePixWHStore) PublicTokenByCorrelation(_ context.Context, _ string) (string, error) {
 	return "", nil // sem token público — efeitos secundários (SSE/email) ignorados
@@ -474,5 +607,75 @@ func TestHandleCobrWebhook_SecretAusente(t *testing.T) {
 	s.handleCobrWebhook(w, req)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("esperado 503 sem secret, veio %d", w.Code)
+	}
+}
+
+// TestHandleWebhook_ErroDeBancoNaoConsomeEvento cobre o webhook PIX: se MarkChargePaid
+// falha (erro de banco), o evento NÃO pode ser encerrado — senão a reentrega da Efí
+// cai no "já visto" e o pagamento é descartado para sempre.
+func TestHandleWebhook_ErroDeBancoNaoConsomeEvento(t *testing.T) {
+	const secret = "secret-pix-retry"
+	provider := &efiProviderStub{getChargeStatus: "paid"}
+	store := &fakePixWHStore{markPaidErr: errors.New("db caiu")}
+
+	s := &Server{cfg: Config{EFIWebhookSecret: secret}, provider: provider, pixWH: store}
+	body := `{"pix":[{"txid":"stpayAAA","horario":"2026-06-21T00:00:00Z","valor":"10.00"}]}`
+	post := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/webhooks/efi/pix?token="+secret, strings.NewReader(body))
+		w := httptest.NewRecorder()
+		s.handleWebhook(w, req)
+		return w
+	}
+
+	// 1ª entrega: banco falha → 5xx pedindo reentrega, evento continua 'pending'.
+	if w := post(); w.Code < 500 {
+		t.Fatalf("erro de banco deveria devolver 5xx, veio %d: %s", w.Code, w.Body.String())
+	}
+	if got := store.eventState("EV1"); got != "pending" {
+		t.Fatalf("evento deveria continuar 'pending', está %q", got)
+	}
+
+	// 2ª entrega (reentrega), banco de volta: o pagamento é finalmente aplicado.
+	store.markPaidErr = nil
+	if w := post(); w.Code != http.StatusOK {
+		t.Fatalf("reentrega deveria dar 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	if store.markPaidCalled.Load() != 2 {
+		t.Fatalf("MarkChargePaid deveria ter sido tentado 2 vezes (falha + reentrega), foram %d", store.markPaidCalled.Load())
+	}
+	if got := store.eventState("EV1"); got != "done" {
+		t.Fatalf("evento deveria estar 'done' após o sucesso, está %q", got)
+	}
+
+	// 3ª entrega: no-op — a idempotência continua valendo depois do sucesso.
+	if w := post(); w.Code != http.StatusOK {
+		t.Fatalf("3ª entrega deveria dar 200, veio %d", w.Code)
+	}
+	if store.markPaidCalled.Load() != 2 {
+		t.Fatalf("3ª entrega não deveria reprocessar, MarkChargePaid foi chamado %d vezes", store.markPaidCalled.Load())
+	}
+}
+
+// TestHandleWebhook_StatusNaoPagoNaoEncerraEvento: a Efí ainda não confirmou o
+// pagamento — responde 200 (nada a reprocessar agora), mas o evento fica 'pending'
+// para que a notificação seguinte, com o status já pago, seja processada.
+func TestHandleWebhook_StatusNaoPagoNaoEncerraEvento(t *testing.T) {
+	const secret = "secret-pix-skip"
+	provider := &efiProviderStub{getChargeStatus: "pending"}
+	store := &fakePixWHStore{}
+	s := &Server{cfg: Config{EFIWebhookSecret: secret}, provider: provider, pixWH: store}
+	body := `{"pix":[{"txid":"stpayAAA","horario":"2026-06-21T00:00:00Z","valor":"10.00"}]}`
+
+	req := httptest.NewRequest("POST", "/webhooks/efi/pix?token="+secret, strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleWebhook(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status não-pago deveria dar 200, veio %d", w.Code)
+	}
+	if store.markPaidCalled.Load() != 0 {
+		t.Fatal("não deveria marcar paga com status não confirmado")
+	}
+	if got := store.eventState("EV1"); got != "pending" {
+		t.Fatalf("evento deveria continuar 'pending' (pode virar pago depois), está %q", got)
 	}
 }
