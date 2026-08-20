@@ -106,6 +106,10 @@ func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) 
 		// pelo front a partir de duração OU horário fixo — ver
 		// autoEndIfDue em hour_sessions.go pra como isso encerra sozinho.
 		ScheduledEndAt *time.Time `json:"scheduledEndAt"`
+		// ScheduledStartAt: opcional, timestamp absoluto (RFC3339). Futuro =
+		// sessão nasce "scheduled" e inicia sozinha na hora (ver
+		// autoStartIfDue); ausente/passado = começa na hora, como sempre.
+		ScheduledStartAt *time.Time `json:"scheduledStartAt"`
 	}
 	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.ClientID) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "clientId inválido"))
@@ -113,6 +117,10 @@ func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) 
 	}
 	if in.ScheduledEndAt != nil && !in.ScheduledEndAt.After(time.Now()) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "scheduledEndAt precisa ser no futuro"))
+		return
+	}
+	if in.ScheduledStartAt != nil && in.ScheduledEndAt != nil && !in.ScheduledEndAt.After(*in.ScheduledStartAt) {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "scheduledEndAt precisa ser depois de scheduledStartAt"))
 		return
 	}
 	client, err := s.getHourClient(r.Context(), in.ClientID)
@@ -124,7 +132,7 @@ func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, errHourClientNotFound)
 		return
 	}
-	h, token, shortCode, err := s.startHourSession(r.Context(), in.ClientID, userIDFrom(r), in.ScheduledEndAt)
+	h, token, shortCode, err := s.startHourSession(r.Context(), in.ClientID, userIDFrom(r), in.ScheduledEndAt, in.ScheduledStartAt)
 	if err != nil {
 		writeErr(w, err)
 		return

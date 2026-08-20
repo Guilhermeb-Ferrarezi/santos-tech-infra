@@ -302,7 +302,7 @@ CREATE INDEX IF NOT EXISTS idx_hour_purchases_client ON hour_purchases(client_id
 CREATE TABLE IF NOT EXISTS hour_sessions (
   id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id          UUID NOT NULL REFERENCES hour_clients(id) ON DELETE CASCADE,
-  status             TEXT NOT NULL CHECK (status IN ('active', 'paused', 'ended')),
+  status             TEXT NOT NULL CHECK (status IN ('active', 'paused', 'ended', 'scheduled')),
   token_hash         TEXT NOT NULL UNIQUE,
   pause_requested_at TIMESTAMPTZ,
   created_by         INTEGER NOT NULL REFERENCES users(id),
@@ -313,7 +313,13 @@ CREATE TABLE IF NOT EXISTS hour_sessions (
   -- Fim agendado (opcional): admin escolhe duração ou horário fixo ao iniciar
   -- (o front resolve os dois pra um timestamp absoluto antes de mandar).
   -- NULL = sessão de duração livre, "até eu parar" (comportamento de sempre).
-  scheduled_end_at TIMESTAMPTZ
+  scheduled_end_at TIMESTAMPTZ,
+  -- Início agendado (opcional): sessão nasce com status 'scheduled' (sem
+  -- evento 'start' ainda, elapsed=0) e vira 'active' sozinha ao chegar nesse
+  -- horário (ver autoStartIfDue) — não é só uma anotação, o cliente só
+  -- consegue usar a partir daí. NULL = começa na hora (comportamento de
+  -- sempre, status 'active' direto na criação).
+  scheduled_start_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_hour_sessions_client ON hour_sessions(client_id);

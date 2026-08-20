@@ -40,6 +40,11 @@ type HourSession struct {
 	// sessão de duração livre, "até o admin encerrar" (comportamento padrão).
 	// Ver autoEndIfDue — é isso que efetivamente encerra sozinha ao passar.
 	ScheduledEndAt *time.Time `json:"scheduledEndAt"`
+	// ScheduledStartAt: início agendado opcional. Não nulo = sessão nasce
+	// status "scheduled" (sem evento 'start', elapsed=0, cliente não consegue
+	// usar ainda) e vira "active" sozinha ao chegar nesse horário — ver
+	// autoStartIfDue. NULL = começa na hora (comportamento padrão).
+	ScheduledStartAt *time.Time `json:"scheduledStartAt"`
 }
 
 type hourSessionEvent struct {
@@ -148,12 +153,12 @@ func (s *Server) addHourPurchase(ctx context.Context, clientID string, minutesAd
 // ── sessões ──────────────────────────────────────────────────────────────────
 
 const hourSessionCols = `s.id::text, s.client_id::text, c.name, s.status, s.pause_requested_at,
-	s.created_at, s.updated_at, c.balance_minutes, s.scheduled_end_at`
+	s.created_at, s.updated_at, c.balance_minutes, s.scheduled_end_at, s.scheduled_start_at`
 
 func scanHourSession(row pgx.Row) (*HourSession, error) {
 	var h HourSession
 	err := row.Scan(&h.ID, &h.ClientID, &h.ClientName, &h.Status, &h.PauseRequestedAt,
-		&h.CreatedAt, &h.UpdatedAt, &h.BalanceMinutes, &h.ScheduledEndAt)
+		&h.CreatedAt, &h.UpdatedAt, &h.BalanceMinutes, &h.ScheduledEndAt, &h.ScheduledStartAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -190,19 +195,25 @@ func (s *Server) releaseStaleShortCodes(ctx context.Context) error {
 // qualquer cenário realista.
 const startHourSessionAttempts = 3
 
-// startHourSession cria a sessão + evento "start" numa transação e devolve o
-// token em texto puro e o código curto (só existem neste retorno — o banco
-// guarda o hash do token e o próprio código, mas o código é zerado no
-// primeiro pareamento, ver pairHourSessionByCode). scheduledEndAt é opcional
-// (nil = duração livre, "até o admin encerrar") — o front resolve
-// duração/horário fixo pra um timestamp absoluto antes de mandar.
-func (s *Server) startHourSession(ctx context.Context, clientID string, createdBy int64, scheduledEndAt *time.Time) (*HourSession, string, string, error) {
+// startHourSession cria a sessão numa transação e devolve o token em texto
+// puro e o código curto (só existem neste retorno — o banco guarda o hash do
+// token e o próprio código, mas o código é zerado no primeiro pareamento,
+// ver pairHourSessionByCode).
+//
+// scheduledEndAt é opcional (nil = duração livre, "até o admin encerrar") —
+// o front resolve duração/horário fixo pra um timestamp absoluto antes de
+// mandar. scheduledStartAt também é opcional e segue o mesmo princípio: nil
+// (ou um horário que já passou/é agora) cria a sessão já "active" com evento
+// 'start' na hora, igual sempre foi; um horário FUTURO cria como
+// "scheduled" (sem evento 'start' ainda — ver autoStartIfDue, que é quem de
+// fato inicia sozinha ao chegar a hora).
+func (s *Server) startHourSession(ctx context.Context, clientID string, createdBy int64, scheduledEndAt, scheduledStartAt *time.Time) (*HourSession, string, string, error) {
 	if err := s.releaseStaleShortCodes(ctx); err != nil {
 		return nil, "", "", err
 	}
 	var lastErr error
 	for i := 0; i < startHourSessionAttempts; i++ {
-		h, token, shortCode, err := s.startHourSessionOnce(ctx, clientID, createdBy, scheduledEndAt)
+		h, token, shortCode, err := s.startHourSessionOnce(ctx, clientID, createdBy, scheduledEndAt, scheduledStartAt)
 		if err == nil {
 			return h, token, shortCode, nil
 		}
@@ -214,10 +225,15 @@ func (s *Server) startHourSession(ctx context.Context, clientID string, createdB
 	return nil, "", "", lastErr
 }
 
-func (s *Server) startHourSessionOnce(ctx context.Context, clientID string, createdBy int64, scheduledEndAt *time.Time) (*HourSession, string, string, error) {
+func (s *Server) startHourSessionOnce(ctx context.Context, clientID string, createdBy int64, scheduledEndAt, scheduledStartAt *time.Time) (*HourSession, string, string, error) {
 	token := randomToken(32)
 	tokenHash := sha256Hex(token)
 	shortCode := randomDigits(6)
+	startsImmediately := scheduledStartAt == nil || !scheduledStartAt.After(time.Now())
+	initialStatus := "active"
+	if !startsImmediately {
+		initialStatus = "scheduled"
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, "", "", err
@@ -225,18 +241,20 @@ func (s *Server) startHourSessionOnce(ctx context.Context, clientID string, crea
 	defer tx.Rollback(ctx)
 	var sessionID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO hour_sessions (client_id, status, token_hash, short_code, short_code_expires_at, created_by, scheduled_end_at)
-		VALUES ($1::uuid, 'active', $2, $3, now() + make_interval(mins => $4), $5, $6)
+		INSERT INTO hour_sessions (client_id, status, token_hash, short_code, short_code_expires_at, created_by, scheduled_end_at, scheduled_start_at)
+		VALUES ($1::uuid, $2, $3, $4, now() + make_interval(mins => $5), $6, $7, $8)
 		RETURNING id::text`,
-		clientID, tokenHash, shortCode, int(shortCodeTTL.Minutes()), createdBy, scheduledEndAt).Scan(&sessionID)
+		clientID, initialStatus, tokenHash, shortCode, int(shortCodeTTL.Minutes()), createdBy, scheduledEndAt, scheduledStartAt).Scan(&sessionID)
 	if err != nil {
 		return nil, "", "", err
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO hour_session_events (session_id, event_type, actor_user_id)
-		VALUES ($1::uuid, 'start', $2)`,
-		sessionID, createdBy); err != nil {
-		return nil, "", "", err
+	if startsImmediately {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO hour_session_events (session_id, event_type, actor_user_id)
+			VALUES ($1::uuid, 'start', $2)`,
+			sessionID, createdBy); err != nil {
+			return nil, "", "", err
+		}
 	}
 	h, err := scanHourSession(tx.QueryRow(ctx, `
 		SELECT `+hourSessionCols+` FROM hour_sessions s JOIN hour_clients c ON c.id = s.client_id
@@ -319,6 +337,9 @@ func (s *Server) listActiveHourSessions(ctx context.Context) ([]HourSession, err
 	}
 	now := time.Now()
 	for i := range out {
+		if err := s.autoStartIfDue(ctx, &out[i]); err != nil {
+			return nil, err
+		}
 		if err := s.autoEndIfDue(ctx, &out[i]); err != nil {
 			return nil, err
 		}
@@ -337,6 +358,9 @@ func (s *Server) getHourSession(ctx context.Context, id string) (*HourSession, e
 		WHERE s.id = $1::uuid`, id))
 	if err != nil || h == nil {
 		return h, err
+	}
+	if err := s.autoStartIfDue(ctx, h); err != nil {
+		return nil, err
 	}
 	if err := s.autoEndIfDue(ctx, h); err != nil {
 		return nil, err
@@ -358,6 +382,9 @@ func (s *Server) getHourSessionByTokenHash(ctx context.Context, tokenHash string
 	if err != nil || h == nil {
 		return h, err
 	}
+	if err := s.autoStartIfDue(ctx, h); err != nil {
+		return nil, err
+	}
 	if err := s.autoEndIfDue(ctx, h); err != nil {
 		return nil, err
 	}
@@ -367,6 +394,62 @@ func (s *Server) getHourSessionByTokenHash(ctx context.Context, tokenHash string
 	}
 	h.ElapsedSeconds = elapsed
 	return h, nil
+}
+
+// autoStartIfDue inicia a sessão sozinha (grava o evento 'start' que faltava
+// e vira "active") quando o início agendado já chegou — mesmo princípio do
+// autoEndIfDue logo abaixo: chamado em todo caminho de leitura de sessão
+// "scheduled", sem worker/cron à parte. Roda ANTES de autoEndIfDue em cada
+// caller: uma sessão com início E fim já passados (agendou uma janela curta
+// e ninguém abriu o link nesse meio tempo) precisa iniciar e encerrar na
+// mesma leitura, nessa ordem.
+func (s *Server) autoStartIfDue(ctx context.Context, h *HourSession) error {
+	if h == nil || h.Status != "scheduled" || h.ScheduledStartAt == nil || h.ScheduledStartAt.After(time.Now()) {
+		return nil
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var createdBy int64
+	var current string
+	if err := tx.QueryRow(ctx, `SELECT created_by, status FROM hour_sessions WHERE id = $1::uuid`, h.ID).
+		Scan(&createdBy, &current); err != nil {
+		return err
+	}
+	if current != "scheduled" {
+		// Outra leitura concorrente já iniciou entre o scan e aqui — recarrega
+		// o estado atual em vez de tentar iniciar de novo (corrida inofensiva).
+		fresh, ferr := scanHourSession(s.db.QueryRow(ctx, `
+			SELECT `+hourSessionCols+` FROM hour_sessions s JOIN hour_clients c ON c.id = s.client_id
+			WHERE s.id = $1::uuid`, h.ID))
+		if ferr != nil {
+			return ferr
+		}
+		*h = *fresh
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE hour_sessions SET status = 'active', updated_at = now() WHERE id = $1::uuid`, h.ID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO hour_session_events (session_id, event_type, actor_user_id)
+		VALUES ($1::uuid, 'start', $2)`,
+		h.ID, createdBy); err != nil {
+		return err
+	}
+	fresh, err := scanHourSession(tx.QueryRow(ctx, `
+		SELECT `+hourSessionCols+` FROM hour_sessions s JOIN hour_clients c ON c.id = s.client_id
+		WHERE s.id = $1::uuid`, h.ID))
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	*h = *fresh
+	return nil
 }
 
 // autoEndIfDue encerra a sessão sozinha (mesma lógica de endHourSession,

@@ -3454,6 +3454,18 @@ paths:
                     quem criou). Front resolve duração OU horário fixo pra esse
                     timestamp antes de mandar. Omitido/null = duração livre, até o
                     admin encerrar (comportamento padrão). Precisa ser no futuro.
+                scheduledStartAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                  description: |
+                    Opcional — timestamp absoluto (RFC3339) em que a sessão inicia
+                    sozinha. Se futuro, a sessão nasce com status `scheduled` (sem
+                    evento start, elapsedSeconds=0, cliente não consegue usar ainda)
+                    e vira `active` sozinha ao chegar nesse horário. Omitido/passado
+                    = começa na hora, como sempre (status `active` direto). Se os
+                    dois campos forem dados, scheduledEndAt precisa ser depois de
+                    scheduledStartAt.
               required: [clientId]
       responses:
         "201":
@@ -5747,9 +5759,10 @@ components:
         id: { type: string, format: uuid }
         clientId: { type: string, format: uuid }
         clientName: { type: string }
-        status: { type: string, enum: [active, paused, ended] }
+        status: { type: string, enum: [scheduled, active, paused, ended], description: "scheduled = ainda não começou (ver scheduledStartAt); vira active sozinha." }
         pauseRequestedAt: { type: string, format: date-time, nullable: true }
         scheduledEndAt: { type: string, format: date-time, nullable: true, description: "Fim agendado opcional — sessão encerra sozinha ao passar (ver POST /hour-sessions). Null = duração livre." }
+        scheduledStartAt: { type: string, format: date-time, nullable: true, description: "Início agendado opcional — sessão nasce status scheduled e vira active sozinha ao passar (ver POST /hour-sessions). Null = começa na hora." }
         elapsedSeconds: { type: integer }
         balanceMinutes: { type: integer, description: "Saldo atual do cliente (antes de debitar o tempo desta sessão, que só é debitado no end)." }
         createdAt: { type: string, format: date-time }

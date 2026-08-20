@@ -533,6 +533,13 @@ CREATE INDEX IF NOT EXISTS idx_hour_sessions_status ON hour_sessions(status) WHE
 ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code TEXT UNIQUE;
 ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code_expires_at TIMESTAMPTZ;
 ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS scheduled_end_at TIMESTAMPTZ;
+ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS scheduled_start_at TIMESTAMPTZ;
+-- status ganhou 'scheduled' (sessão que ainda não começou, ver
+-- autoStartIfDue em hour_sessions.go) — DROP+ADD é rápido (só valida
+-- metadado, sem reescrever a tabela), linhas existentes já cabem no CHECK novo.
+ALTER TABLE hour_sessions DROP CONSTRAINT IF EXISTS hour_sessions_status_check;
+ALTER TABLE hour_sessions ADD CONSTRAINT hour_sessions_status_check
+  CHECK (status IN ('active', 'paused', 'ended', 'scheduled'));
 
 -- Índice do UPDATE que devolve códigos curtos expirados/encerrados ao espaço
 -- UNIQUE (ver releaseStaleShortCodes) — parcial, porque a esmagadora maioria
