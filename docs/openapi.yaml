@@ -256,6 +256,110 @@ paths:
             Set-Cookie:
               $ref: "#/components/headers/ClearAuthCookies"
 
+  /public/qr-login/create:
+    post:
+      tags: [Auth]
+      summary: Criar um pedido de login por QR code/código
+      description: |
+        Login por QR code estilo WhatsApp Web (igual ao pareamento dos PCs do
+        laboratório): o Santos Hub — sem sessão nenhuma ao abrir — chama esta
+        rota e MOSTRA o QR (payload = `token`) e o `code` de 6 dígitos como
+        fallback digitável. Quem já está logado (celular escaneando com a
+        câmera, ou outra aba) confirma em `POST /auth/qr-login/confirm`; o Hub
+        fica com poll em `GET /public/qr-login/poll` até aprovar. Público —
+        quem cria não tem sessão. Expira em 5min. Rate limit: 20 req/min por IP.
+      security: []
+      responses:
+        "200":
+          description: Pedido criado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string, description: "64 chars hex — payload do QR e o que o Hub usa pro poll." }
+                  code: { type: string, description: "6 dígitos — fallback digitável em /conectar-dispositivo." }
+                  expiresAt: { type: string, format: date-time }
+                required: [token, code, expiresAt]
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/qr-login/confirm:
+    post:
+      tags: [Auth]
+      summary: Confirmar um pedido de login do Santos Hub
+      description: |
+        Chamado pela sessão que JÁ está logada (o celular que escaneou o QR,
+        ou outra aba autenticada) — é essa sessão que empresta a identidade
+        pro dispositivo novo. `code` aceita tanto o token (64 chars, vindo do
+        QR) quanto o código de 6 dígitos digitado. Requer sessão. Rate limit:
+        20 req/min por IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code: { type: string, description: "Token (64 chars) ou código (6 dígitos)." }
+              required: [code]
+      responses:
+        "200":
+          description: Confirmado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Token/código expirado ou inválido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: QR_LOGIN_NOT_FOUND, message: "código expirado ou inválido" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /public/qr-login/poll:
+    get:
+      tags: [Auth]
+      summary: Consultar se um pedido de login foi aprovado
+      description: |
+        O Santos Hub chama isso a cada ~2s com o `token` que recebeu de
+        `/public/qr-login/create`, até `ready: true` aparecer. Uso único —
+        assim que devolve a sessão, apaga o registro (uma segunda chamada com
+        o mesmo token dá `ready: false` mesmo tendo sido aprovado antes).
+        Sempre trata como cliente nativo (o Hub nunca manda `Origin`): quando
+        pronto, devolve `accessToken`/`refreshToken` no corpo. Público. Rate
+        limit: 60 req/min por IP.
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Estado do pedido
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties: { ready: { type: boolean, enum: [false] } }
+                  - allOf:
+                      - $ref: "#/components/schemas/SessionResponse"
+                      - type: object
+                        properties: { ready: { type: boolean, enum: [true] } }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /auth/me:
     get:
       tags: [Auth]
@@ -1227,6 +1331,10 @@ paths:
                   type: string
                   format: uri
                   description: "Obrigatório para kind=link — deve começar com http:// ou https://."
+                imageUrl:
+                  type: string
+                  format: uri
+                  description: "Opcional, qualquer kind — foto/ícone pro grid. Deve começar com http:// ou https:// (máx 1000 chars)."
               required: [name, kind]
       responses:
         "201":
@@ -1306,6 +1414,7 @@ paths:
                 category: { type: string }
                 version: { type: string }
                 pinned: { type: boolean }
+                imageUrl: { type: string, format: uri, description: "String vazia remove a imagem." }
       responses:
         "200":
           description: Item atualizado
@@ -3322,8 +3431,11 @@ paths:
       tags: [Horas]
       summary: Inicia sessão para um cliente
       description: |
-        Admin-only. Gera o token do link público (devolvido em texto puro só nesta
-        resposta — o banco guarda apenas o hash). Rate limit 30/min.
+        Admin-only. Gera o token do link público E um código curto de 6 dígitos
+        (alternativa a colar o link no PC — expira em 24h, uso único; ver
+        `POST /public/hour-sessions/pair-by-code`). Ambos devolvidos em texto
+        puro só nesta resposta — o banco guarda apenas o hash do token (e o
+        próprio código, zerado no primeiro pareamento). Rate limit 30/min.
       requestBody:
         required: true
         content:
@@ -3344,7 +3456,8 @@ paths:
                   session: { $ref: "#/components/schemas/HourSession" }
                   token: { type: string, description: "64 chars hex — só aparece nesta resposta." }
                   publicUrl: { type: string }
-                required: [session, token, publicUrl]
+                  shortCode: { type: string, description: "6 dígitos — só aparece nesta resposta. Expira em 24h, uso único." }
+                required: [session, token, publicUrl, shortCode]
         "400":
           description: clientId inválido.
         "404":
@@ -3451,6 +3564,90 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /hour-sessions/{id}/events:
+    get:
+      tags: [Horas]
+      summary: Histórico da sessão (pausas, retomadas e ajustes)
+      description: |
+        Admin-only. Ordem cronológica. start/pause/resume/end sempre foram
+        gravados com autor e horário; `adjust` são as correções manuais de
+        tempo, com `deltaSeconds` e o motivo.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Eventos da sessão.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        eventType: { type: string, enum: [start, pause, resume, end, adjust] }
+                        deltaSeconds: { type: integer, description: "Só em adjust: positivo soma, negativo desconta." }
+                        note: { type: string, nullable: true }
+                        actorName: { type: string, nullable: true }
+                        createdAt: { type: string, format: date-time }
+        "404":
+          description: Sessão não encontrada.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-sessions/{id}/adjust:
+    post:
+      tags: [Horas]
+      summary: Corrige manualmente o tempo da sessão
+      description: |
+        Admin-only. Rate limit 30/min. Para quando o tempo não bate com o real
+        (esqueceu de pausar, o PC caiu, o cliente saiu antes).
+
+        Entra como **evento** no histórico, não como acerto num total: o tempo
+        da sessão continua derivado dos eventos, e a correção fica visível com
+        autor, horário e motivo. Um desconto maior que o tempo corrido não gera
+        tempo negativo — o piso é zero.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deltaSeconds:
+                  type: integer
+                  minimum: -86400
+                  maximum: 86400
+                  description: "Positivo soma, negativo desconta. Zero é recusado."
+                note: { type: string, maxLength: 200 }
+              required: [deltaSeconds]
+      responses:
+        "200":
+          description: Sessão com o tempo já recalculado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: "#/components/schemas/HourSession" }
+        "400":
+          description: Ajuste zero ou fora de ±24h (ADJUST_TOO_LARGE).
+        "404":
+          description: Sessão não encontrada.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /hour-sessions/{id}/link:
     post:
       tags: [Horas]
@@ -3538,6 +3735,41 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /public/hour-sessions/pair-by-code:
+    post:
+      tags: [Horas]
+      summary: Troca um código curto por um token de sessão (sem autenticação)
+      description: |
+        Alternativa a colar o link de 64 chars no PC do laboratório: digita-se
+        só os 6 dígitos. Devolve um token REEMITIDO (nunca o token original,
+        que não fica guardado em texto puro) e zera o código — uso único,
+        mesmo que ainda não tivesse expirado (24h). Rate limit 15/min por IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code: { type: string, description: "6 dígitos" }
+              required: [code]
+      responses:
+        "200":
+          description: Token emitido.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  publicUrl: { type: string }
+                required: [token, publicUrl]
+        "404":
+          description: Código inválido ou expirado.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /hour-lab-devices:
     get:
       tags: [Horas]
@@ -3555,6 +3787,45 @@ paths:
                 type: object
                 properties:
                   devices: { type: array, items: { $ref: "#/components/schemas/LabDevice" } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/pair:
+    post:
+      tags: [Horas]
+      summary: Pareia um PC via QR — inicia sessão e entrega o token no heartbeat seguinte
+      description: |
+        Admin-only. Fluxo do QR: o PC (ainda sem sessão) mostra um QR com o
+        próprio `deviceUuid`; o admin escaneia com o celular (já autenticado),
+        abre `/admin/horas/parear/:deviceUuid` no dashboard e escolhe o
+        cliente — chamando este endpoint. Inicia a sessão (mesma lógica de
+        `POST /hour-sessions`) e deixa o token pronto pra entrega automática
+        no próximo heartbeat do PC (`pending_pair_token`, mesmo padrão de
+        entrega única de `unpairRequested`/`message`) — nada é digitado no
+        PC. Rate limit 30/min.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceUuid: { type: string, format: uuid }
+                clientId: { type: string, format: uuid }
+              required: [deviceUuid, clientId]
+      responses:
+        "200":
+          description: Sessão criada e token preparado pro dispositivo.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: "#/components/schemas/HourSession" }
+        "400":
+          description: deviceUuid/clientId inválido.
+        "404":
+          description: Cliente ou dispositivo não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -3590,6 +3861,25 @@ paths:
                   device: { $ref: "#/components/schemas/LabDevice" }
         "400":
           description: Nome vazio ou maior que 80 caracteres.
+        "404":
+          description: Dispositivo não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [Horas]
+      summary: Remove o registro de um PC do laboratório
+      description: |
+        Admin-only. Remove a linha (nome, histórico de heartbeat) — não afeta
+        nenhuma sessão que o PC já rodou. Se o mesmo PC mandar heartbeat de
+        novo depois, a linha é recriada do zero. Rate limit 30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Dispositivo removido.
         "404":
           description: Dispositivo não encontrado.
         "401":
@@ -3656,8 +3946,8 @@ paths:
         Sem login — `deviceId` (UUID gerado e persistido localmente no primeiro
         boot do app) é a própria identidade. Enviado a cada ~30s pelo
         hour-timer-app; devolve o nome atribuído pelo admin e os comandos
-        pendentes (despairar / aviso), entregues exatamente uma vez. Rate limit
-        120/min por IP.
+        pendentes (despairar / aviso / token de pareamento via QR), entregues
+        exatamente uma vez. Rate limit 120/min por IP.
       security: []
       requestBody:
         required: true
@@ -3669,6 +3959,30 @@ paths:
                 deviceId: { type: string, format: uuid }
                 token: { type: string, description: "Token da sessão pareada localmente, se houver (64 chars hex)." , nullable: true }
                 appVersion: { type: string, maxLength: 50 }
+                previousDeviceId:
+                  type: string
+                  format: uuid
+                  description: >
+                    Identidade anterior do PC (app 0.1.10+), enviada quando o app passa a
+                    derivar o id do MachineGuid do Windows. O servidor MOVE o registro
+                    antigo (nome, sessão, inventário, capturas) para a identidade nova.
+                    Registro que já tem segredo exige o deviceSecret antigo como prova de
+                    posse; registro ainda sem segredo migra livre, pela mesma política de
+                    adoção aberta do primeiro heartbeat (necessário pro upgrade dos PCs em
+                    0.1.0, anteriores ao segredo existir). Se a identidade nova já tiver
+                    registro próprio, nada é movido. O app (0.1.11+) reenvia este campo em
+                    todo heartbeat até a resposta trazer previousDeviceResolved — um envio
+                    único que chegue na hora errada deixaria um dispositivo duplicado sem
+                    chance de retomada.
+                openApps:
+                  type: array
+                  maxItems: 100
+                  items: { type: string, maxLength: 100 }
+                  description: >
+                    Nomes dos aplicativos abertos neste instante (app 0.1.9+). Substituem a
+                    lista anterior. Ausente ≠ vazio: campo omitido mantém a última lista
+                    conhecida (app antigo), enquanto [] significa "nada aberto". Só nomes —
+                    título de janela carregaria conteúdo e fica de fora de propósito.
               required: [deviceId]
       responses:
         "200":
@@ -3686,11 +4000,459 @@ paths:
                     properties:
                       id: { type: string, format: uuid }
                       text: { type: string }
+                  pairToken: { type: string, description: "Token pronto pra uso (pareamento via QR concluído pelo admin) — entregue uma única vez." }
+                  screenshotRequested: { type: boolean, description: "O admin pediu uma captura de tela — entregue uma única vez." }
+                  deviceSecret: { type: string, description: "Credencial deste PC, emitida no ÚNICO heartbeat em que é criada (adoção). O app precisa persistir; sem ela os heartbeats seguintes levam 401." }
+                  previousDeviceResolved:
+                    type: boolean
+                    description: >
+                      Não sobrou nada a migrar do previousDeviceId (moveu agora, ou o
+                      registro antigo já não existe). Só então o app esquece o id antigo;
+                      enquanto não vier, ele reenvia previousDeviceId a cada heartbeat e a
+                      migração acontece sozinha quando o impedimento sair do caminho —
+                      admin esquece o segredo do registro antigo, ou apaga o duplicado.
                 required: [name, unpairRequested]
         "400":
           description: deviceId inválido.
         "429":
           $ref: "#/components/responses/RateLimited"
+
+  /public/lab-devices/inventory:
+    post:
+      tags: [Horas]
+      summary: Inventário de software do PC (sem login, autenticado pelo segredo do dispositivo)
+      description: |
+        O app lê a lista de programas instalados do registro do Windows (a mesma
+        que aparece em "Adicionar ou remover programas") e manda inteira; o
+        servidor substitui o inventário anterior — é uma foto do estado atual,
+        não histórico. Enviado depois de um heartbeat bem-sucedido, só quando a
+        lista muda ou passa um dia.
+
+        Exige o mesmo `deviceSecret` do heartbeat e, diferente dele, **não**
+        adota dispositivo novo: inventário de um `deviceId` que nunca bateu
+        heartbeat é recusado. Rate limit 10/min por IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceId: { type: string, format: uuid }
+                deviceSecret: { type: string, description: "Segredo emitido no primeiro heartbeat (64 chars hex)." }
+                programs:
+                  type: array
+                  maxItems: 1000
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string, maxLength: 200 }
+                      version: { type: string, maxLength: 200 }
+                      publisher: { type: string, maxLength: 200 }
+                      iconHash:
+                        type: string
+                        pattern: "^[0-9a-f]{64}$"
+                        description: >
+                          sha256 do PNG do ícone. Os bytes NÃO vão aqui: a mesma imagem
+                          vale para todos os PCs, então sobe uma vez só em
+                          POST /public/lab-devices/icons. Os hashes que o servidor ainda
+                          não conhece voltam em missingIcons.
+                      icon:
+                        type: string
+                        maxLength: 44000
+                        description: >
+                          Formato do app 0.1.5 (PNG em base64 na própria lista), ainda
+                          aceito — o servidor calcula o hash e guarda a imagem.
+                    required: [name]
+              required: [deviceId]
+      responses:
+        "200":
+          description: >
+            Inventário substituído. missingIcons traz os hashes cujas imagens o
+            servidor ainda não tem — o app envia só essas em
+            POST /public/lab-devices/icons.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  count: { type: integer }
+                  missingIcons:
+                    type: array
+                    items: { type: string, pattern: "^[0-9a-f]{64}$" }
+        "400":
+          description: deviceId inválido ou mais de 1000 programas (INVENTORY_TOO_LARGE).
+        "401":
+          description: Segredo do dispositivo ausente ou inválido (LAB_DEVICE_UNAUTHORIZED).
+        "404":
+          description: Dispositivo desconhecido (nunca mandou heartbeat).
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /public/lab-devices/icons:
+    post:
+      tags: [Horas]
+      summary: Envia as imagens de ícone que faltavam no servidor
+      description: |
+        Segundo passo da coleta: só os hashes que vieram em `missingIcons`. O
+        armazenamento é por conteúdo e compartilhado entre todas as máquinas —
+        por isso o servidor **recalcula** o sha256 do que recebe e descarta
+        quando não bate com o `hash` declarado; sem essa checagem um PC poderia
+        gravar qualquer imagem sob o hash de outro programa e trocar o ícone
+        para todo mundo.
+
+        Autenticado pelo mesmo `deviceSecret` do heartbeat. Rate limit 10/min.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceId: { type: string, format: uuid }
+                deviceSecret: { type: string }
+                icons:
+                  type: array
+                  maxItems: 200
+                  items:
+                    type: object
+                    properties:
+                      hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+                      png: { type: string, description: "PNG em base64 puro, até 32 KB decodificados." }
+                    required: [hash, png]
+              required: [deviceId]
+      responses:
+        "200":
+          description: Quantas imagens foram gravadas (as que não conferiram são ignoradas em silêncio).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  saved: { type: integer }
+        "400":
+          description: deviceId inválido ou lote acima de 200 ícones (TOO_MANY_ICONS).
+        "401":
+          description: Segredo do dispositivo ausente ou inválido (LAB_DEVICE_UNAUTHORIZED).
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /program-icons/{hash}:
+    get:
+      tags: [Horas]
+      summary: PNG do ícone de um programa
+      description: |
+        Admin-only. A URL é o próprio conteúdo (sha256), então a imagem nunca
+        muda: `Cache-Control: public, max-age=31536000, immutable` deixa o
+        navegador buscar cada ícone uma única vez, e o JSON do inventário não
+        precisa carregar imagem nenhuma.
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+      responses:
+        "200":
+          description: Imagem PNG.
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+        "404":
+          description: Hash desconhecido ou fora do formato (ICON_NOT_FOUND).
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/{id}/programs:
+    get:
+      tags: [Horas]
+      summary: Inventário do PC cruzado com os programas esperados
+      description: |
+        Admin-only. `expected` é o cadastro de `/hour-lab-expected-programs` com
+        `installed` resolvido para este PC; `installed` é a lista completa que a
+        máquina reportou. `collectedAt` nulo = o PC nunca mandou inventário
+        (app anterior à 0.1.2, ou ainda não adotado).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Inventário do PC.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  collectedAt: { type: string, format: date-time, nullable: true }
+                  expected:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer, format: int64 }
+                        label: { type: string }
+                        matchPattern: { type: string }
+                        installed: { type: boolean }
+                        matchedName: { type: string }
+                        matchedVersion: { type: string }
+                        matchedIconHash: { type: string, description: "Hash do ícone do programa que casou (ver iconHash)." }
+                  installed:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        version: { type: string }
+                        publisher: { type: string }
+                        iconHash: { type: string, description: "sha256 do PNG; monte a URL /program-icons/{hash}. Ausente quando o programa não declara ícone." }
+        "404":
+          description: Dispositivo não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/{id}/screenshot:
+    post:
+      tags: [Horas]
+      summary: Pede uma captura de tela do PC
+      description: |
+        Admin-only. Rate limit 30/min. Só marca o pedido: o comando é entregue
+        no próximo heartbeat (até ~30s), o PC tira a foto, **mostra um aviso na
+        própria tela** e envia a imagem. Não há captura periódica nem
+        silenciosa, e quem pediu fica registrado junto da captura — a tela de um
+        PC de uso compartilhado pode conter dado de quem está sentado nele.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Pedido registrado; a imagem chega depois do próximo heartbeat.
+        "404":
+          description: Dispositivo não encontrado.
+        "503":
+          description: R2 não configurado no servidor (SCREENSHOT_STORAGE_UNSET).
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/{id}/screenshots:
+    get:
+      tags: [Horas]
+      summary: Capturas de tela do PC, mais recente primeiro
+      description: |
+        Admin-only. `url` é assinada e vale 10 minutos. Só as 20 capturas mais
+        recentes por PC são mantidas; as anteriores são apagadas na captura
+        seguinte.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Histórico de capturas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  screenshots:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        width: { type: integer }
+                        height: { type: integer }
+                        bytes: { type: integer }
+                        requestedBy: { type: string, nullable: true, description: "Nome de quem pediu." }
+                        requestedAt: { type: string, format: date-time, nullable: true }
+                        capturedAt: { type: string, format: date-time }
+                        url: { type: string, description: "URL assinada (10min)." }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/{id}/screenshots/{shotId}:
+    delete:
+      tags: [Horas]
+      summary: Apaga uma captura de tela
+      description: |
+        Admin-only. Rate limit 60/min. Apaga o registro **e** o arquivo no R2 —
+        se o arquivo não sair, a resposta é erro: responder "apagado" com a
+        imagem ainda no bucket seria pior que não ter o botão.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: shotId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Registro e arquivo apagados.
+        "404":
+          description: Captura não encontrada (SCREENSHOT_NOT_FOUND).
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /public/lab-devices/screenshot:
+    post:
+      tags: [Horas]
+      summary: Envia a captura de tela (sem login, autenticado pelo segredo do dispositivo)
+      description: |
+        Só é aceita quando existe pedido recente do admin — 5 minutos desde a
+        entrega do comando no heartbeat. A rota é pública (o PC não faz login),
+        então sem essa janela um dispositivo poderia despejar imagens de tela
+        quando quisesse. Rate limit 10/min.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceId: { type: string, format: uuid }
+                deviceSecret: { type: string }
+                jpeg:
+                  type: string
+                  description: >
+                    JPEG em base64 puro, até 6 MB decodificados. Precisa começar com a
+                    assinatura JPEG (FF D8 FF) — a imagem é servida de volta pro navegador.
+                width: { type: integer }
+                height: { type: integer }
+              required: [deviceId, jpeg]
+      responses:
+        "200":
+          description: Captura registrada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  id: { type: string, format: uuid }
+        "400":
+          description: deviceId inválido ou imagem que não é JPEG.
+        "401":
+          description: Segredo do dispositivo ausente ou inválido (LAB_DEVICE_UNAUTHORIZED).
+        "409":
+          description: Nenhuma captura pendente para este dispositivo (SCREENSHOT_NOT_REQUESTED).
+        "413":
+          description: Imagem acima de 6 MB (SCREENSHOT_TOO_LARGE).
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /hour-lab-expected-programs:
+    get:
+      tags: [Horas]
+      summary: Lista os programas esperados nos PCs do laboratório
+      description: Admin-only. Ordenado por nome.
+      responses:
+        "200":
+          description: Programas cadastrados.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  programs:
+                    type: array
+                    items: { $ref: "#/components/schemas/ExpectedProgram" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Horas]
+      summary: Cadastra um programa esperado
+      description: |
+        Admin-only. Rate limit 30/min. `matchPattern` é procurado por substring,
+        sem diferenciar caixa, no nome que o Windows exibe — omitido, o `label`
+        é usado. Curingas do LIKE (`%`, `_`, `\`) são recusados: um `%` solto
+        casaria com qualquer programa e marcaria todo PC como em dia.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 80 }
+                matchPattern: { type: string, maxLength: 80 }
+              required: [label]
+      responses:
+        "201":
+          description: Programa criado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  program: { $ref: "#/components/schemas/ExpectedProgram" }
+        "400":
+          description: Nome vazio/longo demais, ou padrão com curinga.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-expected-programs/{id}:
+    patch:
+      tags: [Horas]
+      summary: Edita um programa esperado
+      description: Admin-only. Rate limit 30/min. Mesmas regras do POST.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 80 }
+                matchPattern: { type: string, maxLength: 80 }
+              required: [label]
+      responses:
+        "200":
+          description: Programa atualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  program: { $ref: "#/components/schemas/ExpectedProgram" }
+        "400":
+          description: Nome vazio/longo demais, ou padrão com curinga.
+        "404":
+          description: Programa não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [Horas]
+      summary: Remove um programa esperado
+      description: |
+        Admin-only. Rate limit 30/min. Some da checagem dos PCs; nada é
+        desinstalado de máquina nenhuma.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: Programa removido.
+        "404":
+          description: Programa não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /auth/admin/drive-folders/browse:
     get:
@@ -3926,10 +4688,16 @@ paths:
       summary: Lista o conteúdo de uma pasta (arquivos e subpastas)
       description: |
         Exige acesso `read` (ou superior) na pasta raiz `{id}` — resolvido por
-        registro (cargo/membro), não por permissão fixa de cargo. Responde 503
-        se o Drive não estiver configurado (`GOOGLE_DRIVE_SA_JSON_B64` vazio).
-        Itens vêm misturados (pastas e arquivos); distinga pelo `mimeType`
-        (`application/vnd.google-apps.folder` = pasta) pra navegação estilo Drive.
+        registro (cargo/membro), não por permissão fixa de cargo. Rate limit
+        60/min (a service account é compartilhada por todas as pastas/usuários
+        — sem limite aqui, um único usuário podia estourar a cota do Drive pro
+        ecossistema inteiro). Responde 503 se o Drive não estiver configurado
+        (`GOOGLE_DRIVE_SA_JSON_B64` vazio). Itens vêm misturados (pastas e
+        arquivos); distinga pelo `mimeType` (`application/vnd.google-apps.folder`
+        = pasta) pra navegação estilo Drive. Pagina internamente pelo Drive
+        (até 2000 itens); acima disso, devolve os 2000 primeiros e loga um
+        aviso — sem paginação exposta na API ainda (pasta com mais de 2000
+        itens é um caso raro, não vale a pena expor cursor por enquanto).
       parameters:
         - name: id
           in: path
@@ -3970,7 +4738,12 @@ paths:
         `multipart/form-data` com o arquivo no campo `file` (máx. 25MB),
         streamado direto pro Drive sem bufferizar o arquivo inteiro em
         memória. `?parent=<driveFileId>` envia pra uma SUBPASTA (mesma
-        validação de ancestralidade do GET) em vez da raiz.
+        validação de ancestralidade do GET) em vez da raiz. Se o
+        `Content-Type` declarado no multipart for de uma categoria "segura pra
+        inline" (imagem/vídeo/áudio/PDF — mesma allowlist do endpoint de
+        download), os bytes reais são conferidos contra ele (sniff dos
+        primeiros 512 bytes); um `Content-Type` mentiroso (ex. HTML/script
+        disfarçado de `image/png`) é rejeitado com 400 em vez de ir pro Drive.
       parameters:
         - name: id
           in: path
@@ -4016,13 +4789,21 @@ paths:
       tags: [Arquivos]
       summary: Baixa ou visualiza um arquivo (proxeado pelo backend)
       description: |
-        Exige acesso `read` na pasta. O download SEMPRE passa pelo backend
-        (nunca um link direto do Drive) — quem tem permissão no Drive é a
-        service account, não o usuário final; a autorização real é a ACL
-        deste dashboard. Por padrão abre INLINE (o navegador renderiza
+        Exige acesso `read` na pasta. Rate limit 60/min (mesmo motivo da
+        listagem — quota da service account é compartilhada). O download
+        SEMPRE passa pelo backend (nunca um link direto do Drive) — quem tem
+        permissão no Drive é a service account, não o usuário final; a
+        autorização real é a ACL deste dashboard. Por padrão abre INLINE (o
+        navegador renderiza
         imagem/vídeo/PDF quando sabe); `?download=1` força o download
         (Content-Disposition: attachment). Suporta o header `Range` — dá pra
-        dar seek num vídeo sem baixar o arquivo inteiro.
+        dar seek num vídeo sem baixar o arquivo inteiro. **Segurança:** só uma
+        allowlist de tipos (imagem, vídeo, áudio, PDF — exceto `image/svg+xml`,
+        que pode ter `<script>` embutido) pode abrir INLINE; qualquer outro
+        `Content-Type` é sempre forçado a `attachment` +
+        `application/octet-stream`, mesmo sem `?download=1`, e a resposta leva
+        `X-Content-Type-Options: nosniff` — evita XSS armazenado a partir de um
+        upload que declarou um tipo de mídia mas contém HTML/script.
       parameters:
         - name: id
           in: path
@@ -4100,7 +4881,10 @@ paths:
         qualquer usuário/cargo com `write` nessa pasta pode renomear). Rate
         limit 30/min. `fileId` é validado por ancestralidade (IsDescendant)
         contra a árvore de `{id}` — não dá pra renomear algo fora do escopo
-        autorizado só adivinhando o ID no Drive.
+        autorizado só adivinhando o ID no Drive. `fileId` igual ao
+        `driveFolderId` da própria pasta raiz é sempre rejeitado (403) — sem
+        essa checagem, "renomear a raiz" seria um caso técnico válido de
+        ancestralidade, e afetaria todo mundo com acesso àquela pasta.
       parameters:
         - name: id
           in: path
@@ -4145,10 +4929,12 @@ paths:
       description: |
         Exige acesso `write` na pasta raiz `{id}` (mesma regra do renomear —
         qualquer usuário/cargo com `write`, não só Admin). Rate limit 30/min.
-        `fileId` validado por ancestralidade, igual ao renomear/download. Move
-        pra lixeira do Google Drive — **não** é exclusão permanente (mesmo
-        comportamento do botão "Remover" da UI do próprio Drive; reversível
-        de lá pelo dono real do arquivo).
+        `fileId` validado por ancestralidade, igual ao renomear/download —
+        incluindo a mesma rejeição de `fileId` igual ao `driveFolderId` da
+        própria pasta (não dá pra mandar a pasta raiz inteira pra lixeira por
+        aqui). Move pra lixeira do Google Drive — **não** é exclusão permanente
+        (mesmo comportamento do botão "Remover" da UI do próprio Drive;
+        reversível de lá pelo dono real do arquivo).
       parameters:
         - name: id
           in: path
@@ -4165,6 +4951,104 @@ paths:
           description: Sem acesso de escrita a essa pasta, ou fileId fora da árvore autorizada.
         "502":
           description: Falha ao mover pra lixeira no Drive.
+        "503":
+          description: Google Drive não configurado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /drive-folders/{id}/folders:
+    post:
+      tags: [Arquivos]
+      summary: Cria uma subpasta
+      description: |
+        Exige acesso `write` na pasta raiz `{id}`. Rate limit 20/min. Cria a
+        subpasta na raiz por padrão, ou dentro de `?parent=<driveFileId>` se
+        informado (mesma validação de ancestralidade das demais rotas de
+        arquivo — `parent` precisa estar dentro da árvore de `{id}`).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: parent
+          in: query
+          required: false
+          schema: { type: string }
+          description: "ID de uma subpasta dentro da árvore de `{id}`; sem isso, cria na raiz."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, minLength: 1, maxLength: 255 }
+              required: [name]
+      responses:
+        "201":
+          description: Subpasta criada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file: { $ref: "#/components/schemas/DriveFile" }
+                required: [file]
+        "400":
+          description: Nome ausente/vazio ou maior que 255 caracteres.
+        "403":
+          description: Sem acesso de escrita a essa pasta, ou parent fora da árvore autorizada.
+        "502":
+          description: Falha ao criar a pasta no Drive.
+        "503":
+          description: Google Drive não configurado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /drive-folders/{id}/files/{fileId}/move:
+    patch:
+      tags: [Arquivos]
+      summary: Move um arquivo ou subpasta pra outro lugar DENTRO da mesma pasta vinculada
+      description: |
+        Exige acesso `write` na pasta raiz `{id}`. Rate limit 30/min. `fileId`
+        e o destino (`toParent` no corpo, ou a raiz da pasta se omitido) são
+        validados por ancestralidade contra `{id}` — só dá pra reorganizar
+        DENTRO da mesma pasta vinculada, não mover pra outra pasta raiz
+        (exigiria checar acesso de escrita nela também, fora do escopo desta
+        rota). Rejeita mover um item pra dentro dele mesmo, e mover uma pasta
+        pra dentro de uma subpasta dela mesma (ciclo).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                toParent: { type: string, description: "ID de uma subpasta dentro da árvore de `{id}`; sem isso, move pra raiz." }
+      responses:
+        "200":
+          description: Arquivo movido.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file: { $ref: "#/components/schemas/DriveFile" }
+                required: [file]
+        "400":
+          description: Corpo inválido, destino igual ao próprio item, ou moveria a pasta pra dentro dela mesma.
+        "403":
+          description: Sem acesso de escrita a essa pasta, ou fileId/toParent fora da árvore autorizada.
+        "502":
+          description: Falha ao mover no Drive.
         "503":
           description: Google Drive não configurado.
         "401":
@@ -4471,6 +5355,10 @@ components:
           description: Ausente para kind=link.
         pinned: { type: boolean, description: Favoritado — aparece no topo da lista. }
         updatedAt: { type: string, format: date-time }
+        imageUrl:
+          type: string
+          format: uri
+          description: Foto/ícone do item pro grid (Santos Hub e admin) — URL livre, opcional.
       required: [id, name, description, category, version, kind, url, pinned, updatedAt]
     DownloadAdmin:
       description: Mesmo objeto de `Download`, com os campos internos que só o admin vê.
@@ -4871,7 +5759,29 @@ components:
         currentClientName: { type: string, nullable: true }
         currentStatus: { type: string, enum: [active, paused, ended], nullable: true }
         createdAt: { type: string, format: date-time }
+        openApps:
+          type: array
+          items: { type: string }
+          description: "Nomes dos aplicativos abertos no último heartbeat (app 0.1.9+)."
+        openAppsAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: "Quando a lista de abertos foi vista; null = o PC nunca reportou."
       required: [id, deviceUuid, createdAt]
+
+    ExpectedProgram:
+      type: object
+      description: |
+        Programa que todo PC do laboratório deveria ter. O cruzamento com o que
+        cada máquina reportou sai em /hour-lab-devices/{id}/programs.
+      properties:
+        id: { type: integer, format: int64 }
+        label: { type: string, description: "Nome exibido no dashboard (ex.: Unity)." }
+        matchPattern: { type: string, description: "Trecho procurado no nome instalado, sem diferenciar caixa." }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, label, matchPattern, createdAt, updatedAt]
 
     DriveFolder:
       type: object

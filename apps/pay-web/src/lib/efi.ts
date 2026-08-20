@@ -26,12 +26,24 @@ if (!PAYEE_CODE) {
   );
 }
 
-// Hardening: em produção o ambiente DEVE ser "production" — senão dados de cartão
-// reais serão enviados ao sandbox da Efí (sem processamento real e possível exposição).
-if (import.meta.env.PROD && EFI_ENV !== "production") {
-  throw new Error(
-    "VITE_EFI_ENV deve ser \"production\" em produção. Configure a variável de ambiente corretamente.",
-  );
+/**
+ * Hardening: em produção o ambiente DEVE ser "production" — senão dados de
+ * cartão reais seriam enviados ao sandbox da Efí (sem processamento real e com
+ * possível exposição).
+ *
+ * A checagem fica AQUI, chamada de dentro de getCardPaymentToken(), e não no
+ * topo do módulo. Um `throw` no topo é avaliado no import — e como App.tsx
+ * importa as páginas em cadeia, uma env faltando derrubava o app INTEIRO
+ * (inclusive /p/:slug, que nem toca em cartão) com tela branca. Falhando só
+ * aqui, uma env mal configurada degrada exclusivamente o pagamento por cartão:
+ * PIX, boleto e vitrine continuam de pé.
+ */
+function assertEfiEnvironment() {
+  if (import.meta.env.PROD && EFI_ENV !== "production") {
+    throw new Error(
+      "VITE_EFI_ENV deve ser \"production\" em produção. Configure a variável de ambiente corretamente.",
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +93,7 @@ export interface TokenResult {
  * @throws Error com mensagem amigável em PT-BR se a tokenização falhar.
  */
 export async function getCardPaymentToken(card: CardInput): Promise<TokenResult> {
+  assertEfiEnvironment();
   try {
     const result = await EfiPay.CreditCard.setAccount(PAYEE_CODE)
       .setEnvironment(EFI_ENV)

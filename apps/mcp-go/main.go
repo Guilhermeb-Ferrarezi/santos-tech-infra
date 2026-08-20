@@ -39,6 +39,13 @@ func main() {
 
 	srv := NewServer(cfg, openapi, rdb)
 
+	// Sem /auth/me configurado o gateway não consegue validar token nenhum:
+	// as tools que usam credencial de serviço (bot) ficam bloqueadas e o
+	// requireAuth vira só checagem de presença. Só acontece em dev.
+	if srv.authMeURL() == "" {
+		slog.Error("AUTH_API_URL/AUTH_ME_URL vazios — token NÃO será validado e tools de serviço ficarão bloqueadas")
+	}
+
 	// WriteTimeout folgado (60s) cobre respostas SSE do Streamable HTTP sem deixar
 	// conexão pendurada para sempre; ReadHeaderTimeout/IdleTimeout protegem do resto.
 	httpSrv := &http.Server{

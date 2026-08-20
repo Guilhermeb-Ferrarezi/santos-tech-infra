@@ -26,7 +26,7 @@ func (s *Server) checkoutStoreOf() checkoutStore {
 
 // handleListCustomers (admin) lista os clientes com agregados das compras.
 func (s *Server) handleListCustomers(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.ListCustomersWithStats(r.Context())
+	list, err := s.store.ListCustomersWithStats(r.Context(), pageFromRequest(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar clientes")
 		return
@@ -84,7 +84,7 @@ func (s *Server) handlePutMeCustomer(w http.ResponseWriter, r *http.Request) {
 	phone := onlyDigits(in.Phone)
 	// O cliente é identificado pelo CPF — sem CPF não há cliente a salvar.
 	if !validCPF(taxID) {
-		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido (11 dígitos)")
+		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido")
 		return
 	}
 	if !validPhone(phone) {
@@ -104,16 +104,18 @@ func (s *Server) handleGetCart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "redis_error", "Falha no carrinho")
 		return
 	}
-	// enriquece com dados do produto
+	// Enriquece com dados do produto. PublicProduct (não Product): o carrinho é
+	// pré-pagamento — qualquer usuário logado poderia colocar o produto no carrinho
+	// e ler o fileUrl sem pagar.
 	type cartLine struct {
-		Product  Product `json:"product"`
-		Quantity int     `json:"quantity"`
+		Product  PublicProduct `json:"product"`
+		Quantity int           `json:"quantity"`
 	}
 	out := []cartLine{}
 	for _, it := range items {
 		p, err := s.store.GetProductByID(r.Context(), it.ProductID)
 		if err == nil {
-			out = append(out, cartLine{Product: *p, Quantity: it.Quantity})
+			out = append(out, cartLine{Product: publicProduct(*p), Quantity: it.Quantity})
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -188,7 +190,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validCPF(in.TaxID) {
-		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido (11 dígitos)")
+		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido")
 		return
 	}
 	if !validPhone(in.Phone) {
@@ -239,7 +241,11 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Cupom (opcional) ─────────────────────────────────────────────────────
+	// O uso é RESERVADO aqui, de forma atômica, ANTES de falar com a Efí. Antes o
+	// código lia max_uses, ia ao gateway e só então incrementava (com o erro
+	// descartado): compradores simultâneos furavam o limite do cupom.
 	var appliedCouponID int64
+	couponCommitted := false
 	in.Coupon = strings.TrimSpace(in.Coupon)
 	if in.Coupon != "" {
 		cst := s.couponStoreOf()
@@ -247,33 +253,22 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inválido")
 			return
 		}
-		coup, err := cst.GetCouponByCode(r.Context(), in.Coupon)
+		coup, err := cst.RedeemCoupon(r.Context(), in.Coupon)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom não encontrado")
+			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inválido ou esgotado")
 			return
 		}
-		if !coup.Active {
-			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom inativo")
-			return
-		}
-		if coup.MaxUses != -1 && coup.UsedCount >= coup.MaxUses {
-			writeError(w, http.StatusBadRequest, "invalid_coupon", "Cupom esgotado")
-			return
-		}
-		var discountCents int64
-		if coup.DiscountType == "fixed" {
-			discountCents = coup.DiscountValue
-			if discountCents > total {
-				discountCents = total
-			}
-		} else {
-			discountCents = (total*coup.DiscountValue + 50) / 100
-		}
-		total -= discountCents
+		total -= s.couponDiscountFor(coup, total)
 		if total < 0 {
 			total = 0
 		}
 		appliedCouponID = coup.ID
+		// Pagamento que não vinga devolve o uso reservado.
+		defer func() {
+			if !couponCommitted {
+				s.releaseCoupon(r.Context(), appliedCouponID)
+			}
+		}()
 	}
 
 	cid := cust.ID
@@ -302,11 +297,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("falha ao gravar itens da cobrança", "charge_id", c.ID, "err", err)
 	}
 	_ = s.cart.Clear(r.Context(), uid)
-	if appliedCouponID > 0 {
-		if cst := s.couponStoreOf(); cst != nil {
-			_ = cst.IncrementCouponUse(r.Context(), appliedCouponID)
-		}
-	}
+	couponCommitted = true // cobrança criada: o uso reservado do cupom fica de pé
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token": c.PublicToken, "brCode": c.BRCode, "qrCode": c.QRCode, "amountCents": total,
 	})
@@ -323,7 +314,7 @@ func (s *Server) handleMeCharges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha")
 		return
 	}
-	list, err := s.store.ListChargesByCustomer(r.Context(), cust.ID)
+	list, err := s.store.ListChargesByCustomer(r.Context(), cust.ID, pageFromRequest(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar")
 		return
@@ -332,18 +323,14 @@ func (s *Server) handleMeCharges(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMeRecurrences lista as assinaturas (PIX Automático) do usuário logado,
-// consolidadas pelo CPF do cliente. Sem customer ainda → lista vazia (200).
+// amarradas ao customer_id do próprio usuário (JOIN pay_customers.user_id).
+//
+// ATENÇÃO: já foi filtrado por payer_tax_id (CPF), o que era um IDOR — o CPF não é
+// segredo, então bastava um CPF vazado para ler nome, valor, periodicidade,
+// copia-e-cola e publicToken das assinaturas alheias. Não volte a filtrar por CPF.
+// Sem assinatura → lista vazia (200).
 func (s *Server) handleMeRecurrences(w http.ResponseWriter, r *http.Request) {
-	cust, err := s.store.GetCustomerByUserID(r.Context(), s.uid(r))
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeJSON(w, http.StatusOK, []Recurrence{})
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", "Falha")
-		return
-	}
-	list, err := s.store.ListRecurrencesByTaxID(r.Context(), cust.TaxID)
+	list, err := s.store.ListRecurrencesByUserID(r.Context(), s.uid(r), pageFromRequest(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao listar")
 		return

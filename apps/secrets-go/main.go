@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,6 +38,8 @@ func main() {
 	golog.InitLogging()
 	golog.InitSentry("secrets-go")
 	defer golog.FlushSentry()
+
+	checkLogBodiesDisabled()
 
 	cfg := LoadConfig()
 	bootCtx := context.Background()
@@ -63,7 +66,21 @@ func main() {
 	}
 
 	gh := NewGitHubClient(cfg.GitHubTokens)
-	es := NewElasticClient(cfg.ElasticsearchURL)
+
+	// Cofre do matchedValue: sem ele o valor bruto das chaves vazadas nunca é
+	// gravado (só prefixo + hash), e revalidação/sync param de funcionar — daí
+	// o aviso alto no boot.
+	vaultInfo := vaultHKDFInfo
+	if cfg.VaultFromJWT {
+		vaultInfo = vaultFallbackInfo
+		slog.Warn("SECRETS_VAULT_SECRET ausente — cifrando matchedValue com chave derivada do JWT_SECRET; " +
+			"defina uma env dedicada (trocar depois torna ilegível o que já foi cifrado)")
+	}
+	vault := newVault(cfg.VaultSecret, cfg.VaultSalt, vaultInfo)
+	if vault == nil {
+		slog.Error("cofre desabilitado — o valor das chaves vazadas NÃO será persistido (só prefixo/hash)")
+	}
+	es := NewElasticClient(cfg.ElasticsearchURL, vault)
 	if err := es.EnsurePresetsIndex(context.Background()); err != nil {
 		slog.Error("falha ao garantir índice de presets de keywords (segue sem travar o boot)", "err", err)
 	}
@@ -140,4 +157,33 @@ func runPeriodicRevalidation(ctx context.Context, r *Revalidator, state *StateMa
 			state.Update(func(s *StateData) { s.AutoRevalidateRunCount++ })
 		}
 	}
+}
+
+// checkLogBodiesDisabled avisa alto se LOG_BODIES não estiver desligado neste
+// serviço.
+//
+// Por quê: o golog captura request e response completos no log de acesso e
+// redige valores sensíveis por NOME DE CHAVE (password, token, secret, cvv…).
+// A lista não cobre "matchedValue" — e este serviço é justamente o que
+// manipula chaves reais de terceiros. Os dois endpoints que ainda devolvem o
+// valor em claro (POST /reveal e GET /internal/sync-hits, com até 2000 chaves)
+// cairiam inteiros no log, que vai pro stdout do container e pro Sentry.
+//
+// O golog é um pacote compartilhado (packages/golog) e a lista de redação não
+// pode ser mexida daqui, então a proteção é desligar a captura de payload
+// inteira neste serviço: LOG_BODIES=0.
+//
+// Não dá para setar isso pelo código: `logBodies` é uma var de pacote do golog,
+// avaliada quando o pacote importado inicializa — ou seja, ANTES de qualquer
+// init() ou do main() daqui. Um os.Setenv em main chegaria tarde demais. Tem
+// que vir do ambiente do processo (Coolify/compose/.env), daí o aviso de boot.
+func checkLogBodiesDisabled() {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LOG_BODIES"))) {
+	case "0", "false", "no", "off":
+		return
+	}
+	slog.Error("LOG_BODIES não está desligado — o log de acesso vai capturar as respostas " +
+		"de /reveal e /internal/sync-hits com chaves de terceiros em claro. " +
+		"Defina LOG_BODIES=0 no ambiente do serviço (o golog lê essa env na inicialização do pacote, " +
+		"não dá para ajustar em runtime).")
 }

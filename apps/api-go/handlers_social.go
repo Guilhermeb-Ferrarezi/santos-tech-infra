@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -62,6 +63,26 @@ func validateSocialPostInput(in *SocialPostInput) error {
 	if in.DriveFolderID == nil {
 		in.DriveFileID = ""
 		in.DriveFileName = ""
+	}
+	// Mesma normalização pro trio de capa do Reel.
+	if in.DriveCoverFolderID != nil && strings.TrimSpace(*in.DriveCoverFolderID) == "" {
+		in.DriveCoverFolderID = nil
+	}
+	if in.DriveCoverFolderID == nil {
+		in.DriveCoverFileID = ""
+		in.DriveCoverFileName = ""
+	}
+	// carousel_items é livre pra salvar incompleto (planejamento em progresso) —
+	// só o TETO de 10 itens no total (1 do trio principal + até 9 aqui) é uma
+	// regra dura, é o limite real da Graph API do Instagram.
+	if len(in.CarouselItems) > 0 {
+		var items []carouselItemRef
+		if err := json.Unmarshal(in.CarouselItems, &items); err != nil {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "carouselItems inválido")
+		}
+		if len(items) > 9 {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Carrossel aceita no máximo 10 itens no total")
+		}
 	}
 	return nil
 }
@@ -509,4 +530,42 @@ func (s *Server) handleDeleteSocialPlatformOwner(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"owners": owners})
+}
+
+// GET /social/settings
+func (s *Server) handleGetSocialSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.getSocialSettings(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+// PUT /social/settings — configura a localização automática marcada em toda
+// publicação (ver social_publish.go). Ambos os campos são opcionais (string
+// vazia = não marca local naquela rede); só o formato/teto de tamanho é
+// validado aqui — não dá pra confirmar que o ID é válido de verdade sem
+// chamar a Graph API, isso só se descobre na hora de publicar.
+func (s *Server) handleUpdateSocialSettings(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		InstagramLocationID string `json:"instagramLocationId"`
+		FacebookPlaceID     string `json:"facebookPlaceId"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	in.InstagramLocationID = strings.TrimSpace(in.InstagramLocationID)
+	in.FacebookPlaceID = strings.TrimSpace(in.FacebookPlaceID)
+	if len(in.InstagramLocationID) > 100 || len(in.FacebookPlaceID) > 100 {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "ID grande demais (máx 100 caracteres)"))
+		return
+	}
+	settings, err := s.updateSocialSettings(r.Context(), in.InstagramLocationID, in.FacebookPlaceID, userIDFrom(r))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
 }

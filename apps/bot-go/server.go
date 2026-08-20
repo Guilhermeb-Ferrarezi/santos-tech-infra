@@ -145,6 +145,13 @@ type Server struct {
 	retryStream *RetryStream
 	// tenantCache cacheia debounce_ms por tenant no Redis (fail-open p/ o banco).
 	tenantCache *TenantCache
+	// session valida a sessão do painel (cookie access_token) no auth central.
+	session *SessionAuth
+	// bg roda o processamento dos webhooks fora do handler, com paralelismo
+	// limitado e esperado no shutdown (ver bgpool.go).
+	bg *bgPool
+	// rateLimit segura o caminho de entrada antes de virar chamada ao LLM.
+	rateLimit *LLMRateLimiter
 }
 
 // NewServer cria um Server com as dependências fornecidas.
@@ -170,6 +177,9 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		notifDedupe: newNotifDedupe(),
 		retryStream: NewRetryStream(rdb, cfg.RetryStreamKey, cfg.RetryStreamGroup, cfg.RetryStreamConsumer, logger),
 		tenantCache: NewTenantCache(rdb, cfg.DebounceCacheTTL, logger),
+		session:     NewSessionAuth(cfg.AuthMeURL, cfg.AuthTimeout, cfg.AuthCacheTTL),
+		bg:          newBGPool(cfg.BGPoolSlots, logger),
+		rateLimit:   NewLLMRateLimiter(cfg, rdb, logger),
 	}
 }
 
@@ -216,21 +226,11 @@ func (s *Server) Handler() http.Handler {
 	return golog.RequestLogger(s.ipBanCheck(metricsMiddleware(mux)))
 }
 
-// dashMiddleware adiciona CORS e verifica X-Dash-Key.
+// dashMiddleware adiciona CORS e autentica a request (ver dashAuthorized).
 func (s *Server) dashMiddleware(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.setCORSHeaders(w)
-		if s.cfg.DashAPIKey == "" {
-			http.NotFound(w, r)
-			return
-		}
-		key := r.Header.Get("X-Dash-Key")
-		if key == "" {
-			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-				key = strings.TrimPrefix(auth, "Bearer ")
-			}
-		}
-		if subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) != 1 {
+		if !s.dashAuthorized(r) {
 			w.Header().Set("Content-Type", "application/json")
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
@@ -239,9 +239,44 @@ func (s *Server) dashMiddleware(next http.HandlerFunc) http.Handler {
 	})
 }
 
+// dashKeyMatch confere a DASH_API_KEY (header X-Dash-Key ou Authorization:
+// Bearer). Continua valendo para integrações server-to-server.
+func (s *Server) dashKeyMatch(r *http.Request) bool {
+	if s.cfg.DashAPIKey == "" {
+		return false
+	}
+	key := r.Header.Get("X-Dash-Key")
+	if key == "" {
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			key = strings.TrimPrefix(auth, "Bearer ")
+		}
+	}
+	if key == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DashAPIKey)) == 1
+}
+
+// dashAuthorized aceita duas credenciais, nesta ordem:
+//  1. DASH_API_KEY (integrações server-to-server);
+//  2. sessão de admin do auth central — cookie access_token validado em
+//     /auth/me, que é o que o painel manda (credentials: include).
+//
+// Fail-closed: sem nenhuma das duas, nega.
+func (s *Server) dashAuthorized(r *http.Request) bool {
+	if s.dashKeyMatch(r) {
+		return true
+	}
+	return s.session.Authorized(r)
+}
+
 func (s *Server) setCORSHeaders(w http.ResponseWriter) {
 	if origin := s.cfg.DashCORSOrigin; origin != "" {
+		w.Header().Set("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Origin", origin)
+		// O painel manda cookie de sessão (credentials: include); sem este
+		// header o browser descarta a resposta.
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dash-Key, Authorization")
 	}
@@ -290,13 +325,14 @@ func (s *Server) handleInbound(w http.ResponseWriter, r *http.Request) {
 	// 3. ACK imediato para a Meta (< 20 s)
 	w.WriteHeader(http.StatusOK)
 
-	// 4. Processa em background
-	go s.processInbound(body)
+	// 4. Processa no pool de background (esperado no shutdown)
+	s.bg.Go("meta_inbound", func(ctx context.Context) {
+		s.processInbound(ctx, body)
+	})
 }
 
 // processInbound parseia o payload e dispara o engine para cada mensagem.
-func (s *Server) processInbound(body []byte) {
-	ctx := context.Background()
+func (s *Server) processInbound(ctx context.Context, body []byte) {
 
 	msgs, err := ParseMetaWebhook(body, s.cfg.MetaPhoneNumberID)
 	if err != nil {
@@ -323,6 +359,12 @@ func (s *Server) processInbound(body []byte) {
 		}
 
 		msg.TenantID = s.cfg.TenantID
+
+		// Rate limit ANTES de gravar/enfileirar: mensagem barrada não vira
+		// chamada ao LLM nem ocupa slot de rajada.
+		if !s.allowInbound(ctx, "whatsapp", msg.ExternalID) {
+			continue
+		}
 
 		// Dedup via WebhookRepo
 		id, isDuplicate, err := s.webhook.Record(ctx, msg.TenantID, "whatsapp", msg.ProviderMessageID, body)
@@ -604,18 +646,18 @@ func (s *Server) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request) 
 	// respondem no MESMO chat (em grupo, o ...@g.us). Tratado ANTES da captura de
 	// lead — inclusive em grupos, que a captura ignora. Se o comando for tratado,
 	// NÃO segue para o fluxo normal (lead/IA).
-	go func() {
-		if s.dispatchEvolutionCommand(ev) {
+	s.bg.Go("evolution_inbound", func(ctx context.Context) {
+		if s.dispatchEvolutionCommand(ctx, ev) {
 			return
 		}
-		s.captureEvolutionLead(ev)
-	}()
+		s.captureEvolutionLead(ctx, ev)
+	})
 }
 
 // dispatchEvolutionCommand extrai remetente/chat/texto de um evento da Evolution e
 // delega ao handleAdminCommand. Retorna true se a mensagem foi consumida como
 // comando (e portanto NÃO deve seguir para captura de lead / IA).
-func (s *Server) dispatchEvolutionCommand(ev evolutionWebhook) bool {
+func (s *Server) dispatchEvolutionCommand(ctx context.Context, ev evolutionWebhook) bool {
 	if !strings.Contains(strings.ToLower(ev.Event), "upsert") || ev.Data.Key.FromMe {
 		return false
 	}
@@ -642,9 +684,9 @@ func (s *Server) dispatchEvolutionCommand(ev evolutionWebhook) bool {
 		from = chatJid
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	handled, err := s.handleAdminCommand(ctx, from, chatJid, ev.Instance, text)
+	handled, err := s.handleAdminCommand(cmdCtx, from, chatJid, ev.Instance, text)
 	if err != nil {
 		s.logger.Error("evolution: comando admin falhou", "err", err)
 	}
@@ -653,7 +695,7 @@ func (s *Server) dispatchEvolutionCommand(ev evolutionWebhook) bool {
 
 // captureEvolutionLead cria/atualiza um lead a partir de uma mensagem recebida na
 // Evolution. Ignora grupos, status e mensagens próprias. Não responde nada.
-func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
+func (s *Server) captureEvolutionLead(ctx context.Context, ev evolutionWebhook) {
 	if !strings.Contains(strings.ToLower(ev.Event), "upsert") || ev.Data.Key.FromMe {
 		return
 	}
@@ -668,8 +710,6 @@ func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
 	if phone == "" {
 		return
 	}
-
-	ctx := context.Background()
 
 	// Captação por número: se a instância que recebeu a mensagem estiver desligada,
 	// ignora por completo (não cria lead nem deixa o bot responder).
@@ -709,6 +749,12 @@ func (s *Server) captureEvolutionLead(ev evolutionWebhook) {
 		providerMsgID := ev.Data.Key.ID
 		if providerMsgID == "" {
 			s.logger.Debug("evolution: sem id de mensagem, ignorando resposta do bot", "phone", phone)
+			return
+		}
+
+		// Mesmo teto do número oficial — o lead já foi capturado acima; o que o
+		// rate limit corta é só a resposta gerada pelo LLM.
+		if !s.allowInbound(ctx, "evolution", phone) {
 			return
 		}
 

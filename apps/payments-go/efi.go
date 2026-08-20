@@ -209,7 +209,9 @@ func (p *efiProvider) RequestReport(ctx context.Context, dataMovimento string) (
 // Retorna ("done", contentType, csvBytes, nil) quando 200 (pronto),
 // ou ("processing", "", nil, nil) quando 202 (ainda processando).
 func (p *efiProvider) GetReport(ctx context.Context, id string) (string, string, []byte, error) {
-	status, ct, data, err := p.doRaw(ctx, http.MethodGet, "/v2/gn/relatorios/"+id, nil)
+	// PathEscape mesmo com a validação no handler: defesa em profundidade para quem
+	// chamar GetReport de outro lugar.
+	status, ct, data, err := p.doRaw(ctx, http.MethodGet, "/v2/gn/relatorios/"+url.PathEscape(id), nil)
 	if err != nil {
 		return "", "", nil, err
 	}

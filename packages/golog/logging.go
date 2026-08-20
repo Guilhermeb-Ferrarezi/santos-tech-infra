@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -56,7 +57,76 @@ var (
 	// logBodyHardCap: teto de segurança — requests maiores que isso nem são
 	// bufferizados (evita OOM com uploads grandes que escapem do filtro de tipo).
 	logBodyHardCap = logEnvInt("LOG_BODY_HARD_CAP", 1<<20) // 1 MiB
+	// logRepeatWindow agrupa erros 4xx IDÊNTICOS (mesmo método, rota, status e
+	// IP) dentro da janela: o primeiro sai na hora, os seguintes são contados e
+	// só viram linha quando a janela fecha, com repeated=N.
+	//
+	// O caso que motivou isto: um PC do laboratório com app desatualizado
+	// levando 401 no heartbeat a cada 30s — 120 linhas por hora, 91% de tudo
+	// que o serviço logava, todas dizendo a mesma coisa. Silenciar a rota
+	// resolveria o volume e esconderia o problema; agrupar mantém o sinal
+	// (inclusive quantas vezes aconteceu) e devolve o log a quem procura outra
+	// coisa. 0 desliga.
+	logRepeatWindow = logEnvDuration("LOG_REPEAT_WINDOW", 5*time.Minute)
 )
+
+// repeatState guarda, por assinatura de linha, quando ela foi logada pela
+// última vez e quantas repetições foram engolidas desde então.
+type repeatState struct {
+	lastLoggedAt time.Time
+	suppressed   int
+}
+
+var (
+	repeatMu   sync.Mutex
+	repeatSeen = map[string]*repeatState{}
+)
+
+// repeatSeenMax limita a memória do agrupador: cada assinatura distinta ocupa
+// uma entrada, e a chave inclui o IP — sem teto, uma varredura de rotas de um
+// IP aleatório faria o mapa crescer sem parar.
+const repeatSeenMax = 4096
+
+// shouldLogRepeat decide se esta linha vai pro log agora e devolve quantas
+// repetições foram suprimidas desde a última que saiu.
+//
+// A primeira ocorrência de uma assinatura sempre passa; as seguintes só passam
+// quando a janela fecha — e aí levam junto a contagem do que ficou pra trás,
+// pra que "aconteceu 87 vezes" não se perca.
+func shouldLogRepeat(key string, now time.Time, window time.Duration) (bool, int) {
+	if window <= 0 {
+		return true, 0
+	}
+	repeatMu.Lock()
+	defer repeatMu.Unlock()
+
+	if st, ok := repeatSeen[key]; ok {
+		if now.Sub(st.lastLoggedAt) < window {
+			st.suppressed++
+			return false, 0
+		}
+		n := st.suppressed
+		st.lastLoggedAt = now
+		st.suppressed = 0
+		return true, n
+	}
+
+	// Poda antes de inserir: entradas cuja janela já fechou não têm mais o que
+	// agrupar. Se ainda assim estiver cheio, o mapa é zerado — perder o estado
+	// do agrupamento só faz uma linha extra sair, nunca esconde nada.
+	if len(repeatSeen) >= repeatSeenMax {
+		for k, st := range repeatSeen {
+			if now.Sub(st.lastLoggedAt) >= window {
+				delete(repeatSeen, k)
+			}
+		}
+		if len(repeatSeen) >= repeatSeenMax {
+			repeatSeen = map[string]*repeatState{}
+		}
+	}
+	repeatSeen[key] = &repeatState{lastLoggedAt: now}
+	return true, 0
+}
 
 // reqIDCtxKey é a chave do request-id no context (tipo próprio p/ não colidir).
 type reqIDCtxKey struct{}
@@ -238,8 +308,12 @@ func RequestLogger(next http.Handler) http.Handler {
 				level = slog.LevelDebug // GET 2xx rápido: sem valor diagnóstico
 			case lw.status >= 200 && lw.status < 300 &&
 				(r.URL.Path == "/auth/me" || r.URL.Path == "/auth/refresh" ||
-					r.URL.Path == "/public/lab-devices/heartbeat"):
-				level = slog.LevelDebug // polling frequente do frontend: só interessa quando falha
+					// Telemetria dos PCs do laboratório: heartbeat (2/min por
+					// PC), inventário, ícones e captura de tela. Tudo automático
+					// e sem valor diagnóstico quando dá certo — só interessa
+					// quando falha, e aí o status já joga pra WARN/ERROR.
+					strings.HasPrefix(r.URL.Path, "/public/lab-devices/")):
+				level = slog.LevelDebug // polling frequente: só interessa quando falha
 			}
 
 			attrs := []slog.Attr{
@@ -278,6 +352,23 @@ func RequestLogger(next http.Handler) http.Handler {
 					attrs = append(attrs, slog.Bool("resp_body_truncated", true))
 				}
 			}
+
+			// Agrupamento: só 4xx. Erro de cliente é o que repete em laço
+			// (credencial velha, integração mal configurada) e a centésima
+			// linha não diz nada que a primeira já não tenha dito. 5xx fica
+			// fora de propósito — é problema NOSSO, e cada ocorrência importa,
+			// inclusive pra perceber que virou rajada.
+			if lw.status >= 400 && lw.status < 500 {
+				key := r.Method + " " + r.URL.Path + " " + strconv.Itoa(lw.status) + " " + logRemoteIP(r)
+				ok, suppressed := shouldLogRepeat(key, time.Now(), logRepeatWindow)
+				if !ok {
+					return
+				}
+				if suppressed > 0 {
+					attrs = append(attrs, slog.Int("repeated", suppressed))
+				}
+			}
+
 			slog.LogAttrs(r.Context(), level, "http", attrs...)
 		}()
 
@@ -454,6 +545,17 @@ func logEnvInt(k string, def int) int {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return def
+}
+
+// logEnvDuration lê uma duração no formato do time.ParseDuration ("30s", "5m").
+// Valor inválido cai no default — configuração errada não pode derrubar o log.
+func logEnvDuration(k string, def time.Duration) time.Duration {
+	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			return d
 		}
 	}
 	return def

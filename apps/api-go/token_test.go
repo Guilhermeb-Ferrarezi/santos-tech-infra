@@ -17,17 +17,17 @@ func TestGenerateAndVerifyToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateTokens: %v", err)
 	}
-	if uid, _, err := verifyToken(access, tAccess); err != nil || uid != 42 {
+	if uid, _, err := verifyToken(access, tAccess, tokenTypeAccess); err != nil || uid != 42 {
 		t.Fatalf("verify access: uid=%d err=%v", uid, err)
 	}
-	if uid, _, err := verifyToken(refresh, tRefresh); err != nil || uid != 42 {
+	if uid, _, err := verifyToken(refresh, tRefresh, tokenTypeRefresh); err != nil || uid != 42 {
 		t.Fatalf("verify refresh: uid=%d err=%v", uid, err)
 	}
 }
 
 func TestVerifyTokenWrongSecret(t *testing.T) {
 	access, _, _ := generateTokens(tAccess, tRefresh, 1, "", "")
-	if _, _, err := verifyToken(access, "outro-secret"); err == nil {
+	if _, _, err := verifyToken(access, "outro-secret", tokenTypeAccess); err == nil {
 		t.Fatal("esperava erro com secret errado")
 	}
 }
@@ -35,17 +35,17 @@ func TestVerifyTokenWrongSecret(t *testing.T) {
 // access e refresh usam secrets diferentes: um não pode validar o outro.
 func TestVerifyTokenSecretSeparation(t *testing.T) {
 	access, refresh, _ := generateTokens(tAccess, tRefresh, 1, "", "")
-	if _, _, err := verifyToken(access, tRefresh); err == nil {
+	if _, _, err := verifyToken(access, tRefresh, tokenTypeAccess); err == nil {
 		t.Error("access aceito com refresh secret")
 	}
-	if _, _, err := verifyToken(refresh, tAccess); err == nil {
+	if _, _, err := verifyToken(refresh, tAccess, tokenTypeRefresh); err == nil {
 		t.Error("refresh aceito com access secret")
 	}
 }
 
 func TestVerifyTokenMalformed(t *testing.T) {
 	for _, tok := range []string{"", "abc", "a.b.c", "not-a-jwt"} {
-		if _, _, err := verifyToken(tok, tAccess); err == nil {
+		if _, _, err := verifyToken(tok, tAccess, tokenTypeAccess); err == nil {
 			t.Errorf("esperava erro p/ token %q", tok)
 		}
 	}
@@ -58,7 +58,7 @@ func TestVerifyTokenExpired(t *testing.T) {
 		"exp": time.Now().Add(-time.Hour).Unix(),
 	}
 	tok, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(tAccess))
-	if _, _, err := verifyToken(tok, tAccess); err == nil {
+	if _, _, err := verifyToken(tok, tAccess, tokenTypeAccess); err == nil {
 		t.Fatal("token expirado foi aceito")
 	}
 }
@@ -70,7 +70,7 @@ func TestVerifyTokenAlgNone(t *testing.T) {
 	if err != nil {
 		t.Skipf("none signing indisponível: %v", err)
 	}
-	if _, _, err := verifyToken(tok, tAccess); err == nil {
+	if _, _, err := verifyToken(tok, tAccess, tokenTypeAccess); err == nil {
 		t.Fatal("token 'none' foi aceito")
 	}
 }
@@ -78,7 +78,7 @@ func TestVerifyTokenAlgNone(t *testing.T) {
 func TestVerifyTokenNonNumericSub(t *testing.T) {
 	claims := jwt.MapClaims{"sub": "não-numérico", "exp": time.Now().Add(time.Hour).Unix()}
 	tok, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(tAccess))
-	if _, _, err := verifyToken(tok, tAccess); err == nil {
+	if _, _, err := verifyToken(tok, tAccess, tokenTypeAccess); err == nil {
 		t.Fatal("sub não-numérico foi aceito")
 	}
 }
@@ -88,8 +88,39 @@ func TestVerifyTokenNameClaim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateTokens: %v", err)
 	}
-	uid, name, err := verifyToken(access, tAccess)
+	uid, name, err := verifyToken(access, tAccess, tokenTypeAccess)
 	if err != nil || uid != 7 || name != "João Silva" {
 		t.Fatalf("verify name: uid=%d name=%q err=%v", uid, name, err)
+	}
+}
+
+// O claim "typ" separa access de refresh mesmo quando os dois segredos são
+// IGUAIS — sem ele, um refresh de 7 dias valeria como access token.
+func TestVerifyTokenTypeSeparationSameSecret(t *testing.T) {
+	const same = "mesmo-segredo-nos-dois"
+	access, refresh, err := generateTokens(same, same, 9, "u@x.com", "Ana")
+	if err != nil {
+		t.Fatalf("generateTokens: %v", err)
+	}
+	if _, _, err := verifyToken(refresh, same, tokenTypeAccess); err == nil {
+		t.Error("refresh foi aceito como access token")
+	}
+	if _, _, err := verifyToken(access, same, tokenTypeRefresh); err == nil {
+		t.Error("access foi aceito como refresh token")
+	}
+	if uid, _, err := verifyToken(access, same, tokenTypeAccess); err != nil || uid != 9 {
+		t.Errorf("access com o tipo certo devia passar: uid=%d err=%v", uid, err)
+	}
+}
+
+// Transição: tokens emitidos ANTES do claim "typ" continuam válidos, senão
+// todas as sessões vivas cairiam na hora do deploy.
+func TestVerifyTokenLegacyWithoutTypeClaim(t *testing.T) {
+	claims := jwt.MapClaims{"sub": "11", "iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix()}
+	tok, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(tAccess))
+	for _, want := range []string{tokenTypeAccess, tokenTypeRefresh} {
+		if uid, _, err := verifyToken(tok, tAccess, want); err != nil || uid != 11 {
+			t.Errorf("token legado (sem typ) recusado para %q: uid=%d err=%v", want, uid, err)
+		}
 	}
 }

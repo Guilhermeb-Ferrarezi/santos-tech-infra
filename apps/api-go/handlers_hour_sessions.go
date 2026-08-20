@@ -96,7 +96,7 @@ func (s *Server) handleListHourSessions(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 }
 
-// POST /hour-sessions — {clientId} -> {session, token, publicUrl}
+// POST /hour-sessions — {clientId} -> {session, token, publicUrl, shortCode}
 func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	var in struct {
@@ -115,7 +115,7 @@ func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, errHourClientNotFound)
 		return
 	}
-	h, token, err := s.startHourSession(r.Context(), in.ClientID, userIDFrom(r))
+	h, token, shortCode, err := s.startHourSession(r.Context(), in.ClientID, userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -124,7 +124,50 @@ func (s *Server) handleStartHourSession(w http.ResponseWriter, r *http.Request) 
 		"session":   h,
 		"token":     token,
 		"publicUrl": s.cfg.DashboardWebOrigin + "/sessao/" + token,
+		"shortCode": shortCode,
 	})
+}
+
+// POST /public/hour-sessions/pair-by-code — {code} -> {token, publicUrl}
+// Trocado por um token novo (reemitido) e o código fica inutilizado — ver
+// pairHourSessionByCode. Sem authGuard: o código curto É a credencial (posse
+// = acesso), mesmo espírito do token na URL da rota pública de leitura.
+func (s *Server) handlePairHourSessionByCode(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var in struct {
+		Code string `json:"code"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	in.Code = strings.TrimSpace(in.Code)
+	if !isValidHourSessionShortCode(in.Code) {
+		writeErr(w, errHourSessionCodeInvalid)
+		return
+	}
+	token, err := s.pairHourSessionByCode(r.Context(), in.Code)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"token":     token,
+		"publicUrl": s.cfg.DashboardWebOrigin + "/sessao/" + token,
+	})
+}
+
+// isValidHourSessionShortCode reporta se s é a saída exata de randomDigits(6).
+func isValidHourSessionShortCode(s string) bool {
+	if len(s) != 6 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // POST /hour-sessions/{id}/link — gera (ou reemite) o link público da sessão.
@@ -262,3 +305,54 @@ func hourUUIDFrom(r *http.Request, param string, notFound error) (string, error)
 	return id, nil
 }
 
+// GET /hour-sessions/{id}/events — histórico da sessão.
+//
+// start/pause/resume/end sempre foram gravados com autor e horário; esta rota
+// é o que finalmente os mostra. Inclui os ajustes manuais de tempo.
+func (s *Server) handleListHourSessionEvents(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errHourSessionNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	events, err := s.listHourSessionEvents(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+// POST /hour-sessions/{id}/adjust — {deltaSeconds, note?}
+//
+// Corrige a duração da sessão (esqueceu de pausar, PC caiu, cliente saiu
+// antes). deltaSeconds positivo soma, negativo desconta, entre -24h e +24h.
+func (s *Server) handleAdjustHourSession(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errHourSessionNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var in struct {
+		DeltaSeconds int64  `json:"deltaSeconds"`
+		Note         string `json:"note"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	var note *string
+	if n := strings.TrimSpace(in.Note); n != "" {
+		if len(n) > 200 {
+			n = n[:200]
+		}
+		note = &n
+	}
+	h, err := s.adjustHourSession(r.Context(), id, userIDFrom(r), in.DeltaSeconds, note)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": h})
+}

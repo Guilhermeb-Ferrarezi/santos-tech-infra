@@ -99,6 +99,28 @@ navegador. Não requer `access_token` — basta o cookie `accounts`.
   `SESSION_EXPIRED` | 403 `ACCOUNT_SUSPENDED` (rate 20/min)
   — rotaciona a sessão escolhida e seta os cookies `access_token` + `refresh_token`
 
+### QR login (estilo WhatsApp Web) — Santos Hub mostra, alguém logado confirma
+
+Mesmo padrão do pareamento dos PCs do laboratório (`/hour-lab-devices/pair`),
+aplicado a login de usuário: o Santos Hub (app Tauri sem sessão nenhuma ao
+abrir) GERA e MOSTRA o QR/código; quem já está logado (celular escaneando com
+a câmera, ou outra aba) CONFIRMA; o Hub só fica com poll até aprovar. Redis
+puro (`qr_login:token:<token>` com o registro completo, `qr_login:code:<code>`
+como ponteiro pro token) — sem tabela no Postgres. Uso único, 5min de vida.
+
+- `POST /public/qr-login/create` (público — quem cria não tem sessão) →
+  `{token, code, expiresAt}` · rate 20/min. `token` (64 chars hex) vira o
+  payload do QR mostrado na tela do Hub; `code` (6 dígitos) é o fallback
+  digitável em `dashboard/web:/conectar-dispositivo`.
+- `POST /auth/qr-login/confirm {code}` (sessão — mesmo campo aceita token OU
+  code) → `{ok:true}` · rate 20/min · 404 `QR_LOGIN_NOT_FOUND` se
+  expirado/inválido. É essa sessão que autoriza o Hub a entrar.
+- `GET /public/qr-login/poll?token=` (público) → `{ready:false}` enquanto
+  pendente; uma vez aprovado, `{ready:true, user, accessToken, refreshToken}`
+  (trata como cliente nativo incondicionalmente — quem chama nunca tem
+  sessão/cookie) e apaga o registro (poll seguinte com o mesmo token dá
+  `ready:false` de novo) · rate 60/min (Hub faz poll a cada ~2s).
+
 ### OAuth provider ("Entrar com Santos Tech") — authorization code + PKCE S256
 
 Fluxo em 3 passos; **PKCE S256 obrigatório**; code de uso único (TTL 60s);
@@ -325,19 +347,35 @@ Admin (role admin, sem cargo personalizado):
 - `POST /hour-clients {name, phone?}` → 201 `{client}`
 - `POST /hour-clients/{id}/purchases {minutesAdded, note?}` → credita o saldo → `{client}`
 - `GET /hour-sessions` — sessões não encerradas, com `elapsedSeconds` calculado → `{sessions:[HourSession]}`
-- `POST /hour-sessions {clientId}` → cria e devolve o token em texto puro (só
-  aqui — o banco guarda o hash) → 201 `{session, token, publicUrl}`
+- `POST /hour-sessions {clientId}` → cria e devolve o token E um código curto
+  de 6 dígitos em texto puro (só aqui — o banco guarda o hash de cada um) →
+  201 `{session, token, publicUrl, shortCode}`. `shortCode` expira em 24h e
+  é de uso único — alternativa a colar o link de 64 chars no PC do laboratório.
 - `POST /hour-sessions/{id}/pause` — só de `active` → `paused`; limpa pedido de pausa pendente
 - `POST /hour-sessions/{id}/resume` — só de `paused` → `active`
 - `POST /hour-sessions/{id}/end` — debita o tempo decorrido do saldo do cliente → `ended`
 - `POST /hour-sessions/{id}/deny-pause` — recusa o pedido do cliente sem pausar → 204
 - `POST /hour-sessions/{id}/link` — gera/reemite o link público (não depende de cache local; token anterior para de funcionar) → `{token, publicUrl}`
+- `GET /hour-sessions/{id}/events` →
+  `{events:[{id, eventType, deltaSeconds, note, actorName, createdAt}]}` em ordem
+  cronológica. `eventType`: start | pause | resume | end | adjust. É o histórico
+  que responde "quem pausou, quando, e quanto tempo ficou parada".
+- `POST /hour-sessions/{id}/adjust {deltaSeconds, note?}` → `{session}` · rate
+  limit 30/min · correção manual de tempo (esqueceu de pausar, PC caiu, cliente
+  saiu antes). Positivo soma, negativo desconta, entre -24h e +24h
+  (`ADJUST_TOO_LARGE`; zero também é recusado). **Entra como evento**, não como
+  acerto num total: o tempo continua derivado do histórico e o ajuste aparece
+  na própria lista com autor e motivo. Desconto maior que o tempo corrido não
+  gera negativo — o piso é zero.
 - Transição fora de ordem (ex.: pause numa sessão já `ended`) → 409 `HOUR_SESSION_BAD_STATE`
 
 Público (sem auth — token da URL é a credencial, não cookie/sessão; consumido
 pela rota `/sessao/:token` do dashboard/web, com polling):
 - `GET /public/hour-sessions/{token}` — `{clientName, status, elapsedSeconds, remainingMinutes, pauseRequested}` · rate limit 120/min
 - `POST /public/hour-sessions/{token}/request-pause` → 204 · rate limit 5/min (evita virar canal de spam pro admin) · 409 se já não está `active` ou já tem pedido pendente
+- `POST /public/hour-sessions/pair-by-code {code}` → `{token, publicUrl}` ·
+  rate limit 15/min · 404 se código inválido/expirado. Troca por um token
+  REEMITIDO (nunca o original) e zera o código — uso único.
 
 ### PCs do laboratório — `/hour-lab-devices` e `/public/lab-devices/heartbeat`
 
@@ -350,7 +388,18 @@ considerar offline acima de ~90s sem heartbeat).
 
 Admin:
 - `GET /hour-lab-devices` — `{devices:[LabDevice]}`
+- `POST /hour-lab-devices/pair {deviceUuid, clientId}` → `{session}` · rate
+  limit 30/min · fluxo do QR: o PC mostra um QR com o próprio deviceUuid, o
+  admin escaneia com o celular (rota `/admin/horas/parear/:deviceUuid` do
+  dashboard/web) e chama isto — inicia sessão (mesma lógica de
+  `POST /hour-sessions`) e deixa o token pronto pra entrega automática no
+  próximo heartbeat (`pairToken`), sem digitar nada no PC. Token expira em
+  10min se não for entregue (evita reabrir sozinho uma sessão velha — cada
+  sessão é de uso único por design).
 - `PATCH /hour-lab-devices/{id} {name}` → `{device}` · rate limit 30/min
+- `DELETE /hour-lab-devices/{id}` → 204 · rate limit 30/min — remove o
+  registro do PC (não afeta sessões que ele já rodou); reaparece do zero se
+  mandar heartbeat de novo
 - `POST /hour-lab-devices/{id}/unpair` → 204 · rate limit 30/min — não afeta a
   sessão em si (isso é `/hour-sessions/{id}/...`), só solta o pareamento local
   do PC; entregue no heartbeat seguinte (até ~30s de atraso)
@@ -359,12 +408,115 @@ Admin:
   reenviar o mesmo texto exibe de novo (o app deduplica pelo id, não pelo texto)
 
 Público (sem auth — `deviceId` é a identidade):
-- `POST /public/lab-devices/heartbeat {deviceId, token?, appVersion?}` →
-  `{name, unpairRequested, message?}` · rate limit 120/min. `token` é o token
-  da sessão de horas pareada localmente, se houver (resolve pra
+- `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?, previousDeviceId?}` →
+  `{name, unpairRequested, message?, pairToken?}` · rate limit 120/min. `token`
+  é o token da sessão de horas pareada localmente, se houver (resolve pra
   `currentSessionId`/`currentClientName` na listagem admin). Comandos
-  (`unpairRequested`, `message`) são entregues exatamente uma vez — a query
-  seguinte já não os vê mais (exceto `message`, que o app deduplica pelo id).
+  (`unpairRequested`, `message`, `pairToken`, `screenshotRequested`) são
+  entregues exatamente uma vez — a query seguinte já não os vê mais (exceto
+  `message`, que o app deduplica pelo id).
+
+  `previousDeviceId` (0.1.10+) é a identidade ANTERIOR do PC, mandada quando o
+  app passa a derivar o id do MachineGuid do Windows: o servidor MOVE o registro
+  antigo (nome, sessão, inventário, capturas) para a identidade nova. Antes
+  disso a identidade vivia só no config.json do app — perder esse arquivo numa
+  reinstalação criava um dispositivo duplicado, e o config é por usuário do
+  Windows, então num PC compartilhado cada conta viraria um dispositivo.
+
+  A resposta traz `previousDeviceResolved: true` quando não sobrou nada a migrar
+  (moveu agora, ou o registro antigo já não existe). O app (0.1.11+) guarda o id
+  antigo em disco e o REENVIA em todo heartbeat até ouvir isso. Mandar uma vez
+  só não bastava: no rollout da 0.1.10 o primeiro heartbeat chegou 6 segundos
+  antes de a API nova subir, o servidor antigo ignorou o campo, e o PC virou dois
+  dispositivos sem chance de retomada — o app já tinha esquecido a identidade
+  anterior, e o conserto foi UPDATE na mão no banco.
+
+  Sem `previousDeviceResolved`, a migração fica PENDENTE e sai sozinha quando o
+  impedimento sair do caminho. Dois impedimentos possíveis, ambos com conserto
+  no dashboard:
+  - segredo não confere → admin usa "esquecer segredo" no registro antigo
+    (`POST /hour-lab-devices/{id}/reset-secret`);
+  - identidade nova já tem registro próprio → admin apaga o duplicado.
+  Registro que ainda NÃO tem segredo migra sem prova, pela mesma política de
+  adoção aberta do primeiro heartbeat: exigir prova ali não protegeria nada
+  (quem migrasse poderia adotar direto) e travaria o upgrade dos PCs em 0.1.0,
+  anteriores ao segredo existir. Registro que já tem segredo continua exigindo
+  prova — saber o device_uuid, visível num QR na tela do PC, não pode bastar pra
+  sequestrar outro registro.
+
+  `openApps` (0.1.9+) são os NOMES dos aplicativos abertos naquele instante,
+  máx. 100. Substituem a lista anterior a cada heartbeat e voltam em
+  `openApps`/`openAppsAt` no `LabDevice` da listagem admin. **Ausente ≠ vazio**:
+  app antigo não manda o campo e a última lista conhecida é mantida; `[]`
+  explícito significa "nada aberto". Sem histórico e sem título de janela de
+  propósito — o título carrega conteúdo ("Conversa com Fulano", "contrato.docx")
+  e o nome do app já responde o que a máquina está rodando.
+
+#### Inventário de software do PC
+
+O app lê a lista de programas instalados do registro do Windows (as três chaves
+`Uninstall`: HKLM, HKLM\WOW6432Node e HKCU — a mesma fonte de "Adicionar ou
+remover programas") e manda **inteira**; quem sabe o que é esperado é o
+servidor, então mudar a expectativa é editar no dashboard, sem instalador novo.
+Cada envio **substitui** o inventário anterior: é uma foto do estado atual.
+
+- `POST /public/lab-devices/inventory {deviceId, deviceSecret, programs:[{name, version?, publisher?, iconHash?}]}`
+  → `{ok, count, missingIcons:[hash]}` · rate limit 10/min · máx. 1000 programas
+  (`INVENTORY_TOO_LARGE`). Exige o mesmo `deviceSecret` do heartbeat e, ao
+  contrário dele, **não adota** dispositivo novo — `deviceId` que nunca bateu
+  heartbeat leva 404. O app manda depois de um heartbeat bem-sucedido, só
+  quando a lista muda ou passa 24h (0.1.2+).
+
+  **Ícones são endereçados pelo conteúdo.** `iconHash` é o sha256 do PNG; os
+  BYTES não vão nesta chamada, porque o ícone do Blender é o mesmo arquivo em
+  todo PC — mandá-lo por máquina repetiria ~200 KB que o servidor já tem.
+  `missingIcons` traz os hashes desconhecidos, e só esses sobem em seguida:
+- `POST /public/lab-devices/icons {deviceId, deviceSecret, icons:[{hash, png}]}`
+  → `{ok, saved}` · rate limit 10/min · máx. 200 por lote, 32 KB por imagem.
+  `png` é base64 puro. O servidor **recalcula** o sha256 do que recebe e
+  descarta quando não bate com o `hash` declarado — sem isso um PC poderia
+  gravar qualquer imagem sob o hash de outro programa, já que o armazenamento é
+  compartilhado entre todas as máquinas. (`icon` em base64 direto na lista do
+  inventário ainda é aceito: é o formato da 0.1.5; 0.1.6+ manda hash.)
+- `GET /program-icons/{hash}` (admin) → PNG cru, `Cache-Control: immutable` de
+  um ano. A URL é o próprio conteúdo, então o navegador busca cada ícone uma
+  vez só e o JSON do inventário não carrega imagem nenhuma.
+- `GET /hour-lab-devices/{id}/programs` (admin) →
+  `{collectedAt, expected:[{id, label, matchPattern, installed, matchedName?, matchedVersion?, matchedIconHash?}], installed:[{name, version, publisher, iconHash?}]}`
+  · `collectedAt` nulo = PC nunca reportou.
+- `GET|POST /hour-lab-expected-programs` e `PATCH|DELETE /hour-lab-expected-programs/{id}`
+  (admin, rate limit 30/min no que escreve) — cadastro do que se espera achar.
+  `matchPattern` casa por substring sem diferenciar caixa contra o nome exibido
+  ("unity" pega "Unity 6000.0.23f1" e "Unity Hub"); omitido, usa o `label`.
+  Curinga do LIKE (`%`, `_`, `\`) é recusado com 400 — um `%` solto casaria com
+  qualquer coisa e marcaria todo PC como em dia.
+
+#### Captura de tela sob demanda (0.1.7+)
+
+O admin pede pelo dashboard, o comando sai no PRÓXIMO heartbeat (até ~30s), o
+PC tira a foto da tela principal, **mostra um aviso na própria tela** e manda a
+imagem. Não há captura periódica nem silenciosa, e quem pediu fica registrado
+junto da captura: a tela de um PC de uso compartilhado pode conter dado de quem
+está sentado nele.
+
+- `POST /hour-lab-devices/{id}/screenshot` (admin) → `{ok}` · rate limit 30/min
+  · só marca o pedido. 503 `SCREENSHOT_STORAGE_UNSET` quando o R2 não está
+  configurado no servidor.
+- `GET /hour-lab-devices/{id}/screenshots` (admin) →
+  `{screenshots:[{id, width, height, bytes, requestedBy, requestedAt, capturedAt, url}]}`
+  · `url` é assinada e vale 10min. Só as 20 últimas por PC ficam guardadas — as
+  anteriores somem na captura seguinte, **arquivo no R2 junto**.
+- `DELETE /hour-lab-devices/{id}/screenshots/{shotId}` (admin) → `{ok}` · rate
+  limit 60/min · apaga o registro E o arquivo. Se o arquivo não sair, responde
+  erro: dizer "apagado" com a imagem ainda no bucket seria pior que não ter o
+  botão. Toda captura tem que ser apagável pela interface — sem isso, "apaga
+  isso agora" vira acesso ao banco de produção.
+- `POST /public/lab-devices/screenshot {deviceId, deviceSecret, jpeg, width, height}`
+  → `{ok, id}` · rate limit 10/min. `jpeg` é base64 puro, até 6 MB
+  decodificados, e precisa começar com a assinatura JPEG (a imagem é servida de
+  volta pro navegador depois). Só entra com pedido recente — 5min desde a
+  entrega no heartbeat: a rota é pública, então sem isso um PC mandaria imagem
+  de tela quando quisesse (409 `SCREENSHOT_NOT_REQUESTED`).
 
 ## Catálogo de downloads (Santos Hub) — `api.santos-tech.com/auth/admin/downloads` e `/public/downloads`
 
@@ -381,8 +533,10 @@ Admin (role admin, sem cargo personalizado — mesmo critério de model3d):
 - `POST /auth/admin/downloads {name, kind, ...}` → 201 `{item}` · rate limit
   20/min · `kind=file` exige `objectKey`+`filename`+`contentType`+`sizeBytes`
   (do passo do `/presign`); `kind=link` exige `externalUrl` (http/https)
-- `PATCH /auth/admin/downloads/{id} {name?, description?, category?, version?, pinned?}` →
-  `{item}` · rate limit 30/min · só metadados — trocar o arquivo é apagar e recadastrar
+- `PATCH /auth/admin/downloads/{id} {name?, description?, category?, version?, pinned?, imageUrl?}` →
+  `{item}` · rate limit 30/min · só metadados — trocar o arquivo é apagar e recadastrar.
+  `imageUrl` é opcional em qualquer kind (foto/ícone pro grid, URL livre — não é
+  upload); string vazia remove.
 - `DELETE /auth/admin/downloads/{id}` → 204 — apaga o objeto no R2 também, se `kind=file`
 
 Público (sem auth nenhuma — leitura 100% aberta):
@@ -427,36 +581,64 @@ Admin-only (cria pasta e define quem tem acesso; professor não administra):
 Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por permissão de cargo):
 - `GET /drive-folders/mine` — só pastas com acesso ≥ `read`; admin vê todas com `access:"write"` → `{folders:[MyDriveFolder]}`
 - `GET /drive-folders/{id}/files[?parent=<driveFileId>]` — exige `read` na
-  pasta raiz `{id}` → `{files:[DriveFile]}` (403 sem acesso, 503 sem Drive
-  configurado). Itens vêm misturados (pasta+arquivo); distinga pelo
-  `mimeType` (`application/vnd.google-apps.folder`=pasta) pra navegação
-  estilo Drive. `parent` navega numa subpasta — validado por ancestralidade
-  (`DriveClient.IsDescendant`, sobe até 12 níveis por `parents`), 403 se o ID
-  não for descendente da raiz autorizada
+  pasta raiz `{id}` · rate limit 60/min → `{files:[DriveFile]}` (403 sem
+  acesso, 503 sem Drive configurado). Itens vêm misturados (pasta+arquivo);
+  distinga pelo `mimeType` (`application/vnd.google-apps.folder`=pasta) pra
+  navegação estilo Drive. `parent` navega numa subpasta — validado por
+  ancestralidade (`DriveClient.IsDescendant`, sobe até 12 níveis por
+  `parents`, resultado cacheado 5min no Redis), 403 se o ID não for
+  descendente da raiz autorizada. Pagina internamente pelo Drive até 2000
+  itens (10 páginas de 200) — acima disso loga aviso e devolve o que já tem,
+  sem cursor exposto na API ainda
 - `GET /drive-folders/{id}/files/{fileId}/download[?download=1]` — exige
-  `read`; stream binário proxeado (nunca link direto do Drive). Sem
-  `download`, abre INLINE (Content-Disposition: inline — navegador renderiza
+  `read` · rate limit 60/min; stream binário proxeado (nunca link direto do
+  Drive). Sem `download`, abre INLINE (Content-Disposition: inline — navegador renderiza
   imagem/vídeo/PDF quando sabe); `?download=1` força attachment. Repassa
   header `Range` pro Drive (206 Partial Content) — dá seek em vídeo sem
   baixar tudo primeiro. `fileId` validado por ancestralidade contra `{id}`
-  (403 se fora da árvore autorizada — impede adivinhar um ID de fora da pasta)
+  (403 se fora da árvore autorizada — impede adivinhar um ID de fora da pasta).
+  Segurança: só abre INLINE um `Content-Type` da allowlist de mídia segura
+  (imagem/vídeo/áudio/PDF, exceto `image/svg+xml`) — qualquer outro tipo é
+  sempre forçado a `attachment`+`application/octet-stream`, resposta sempre
+  com `X-Content-Type-Options: nosniff` (evita XSS armazenado via upload que
+  mentiu o Content-Type)
 - `GET /drive-folders/{id}/files/{fileId}/thumbnail` — exige `read`; miniatura
   proxeada (thumbnailLink do Drive exige o Bearer token da service account,
   não é URL pública) · rate limit 120/min · 404 se o arquivo não tem
-  miniatura (frontend cai pro ícone genérico) · mesma validação de
-  ancestralidade de `fileId` do download
+  miniatura (frontend cai pro ícone genérico, resultado cacheado 1h no Redis
+  também) · mesma validação de ancestralidade de `fileId` do download
 - `POST /drive-folders/{id}/files[?parent=<driveFileId>]` — exige `write` na
   raiz `{id}`; `multipart/form-data` campo `file` (máx. 25MB, streamado sem
   bufferizar inteiro em memória) → 201 `{file}` · rate limit 10/min ·
-  `parent` envia pra uma subpasta (mesma validação de ancestralidade do GET)
+  `parent` envia pra uma subpasta (mesma validação de ancestralidade do GET).
+  Segurança: se o `Content-Type` declarado no multipart cair na allowlist
+  "segura pra inline" (imagem/vídeo/áudio/PDF), os primeiros 512 bytes são
+  sniffados (`http.DetectContentType`) e conferidos contra ele — Content-Type
+  mentiroso (ex. HTML/script declarado como `image/png`) → 400, nunca chega
+  a subir pro Drive. Tipos fora dessa allowlist (docx, zip, glb…) não passam
+  por esse sniff (já são sempre forçados a download no endpoint acima)
 - `PATCH /drive-folders/{id}/files/{fileId} {name}` — exige `write` na raiz
   `{id}` (qualquer cargo/usuário com `write`, não só admin) · rate limit
   30/min · renomeia arquivo/subpasta no Drive → `{file}` · `fileId` validado
-  por ancestralidade (403 se fora da árvore)
+  por ancestralidade (403 se fora da árvore) · `fileId` igual ao
+  `driveFolderId` da própria pasta é sempre rejeitado (403) — sem isso dava
+  pra renomear a pasta raiz inteira só com acesso `write`
 - `DELETE /drive-folders/{id}/files/{fileId}` — exige `write` na raiz `{id}`
   · rate limit 30/min · move pra lixeira do Drive (NÃO é exclusão permanente,
   mesmo botão "Remover" da UI do Drive) → 204 · `fileId` validado por
-  ancestralidade (403 se fora da árvore)
+  ancestralidade (403 se fora da árvore) · mesma rejeição de `fileId` igual
+  ao `driveFolderId` da própria pasta (não dá pra excluir a raiz por aqui)
+- `POST /drive-folders/{id}/folders[?parent=<driveFileId>] {name}` — exige
+  `write` na raiz `{id}` · rate limit 20/min · cria subpasta (na raiz, ou
+  dentro de `parent` se informado — mesma validação de ancestralidade do
+  upload) → 201 `{file}`
+- `PATCH /drive-folders/{id}/files/{fileId}/move {toParent?}` — exige `write`
+  na raiz `{id}` · rate limit 30/min · move fileId pra dentro de `toParent`
+  (ou pra raiz da pasta se omitido) → `{file}` · SÓ reorganiza dentro da MESMA
+  pasta vinculada (fileId e toParent validados por ancestralidade contra
+  `{id}`; mover pra outra pasta raiz exigiria checar acesso lá também, fora
+  do escopo) · rejeita destino == fileId e mover uma pasta pra dentro de uma
+  subpasta dela mesma (ciclo, checado via IsDescendant invertido)
 
 ## Social — Calendário Editorial — `api.santos-tech.com/social`
 
@@ -484,8 +666,8 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
   `plataformasDestino` → 400 `PLATFORM_NOT_TARGET`. O texto enviado à rede é `caption` +
   `hashtags[]` colado no fim (separado por linha em branco). Mídia vem de `driveFileId` (baixa via
   service account do Drive, sobe temporário pro R2 público, usa essa URL na Graph API) ou,
-  sem arquivo do Drive, de `mediaUrl` direto. Carrossel e story ainda não são suportados
-  (`status: "unsupported"`, confirme manualmente). Publicação com sucesso já confirma a
+  sem arquivo do Drive, de `mediaUrl` direto. Story ainda não é suportado (`status:
+  "unsupported"`, confirme manualmente). Publicação com sucesso já confirma a
   plataforma (mesma tabela do checklist manual) e registra uma nota de auditoria com o ID
   externo. → `{results:[{platform,status,externalId?,error?}]}` — `status`:
   `published`|`manual` (sem adaptador)|`failed`|`unsupported`. Nenhuma das plataformas
@@ -494,6 +676,33 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
   `INSTAGRAM_USER_ID` e/ou `FACEBOOK_ACCESS_TOKEN`/`FACEBOOK_PAGE_ID` (Page Access Token de
   longa duração, não expira sozinho — ver `facebook_client.go`); adaptador sem env
   configurada cai pro checklist manual, nunca erro. Feature de 18/08/2026.
+  - **Localização automática** (opcional): `instagramLocationId` (`GET/PUT /social/settings`,
+    ver abaixo) marca local em toda publicação do Instagram (image/video/reel);
+    `facebookPlaceId` marca local em toda FOTO da Página (vídeo da Página não suporta
+    `place` nesse endpoint). Ambos vazios por padrão — sem configurar, não marca local
+    nenhum. Precisam ser o ID de uma Page da Meta com latitude/longitude, não um endereço
+    solto. Config fixa (não por post, não é env var — editável em Configurações do
+    Calendário Editorial, admin-only). Feature de 19/08/2026.
+  - **Capa de Reel** (opcional): `driveCoverFolderId`/`driveCoverFileId`/`driveCoverFileName`
+    no post — mesmo trio de `driveFolderId`/`driveFileId`/`driveFileName`, só que aponta pra
+    outro arquivo (a imagem de capa). Se preenchido, vira `cover_url` na Graph API do
+    Instagram (só vídeo/reel — sem capa, a Meta usa o frame 0). Facebook não recebe (o
+    endpoint `/videos` só aceita capa via upload binário, que não implementamos).
+  - **Texto alternativo** (opcional): `altText` no post — vira `alt_text` (Instagram, só
+    imagem estática) e `alt_text_custom` (Facebook, só foto).
+  - **Carrossel real** (Instagram apenas): `formato: "carrossel"` publica de verdade via
+    `children` da Graph API — o item 1 é o trio `driveFolderId`/`driveFileId`/`driveFileName`
+    do post, os itens 2..10 vêm de `carouselItems[]` (`{folderId,fileId,fileName}`, teto de
+    9 = 10 no total, validado no PUT/POST → 400 se passar). Cada item pode ser foto OU vídeo
+    (decidido pela extensão do arquivo, não por um campo à parte); vídeo espera processar
+    (`status_code FINISHED`) antes de virar container filho, igual Reels. Precisa de pelo
+    menos 2 itens escolhidos pra publicar de verdade — com menos, `POST .../publish` falha
+    com `CAROUSEL_NOT_ENOUGH_ITEMS`; com mais de 10, `CAROUSEL_TOO_MANY_ITEMS`.
+    **Facebook não tem suporte automático a carrossel** (endpoint de álbum multi-foto é um
+    fluxo bem diferente — não implementado ainda): plataformas != instagram com
+    `formato: "carrossel"` sempre voltam `status: "unsupported"` (com adaptador
+    configurado) ou `"manual"` (sem adaptador), nunca publicam de verdade. Feature de
+    19/08/2026.
 - `POST /social/posts/{id}/publish-confirmations/{platform}` — confirma publicação
   naquela plataforma (upsert; reconfirmar atualiza, não duplica). `confirmedBy` vem
   sempre da sessão autenticada, nunca do corpo da requisição. → `{confirmations:[...]}`
@@ -511,6 +720,13 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
   de publicação (`POST`/`DELETE .../publish-confirmations/{platform}` → 403 `NOT_PLATFORM_OWNER`
   pra qualquer outro usuário). Sem dono configurado, comportamento de 13/08 (qualquer um com
   `social:execute` confirma). Feature de 17/08/2026.
+- `GET /social/settings` — config fixa do publicador (hoje só localização automática, ver
+  acima). → `{settings: SocialSettings}`. Sempre existe uma linha (seed pela migração).
+- `PUT /social/settings {instagramLocationId?, facebookPlaceId?}` — atualiza (ambos os
+  campos juntos, string vazia = desliga aquela rede). **Admin-only**. Só valida tamanho
+  (máx 100 chars cada) — não confirma que o ID é válido na Meta, isso só se descobre na
+  hora de publicar. → `{settings: SocialSettings}` · corpo inválido/ID grande demais → 400.
+  Feature de 19/08/2026.
 
 **SocialPost** (campos do briefing): `title` (interno), `caption` (legenda),
 `platform`, `pilar` (educacional|institucional|captacao|prova_social|bastidores|tech_mundo_real),
@@ -520,6 +736,11 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 não uma fixa), `driveFileId` (id do arquivo no Google Drive dentro dela), `driveFileName`
 (cache de exibição). Quando preenchidos, `POST .../publish` usa esse arquivo como mídia em
 vez de `mediaUrl`. Feature de 18/08/2026.
+`driveCoverFolderId`/`driveCoverFileId`/`driveCoverFileName` (mesmo trio, mas pra capa
+opcional de Reel — ver publish acima), `altText` (texto alternativo de acessibilidade, só
+imagem estática), `carouselItems[]` (`{folderId,fileId,fileName}`, itens 2..10 de um
+carrossel — o item 1 é o trio `driveFolderId`/`driveFileId`/`driveFileName` de cima; teto de
+9 itens aqui, validado no POST/PUT → 400 se passar). Feature de 19/08/2026.
 `formato` (estatico|carrossel|reel|story|video_longo|short|thumbnail|card_link),
 `objetivo` (alcance|engajamento|conversao|autoridade),
 `programa` (''|create|jr|camps|academies), `receita` (catálogo de composição:
@@ -540,6 +761,9 @@ populado em `GET /social/posts/{id}` (post único), vazio em `GET /social/posts`
 
 **SocialPlatformOwner**: `{platform, userId, userName, updatedAt}` — mapeamento global
 (não por post) de quem pode confirmar aquele canal.
+
+**SocialSettings**: `{instagramLocationId, facebookPlaceId, updatedById, updatedByName,
+updatedAt}` — config fixa (não por post) do publicador, ver `GET/PUT /social/settings`.
 
 ## Tarefas — `api.santos-tech.com/tasks`
 

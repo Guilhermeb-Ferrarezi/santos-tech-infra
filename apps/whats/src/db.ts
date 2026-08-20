@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS whats_knowledge (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   answered_at TIMESTAMPTZ
 );
+CREATE INDEX IF NOT EXISTS idx_whats_knowledge_jid ON whats_knowledge(jid, id DESC);
 CREATE TABLE IF NOT EXISTS whats_messages (
   id        BIGSERIAL PRIMARY KEY,
   jid       TEXT NOT NULL,
@@ -138,10 +139,15 @@ export async function answerLatestPending(jid: string, answer: string): Promise<
   return (r.rowCount ?? 0) > 0
 }
 
-// listFacts devolve os fatos respondidos (a memória usada nos turnos).
-export async function listFacts(): Promise<{ id: number; question: string; answer: string }[]> {
+// listFacts devolve os fatos respondidos DESTE chat (a memória usada nos turnos).
+//
+// Sem o filtro por jid, a pergunta de um contato e a resposta que o dono deu a
+// ele entravam no prompt de qualquer outro contato — vazamento de conversa
+// entre pessoas diferentes.
+export async function listFacts(jid: string): Promise<{ id: number; question: string; answer: string }[]> {
   const r = await pool.query(
-    "SELECT id, question, answer FROM whats_knowledge WHERE answer IS NOT NULL ORDER BY id DESC LIMIT 500",
+    "SELECT id, question, answer FROM whats_knowledge WHERE jid=$1 AND answer IS NOT NULL ORDER BY id DESC LIMIT 500",
+    [jid],
   )
   return r.rows
 }

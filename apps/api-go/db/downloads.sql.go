@@ -13,9 +13,9 @@ import (
 
 const createDownload = `-- name: CreateDownload :one
 
-INSERT INTO downloads (name, description, category, version, kind, object_key, external_url, filename, content_type, size_bytes, uploaded_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, name, description, category, version, kind, object_key, external_url, filename, content_type, size_bytes, pinned, uploaded_by, created_at, updated_at
+INSERT INTO downloads (name, description, category, version, kind, object_key, external_url, filename, content_type, size_bytes, uploaded_by, image_url)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, name, description, category, version, kind, object_key, external_url, filename, content_type, size_bytes, pinned, uploaded_by, created_at, updated_at, image_url
 `
 
 type CreateDownloadParams struct {
@@ -30,6 +30,7 @@ type CreateDownloadParams struct {
 	ContentType string
 	SizeBytes   pgtype.Int8
 	UploadedBy  pgtype.Int4
+	ImageUrl    pgtype.Text
 }
 
 // Queries do catálogo de downloads (Santos Hub — app Tauri dos PCs da empresa)
@@ -46,6 +47,7 @@ func (q *Queries) CreateDownload(ctx context.Context, arg CreateDownloadParams) 
 		arg.ContentType,
 		arg.SizeBytes,
 		arg.UploadedBy,
+		arg.ImageUrl,
 	)
 	var i Download
 	err := row.Scan(
@@ -64,6 +66,7 @@ func (q *Queries) CreateDownload(ctx context.Context, arg CreateDownloadParams) 
 		&i.UploadedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ImageUrl,
 	)
 	return i, err
 }
@@ -81,7 +84,7 @@ func (q *Queries) DeleteDownload(ctx context.Context, id int64) (int64, error) {
 }
 
 const getDownload = `-- name: GetDownload :one
-SELECT id, name, description, category, version, kind, object_key, external_url, filename, content_type, size_bytes, pinned, uploaded_by, created_at, updated_at
+SELECT id, name, description, category, version, kind, object_key, external_url, filename, content_type, size_bytes, pinned, uploaded_by, created_at, updated_at, image_url
 FROM downloads WHERE id = $1
 `
 
@@ -104,12 +107,13 @@ func (q *Queries) GetDownload(ctx context.Context, id int64) (Download, error) {
 		&i.UploadedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ImageUrl,
 	)
 	return i, err
 }
 
 const listDownloads = `-- name: ListDownloads :many
-SELECT id, name, description, category, version, kind, object_key, external_url, filename, content_type, size_bytes, pinned, uploaded_by, created_at, updated_at
+SELECT id, name, description, category, version, kind, object_key, external_url, filename, content_type, size_bytes, pinned, uploaded_by, created_at, updated_at, image_url
 FROM downloads
 ORDER BY pinned DESC, created_at DESC
 `
@@ -139,6 +143,7 @@ func (q *Queries) ListDownloads(ctx context.Context) ([]Download, error) {
 			&i.UploadedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ImageUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -152,9 +157,9 @@ func (q *Queries) ListDownloads(ctx context.Context) ([]Download, error) {
 
 const updateDownload = `-- name: UpdateDownload :one
 UPDATE downloads
-SET name = $2, description = $3, category = $4, version = $5, pinned = $6, updated_at = now()
+SET name = $2, description = $3, category = $4, version = $5, pinned = $6, image_url = $7, updated_at = now()
 WHERE id = $1
-RETURNING id, name, description, category, version, kind, object_key, external_url, filename, content_type, size_bytes, pinned, uploaded_by, created_at, updated_at
+RETURNING id, name, description, category, version, kind, object_key, external_url, filename, content_type, size_bytes, pinned, uploaded_by, created_at, updated_at, image_url
 `
 
 type UpdateDownloadParams struct {
@@ -164,6 +169,7 @@ type UpdateDownloadParams struct {
 	Category    string
 	Version     string
 	Pinned      bool
+	ImageUrl    pgtype.Text
 }
 
 func (q *Queries) UpdateDownload(ctx context.Context, arg UpdateDownloadParams) (Download, error) {
@@ -174,6 +180,7 @@ func (q *Queries) UpdateDownload(ctx context.Context, arg UpdateDownloadParams) 
 		arg.Category,
 		arg.Version,
 		arg.Pinned,
+		arg.ImageUrl,
 	)
 	var i Download
 	err := row.Scan(
@@ -192,6 +199,7 @@ func (q *Queries) UpdateDownload(ctx context.Context, arg UpdateDownloadParams) 
 		&i.UploadedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ImageUrl,
 	)
 	return i, err
 }

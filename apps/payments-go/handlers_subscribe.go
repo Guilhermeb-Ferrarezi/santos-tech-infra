@@ -56,7 +56,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validCPF(in.TaxID) {
-		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido (11 dígitos)")
+		writeError(w, http.StatusBadRequest, "invalid_body", "CPF inválido")
 		return
 	}
 	if !validPhone(in.Phone) {
@@ -217,14 +217,13 @@ func (s *Server) handleSubscribeEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Assinatura não encontrada")
 		return
 	}
-	flusher, ok := w.(http.Flusher)
+	// startSSE remove o write deadline desta conexão: o WriteTimeout de 60s do
+	// servidor vale para a resposta INTEIRA e matava o stream antes do 'paid'.
+	flusher, ok := startSSE(w)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "sse_unsupported", "Streaming indisponível")
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
 
 	fmt.Fprintf(w, "event: status\ndata: %s\n\n", rec.Status)
 	flusher.Flush()
@@ -243,10 +242,16 @@ func (s *Server) handleSubscribeEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ping periódico: sem tráfego, proxies derrubam a conexão ociosa antes do evento.
+	ping := time.NewTicker(sseKeepAliveInterval)
+	defer ping.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-ping.C:
+			sseKeepAlive(w, flusher)
 		case msg := <-ch:
 			if msg != nil && msg.Payload != "" {
 				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", msg.Payload, msg.Payload)

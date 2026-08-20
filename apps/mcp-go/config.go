@@ -8,6 +8,7 @@ import (
 type Config struct {
 	Port           string
 	AuthBaseURL    string // raiz da API central (rotas /auth, /status, /llms.txt)
+	AuthMeURL      string // /auth/me usado pelo requireAuth p/ validar o token (default: AuthBaseURL + /auth/me)
 	ClaudeBaseURL  string // raiz do claude agent (rotas /claude/*)
 	EmailAPIURL    string // ex: https://mails.santos-tech.com/api
 	BotAPIURL      string // raiz do dashboard API do bot-go (rotas /api/*), ex: https://api.santos-tech.com/bot
@@ -29,6 +30,7 @@ func LoadConfig() Config {
 	return Config{
 		Port:           getEnv("PORT", "3335"),
 		AuthBaseURL:    strings.TrimRight(getEnv("AUTH_API_URL", "https://api.santos-tech.com"), "/"),
+		AuthMeURL:      strings.TrimRight(getEnv("AUTH_ME_URL", ""), "/"),
 		ClaudeBaseURL:  strings.TrimRight(getEnv("CLAUDE_API_URL", "https://api.santos-tech.com"), "/"),
 		EmailAPIURL:    strings.TrimRight(getEnv("EMAIL_API_URL", "https://mails.santos-tech.com/api"), "/"),
 		BotAPIURL:      strings.TrimRight(getEnv("BOT_API_URL", "https://api.santos-tech.com/bot"), "/"),

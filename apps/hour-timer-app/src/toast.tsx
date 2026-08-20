@@ -8,6 +8,8 @@ import "./index.css";
 const STORE_FILE = "config.json";
 const TOAST_MESSAGE_KEY = "toastMessage";
 const POLL_INTERVAL_MS = 2_000;
+// Quanto o aviso fica na tela antes de sumir sozinho.
+const AUTO_DISMISS_MS = 30_000;
 
 let storePromise: Promise<Store> | null = null;
 function getStore() {
@@ -54,6 +56,16 @@ function ToastApp() {
     if (visible) appWindow.show();
     else appWindow.hide();
   }, [visible]);
+
+  // Some sozinho depois de AUTO_DISMISS_MS. O aviso é para ser lido de
+  // passagem por quem está no PC — sem isso ele fica na frente da tela até
+  // alguém clicar no X, atrapalhando justamente quem está usando a máquina.
+  const messageId = message?.id;
+  useEffect(() => {
+    if (!visible || !messageId) return;
+    const timer = setTimeout(() => setDismissedId(messageId), AUTO_DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [visible, messageId]);
 
   if (!visible || !message) return null;
 

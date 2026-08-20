@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -22,14 +23,34 @@ func portalOptionalID(r *http.Request, name string) (*int64, error) {
 	return &id, nil
 }
 
-// handlePortalSearchUsers — GET /portal/users?q=&limit= : seletor de alunos.
+// handlePortalSearchUsers — GET /portal/users?q=&role=&limit= : seletor de
+// alunos. Exige q com >= 2 caracteres e devolve só alunos (role 1); ?role= é
+// aceito apenas para admin, porque a rota passa por portalAnyRead (qualquer
+// cargo com um portal_*:read entra) e o resultado carrega e-mail.
 func (s *Server) handlePortalSearchUsers(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("q")
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len([]rune(q)) < 2 {
+		writeErr(w, validationErr("q obrigatório (mínimo 2 caracteres)"))
+		return
+	}
 	limit := atoiMin(r.URL.Query().Get("limit"), 20, 1)
 	if limit > 50 {
 		limit = 50
 	}
-	items, err := s.portalSearchUsers(r.Context(), q, limit)
+	role := int16(RoleStudent)
+	if raw := strings.TrimSpace(r.URL.Query().Get("role")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 4 {
+			writeErr(w, validationErr("role inválido"))
+			return
+		}
+		if n != RoleStudent && !s.portalActorIsAdmin(r.Context(), userIDFrom(r)) {
+			writeErr(w, appErr(http.StatusForbidden, "FORBIDDEN", "apenas admin pode buscar usuários que não sejam alunos"))
+			return
+		}
+		role = int16(n)
+	}
+	items, err := s.portalSearchUsers(r.Context(), q, role, limit)
 	if err != nil {
 		writeErr(w, err)
 		return

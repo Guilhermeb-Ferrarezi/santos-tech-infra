@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Capability da janela principal. opener: NAO usar 'opener:default' — ele arrasta 'allow-default-urls', cujo escopo e http://* e https://*, o que deixaria openUrl(item.url) do catalogo (/public/downloads) abrir qualquer coisa. Escopo restrito ao CDN (kind=file) e ao site (pagina de conectar-dispositivo).",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -11,8 +11,13 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-is-maximized",
     "core:window:allow-start-dragging",
-    "opener:default",
-    "store:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://cdn.santos-tech.com/*" },
+        { "url": "https://santos-tech.com/*" }
+      ]
+    },
     {
       "identifier": "http:default",
       "allow": [{ "url": "https://api.santos-tech.com/*" }]

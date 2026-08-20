@@ -74,7 +74,10 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
   name          TEXT NOT NULL,
   redirect_uris TEXT[] NOT NULL,
   is_active     BOOLEAN NOT NULL DEFAULT true,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Quando um admin liberou o client. Clients do painel nascem aprovados; os do
+  -- DCR anônimo (POST /oauth/register) nascem is_active=false e sem aprovação.
+  approved_at   TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS boards (
@@ -111,6 +114,16 @@ CREATE TABLE IF NOT EXISTS social_posts (
   drive_folder_id     UUID,
   drive_file_id       TEXT NOT NULL DEFAULT '',
   drive_file_name     TEXT NOT NULL DEFAULT '',
+  -- Capa customizada de Reel (mesmo shape do trio acima, mesma ressalva de FK).
+  drive_cover_folder_id UUID,
+  drive_cover_file_id   TEXT NOT NULL DEFAULT '',
+  drive_cover_file_name TEXT NOT NULL DEFAULT '',
+  -- Texto alternativo de acessibilidade (só imagem estática, ver alt_text da
+  -- Graph API do Instagram / alt_text_custom do Facebook).
+  alt_text            TEXT NOT NULL DEFAULT '',
+  -- Itens 2..10 de um carrossel — array de {folderId,fileId,fileName}; o
+  -- item 1 é o trio drive_folder_id/drive_file_id/drive_file_name acima.
+  carousel_items      JSONB NOT NULL DEFAULT '[]',
   formato             TEXT NOT NULL DEFAULT 'estatico',
   objetivo            TEXT NOT NULL DEFAULT 'alcance',
   programa            TEXT NOT NULL DEFAULT '',
@@ -129,6 +142,17 @@ CREATE TABLE IF NOT EXISTS social_posts (
   created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Configuração fixa (não por post) de localização automática do publicador
+-- universal — linha única (o truque "id BOOLEAN PRIMARY KEY CHECK(id)"
+-- garante isso). Ver social_publish.go / GET,PUT /social/settings.
+CREATE TABLE IF NOT EXISTS social_settings (
+  id                    BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+  instagram_location_id TEXT NOT NULL DEFAULT '',
+  facebook_place_id     TEXT NOT NULL DEFAULT '',
+  updated_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS social_post_notes (
@@ -189,7 +213,8 @@ CREATE TABLE IF NOT EXISTS downloads (
   pinned       BOOLEAN NOT NULL DEFAULT false,
   uploaded_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  image_url    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS api_router_providers (
@@ -282,7 +307,9 @@ CREATE TABLE IF NOT EXISTS hour_sessions (
   pause_requested_at TIMESTAMPTZ,
   created_by         INTEGER NOT NULL REFERENCES users(id),
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  short_code            TEXT UNIQUE,
+  short_code_expires_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_hour_sessions_client ON hour_sessions(client_id);
@@ -317,7 +344,9 @@ CREATE TABLE IF NOT EXISTS hour_lab_devices (
   message_id          UUID,
   message_text        TEXT,
   message_sent_at     TIMESTAMPTZ,
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  pending_pair_token  TEXT,
+  pending_pair_token_expires_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_last_seen ON hour_lab_devices(last_seen_at);
 

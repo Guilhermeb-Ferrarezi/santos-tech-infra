@@ -151,3 +151,53 @@ func TestGetProductByID_Handler(t *testing.T) {
 		t.Fatalf("esperava 404 para id inexistente, veio %d", rec.Code)
 	}
 }
+
+// TestGetProductBySlugNaoVazaFileURL: /products/by-slug é PÚBLICO. Antes ele serializava
+// o Product inteiro, entregando o fileUrl — o produto comprado — a quem soubesse o slug.
+// A resposta deve trazer só a vitrine, com hasFile no lugar da URL.
+func TestGetProductBySlugNaoVazaFileURL(t *testing.T) {
+	st := newFakeProductStore()
+	const secreto = "https://cdn.santos-tech.com/entregaveis/curso-secreto.pdf"
+	_ = st.CreateProduct(context.Background(), &Product{
+		Slug: "curso", Name: "Curso", PriceCents: 9900, Active: true,
+		ImageURL: "https://cdn.santos-tech.com/capa.png", FileURL: secreto,
+	})
+
+	s := &Server{products: st}
+	req := httptest.NewRequest("GET", "/products/by-slug/curso", nil)
+	req.SetPathValue("slug", "curso")
+	w := httptest.NewRecorder()
+	s.handleGetProductBySlug(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, veio %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, secreto) {
+		t.Fatalf("rota pública vazou o entregável: %s", body)
+	}
+	if strings.Contains(body, "fileUrl") {
+		t.Fatalf("rota pública não deveria ter o campo fileUrl: %s", body)
+	}
+
+	var got PublicProduct
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("resposta não é PublicProduct: %v", err)
+	}
+	if !got.HasFile {
+		t.Fatal("hasFile deveria ser true (existe entregável, sem revelar a URL)")
+	}
+	if got.Name != "Curso" || got.PriceCents != 9900 || got.ImageURL == "" {
+		t.Fatalf("a vitrine deveria continuar completa: %+v", got)
+	}
+}
+
+// TestPublicProductSemEntregavel: sem file_url, hasFile é false.
+func TestPublicProductSemEntregavel(t *testing.T) {
+	if publicProduct(Product{Slug: "x", FileURL: "   "}).HasFile {
+		t.Fatal("file_url em branco não deveria contar como entregável")
+	}
+	if !publicProduct(Product{Slug: "x", FileURL: "https://a/b.pdf"}).HasFile {
+		t.Fatal("file_url preenchido deveria marcar hasFile")
+	}
+}

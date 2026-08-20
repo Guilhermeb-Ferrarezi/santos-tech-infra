@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -22,8 +24,48 @@ import (
 
 var apiRouterHTTP = &http.Client{Timeout: 30 * time.Second}
 
+const (
+	// apiRouterMaxResponseBytes limita o corpo lido de um provider. Sem teto,
+	// um provider (ou quem sequestrasse a rota) podia streamar até derrubar o
+	// processo por OOM: a resposta é lida INTEIRA em memória antes de voltar.
+	// 32MB cobre com folga áudio/imagem em base64 (o request de op já é 25MB).
+	apiRouterMaxResponseBytes = 32 << 20
+
+	// apiRouterRotationBudget é o teto TOTAL da rotação de chaves. Cada
+	// tentativa tem 30s (apiRouterHTTP.Timeout); com 10 chaves cadastradas, a
+	// requisição do admin ficava presa até 300s. Agora o ctx morre em 60s.
+	apiRouterRotationBudget = 60 * time.Second
+
+	// apiRouterMaxKeyAttempts limita quantas chaves são tentadas numa mesma
+	// requisição, independente do relógio.
+	apiRouterMaxKeyAttempts = 4
+)
+
+// errAPIRouterResponseTooLarge: o provider devolveu mais do que
+// apiRouterMaxResponseBytes.
+var errAPIRouterResponseTooLarge = errors.New("apirouter: resposta do provider grande demais")
+
+// readAPIRouterBody lê o corpo com teto. Devolve erro em vez de truncar em
+// silêncio — um JSON cortado pela metade viraria "erro do adapter" mais na
+// frente, escondendo a causa.
+func readAPIRouterBody(r io.Reader) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, apiRouterMaxResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > apiRouterMaxResponseBytes {
+		return nil, errAPIRouterResponseTooLarge
+	}
+	return b, nil
+}
+
 var errAPIRouterNoActiveKeys = errors.New("apirouter: nenhuma chave ativa para o provider")
 var errAPIRouterAllKeysExhausted = errors.New("apirouter: todas as chaves ativas falharam")
+
+// errAPIRouterInvalidPath: o path pedido tentaria sair do host do provider
+// (sequestro de host) — a requisição carrega a chave decifrada no header de
+// auth, então mandar para outro host é exfiltração de credencial.
+var errAPIRouterInvalidPath = errors.New("apirouter: path inválido (precisa começar com / e não pode trocar o host do provider)")
 
 const (
 	apiRouterOutcomeSuccess        = "success"
@@ -65,6 +107,63 @@ func authHeaderValue(scheme, secret string) string {
 	return scheme + " " + secret
 }
 
+// apiRouterRequestURL junta base_url + path SEM deixar o path trocar o host.
+// A concatenação crua ("https://api.x.com" + path) era sequestrável: um path
+// como "@evil.com/v1/models" produz "https://api.x.com@evil.com/v1/models",
+// cujo host é evil.com — e buildAPIRouterRequest manda a chave decifrada no
+// header de auth. Mesma armadilha com "//evil.com/x" (URL protocolo-relativa).
+//
+// Regras: path vazio = a própria base_url (usado por test_path vazio); senão
+// precisa começar com "/" e não pode começar com "//". A query é separada
+// antes do JoinPath (que escaparia o "?") e reanexada depois. No fim,
+// scheme/host/userinfo do resultado são conferidos contra a base — cinto e
+// suspensório caso alguma regra acima escape.
+func apiRouterRequestURL(baseURL, path string) (string, error) {
+	base, err := url.Parse(baseURL)
+	if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") {
+		return "", fmt.Errorf("apirouter: base_url inválida: %q", baseURL)
+	}
+	if path == "" {
+		return base.String(), nil
+	}
+	if !apiRouterValidPath(path) {
+		return "", errAPIRouterInvalidPath
+	}
+	rawPath, rawQuery, hasQuery := strings.Cut(path, "?")
+	u := base.JoinPath(rawPath)
+	if u.Scheme != base.Scheme || u.Host != base.Host || u.User != nil {
+		return "", errAPIRouterInvalidPath
+	}
+	if hasQuery {
+		u.RawQuery = rawQuery
+	}
+	return u.String(), nil
+}
+
+// apiRouterValidPath valida a SINTAXE do path (sem precisar da base_url), pra
+// os handlers recusarem com 400 antes de chegar no provider e pro cadastro de
+// provider barrar test_path/chat_path envenenados. Vazio é válido: test_path
+// vazio significa "GET na própria base_url" e chat_path vazio cai no default
+// do adapter.
+func apiRouterValidPath(path string) bool {
+	if path == "" {
+		return true
+	}
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		return false
+	}
+	if strings.Contains(path, "#") {
+		return false
+	}
+	return strings.IndexFunc(path, isCtlByte) < 0
+}
+
+// isCtlByte reporta se r é um caractere de controle (CR/LF/NUL/DEL...), que
+// não tem uso legítimo num path e serve pra confundir proxies.
+func isCtlByte(r rune) bool {
+	return r < 0x20 || r == 0x7f
+}
+
 // buildAPIRouterRequest monta a requisição HTTP para uma chave decifrada:
 // base_url do provider + path, com o header de auth configurado e headers extras.
 // contentType vazio com body != nil assume application/json (comportamento
@@ -74,7 +173,11 @@ func buildAPIRouterRequest(ctx context.Context, provider db.ApiRouterProvider, s
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, provider.BaseUrl+path, reader)
+	full, err := apiRouterRequestURL(provider.BaseUrl, path)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, full, reader)
 	if err != nil {
 		return nil, fmt.Errorf("apirouter: montar request: %w", err)
 	}
@@ -114,6 +217,47 @@ type apiRouterOutcome struct {
 	Attempts   []apiRouterAttempt
 }
 
+// decryptAPIRouterKeySecret decifra o segredo de uma chave do roteador. Aceita
+// tanto o formato v2 (HKDF + AAD amarrado ao provider/tail) quanto o legado
+// v1 que já está gravado no banco — ver vault.go.
+//
+// Migração preguiçosa: quando o valor vem em v1 e a decifragem deu certo, ele
+// é reescrito em v2 na mesma linha. O plaintext já está em mãos, então a
+// reescrita não pode perder dado: se o UPDATE falhar, a linha continua em v1 e
+// legível, e a próxima leitura tenta de novo. Nunca reescrevemos sem ter
+// decifrado antes — é isso que impede o cofre de ficar irrecuperável.
+func (s *Server) decryptAPIRouterKeySecret(ctx context.Context, k db.ApiRouterKey) (string, error) {
+	secret, legacy, err := s.vault.DecryptKeySecret(k.SecretEnc, k.ProviderID, k.SecretTail)
+	if err != nil {
+		return "", err
+	}
+	if legacy {
+		s.rewriteAPIRouterKeySecret(ctx, k, secret)
+	}
+	return secret, nil
+}
+
+// rewriteAPIRouterKeySecret regrava em v2 uma chave que ainda estava em v1.
+// Best-effort: qualquer falha só é logada — a linha segue legível em v1.
+func (s *Server) rewriteAPIRouterKeySecret(ctx context.Context, k db.ApiRouterKey, secret string) {
+	enc, err := s.vault.EncryptKeySecret(secret, k.ProviderID, k.SecretTail)
+	if err != nil {
+		slog.Warn("apirouter: falha ao recifrar chave legada (segue em v1)", "keyId", k.ID, "err", err)
+		return
+	}
+	// Confere que o que vamos gravar volta a decifrar no MESMO valor antes de
+	// tocar no banco. Paranoia barata contra transformar o cofre em lixo.
+	if back, _, err := s.vault.DecryptKeySecret(enc, k.ProviderID, k.SecretTail); err != nil || back != secret {
+		slog.Error("apirouter: recifragem não fecha o round-trip; abortando reescrita", "keyId", k.ID, "err", err)
+		return
+	}
+	if err := s.q.SetAPIRouterKeySecret(ctx, db.SetAPIRouterKeySecretParams{ID: k.ID, SecretEnc: enc}); err != nil {
+		slog.Warn("apirouter: falha ao gravar chave recifrada (segue em v1)", "keyId", k.ID, "err", err)
+		return
+	}
+	slog.Info("apirouter: chave migrada do cofre v1 para v2", "keyId", k.ID, "providerId", k.ProviderID)
+}
+
 // executeAPIRouterRequest tenta a requisição com cada chave ativa do provider,
 // em ordem de prioridade, até uma responder fora dos códigos de
 // unauthorized/no-credits. Erro de rede com uma chave não a penaliza (o
@@ -127,9 +271,19 @@ func (s *Server) executeAPIRouterRequest(ctx context.Context, provider db.ApiRou
 		return nil, errAPIRouterNoActiveKeys
 	}
 
+	// Teto TOTAL da rotação: sem ele, N chaves × 30s prendiam a requisição do
+	// admin por minutos (10 chaves = 300s). Duas travas independentes, porque
+	// falha rápida (connection refused) não gasta relógio: o ctx com deadline e
+	// o número de chaves tentadas.
+	ctx, cancel := context.WithTimeout(ctx, apiRouterRotationBudget)
+	defer cancel()
+
 	var attempts []apiRouterAttempt
-	for _, key := range keys {
-		secret, err := s.vault.Decrypt(key.SecretEnc)
+	for i, key := range keys {
+		if i >= apiRouterMaxKeyAttempts || ctx.Err() != nil {
+			break
+		}
+		secret, err := s.decryptAPIRouterKeySecret(ctx, key)
 		if err != nil {
 			attempts = append(attempts, apiRouterAttempt{KeyID: key.ID, KeyLabel: key.Label, Outcome: apiRouterOutcomeTransportError})
 			continue
@@ -143,7 +297,7 @@ func (s *Server) executeAPIRouterRequest(ctx context.Context, provider db.ApiRou
 			attempts = append(attempts, apiRouterAttempt{KeyID: key.ID, KeyLabel: key.Label, Outcome: apiRouterOutcomeTransportError})
 			continue
 		}
-		respBody, readErr := io.ReadAll(resp.Body)
+		respBody, readErr := readAPIRouterBody(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
 			attempts = append(attempts, apiRouterAttempt{KeyID: key.ID, KeyLabel: key.Label, StatusCode: resp.StatusCode, Outcome: apiRouterOutcomeTransportError})
@@ -176,7 +330,7 @@ func (s *Server) executeAPIRouterRequestOnce(ctx context.Context, provider db.Ap
 	if err != nil {
 		return nil, fmt.Errorf("apirouter: buscar chave do job: %w", err)
 	}
-	secret, err := s.vault.Decrypt(key.SecretEnc)
+	secret, err := s.decryptAPIRouterKeySecret(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("apirouter: decifrar chave do job: %w", err)
 	}
@@ -188,7 +342,7 @@ func (s *Server) executeAPIRouterRequestOnce(ctx context.Context, provider db.Ap
 	if err != nil {
 		return nil, err
 	}
-	respBody, readErr := io.ReadAll(resp.Body)
+	respBody, readErr := readAPIRouterBody(resp.Body)
 	resp.Body.Close()
 	if readErr != nil {
 		return nil, readErr
@@ -218,7 +372,7 @@ type apiRouterTestResult struct {
 // TestMethod, ou GET na base_url se ambos vazios) usando uma chave
 // específica, e já grava o resultado.
 func (s *Server) testAPIRouterKey(ctx context.Context, provider db.ApiRouterProvider, key db.ApiRouterKey) (apiRouterTestResult, error) {
-	secret, err := s.vault.Decrypt(key.SecretEnc)
+	secret, err := s.decryptAPIRouterKeySecret(ctx, key)
 	if err != nil {
 		return apiRouterTestResult{}, fmt.Errorf("apirouter: decifrar chave: %w", err)
 	}
@@ -237,7 +391,9 @@ func (s *Server) testAPIRouterKey(ctx context.Context, provider db.ApiRouterProv
 		return apiRouterTestResult{Outcome: apiRouterOutcomeTransportError, Error: err.Error()}, nil
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
+	// Só interessa o status: drena o começo pra reaproveitar a conexão, com teto
+	// (io.Copy sem limite deixaria um provider hostil nos alimentando à vontade).
+	_, _ = io.CopyN(io.Discard, resp.Body, 32<<10)
 
 	outcome := classifyAPIRouterStatus(provider.UnauthorizedCodes, provider.NoCreditCodes, resp.StatusCode)
 	switch outcome {
