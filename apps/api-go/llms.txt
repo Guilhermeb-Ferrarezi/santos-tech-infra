@@ -413,14 +413,17 @@ remover programas") e manda **inteira**; quem sabe o que é esperado é o
 servidor, então mudar a expectativa é editar no dashboard, sem instalador novo.
 Cada envio **substitui** o inventário anterior: é uma foto do estado atual.
 
-- `POST /public/lab-devices/inventory {deviceId, deviceSecret, programs:[{name, version?, publisher?}]}`
+- `POST /public/lab-devices/inventory {deviceId, deviceSecret, programs:[{name, version?, publisher?, icon?}]}`
   → `{ok, count}` · rate limit 10/min · máx. 1000 programas
   (`INVENTORY_TOO_LARGE`). Exige o mesmo `deviceSecret` do heartbeat e, ao
   contrário dele, **não adota** dispositivo novo — `deviceId` que nunca bateu
   heartbeat leva 404. O app manda depois de um heartbeat bem-sucedido, só
   quando a lista muda ou passa 24h (0.1.2+).
+  `icon` é o PNG 48x48 do programa em base64 puro (o app extrai do executável
+  apontado em DisplayIcon), teto de 32 KB; valor que não for base64 válido é
+  descartado — o programa entra sem ícone e a coleta continua (0.1.4+).
 - `GET /hour-lab-devices/{id}/programs` (admin) →
-  `{collectedAt, expected:[{id, label, matchPattern, installed, matchedName?, matchedVersion?}], installed:[{name, version, publisher}]}`
+  `{collectedAt, expected:[{id, label, matchPattern, installed, matchedName?, matchedVersion?, matchedIcon?}], installed:[{name, version, publisher, icon?}]}`
   · `collectedAt` nulo = PC nunca reportou.
 - `GET|POST /hour-lab-expected-programs` e `PATCH|DELETE /hour-lab-expected-programs/{id}`
   (admin, rate limit 30/min no que escreve) — cadastro do que se espera achar.

@@ -19,8 +19,10 @@ import (
 // dia). Substitui o inventário inteiro: é uma foto do estado atual da máquina.
 func (s *Server) handleLabDeviceInventory(w http.ResponseWriter, r *http.Request) {
 	// Inventário é maior que o heartbeat: algumas centenas de entradas com
-	// nome, versão e fabricante cabem folgado em 256 KB.
-	r.Body = http.MaxBytesReader(w, r.Body, 256<<10)
+	// nome, versão, fabricante e o ÍCONE em base64 (~3-6 KB cada). 80 programas
+	// com ícone dão uns 400 KB; 4 MB cobre um PC cheio com folga e ainda fica
+	// abaixo do LOG_BODY_HARD_CAP, que evita bufferizar isso no log de acesso.
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 	var in struct {
 		DeviceID     string       `json:"deviceId"`
 		DeviceSecret string       `json:"deviceSecret"`

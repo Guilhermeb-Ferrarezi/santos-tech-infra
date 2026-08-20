@@ -206,6 +206,10 @@ pub struct InstalledProgram {
     name: String,
     version: String,
     publisher: String,
+    // PNG 32x32 em base64 (sem o prefixo data:), extraído do executável que o
+    // registro aponta em DisplayIcon. Vazio quando o programa não declara ícone
+    // ou o arquivo sumiu — o dashboard cai num placeholder.
+    icon: String,
 }
 
 // Tira caracteres de controle e espaços das pontas de um valor do registro.
@@ -216,6 +220,33 @@ pub struct InstalledProgram {
 #[cfg(windows)]
 fn clean_reg_string(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string()
+}
+
+// Tamanho do ícone coletado. O dashboard mostra a ~24px; Medium (48px) cobre
+// tela retina sem engordar o payload — são ~80 programas por PC, e Large (96px)
+// quadruplicaria os bytes de cada um à toa.
+
+// Extrai o ícone que o registro aponta em DisplayIcon, como PNG base64.
+//
+// O valor vem em formatos variados: "C:\app\x.exe", "C:\app\x.exe,0" (índice do
+// recurso), ou com aspas. Só o caminho interessa — a crate escolhe o ícone
+// padrão do arquivo. Falha (arquivo removido, .ico corrompido, DLL sem ícone)
+// devolve vazio: um programa sem ícone na tela é melhor que uma coleta perdida.
+#[cfg(windows)]
+fn extract_icon_base64(display_icon: &str) -> String {
+    let raw = display_icon.trim().trim_matches('"');
+    // ",0" / ",-15" no fim é índice do recurso, não parte do caminho. Cuidado
+    // com "C:" — a vírgula tem que estar depois da letra de unidade.
+    let path = match raw.rfind(',') {
+        Some(i) if i > 2 => &raw[..i],
+        _ => raw,
+    };
+    let path = path.trim().trim_matches('"');
+    if path.is_empty() || !std::path::Path::new(path).exists() {
+        return String::new();
+    }
+    windows_icons::get_icon_base64_by_path_with_size(path, windows_icons::IconSize::Medium)
+        .unwrap_or_default()
 }
 
 // Lê as três chaves Uninstall do registro: HKLM (64 bits), HKLM\WOW6432Node
@@ -272,6 +303,7 @@ fn list_installed_programs() -> Vec<InstalledProgram> {
             if entry.get_value::<String, _>("ParentKeyName").is_ok() {
                 continue;
             }
+            let display_icon: String = entry.get_value("DisplayIcon").unwrap_or_default();
             out.push(InstalledProgram {
                 name,
                 version: clean_reg_string(
@@ -280,6 +312,7 @@ fn list_installed_programs() -> Vec<InstalledProgram> {
                 publisher: clean_reg_string(
                     &entry.get_value::<String, _>("Publisher").unwrap_or_default(),
                 ),
+                icon: extract_icon_base64(&clean_reg_string(&display_icon)),
             });
         }
     }

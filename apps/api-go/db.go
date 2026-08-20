@@ -610,6 +610,13 @@ CREATE TABLE IF NOT EXISTS hour_lab_device_programs (
 );
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS inventory_collected_at TIMESTAMPTZ;
 
+-- icon: PNG 48x48 em base64 (sem prefixo data:), extraído pelo app do
+-- executável apontado em DisplayIcon no registro. Vazio = programa sem ícone
+-- declarado ou arquivo sumido; a tela cai num placeholder. Fica na linha do
+-- programa e não numa tabela própria porque o inventário é substituído inteiro
+-- a cada coleta — não há o que reaproveitar entre versões.
+ALTER TABLE hour_lab_device_programs ADD COLUMN IF NOT EXISTS icon TEXT NOT NULL DEFAULT '';
+
 -- Programas esperados nos PCs do laboratório (cadastro do admin em
 -- /admin/horas/programas). match_pattern casa por substring, sem diferenciar
 -- maiúscula, contra o nome que o Windows exibe: "unity" pega "Unity 6000.0.23f1"

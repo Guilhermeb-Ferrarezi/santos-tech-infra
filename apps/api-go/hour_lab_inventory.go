@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"strings"
 	"time"
@@ -24,6 +25,10 @@ type LabProgram struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`
 	Publisher string `json:"publisher"`
+	// PNG 48x48 em base64 puro (sem "data:image/png;base64,"), extraído pelo
+	// app do executável que o registro aponta. Vazio quando o programa não
+	// declara ícone — a tela cai num placeholder.
+	Icon string `json:"icon,omitempty"`
 }
 
 // ExpectedProgram é um programa que o admin espera encontrar nos PCs.
@@ -45,6 +50,7 @@ type ExpectedProgramStatus struct {
 	Installed      bool   `json:"installed"`
 	MatchedName    string `json:"matchedName,omitempty"`
 	MatchedVersion string `json:"matchedVersion,omitempty"`
+	MatchedIcon    string `json:"matchedIcon,omitempty"`
 }
 
 // DeviceInventory é a resposta da tela de programas de um PC.
@@ -60,6 +66,10 @@ type DeviceInventory struct {
 const (
 	maxInventoryPrograms   = 1000
 	maxInventoryFieldRunes = 200
+	// Um PNG 48x48 em base64 fica na casa dos 3-6 KB. 32 KB dá folga pra ícone
+	// mais detalhado e ainda barra alguém tentando usar a coluna como depósito:
+	// acima disso o ícone é descartado, não o programa.
+	maxInventoryIconBytes = 32 << 10
 )
 
 var errTooManyPrograms = appErr(http.StatusBadRequest, "INVENTORY_TOO_LARGE",
@@ -107,12 +117,13 @@ func (s *Server) replaceLabDeviceInventory(ctx context.Context, deviceUUID, devi
 		// ON CONFLICT: a chave é (device_id, name, version) e o registro do
 		// Windows repete a mesma entrada em HKLM e HKCU com frequência.
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO hour_lab_device_programs (device_id, name, version, publisher)
-			VALUES ($1::uuid, $2, $3, $4)
+			INSERT INTO hour_lab_device_programs (device_id, name, version, publisher, icon)
+			VALUES ($1::uuid, $2, $3, $4, $5)
 			ON CONFLICT (device_id, name, version) DO NOTHING`,
 			deviceID, name,
 			sanitizeInventoryField(p.Version),
-			sanitizeInventoryField(p.Publisher)); err != nil {
+			sanitizeInventoryField(p.Publisher),
+			sanitizeIcon(p.Icon)); err != nil {
 			return err
 		}
 	}
@@ -138,6 +149,21 @@ func sanitizeInventoryField(s string) string {
 		return r
 	}, s)
 	return truncRunes(strings.TrimSpace(s), maxInventoryFieldRunes)
+}
+
+// sanitizeIcon valida o base64 do ícone antes de gravar. O valor vai direto pra
+// um src="data:image/png;base64,..." no dashboard, então só passa base64 puro:
+// caractere fora do alfabeto (ou um "data:...," coloado junto) vira ícone
+// descartado, nunca conteúdo arbitrário injetado na página.
+func sanitizeIcon(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || len(s) > maxInventoryIconBytes {
+		return ""
+	}
+	if _, err := base64.StdEncoding.DecodeString(s); err != nil {
+		return ""
+	}
+	return s
 }
 
 func truncRunes(s string, max int) string {
@@ -172,7 +198,7 @@ func (s *Server) labDeviceInventory(ctx context.Context, deviceID string) (*Devi
 	// "Unity 6000"); a tela mostra uma, então escolhemos a primeira em ordem
 	// alfabética para o resultado não dançar entre requisições.
 	rows, err := s.db.Query(ctx, `
-		SELECT DISTINCT ON (e.id) e.id, e.label, e.match_pattern, p.name, p.version
+		SELECT DISTINCT ON (e.id) e.id, e.label, e.match_pattern, p.name, p.version, p.icon
 		FROM hour_lab_expected_programs e
 		LEFT JOIN hour_lab_device_programs p
 		  ON p.device_id = $1::uuid AND p.name ILIKE '%' || e.match_pattern || '%'
@@ -183,8 +209,8 @@ func (s *Server) labDeviceInventory(ctx context.Context, deviceID string) (*Devi
 	defer rows.Close()
 	for rows.Next() {
 		var st ExpectedProgramStatus
-		var name, version *string
-		if err := rows.Scan(&st.ID, &st.Label, &st.MatchPattern, &name, &version); err != nil {
+		var name, version, icon *string
+		if err := rows.Scan(&st.ID, &st.Label, &st.MatchPattern, &name, &version, &icon); err != nil {
 			return nil, err
 		}
 		if name != nil {
@@ -192,6 +218,9 @@ func (s *Server) labDeviceInventory(ctx context.Context, deviceID string) (*Devi
 			st.MatchedName = *name
 			if version != nil {
 				st.MatchedVersion = *version
+			}
+			if icon != nil {
+				st.MatchedIcon = *icon
 			}
 		}
 		out.Expected = append(out.Expected, st)
@@ -204,7 +233,7 @@ func (s *Server) labDeviceInventory(ctx context.Context, deviceID string) (*Devi
 	sortExpectedByLabel(out.Expected)
 
 	prows, err := s.db.Query(ctx, `
-		SELECT name, version, publisher FROM hour_lab_device_programs
+		SELECT name, version, publisher, icon FROM hour_lab_device_programs
 		WHERE device_id = $1::uuid ORDER BY name`, deviceID)
 	if err != nil {
 		return nil, err
@@ -212,7 +241,7 @@ func (s *Server) labDeviceInventory(ctx context.Context, deviceID string) (*Devi
 	defer prows.Close()
 	for prows.Next() {
 		var p LabProgram
-		if err := prows.Scan(&p.Name, &p.Version, &p.Publisher); err != nil {
+		if err := prows.Scan(&p.Name, &p.Version, &p.Publisher, &p.Icon); err != nil {
 			return nil, err
 		}
 		out.Installed = append(out.Installed, p)

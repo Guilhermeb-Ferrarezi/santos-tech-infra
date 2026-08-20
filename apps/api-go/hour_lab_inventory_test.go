@@ -112,6 +112,27 @@ func TestSanitizeInventoryFieldTiraNulEControles(t *testing.T) {
 	}
 }
 
+// O ícone vai direto num src="data:image/png;base64,..." — o que não for
+// base64 puro precisa virar vazio, não conteúdo solto dentro do atributo.
+func TestSanitizeIconSoAceitaBase64Puro(t *testing.T) {
+	valid := "iVBORw0KGgo="
+	if got := sanitizeIcon(valid); got != valid {
+		t.Fatalf("base64 válido deveria passar, veio %q", got)
+	}
+	for _, bad := range []string{
+		"data:image/png;base64,iVBORw0KGgo=", // prefixo colado
+		`" onerror="alert(1)`,                // tentativa de sair do atributo
+		"não é base64!",
+	} {
+		if got := sanitizeIcon(bad); got != "" {
+			t.Errorf("%q deveria ser descartado, veio %q", bad, got)
+		}
+	}
+	if got := sanitizeIcon(strings.Repeat("A", maxInventoryIconBytes+1)); got != "" {
+		t.Error("ícone acima do teto deveria ser descartado")
+	}
+}
+
 func TestTruncRunesNaoQuebraAcento(t *testing.T) {
 	if got := truncRunes("ãããã", 2); got != "ãã" {
 		t.Fatalf("esperava 2 runas, veio %q", got)

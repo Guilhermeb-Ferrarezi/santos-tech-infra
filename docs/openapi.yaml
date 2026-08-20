@@ -3932,6 +3932,14 @@ paths:
                       name: { type: string, maxLength: 200 }
                       version: { type: string, maxLength: 200 }
                       publisher: { type: string, maxLength: 200 }
+                      icon:
+                        type: string
+                        maxLength: 32768
+                        description: >
+                          PNG 48x48 em base64 puro (sem o prefixo data:), extraído
+                          pelo app do executável que o registro aponta em DisplayIcon.
+                          Valor que não seja base64 válido é descartado — o programa
+                          entra sem ícone, a coleta não é recusada.
                     required: [name]
               required: [deviceId]
       responses:
@@ -3987,6 +3995,7 @@ paths:
                         installed: { type: boolean }
                         matchedName: { type: string }
                         matchedVersion: { type: string }
+                        matchedIcon: { type: string, description: "PNG base64 do programa que casou (ver icon)." }
                   installed:
                     type: array
                     items:
@@ -3995,6 +4004,7 @@ paths:
                         name: { type: string }
                         version: { type: string }
                         publisher: { type: string }
+                        icon: { type: string, description: "PNG 48x48 base64 puro; ausente quando o programa não declara ícone." }
         "404":
           description: Dispositivo não encontrado.
         "401":
