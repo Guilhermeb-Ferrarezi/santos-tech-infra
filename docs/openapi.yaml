@@ -4097,6 +4097,116 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /hour-lab-devices/{id}/screenshot:
+    post:
+      tags: [Horas]
+      summary: Pede uma captura de tela do PC
+      description: |
+        Admin-only. Rate limit 30/min. Só marca o pedido: o comando é entregue
+        no próximo heartbeat (até ~30s), o PC tira a foto, **mostra um aviso na
+        própria tela** e envia a imagem. Não há captura periódica nem
+        silenciosa, e quem pediu fica registrado junto da captura — a tela de um
+        PC de uso compartilhado pode conter dado de quem está sentado nele.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Pedido registrado; a imagem chega depois do próximo heartbeat.
+        "404":
+          description: Dispositivo não encontrado.
+        "503":
+          description: R2 não configurado no servidor (SCREENSHOT_STORAGE_UNSET).
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/{id}/screenshots:
+    get:
+      tags: [Horas]
+      summary: Capturas de tela do PC, mais recente primeiro
+      description: |
+        Admin-only. `url` é assinada e vale 10 minutos. Só as 20 capturas mais
+        recentes por PC são mantidas; as anteriores são apagadas na captura
+        seguinte.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Histórico de capturas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  screenshots:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        width: { type: integer }
+                        height: { type: integer }
+                        bytes: { type: integer }
+                        requestedBy: { type: string, nullable: true, description: "Nome de quem pediu." }
+                        requestedAt: { type: string, format: date-time, nullable: true }
+                        capturedAt: { type: string, format: date-time }
+                        url: { type: string, description: "URL assinada (10min)." }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /public/lab-devices/screenshot:
+    post:
+      tags: [Horas]
+      summary: Envia a captura de tela (sem login, autenticado pelo segredo do dispositivo)
+      description: |
+        Só é aceita quando existe pedido recente do admin — 5 minutos desde a
+        entrega do comando no heartbeat. A rota é pública (o PC não faz login),
+        então sem essa janela um dispositivo poderia despejar imagens de tela
+        quando quisesse. Rate limit 10/min.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceId: { type: string, format: uuid }
+                deviceSecret: { type: string }
+                jpeg:
+                  type: string
+                  description: >
+                    JPEG em base64 puro, até 6 MB decodificados. Precisa começar com a
+                    assinatura JPEG (FF D8 FF) — a imagem é servida de volta pro navegador.
+                width: { type: integer }
+                height: { type: integer }
+              required: [deviceId, jpeg]
+      responses:
+        "200":
+          description: Captura registrada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  id: { type: string, format: uuid }
+        "400":
+          description: deviceId inválido ou imagem que não é JPEG.
+        "401":
+          description: Segredo do dispositivo ausente ou inválido (LAB_DEVICE_UNAUTHORIZED).
+        "409":
+          description: Nenhuma captura pendente para este dispositivo (SCREENSHOT_NOT_REQUESTED).
+        "413":
+          description: Imagem acima de 6 MB (SCREENSHOT_TOO_LARGE).
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /hour-lab-expected-programs:
     get:
       tags: [Horas]

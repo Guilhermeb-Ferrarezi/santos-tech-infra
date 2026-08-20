@@ -43,6 +43,9 @@ type LabDeviceHeartbeatResult struct {
 	MessageID       *string
 	MessageText     *string
 	PairToken       *string
+	// ScreenshotRequested: o admin pediu uma captura de tela; o app tira, MOSTRA
+	// o aviso na tela do PC e manda em POST /public/lab-devices/screenshot.
+	ScreenshotRequested bool
 	// DeviceSecret só vem preenchido no ÚNICO heartbeat em que o segredo é
 	// criado (dispositivo novo, ou legado ainda sem segredo). O app tem que
 	// gravar em disco: sem ele os heartbeats seguintes levam 401.
@@ -92,15 +95,19 @@ const labDeviceHeartbeatUpsertSQL = `
 	ON CONFLICT (device_uuid) DO UPDATE SET
 		last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid
 	RETURNING name, unpair_requested, message_id::text, message_text,
-		CASE WHEN pending_pair_token_expires_at > now() THEN pending_pair_token ELSE NULL END AS pending_pair_token`
+		CASE WHEN pending_pair_token_expires_at > now() THEN pending_pair_token ELSE NULL END AS pending_pair_token,
+		screenshot_requested_at IS NOT NULL AS screenshot_requested`
 
 // labDeviceHeartbeatClearSQL roda como comando SEPARADO, na mesma transação do
 // upsert — é assim que a limpeza de fato acontece. Como o upsert já segurou o
 // lock da linha, um pareamento concorrente (pairLabDeviceViaQR) fica bloqueado
 // até o commit e só então grava o token novo: nenhum token se perde.
 const labDeviceHeartbeatClearSQL = `
-	UPDATE hour_lab_devices SET unpair_requested = false, pending_pair_token = NULL, pending_pair_token_expires_at = NULL
-	WHERE device_uuid = $1 AND (unpair_requested = true OR pending_pair_token IS NOT NULL)`
+	UPDATE hour_lab_devices SET unpair_requested = false, pending_pair_token = NULL, pending_pair_token_expires_at = NULL,
+		screenshot_delivered_at = CASE WHEN screenshot_requested_at IS NOT NULL THEN now() ELSE screenshot_delivered_at END,
+		screenshot_requested_at = NULL
+	WHERE device_uuid = $1
+	  AND (unpair_requested = true OR pending_pair_token IS NOT NULL OR screenshot_requested_at IS NOT NULL)`
 
 // labDeviceSecretLookupSQL trava a linha do dispositivo (FOR UPDATE) e lê o hash
 // do segredo — a trava é o que serializa a adoção contra um heartbeat
@@ -191,10 +198,11 @@ func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, device
 
 	var res LabDeviceHeartbeatResult
 	if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, deviceUUID, ip, appVersion, sessionID).
-		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken); err != nil {
+		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken,
+			&res.ScreenshotRequested); err != nil {
 		return nil, err
 	}
-	if res.UnpairRequested || res.PairToken != nil {
+	if res.UnpairRequested || res.PairToken != nil || res.ScreenshotRequested {
 		if _, err := tx.Exec(ctx, labDeviceHeartbeatClearSQL, deviceUUID); err != nil {
 			return nil, err
 		}

@@ -394,6 +394,10 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /hour-lab-devices/{id}/message", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceMessage)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/reset-secret", s.rateLimit(30, min, s.adminGuard(s.handleResetLabDeviceSecret)))
 	mux.HandleFunc("GET /hour-lab-devices/{id}/programs", s.adminGuard(s.handleGetLabDevicePrograms))
+	// Captura de tela sob demanda: pedir é admin, a imagem chega pelo próprio
+	// PC (rota pública abaixo) e o histórico fica com quem pediu registrado.
+	mux.HandleFunc("POST /hour-lab-devices/{id}/screenshot", s.rateLimit(30, min, s.adminGuard(s.handleRequestLabDeviceScreenshot)))
+	mux.HandleFunc("GET /hour-lab-devices/{id}/screenshots", s.adminGuard(s.handleListLabDeviceScreenshots))
 	// Imagem do ícone por hash de conteúdo — admin-only como o resto do
 	// domínio; a resposta é cacheável pra sempre (a URL é o próprio conteúdo).
 	mux.HandleFunc("GET /program-icons/{hash}", s.adminGuard(s.handleLabProgramIcon))
@@ -413,6 +417,9 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	// Segundo passo da coleta (só os ícones que o servidor ainda não tem) —
 	// mesmo orçamento do inventário, já que sempre vem logo depois dele.
 	mux.HandleFunc("POST /public/lab-devices/icons", s.rateLimit(10, min, s.handleLabDeviceIcons))
+	// Imagem da captura — só entra com pedido recente do admin (a rota é
+	// pública, autenticada pelo segredo do dispositivo).
+	mux.HandleFunc("POST /public/lab-devices/screenshot", s.rateLimit(10, min, s.handleLabDeviceScreenshot))
 }
 
 // registerDownloadsRoutes: catálogo de downloads do Santos Hub. Cadastro/edição/

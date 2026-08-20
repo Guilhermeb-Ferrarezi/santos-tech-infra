@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { load, type Store } from "@tauri-apps/plugin-store";
 import { getVersion } from "@tauri-apps/api/app";
 import { syncInventory } from "./inventory";
+import { captureAndSend } from "./screenshot";
 
 const STORE_FILE = "config.json";
 const DEVICE_ID_KEY = "deviceId";
@@ -22,6 +23,8 @@ interface HeartbeatResponse {
   unpairRequested: boolean;
   message?: { id: string; text: string };
   pairToken?: string;
+  /** O admin pediu uma captura de tela (entregue uma única vez). */
+  screenshotRequested?: boolean;
   // Credencial deste PC, emitida pelo servidor UMA ÚNICA VEZ (no primeiro
   // heartbeat de um device_uuid ainda sem segredo). Guardamos em disco e
   // reenviamos em todo heartbeat seguinte — sem ela o servidor responde 401 e
@@ -90,6 +93,12 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
       // sai quando a lista muda ou passa um dia, e nunca antes da adoção — a
       // rota exige o mesmo segredo. Não é await pra não segurar o heartbeat.
       void syncInventory(store, API_ORIGIN, deviceId, data.deviceSecret ?? deviceSecret);
+
+      // Captura de tela pedida pelo admin: tira a foto, avisa na tela do PC e
+      // manda. Sob demanda e uma vez por pedido — nunca em laço.
+      if (data.screenshotRequested) {
+        void captureAndSend(store, API_ORIGIN, deviceId, data.deviceSecret ?? deviceSecret);
+      }
 
       setDeviceName(data.name);
       if (data.unpairRequested) onUnpairRequested();

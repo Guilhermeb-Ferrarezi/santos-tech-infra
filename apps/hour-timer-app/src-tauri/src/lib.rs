@@ -255,6 +255,60 @@ fn extract_icon_base64(display_icon: &str) -> String {
         .unwrap_or_default()
 }
 
+// Captura da tela principal, em JPEG base64, para o admin ver o que está
+// acontecendo no PC (pedida no heartbeat, ver useDeviceHeartbeat.ts).
+//
+// Só roda quando o servidor pede — nunca em laço. Quem chama também mostra o
+// aviso na tela do PC: captura silenciosa numa máquina de uso compartilhado é
+// exatamente o que não queremos.
+#[derive(serde::Serialize)]
+pub struct ScreenCapture {
+    jpeg: String,
+    width: u32,
+    height: u32,
+}
+
+// Qualidade do JPEG. 70 mantém texto de tela legível (é pra isso que serve) e
+// deixa uma tela 1080p em ~200-400 KB, em vez dos ~3 MB de um PNG.
+#[cfg(windows)]
+const SCREENSHOT_JPEG_QUALITY: u8 = 70;
+
+#[cfg(windows)]
+#[tauri::command]
+fn capture_screen() -> Result<ScreenCapture, String> {
+    use base64::Engine;
+    use image::codecs::jpeg::JpegEncoder;
+    use xcap::Monitor;
+
+    let monitors = Monitor::all().map_err(|e| format!("monitores: {e}"))?;
+    // Monitor principal; num PC de laboratório com dois monitores, é onde a
+    // pessoa está trabalhando.
+    let monitor = monitors
+        .into_iter()
+        .find(|m| m.is_primary().unwrap_or(false))
+        .ok_or_else(|| "nenhum monitor principal".to_string())?;
+
+    let image = monitor.capture_image().map_err(|e| format!("captura: {e}"))?;
+    let (width, height) = (image.width(), image.height());
+
+    let mut jpeg = Vec::new();
+    JpegEncoder::new_with_quality(&mut jpeg, SCREENSHOT_JPEG_QUALITY)
+        .encode(&image, width, height, image::ExtendedColorType::Rgba8)
+        .map_err(|e| format!("codificar jpeg: {e}"))?;
+
+    Ok(ScreenCapture {
+        jpeg: base64::engine::general_purpose::STANDARD.encode(&jpeg),
+        width,
+        height,
+    })
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn capture_screen() -> Result<ScreenCapture, String> {
+    Err("captura de tela só no Windows".to_string())
+}
+
 // sha256 dos BYTES do PNG (não do base64) — o servidor recalcula igual, a
 // partir do que recebe, e recusa quando não bate. Ícone vazio não tem hash.
 #[cfg(windows)]
@@ -486,7 +540,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             set_overlay_position,
             update_tray_status,
-            list_installed_programs
+            list_installed_programs,
+            capture_screen
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

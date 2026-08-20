@@ -444,6 +444,28 @@ Cada envio **substitui** o inventário anterior: é uma foto do estado atual.
   Curinga do LIKE (`%`, `_`, `\`) é recusado com 400 — um `%` solto casaria com
   qualquer coisa e marcaria todo PC como em dia.
 
+#### Captura de tela sob demanda (0.1.7+)
+
+O admin pede pelo dashboard, o comando sai no PRÓXIMO heartbeat (até ~30s), o
+PC tira a foto da tela principal, **mostra um aviso na própria tela** e manda a
+imagem. Não há captura periódica nem silenciosa, e quem pediu fica registrado
+junto da captura: a tela de um PC de uso compartilhado pode conter dado de quem
+está sentado nele.
+
+- `POST /hour-lab-devices/{id}/screenshot` (admin) → `{ok}` · rate limit 30/min
+  · só marca o pedido. 503 `SCREENSHOT_STORAGE_UNSET` quando o R2 não está
+  configurado no servidor.
+- `GET /hour-lab-devices/{id}/screenshots` (admin) →
+  `{screenshots:[{id, width, height, bytes, requestedBy, requestedAt, capturedAt, url}]}`
+  · `url` é assinada e vale 10min. Só as 20 últimas por PC ficam guardadas — as
+  anteriores somem na captura seguinte.
+- `POST /public/lab-devices/screenshot {deviceId, deviceSecret, jpeg, width, height}`
+  → `{ok, id}` · rate limit 10/min. `jpeg` é base64 puro, até 6 MB
+  decodificados, e precisa começar com a assinatura JPEG (a imagem é servida de
+  volta pro navegador depois). Só entra com pedido recente — 5min desde a
+  entrega no heartbeat: a rota é pública, então sem isso um PC mandaria imagem
+  de tela quando quisesse (409 `SCREENSHOT_NOT_REQUESTED`).
+
 ## Catálogo de downloads (Santos Hub) — `api.santos-tech.com/auth/admin/downloads` e `/public/downloads`
 
 App desktop Tauri Windows (`apps/santos-hub`) instalado nos PCs da empresa,

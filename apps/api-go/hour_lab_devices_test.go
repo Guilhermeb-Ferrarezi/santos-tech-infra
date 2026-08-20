@@ -17,13 +17,14 @@ import (
 // exatamente-uma-vez sem um Postgres real — o harness deste pacote roda com
 // s.db == nil (ver nota em handlers_social_test.go).
 type fakeLabDeviceDB struct {
-	exists           bool
-	name             *string
-	unpairRequested  bool
-	messageID        *string
-	messageText      *string
-	pendingPairToken *string
-	secretHash       *string
+	exists              bool
+	name                *string
+	unpairRequested     bool
+	messageID           *string
+	messageText         *string
+	pendingPairToken    *string
+	screenshotRequested bool
+	secretHash          *string
 
 	upserts int
 	clears  int
@@ -58,6 +59,7 @@ func (r fakeLabDeviceRow) Scan(dest ...any) error {
 	*(dest[2].(**string)) = r.db.messageID
 	*(dest[3].(**string)) = r.db.messageText
 	*(dest[4].(**string)) = r.db.pendingPairToken
+	*(dest[5].(*bool)) = r.db.screenshotRequested
 	return nil
 }
 
@@ -96,9 +98,10 @@ func (f *fakeLabDeviceDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.
 		return pgconn.CommandTag{}, nil
 	}
 	f.clears++
-	if f.unpairRequested || f.pendingPairToken != nil {
+	if f.unpairRequested || f.pendingPairToken != nil || f.screenshotRequested {
 		f.unpairRequested = false
 		f.pendingPairToken = nil
+		f.screenshotRequested = false
 	}
 	return pgconn.NewCommandTag("UPDATE 1"), nil
 }
@@ -265,5 +268,36 @@ func TestHeartbeatAdocaoNaoEntregaPairToken(t *testing.T) {
 	}
 	if fake.pendingPairToken != nil {
 		t.Error("o token pendente deveria ter sido zerado na adoção (admin repareia)")
+	}
+}
+
+// A captura de tela é sob demanda: o comando sai UMA vez e o PC não fica
+// tirando foto sozinho no heartbeat seguinte. Mesma garantia do unpair — e aqui
+// ela importa mais, porque a tela de um PC compartilhado pode ter dado de quem
+// está sentado nele.
+func TestHeartbeatEntregaCapturaDeTelaUmaVezSo(t *testing.T) {
+	const segredo = "segredo-do-pc"
+	fake := &fakeLabDeviceDB{
+		exists:              true,
+		name:                ptrTo("PC-01"),
+		screenshotRequested: true,
+		secretHash:          ptrTo(sha256Hex(segredo)),
+	}
+	ctx := context.Background()
+
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil)
+	if err != nil {
+		t.Fatalf("primeiro heartbeat: %v", err)
+	}
+	if !first.ScreenshotRequested {
+		t.Fatal("primeiro heartbeat deveria pedir a captura")
+	}
+
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil)
+	if err != nil {
+		t.Fatalf("segundo heartbeat: %v", err)
+	}
+	if second.ScreenshotRequested {
+		t.Error("segundo heartbeat NÃO pode pedir captura de novo")
 	}
 }

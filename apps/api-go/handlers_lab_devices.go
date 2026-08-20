@@ -70,6 +70,11 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 	if res.PairToken != nil {
 		resp["pairToken"] = *res.PairToken
 	}
+	if res.ScreenshotRequested {
+		// O app tira a foto da tela, MOSTRA o aviso na tela do PC e manda em
+		// POST /public/lab-devices/screenshot.
+		resp["screenshotRequested"] = true
+	}
 	if res.DeviceSecret != nil {
 		// Única vez que o segredo trafega — o app PRECISA persistir agora.
 		resp["deviceSecret"] = *res.DeviceSecret

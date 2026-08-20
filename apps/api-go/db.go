@@ -621,6 +621,34 @@ CREATE TABLE IF NOT EXISTS hour_lab_program_icons (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE hour_lab_device_programs ADD COLUMN IF NOT EXISTS icon_hash TEXT;
+
+-- Captura de tela sob demanda. screenshot_requested_at é o comando pendente,
+-- entregue no próximo heartbeat e zerado na mesma transação (mesma regra do
+-- unpair_requested) — o PC não fica capturando sozinho.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS screenshot_requested_at TIMESTAMPTZ;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS screenshot_requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+-- Quando o comando foi ENTREGUE ao PC (o heartbeat zera o requested_at ao
+-- entregar). É essa marca que define a janela em que a imagem é aceita: sem
+-- ela, o upload chegaria sempre com o pedido já apagado.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS screenshot_delivered_at TIMESTAMPTZ;
+
+-- Histórico das capturas. requested_by fica registrado de propósito: a tela de
+-- um PC do laboratório pode ter dado de quem está sentado nele, então tem que
+-- existir trilha de quem pediu e quando. A imagem mora no R2 (object_key), não
+-- aqui — são centenas de KB cada.
+CREATE TABLE IF NOT EXISTS hour_lab_device_screenshots (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  device_id    UUID NOT NULL REFERENCES hour_lab_devices(id) ON DELETE CASCADE,
+  object_key   TEXT NOT NULL,
+  width        INTEGER NOT NULL DEFAULT 0,
+  height       INTEGER NOT NULL DEFAULT 0,
+  bytes        INTEGER NOT NULL DEFAULT 0,
+  requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  requested_at TIMESTAMPTZ,
+  captured_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hour_lab_screenshots_device
+  ON hour_lab_device_screenshots(device_id, captured_at DESC);
 -- Coluna da 1a versão (base64 na própria linha do programa), substituída pelo
 -- icon_hash acima. Some junto com a próxima coleta de cada PC.
 ALTER TABLE hour_lab_device_programs DROP COLUMN IF EXISTS icon;
