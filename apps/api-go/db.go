@@ -548,6 +548,16 @@ CREATE TABLE IF NOT EXISTS hour_session_events (
 );
 CREATE INDEX IF NOT EXISTS idx_hour_session_events_session ON hour_session_events(session_id, created_at);
 
+-- Ajuste manual de tempo: o admin corrige a duração de uma sessão (esqueceu de
+-- pausar, o PC caiu, cliente saiu antes). Entra como EVENTO, não como acerto no
+-- total — o tempo continua derivado do histórico, e o ajuste fica visível com
+-- autor, horário e motivo em vez de o número simplesmente mudar sozinho.
+ALTER TABLE hour_session_events ADD COLUMN IF NOT EXISTS delta_seconds INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE hour_session_events ADD COLUMN IF NOT EXISTS note TEXT;
+ALTER TABLE hour_session_events DROP CONSTRAINT IF EXISTS hour_session_events_event_type_check;
+ALTER TABLE hour_session_events ADD CONSTRAINT hour_session_events_event_type_check
+  CHECK (event_type IN ('start', 'pause', 'resume', 'end', 'adjust'));
+
 -- PCs do laboratório: cada instalação do app desktop (hour-timer-app) gera um
 -- device_uuid estável e manda heartbeat periódico. Nome é atribuído pelo admin
 -- (nunca pelo próprio PC) para não bagunçar com quem estiver sentado nele.

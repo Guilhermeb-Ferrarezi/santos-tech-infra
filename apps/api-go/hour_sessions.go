@@ -40,6 +40,19 @@ type HourSession struct {
 type hourSessionEvent struct {
 	EventType string
 	CreatedAt time.Time
+	// DeltaSeconds só é usado por 'adjust' (positivo soma, negativo desconta).
+	DeltaSeconds int64
+}
+
+// HourSessionEvent é uma linha do histórico da sessão, como o admin vê:
+// start/pause/resume/end e os ajustes manuais, com quem fez cada um.
+type HourSessionEvent struct {
+	ID           string    `json:"id"`
+	EventType    string    `json:"eventType"`
+	DeltaSeconds int64     `json:"deltaSeconds"`
+	Note         *string   `json:"note"`
+	ActorName    *string   `json:"actorName"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 var errHourClientNotFound = appErr(http.StatusNotFound, "HOUR_CLIENT_NOT_FOUND", "Cliente não encontrado")
@@ -345,7 +358,7 @@ func (s *Server) getHourSessionByTokenHash(ctx context.Context, tokenHash string
 // de eventos — nunca de um contador guardado.
 func (s *Server) hourSessionElapsedSeconds(ctx context.Context, sessionID string, now time.Time) (int64, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT event_type, created_at FROM hour_session_events
+		SELECT event_type, created_at, delta_seconds FROM hour_session_events
 		WHERE session_id = $1::uuid ORDER BY created_at`, sessionID)
 	if err != nil {
 		return 0, err
@@ -354,7 +367,7 @@ func (s *Server) hourSessionElapsedSeconds(ctx context.Context, sessionID string
 	events := []hourSessionEvent{}
 	for rows.Next() {
 		var e hourSessionEvent
-		if err := rows.Scan(&e.EventType, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.EventType, &e.CreatedAt, &e.DeltaSeconds); err != nil {
 			return 0, err
 		}
 		events = append(events, e)
@@ -379,15 +392,78 @@ func computeElapsedSeconds(events []hourSessionEvent, now time.Time) int64 {
 				total += e.CreatedAt.Sub(since)
 				running = false
 			}
+		case "adjust":
+			// Correção manual do admin. Entra na mesma conta dos intervalos
+			// para que o total continue sendo derivado do histórico inteiro —
+			// nunca um número guardado à parte, que dessincroniza.
+			total += time.Duration(e.DeltaSeconds) * time.Second
 		}
 	}
 	if running {
 		total += now.Sub(since)
 	}
 	if total < 0 {
+		// Ajuste negativo maior que o tempo corrido: o cliente não fica
+		// devendo tempo pra sessão, o piso é zero.
 		return 0
 	}
 	return int64(total.Seconds())
+}
+
+// maxAdjustSeconds limita um ajuste isolado a 24h pra cada lado. Não é
+// desconfiança do admin: é rede de proteção contra dígito a mais numa correção
+// digitada na mão, que sairia do saldo do cliente no encerramento.
+const maxAdjustSeconds = 24 * 60 * 60
+
+var errAdjustTooLarge = appErr(http.StatusBadRequest, "ADJUST_TOO_LARGE",
+	"Ajuste deve estar entre -24h e +24h")
+
+// adjustHourSession registra uma correção manual de tempo como EVENTO.
+//
+// Não mexe num total acumulado (não existe): o tempo continua derivado do
+// histórico, e o ajuste fica lá com autor, horário e motivo. Assim "por que
+// essa sessão tem 3h se o cliente ficou 2h?" tem resposta na própria tela, em
+// vez de um número que mudou sem explicação.
+func (s *Server) adjustHourSession(ctx context.Context, id string, actorID int64, deltaSeconds int64, note *string) (*HourSession, error) {
+	if deltaSeconds == 0 || deltaSeconds > maxAdjustSeconds || deltaSeconds < -maxAdjustSeconds {
+		return nil, errAdjustTooLarge
+	}
+	tag, err := s.db.Exec(ctx, `
+		INSERT INTO hour_session_events (session_id, event_type, actor_user_id, delta_seconds, note)
+		SELECT $1::uuid, 'adjust', $2, $3, $4
+		WHERE EXISTS (SELECT 1 FROM hour_sessions WHERE id = $1::uuid)`,
+		id, actorID, deltaSeconds, note)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, errHourSessionNotFound
+	}
+	return s.getHourSession(ctx, id)
+}
+
+// listHourSessionEvents devolve o histórico da sessão em ordem cronológica —
+// é o que responde "quem pausou, quando, e por quanto tempo ficou parada".
+func (s *Server) listHourSessionEvents(ctx context.Context, sessionID string) ([]HourSessionEvent, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT e.id::text, e.event_type, e.delta_seconds, e.note, u.name, e.created_at
+		FROM hour_session_events e
+		LEFT JOIN users u ON u.id = e.actor_user_id
+		WHERE e.session_id = $1::uuid
+		ORDER BY e.created_at`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HourSessionEvent{}
+	for rows.Next() {
+		var e HourSessionEvent
+		if err := rows.Scan(&e.ID, &e.EventType, &e.DeltaSeconds, &e.Note, &e.ActorName, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // transitionHourSession aplica pause/resume: valida a troca de estado, grava

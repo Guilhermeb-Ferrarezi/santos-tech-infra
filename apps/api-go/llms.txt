@@ -356,6 +356,17 @@ Admin (role admin, sem cargo personalizado):
 - `POST /hour-sessions/{id}/end` — debita o tempo decorrido do saldo do cliente → `ended`
 - `POST /hour-sessions/{id}/deny-pause` — recusa o pedido do cliente sem pausar → 204
 - `POST /hour-sessions/{id}/link` — gera/reemite o link público (não depende de cache local; token anterior para de funcionar) → `{token, publicUrl}`
+- `GET /hour-sessions/{id}/events` →
+  `{events:[{id, eventType, deltaSeconds, note, actorName, createdAt}]}` em ordem
+  cronológica. `eventType`: start | pause | resume | end | adjust. É o histórico
+  que responde "quem pausou, quando, e quanto tempo ficou parada".
+- `POST /hour-sessions/{id}/adjust {deltaSeconds, note?}` → `{session}` · rate
+  limit 30/min · correção manual de tempo (esqueceu de pausar, PC caiu, cliente
+  saiu antes). Positivo soma, negativo desconta, entre -24h e +24h
+  (`ADJUST_TOO_LARGE`; zero também é recusado). **Entra como evento**, não como
+  acerto num total: o tempo continua derivado do histórico e o ajuste aparece
+  na própria lista com autor e motivo. Desconto maior que o tempo corrido não
+  gera negativo — o piso é zero.
 - Transição fora de ordem (ex.: pause numa sessão já `ended`) → 409 `HOUR_SESSION_BAD_STATE`
 
 Público (sem auth — token da URL é a credencial, não cookie/sessão; consumido

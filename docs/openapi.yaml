@@ -3564,6 +3564,90 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /hour-sessions/{id}/events:
+    get:
+      tags: [Horas]
+      summary: Histórico da sessão (pausas, retomadas e ajustes)
+      description: |
+        Admin-only. Ordem cronológica. start/pause/resume/end sempre foram
+        gravados com autor e horário; `adjust` são as correções manuais de
+        tempo, com `deltaSeconds` e o motivo.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Eventos da sessão.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        eventType: { type: string, enum: [start, pause, resume, end, adjust] }
+                        deltaSeconds: { type: integer, description: "Só em adjust: positivo soma, negativo desconta." }
+                        note: { type: string, nullable: true }
+                        actorName: { type: string, nullable: true }
+                        createdAt: { type: string, format: date-time }
+        "404":
+          description: Sessão não encontrada.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-sessions/{id}/adjust:
+    post:
+      tags: [Horas]
+      summary: Corrige manualmente o tempo da sessão
+      description: |
+        Admin-only. Rate limit 30/min. Para quando o tempo não bate com o real
+        (esqueceu de pausar, o PC caiu, o cliente saiu antes).
+
+        Entra como **evento** no histórico, não como acerto num total: o tempo
+        da sessão continua derivado dos eventos, e a correção fica visível com
+        autor, horário e motivo. Um desconto maior que o tempo corrido não gera
+        tempo negativo — o piso é zero.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deltaSeconds:
+                  type: integer
+                  minimum: -86400
+                  maximum: 86400
+                  description: "Positivo soma, negativo desconta. Zero é recusado."
+                note: { type: string, maxLength: 200 }
+              required: [deltaSeconds]
+      responses:
+        "200":
+          description: Sessão com o tempo já recalculado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: "#/components/schemas/HourSession" }
+        "400":
+          description: Ajuste zero ou fora de ±24h (ADJUST_TOO_LARGE).
+        "404":
+          description: Sessão não encontrada.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /hour-sessions/{id}/link:
     post:
       tags: [Horas]
