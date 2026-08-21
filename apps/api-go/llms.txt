@@ -671,7 +671,13 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 - `GET /social/posts` — `{posts:[SocialPost]}`
 - `POST /social/posts {SocialPostInput}` → 201 `{post}` · campo inválido → 400
 - `GET /social/posts/{id}` — `{post}` · inexistente → 404
-- `PUT /social/posts/{id} {SocialPostInput}` → `{post}`
+- `PUT /social/posts/{id} {SocialPostInput parcial}` → `{post}` — atualização **PARCIAL**:
+  manda só os campos que mudaram, não o objeto inteiro. Campo ausente do JSON mantém o
+  valor atual do post; campo presente — mesmo `""`/`[]`/`null` — sobrescreve (é uma
+  alteração intencional). Continua aceitando o corpo completo (contrato antigo) sem
+  diferença de comportamento, já que todo campo presente sobrescreve com o mesmo valor
+  de antes. Campos fora do schema de `SocialPostInput` (`driveFileId`, `publishConfirmations`,
+  `createdAt` etc.) são simplesmente ignorados — não têm efeito no update.
 - `DELETE /social/posts/{id}` → 204
 - `PATCH /social/posts/{id}/status {status}` — registra histórico; `revisao` alerta o CEO
 - `GET /social/posts/{id}/history` — `{history:[{oldStatus,newStatus,changedBy,changedAt}]}`

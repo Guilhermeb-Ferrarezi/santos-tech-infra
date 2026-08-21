@@ -68,3 +68,92 @@ func TestValidateSocialPostInput_ProgramaVazioOK(t *testing.T) {
 		t.Fatalf("programa/receita vazios devem ser válidos, veio %v", err)
 	}
 }
+
+// --- PUT /social/posts/{id} parcial (mergeSocialPostInput) ---
+//
+// O PUT deixou de exigir o objeto inteiro: só os campos presentes no JSON
+// são aplicados, os ausentes mantêm o valor atual do post (ver
+// handleUpdateSocialPost em handlers_social.go). Estes testes cobrem só a
+// lógica pura de merge (sem tocar s.db, que é nil no harness de testes).
+
+func baseCurrentPost() *SocialPost {
+	return &SocialPost{
+		Title:              "Original",
+		Caption:            "legenda original",
+		Platform:           "instagram",
+		Pilar:              "educacional",
+		Status:             "ideia",
+		Formato:            "carrossel",
+		Objetivo:           "alcance",
+		Programa:           "create",
+		Receita:            "versus",
+		MediaURL:           "https://example.com/media.jpg",
+		Hashtags:           []string{"#a", "#b"},
+		PlataformasDestino: []string{"instagram", "facebook"},
+		CopyArte:           json.RawMessage(`[{"slide":1,"headline":"oi"}]`),
+	}
+}
+
+func TestMergeSocialPostInput_PartialUpdateKeepsOtherFields(t *testing.T) {
+	in := socialPostInputFromCurrent(baseCurrentPost())
+
+	raw := map[string]json.RawMessage{
+		"title": json.RawMessage(`"Novo título"`),
+	}
+	if err := mergeSocialPostInput(&in, raw); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+
+	if in.Title != "Novo título" {
+		t.Fatalf("title não foi atualizado: %q", in.Title)
+	}
+	if in.Caption != "legenda original" {
+		t.Fatalf("caption não deveria mudar, veio %q", in.Caption)
+	}
+	if in.Platform != "instagram" || in.Pilar != "educacional" || in.Status != "ideia" {
+		t.Fatalf("campo ausente do JSON foi alterado indevidamente: %+v", in)
+	}
+	if len(in.Hashtags) != 2 || in.Hashtags[0] != "#a" {
+		t.Fatalf("hashtags não deveriam mudar: %+v", in.Hashtags)
+	}
+	if string(in.CopyArte) != `[{"slide":1,"headline":"oi"}]` {
+		t.Fatalf("copyArte não deveria mudar: %s", in.CopyArte)
+	}
+	if len(in.PlataformasDestino) != 2 {
+		t.Fatalf("plataformasDestino não deveria mudar: %+v", in.PlataformasDestino)
+	}
+}
+
+// Campo presente com valor vazio é uma alteração intencional — diferente de
+// campo ausente, que preserva o valor atual.
+func TestMergeSocialPostInput_PresentEmptyValueOverwrites(t *testing.T) {
+	in := socialPostInputFromCurrent(baseCurrentPost())
+
+	raw := map[string]json.RawMessage{
+		"caption":  json.RawMessage(`""`),
+		"hashtags": json.RawMessage(`[]`),
+	}
+	if err := mergeSocialPostInput(&in, raw); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if in.Caption != "" {
+		t.Fatalf("caption deveria ter sido esvaziada, veio %q", in.Caption)
+	}
+	if len(in.Hashtags) != 0 {
+		t.Fatalf("hashtags deveriam ter sido esvaziadas, veio %+v", in.Hashtags)
+	}
+	// Título não veio no JSON — continua o mesmo.
+	if in.Title != "Original" {
+		t.Fatalf("title não deveria ter sido tocado: %q", in.Title)
+	}
+}
+
+func TestMergeSocialPostInput_TipoInvalidoRetornaErro(t *testing.T) {
+	in := socialPostInputFromCurrent(baseCurrentPost())
+	raw := map[string]json.RawMessage{
+		"responsavelId": json.RawMessage(`"nao-e-numero"`),
+	}
+	if err := mergeSocialPostInput(&in, raw); err == nil {
+		t.Fatal("esperava erro de tipo inválido em responsavelId")
+	}
+}
