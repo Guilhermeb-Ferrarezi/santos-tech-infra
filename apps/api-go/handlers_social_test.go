@@ -87,6 +87,17 @@ func TestHandleCreateSocialPostValidation(t *testing.T) {
 	}
 }
 
+// Corpo JSON malformado é rejeitado antes de buscar o post atual — não toca
+// o banco (que é nil em testServer(Config{})).
+func TestHandleUpdateSocialPostBadBody(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	s.handleUpdateSocialPost(w, socialReq("PUT", validUUID, "xxx", 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("corpo inválido: code=%d", w.Code)
+	}
+}
+
 func TestHandleUpdateSocialPostStatusValidation(t *testing.T) {
 	s := testServer(Config{})
 

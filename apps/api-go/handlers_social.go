@@ -146,7 +146,13 @@ func (s *Server) handleCreateSocialPost(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, map[string]any{"post": post})
 }
 
-// PUT /social/posts/{id}
+// PUT /social/posts/{id} — atualização PARCIAL: só os campos presentes no
+// corpo JSON são sobrescritos, os demais mantêm o valor atual do post. Um
+// campo presente com valor vazio ("", [], null) é uma alteração intencional
+// e é aplicado; um campo simplesmente ausente do JSON não é tocado. Isso
+// significa que já não é preciso mandar o objeto inteiro a cada PUT — quem
+// já manda (contrato antigo) continua funcionando igual, já que todo campo
+// presente sobrescreve com o mesmo valor de antes.
 func (s *Server) handleUpdateSocialPost(w http.ResponseWriter, r *http.Request) {
 	id, err := socialPostIDFrom(r)
 	if err != nil {
@@ -154,17 +160,9 @@ func (s *Server) handleUpdateSocialPost(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
-	var in SocialPostInput
-	if err := decodeJSON(r, &in); err != nil {
+	var raw map[string]json.RawMessage
+	if err := decodeJSON(r, &raw); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
-		return
-	}
-	if err := validateSocialPostInput(&in); err != nil {
-		writeErr(w, err)
-		return
-	}
-	if err := s.validateAssigneeIDs(r.Context(), in.AssigneeIDs); err != nil {
-		writeErr(w, err)
 		return
 	}
 
@@ -175,6 +173,20 @@ func (s *Server) handleUpdateSocialPost(w http.ResponseWriter, r *http.Request) 
 	}
 	if current == nil {
 		writeErr(w, errSocialPostNotFound)
+		return
+	}
+
+	in := socialPostInputFromCurrent(current)
+	if err := mergeSocialPostInput(&in, raw); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	if err := validateSocialPostInput(&in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.validateAssigneeIDs(r.Context(), in.AssigneeIDs); err != nil {
+		writeErr(w, err)
 		return
 	}
 	// Trava: só valida na TRANSIÇÃO pra "publicado" (post que já estava publicado

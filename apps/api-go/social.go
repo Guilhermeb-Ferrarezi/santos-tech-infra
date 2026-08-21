@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -143,6 +144,99 @@ type SocialPostInput struct {
 	ResponsavelID      *int64          `json:"responsavelId"`
 	FunilEtapa         string          `json:"funilEtapa"`
 	AssigneeIDs        []int64         `json:"assigneeIds"`
+}
+
+// socialPostInputFromCurrent copia os campos editáveis do post atual para um
+// SocialPostInput — é a base sobre a qual o PUT parcial (mergeSocialPostInput)
+// aplica só os campos presentes no corpo da requisição.
+func socialPostInputFromCurrent(p *SocialPost) SocialPostInput {
+	return SocialPostInput{
+		Title:              p.Title,
+		Caption:            p.Caption,
+		Platform:           p.Platform,
+		Pilar:              p.Pilar,
+		Status:             p.Status,
+		ScheduledAt:        p.ScheduledAt,
+		MediaURL:           p.MediaURL,
+		ReferenceURL:       p.ReferenceURL,
+		DriveFolderID:      p.DriveFolderID,
+		DriveFileID:        p.DriveFileID,
+		DriveFileName:      p.DriveFileName,
+		DriveCoverFolderID: p.DriveCoverFolderID,
+		DriveCoverFileID:   p.DriveCoverFileID,
+		DriveCoverFileName: p.DriveCoverFileName,
+		AltText:            p.AltText,
+		CarouselItems:      p.CarouselItems,
+		Formato:            p.Formato,
+		Objetivo:           p.Objetivo,
+		Programa:           p.Programa,
+		Receita:            p.Receita,
+		PlataformasDestino: p.PlataformasDestino,
+		CopyArte:           p.CopyArte,
+		Hashtags:           p.Hashtags,
+		ConceitoVisual:     p.ConceitoVisual,
+		Paleta:             p.Paleta,
+		PromptIA:           p.PromptIA,
+		Specs:              p.Specs,
+		MasterURL:          p.MasterURL,
+		Mandatorios:        p.Mandatorios,
+		ResponsavelID:      p.ResponsavelID,
+		FunilEtapa:         p.FunilEtapa,
+		AssigneeIDs:        p.AssigneeIDs,
+	}
+}
+
+// mergeSocialPostInput aplica em `in` só os campos presentes em `raw` (chave
+// JSON → ponteiro do campo correspondente). Um campo ausente do JSON não é
+// tocado (o handler já preencheu `in` com socialPostInputFromCurrent); um
+// campo presente — mesmo com valor vazio ("", [], null) — é uma alteração
+// intencional e sobrescreve o valor atual. É o que faz o PUT /social/posts/{id}
+// ser uma atualização PARCIAL em vez de um replace do objeto inteiro.
+func mergeSocialPostInput(in *SocialPostInput, raw map[string]json.RawMessage) error {
+	fields := map[string]any{
+		"title":              &in.Title,
+		"caption":            &in.Caption,
+		"platform":           &in.Platform,
+		"pilar":              &in.Pilar,
+		"status":             &in.Status,
+		"scheduledAt":        &in.ScheduledAt,
+		"mediaUrl":           &in.MediaURL,
+		"referenceUrl":       &in.ReferenceURL,
+		"driveFolderId":      &in.DriveFolderID,
+		"driveFileId":        &in.DriveFileID,
+		"driveFileName":      &in.DriveFileName,
+		"driveCoverFolderId": &in.DriveCoverFolderID,
+		"driveCoverFileId":   &in.DriveCoverFileID,
+		"driveCoverFileName": &in.DriveCoverFileName,
+		"altText":            &in.AltText,
+		"carouselItems":      &in.CarouselItems,
+		"formato":            &in.Formato,
+		"objetivo":           &in.Objetivo,
+		"programa":           &in.Programa,
+		"receita":            &in.Receita,
+		"plataformasDestino": &in.PlataformasDestino,
+		"copyArte":           &in.CopyArte,
+		"hashtags":           &in.Hashtags,
+		"conceitoVisual":     &in.ConceitoVisual,
+		"paleta":             &in.Paleta,
+		"promptIa":           &in.PromptIA,
+		"specs":              &in.Specs,
+		"masterUrl":          &in.MasterURL,
+		"mandatorios":        &in.Mandatorios,
+		"responsavelId":      &in.ResponsavelID,
+		"funilEtapa":         &in.FunilEtapa,
+		"assigneeIds":        &in.AssigneeIDs,
+	}
+	for key, ptr := range fields {
+		v, ok := raw[key]
+		if !ok {
+			continue
+		}
+		if err := json.Unmarshal(v, ptr); err != nil {
+			return fmt.Errorf("campo %q: %w", key, err)
+		}
+	}
+	return nil
 }
 
 var validSocialPlatforms = map[string]bool{
