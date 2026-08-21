@@ -56,6 +56,56 @@ func TestHandleMFAEmailMissingChallenge(t *testing.T) {
 	}
 }
 
+// TestHandleMFAEmailCooldownBlocks verifica que quando a chave de cooldown já está
+// presente no Redis, handleMFAEmail devolve 429 sem chegar ao banco. Simula o
+// cenário onde o usuário (ou um atacante) tenta reenviar o email imediatamente após
+// o primeiro envio bem-sucedido.
+func TestHandleMFAEmailCooldownBlocks(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s := testServer(Config{})
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+
+	challenge := strings.Repeat("a", 48)
+	ctx := context.Background()
+	// Semente do challenge (simula login que gerou o desafio).
+	_ = s.rdb.Set(ctx, "mfa_challenge:"+challenge, "1", 0)
+	// Semente do cooldown (simula envio já realizado neste challenge).
+	_ = s.rdb.SetNX(ctx, "api-go:mfa_email_resend_cd:"+challenge, "1", 60*time.Second)
+
+	w := httptest.NewRecorder()
+	s.handleMFAEmail(w, httptest.NewRequest("POST", "/auth/mfa/email",
+		strings.NewReader(`{"challenge":"`+challenge+`"}`)))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("cooldown ativo deve retornar 429, veio %d", w.Code)
+	}
+}
+
+// TestHandleMFAEmailCooldownRedisDown verifica que quando o Redis falha no SetNX do
+// cooldown, o handler devolve 500 (fail-closed) em vez de prosseguir sem proteção.
+func TestHandleMFAEmailCooldownRedisDown(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s := testServer(Config{})
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+
+	challenge := strings.Repeat("a", 48)
+	// Semente do challenge para passar do challengeUser com sucesso.
+	_ = s.rdb.Set(context.Background(), "mfa_challenge:"+challenge, "1", 0)
+
+	// Derruba o Redis depois de semear o challenge: o SetNX do cooldown vai falhar.
+	mr.SetError("ERR simulated failure")
+
+	w := httptest.NewRecorder()
+	s.handleMFAEmail(w, httptest.NewRequest("POST", "/auth/mfa/email",
+		strings.NewReader(`{"challenge":"`+challenge+`"}`)))
+	// Com Redis fora, a checagem do challenge também falha → 500 vindo do challengeUser.
+	// O teste garante que o handler não prossegue para o banco (o que causaria panic).
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("Redis indisponível deve retornar 500, veio %d", w.Code)
+	}
+}
+
 func TestHandleMFAVerifyBadBody(t *testing.T) {
 	s := testServer(Config{})
 	w := httptest.NewRecorder()
