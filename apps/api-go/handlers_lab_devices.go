@@ -7,9 +7,16 @@ package main
 
 import (
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+// sshPublicKeyRe aceita o formato "authorized_keys" de uma linha: tipo da
+// chave + base64, com comentário opcional. Não valida o base64 em si (o
+// sshd rejeita sozinho na hora do login) — só barra lixo óbvio antes de
+// gravar no banco.
+var sshPublicKeyRe = regexp.MustCompile(`^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/]+=* ?.*$`)
 
 // ── público (sem auth) ───────────────────────────────────────────────────────
 
@@ -37,6 +44,11 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		// Nomes dos aplicativos abertos agora (0.1.9+). Ausente = app antigo, e
 		// aí a última lista conhecida é mantida em vez de apagada.
 		OpenApps []string `json:"openApps"`
+		// SSHPublicKey: chave pública gerada localmente pelo autounattend.xml da
+		// imagem Windows, mandada só no primeiro heartbeat da máquina — string
+		// vazia nos seguintes mantém a já registrada (ver upsert em
+		// hour_lab_devices.go). A privada NUNCA sai da máquina.
+		SSHPublicKey string `json:"sshPublicKey"`
 	}
 	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.DeviceID) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "deviceId inválido"))
@@ -51,6 +63,17 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 	if len(in.AppVersion) > 50 {
 		in.AppVersion = in.AppVersion[:50]
 	}
+	// Chave SSH pública: formato solto (só o prefixo do tipo de chave), mas com
+	// teto de tamanho — RSA 4096 dá ~800 bytes, ed25519 ~100; 2KB cobre qualquer
+	// caso real e barra quem tentasse inflar a coluna.
+	if len(in.SSHPublicKey) > 2048 {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "sshPublicKey grande demais"))
+		return
+	}
+	if in.SSHPublicKey != "" && !sshPublicKeyRe.MatchString(in.SSHPublicKey) {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "sshPublicKey em formato inválido"))
+		return
+	}
 	var sessionID *string
 	if in.Token != nil && isValidHourSessionToken(*in.Token) {
 		h, err := s.getHourSessionByTokenHash(r.Context(), sha256Hex(*in.Token))
@@ -63,7 +86,7 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		}
 	}
 	res, err := s.upsertLabDeviceHeartbeat(r.Context(), in.DeviceID, in.DeviceSecret, clientIP(r),
-		in.AppVersion, sessionID, encodeOpenApps(in.OpenApps), previousUUID(in.PreviousDeviceID))
+		in.AppVersion, sessionID, encodeOpenApps(in.OpenApps), previousUUID(in.PreviousDeviceID), in.SSHPublicKey)
 	if err != nil {
 		writeErr(w, err)
 		return

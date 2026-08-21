@@ -428,7 +428,7 @@ Admin:
   reenviar o mesmo texto exibe de novo (o app deduplica pelo id, não pelo texto)
 
 Público (sem auth — `deviceId` é a identidade):
-- `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?, previousDeviceId?}` →
+- `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?, previousDeviceId?, sshPublicKey?}` →
   `{name, unpairRequested, message?, pairToken?}` · rate limit 120/min. `token`
   é o token da sessão de horas pareada localmente, se houver (resolve pra
   `currentSessionId`/`currentClientName` na listagem admin). Comandos
@@ -471,6 +471,13 @@ Público (sem auth — `deviceId` é a identidade):
   explícito significa "nada aberto". Sem histórico e sem título de janela de
   propósito — o título carrega conteúdo ("Conversa com Fulano", "contrato.docx")
   e o nome do app já responde o que a máquina está rodando.
+
+  `sshPublicKey` é a chave pública SSH gerada localmente pela máquina (ex.: pela
+  imagem Windows via autounattend.xml) e mandada só no primeiro heartbeat —
+  string vazia nos seguintes MANTÉM a já registrada em vez de apagar, mesma
+  semântica de `openApps` ausente. A privada nunca sai da máquina. Volta em
+  `sshPublicKey` no `LabDevice` da listagem admin, pra alguém do time dar ssh
+  sem procurar a chave manualmente.
 
 #### Inventário de software do PC
 

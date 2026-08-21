@@ -670,6 +670,12 @@ ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS screenshot_delivered_at TI
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS open_apps JSONB;
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS open_apps_at TIMESTAMPTZ;
 
+-- Chave pública SSH gerada pela própria máquina (autounattend.xml da imagem
+-- Windows) e enviada no primeiro heartbeat, pra alguém do time conseguir dar
+-- ssh na máquina sem precisar buscar a chave manualmente. Nunca a privada:
+-- essa fica só localmente na máquina, gerada com o par no primeiro boot.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS ssh_public_key TEXT;
+
 -- Histórico das capturas. requested_by fica registrado de propósito: a tela de
 -- um PC do laboratório pode ter dado de quem está sentado nele, então tem que
 -- existir trilha de quem pediu e quando. A imagem mora no R2 (object_key), não

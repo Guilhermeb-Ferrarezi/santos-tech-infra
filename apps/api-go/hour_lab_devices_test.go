@@ -28,6 +28,7 @@ type fakeLabDeviceDB struct {
 	screenshotRequested bool
 	secretHash          *string
 	migrationBlocked    bool
+	sshPublicKey        *string
 
 	upserts    int
 	clears     int
@@ -89,6 +90,11 @@ func (f *fakeLabDeviceDB) QueryRow(_ context.Context, sql string, args ...any) p
 	case strings.Contains(sql, "INSERT INTO hour_lab_devices"):
 		f.upserts++
 		f.exists = true
+		// Mesma semântica do CASE WHEN $6 = '' no SQL real: string vazia mantém
+		// a chave já registrada, só sobrescreve quando vem algo de verdade.
+		if key, _ := args[5].(string); key != "" {
+			f.sshPublicKey = &key
+		}
 		// O SET do ON CONFLICT só mexe em last_seen_at/last_ip/app_version/
 		// current_session_id — as colunas de comando ficam como estavam, e é
 		// isso que o RETURNING devolve.
@@ -137,7 +143,7 @@ func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "")
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -151,7 +157,7 @@ func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 		t.Errorf("primeiro heartbeat: %d UPDATEs de limpeza, quer 1", fake.clears)
 	}
 
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "")
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("segundo heartbeat: %v", err)
 	}
@@ -174,11 +180,40 @@ func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 func TestHeartbeatNaoLimpaQuandoNaoHaComando(t *testing.T) {
 	const segredo = "segredo-do-pc"
 	fake := &fakeLabDeviceDB{exists: true, name: ptrTo("PC-02"), secretHash: ptrTo(sha256Hex(segredo))}
-	if _, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, ""); err != nil {
+	if _, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "", ""); err != nil {
 		t.Fatalf("heartbeat: %v", err)
 	}
 	if fake.clears != 0 {
 		t.Errorf("%d UPDATEs de limpeza sem comando pendente, quer 0", fake.clears)
+	}
+}
+
+// TestHeartbeatSSHPublicKeyGravaUmaVezSoNaoApagaComVazio prova a mesma
+// semântica do open_apps aplicada à chave SSH: o autounattend.xml manda a
+// chave só no primeiro heartbeat (0.1.x+); heartbeats seguintes chegam com
+// sshPublicKey vazio e não podem apagar o que já foi registrado.
+func TestHeartbeatSSHPublicKeyGravaUmaVezSoNaoApagaComVazio(t *testing.T) {
+	const segredo = "segredo-do-pc"
+	const chave = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINyOZHpPHJgaA8nHVVEpllq4I4UCyciydnsrbEWEUDFK guilherme@santostech"
+	fake := &fakeLabDeviceDB{exists: false}
+	ctx := context.Background()
+
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil, "", chave)
+	if err != nil {
+		t.Fatalf("primeiro heartbeat: %v", err)
+	}
+	if fake.sshPublicKey == nil || *fake.sshPublicKey != chave {
+		t.Fatalf("primeiro heartbeat: sshPublicKey = %v, quer %q", fake.sshPublicKey, chave)
+	}
+
+	segredoEmitido := *first.DeviceSecret
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredoEmitido, "1.2.3.4", "1.0.0", nil, nil, "", "")
+	if err != nil {
+		t.Fatalf("segundo heartbeat: %v", err)
+	}
+	_ = second
+	if fake.sshPublicKey == nil || *fake.sshPublicKey != chave {
+		t.Errorf("segundo heartbeat (vazio): sshPublicKey = %v, quer manter %q", fake.sshPublicKey, chave)
 	}
 }
 
@@ -204,7 +239,7 @@ func TestHeartbeatEmiteSegredoUmaVez(t *testing.T) {
 	fake := &fakeLabDeviceDB{}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil, "")
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -219,7 +254,7 @@ func TestHeartbeatEmiteSegredoUmaVez(t *testing.T) {
 		t.Errorf("%d emissões de segredo, quer 1", fake.mints)
 	}
 
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", secret, "1.2.3.4", "1.0.0", nil, nil, "")
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", secret, "1.2.3.4", "1.0.0", nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("segundo heartbeat com o segredo: %v", err)
 	}
@@ -244,7 +279,7 @@ func TestHeartbeatSemSegredoNaoVazaPairToken(t *testing.T) {
 	ctx := context.Background()
 
 	for _, tentativa := range []string{"", "segredo-errado", sha256Hex("segredo-do-pc")} {
-		res, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", tentativa, "9.9.9.9", "1.0.0", nil, nil, "")
+		res, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", tentativa, "9.9.9.9", "1.0.0", nil, nil, "", "")
 		if !errors.Is(err, errLabDeviceUnauthorized) {
 			t.Fatalf("segredo %q: err = %v, quer errLabDeviceUnauthorized", tentativa, err)
 		}
@@ -269,7 +304,7 @@ func TestHeartbeatAdocaoNaoEntregaPairToken(t *testing.T) {
 		name:             ptrTo("PC-legado"),
 		pendingPairToken: ptrTo("tok-secreto"),
 	}
-	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil, "")
+	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("adoção de legado: %v", err)
 	}
@@ -298,7 +333,7 @@ func TestHeartbeatEntregaCapturaDeTelaUmaVezSo(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "")
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -306,7 +341,7 @@ func TestHeartbeatEntregaCapturaDeTelaUmaVezSo(t *testing.T) {
 		t.Fatal("primeiro heartbeat deveria pedir a captura")
 	}
 
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "")
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("segundo heartbeat: %v", err)
 	}

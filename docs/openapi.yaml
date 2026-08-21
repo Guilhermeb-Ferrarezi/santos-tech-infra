@@ -4094,6 +4094,16 @@ paths:
                     lista anterior. Ausente ≠ vazio: campo omitido mantém a última lista
                     conhecida (app antigo), enquanto [] significa "nada aberto". Só nomes —
                     título de janela carregaria conteúdo e fica de fora de propósito.
+                sshPublicKey:
+                  type: string
+                  maxLength: 2048
+                  description: >
+                    Chave pública SSH (formato de linha do authorized_keys) gerada
+                    localmente pela máquina e enviada só no primeiro heartbeat — nunca a
+                    privada, que fica só na máquina. String vazia nos heartbeats
+                    seguintes mantém a chave já registrada em vez de apagar. Visível no
+                    LabDevice da listagem admin (GET /hour-lab-devices) pra alguém do
+                    time conseguir dar ssh sem procurar a chave manualmente.
               required: [deviceId]
       responses:
         "200":
@@ -5882,6 +5892,10 @@ components:
           format: date-time
           nullable: true
           description: "Quando a lista de abertos foi vista; null = o PC nunca reportou."
+        sshPublicKey:
+          type: string
+          nullable: true
+          description: "Chave pública SSH mandada no primeiro heartbeat (ver POST /public/lab-devices/heartbeat); null = máquina não manda (imagem antiga, ou não provisionada via autounattend.xml)."
       required: [id, deviceUuid, createdAt]
 
     ExpectedProgram:
