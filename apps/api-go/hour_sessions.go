@@ -15,10 +15,10 @@ import (
 )
 
 type HourClient struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Phone          *string   `json:"phone"`
-	BalanceMinutes int       `json:"balanceMinutes"`
+	ID             string  `json:"id"`
+	Name           string  `json:"name"`
+	Phone          *string `json:"phone"`
+	BalanceMinutes int     `json:"balanceMinutes"`
 	// DiscountPercent: desconto padrão (0-100) aplicado no faturamento avulso
 	// deste cliente — ver listHourBilling.
 	DiscountPercent int       `json:"discountPercent"`
