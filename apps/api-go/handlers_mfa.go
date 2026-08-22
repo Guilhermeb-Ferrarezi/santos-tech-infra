@@ -207,7 +207,15 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
 			return
 		}
-		valid = !alreadyUsed
+		if alreadyUsed {
+			// Código TOTP matematicamente válido mas já consumido nesta janela de 90s.
+			// Retorna imediatamente para não acionar consumeAcctEmailCode logo abaixo:
+			// aquela função usa GetDel e destruiria o OTP de email pendente mesmo sem
+			// que nenhuma autenticação tivesse ocorrido.
+			writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
+			return
+		}
+		valid = true
 	}
 	if !valid && len(code) == recoveryCodeLen {
 		valid = s.consumeRecoveryCode(r.Context(), uid, sha256Hex(strings.ToUpper(code)))
@@ -368,6 +376,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	valid := false
+	totpReplay := false
 	if u.TOTPSecret != nil && totp.Validate(code, *u.TOTPSecret) {
 		alreadyUsed, rdErr := s.checkAndMarkTOTPUsed(r.Context(), uid, code)
 		if rdErr != nil {
@@ -377,9 +386,14 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		if !alreadyUsed {
 			valid = true
+		} else {
+			totpReplay = true
 		}
 	}
-	if !valid {
+	// GetDel consome o OTP de email de forma destrutiva antes de comparar — não
+	// chamar quando o TOTP era válido mas já usado: o OTP seria invalidado sem que
+	// nenhuma autenticação tivesse ocorrido (códigos são valores distintos e nunca vão bater).
+	if !valid && !totpReplay {
 		// GetDel é atômico: evita que duas requisições concorrentes com o mesmo
 		// código ambas passem antes que a primeira remova a chave (TOCTOU).
 		if ec, e := s.rdb.GetDel(r.Context(), "mfa_email:"+body.Challenge).Result(); e == nil && ec != "" &&
