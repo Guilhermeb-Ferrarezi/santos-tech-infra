@@ -18,8 +18,8 @@ const (
 	mfaEmailAcctCooldown = 60 * time.Second
 )
 
-func mfaEmailAcctKey(uid int64) string   { return fmt.Sprintf("mfa_email_acct:%d", uid) }
-func mfaEmailAcctCDKey(uid int64) string { return fmt.Sprintf("mfa_email_acct_cd:%d", uid) }
+func mfaEmailAcctKey(uid int64) string   { return fmt.Sprintf("api-go:mfa_email_acct:%d", uid) }
+func mfaEmailAcctCDKey(uid int64) string { return fmt.Sprintf("api-go:mfa_email_acct_cd:%d", uid) }
 
 // sendChallengeEmailCode gera e envia o código do 2º passo preso a um challenge de
 // login. Reusado pelo login por senha, pelo OAuth (método preferido = email) e pelo
