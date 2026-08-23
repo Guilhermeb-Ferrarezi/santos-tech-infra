@@ -72,6 +72,14 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uidStr := strconv.FormatInt(uid, 10)
+	// Código TOTP tem 6 dígitos: rejeita comprimento inválido antes de qualquer I/O
+	// (Redis/TOTP), espelhando handleMFADisable e handleMFAVerify que fazem a mesma
+	// checagem antes do contador de tentativas.
+	code := strings.TrimSpace(body.Code)
+	if len(code) != 6 {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
+		return
+	}
 	secret, err := s.rdb.Get(r.Context(), "mfa_setup:"+uidStr).Result()
 	if err != nil || secret == "" {
 		writeErr(w, appErr(http.StatusBadRequest, "MFA_SETUP_EXPIRED", "Setup expirado, gere novamente"))
@@ -100,12 +108,6 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("mfa_enable: falha ao invalidar setup após excesso de tentativas", "uid", uid, "err", err)
 		}
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Gere um novo QR code."))
-		return
-	}
-	code := strings.TrimSpace(body.Code)
-	// Código TOTP tem 6 dígitos: rejeita comprimento inválido antes de validar.
-	if len(code) != 6 {
-		writeErr(w, appErr(http.StatusBadRequest, "INVALID_CODE", "Código inválido"))
 		return
 	}
 	if !totp.Validate(code, secret) {
