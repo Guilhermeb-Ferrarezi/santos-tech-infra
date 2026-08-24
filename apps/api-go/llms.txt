@@ -566,9 +566,23 @@ Admin (role admin, sem cargo personalizado — mesmo critério de model3d):
   upload); string vazia remove.
 - `DELETE /auth/admin/downloads/{id}` → 204 — apaga o objeto no R2 também, se `kind=file`
 
-Público (sem auth nenhuma — leitura 100% aberta):
-- `GET /public/downloads` — `{items:[Download]}`, mesma ordenação do admin,
-  sem os campos internos (`objectKey`, `uploadedBy`) · rate limit 120/min
+Sem login de usuário, mas com dois níveis de acesso diferentes — cuidado, já
+causou regressão: uma página web pública (`dashboard/web:/hub`) apareceu
+esperando `/public/downloads` sem token, e a rota exige o token do Hub desde
+`fbf953f` (antes vazava o catálogo inteiro, incluindo links assinados
+permanentes, pra qualquer um na internet). Página web **não pode** embarcar
+esse token (JS de cliente, qualquer um lê no navegador) — por isso a segunda
+rota, estreita e essa sim 100% pública:
+- `GET /public/downloads` — exige `X-Santos-Hub-Token` (ou `Authorization:
+  Bearer`) igual a `SANTOS_HUB_TOKEN`; sem a env configurada responde 503
+  (`HUB_TOKEN_UNSET`), token errado/ausente responde 401 (`HUB_UNAUTHORIZED`).
+  Uso: só o app Tauri do Hub, que embute o token no build. `{items:[Download]}`,
+  mesma ordenação do admin, sem os campos internos (`objectKey`, `uploadedBy`)
+  · rate limit 120/min
+- `GET /public/downloads/hub-installer` — genuinamente sem credencial nenhuma.
+  Devolve só o item `category="Santos Hub"` (`{item:Download}`, 404 se ainda
+  não cadastrado) — é o que a landing page `/hub` consome pra oferecer o
+  download do instalador do próprio Hub · rate limit 120/min
 
 ## Arquivos (Google Drive) — `api.santos-tech.com/auth/admin/drive-folders` e `/drive-folders`
 
@@ -797,6 +811,24 @@ populado em `GET /social/posts/{id}` (post único), vazio em `GET /social/posts`
 
 **SocialSettings**: `{instagramLocationId, facebookPlaceId, updatedById, updatedByName,
 updatedAt}` — config fixa (não por post) do publicador, ver `GET/PUT /social/settings`.
+
+## Automação Instagram (comentário → DM) — `api.santos-tech.com/instagram`
+
+Substitui o ManyChat: quem comenta numa publicação mapeada recebe uma DM automática
+(private reply da Graph API). Webhook da Meta em `GET|POST /webhooks/instagram`
+(autenticado por verify token / assinatura HMAC, não por cookie). Gestão admin-only:
+
+- `GET /instagram/media` — publicações recentes da conta (seletor visual). → `{media:[...]}`
+- `GET /instagram/links` — mapeamentos. → `{links:[InstagramCommentLink]}`
+- `PUT /instagram/links/{mediaId} {url, note?, keyword?, message?}` — upsert idempotente
+  por publicação. `keyword`: só responde se o comentário contiver a palavra
+  (case-insensitive; vazio = qualquer comentário). `message`: texto da DM — o placeholder
+  `{link}` é substituído pelo `url`; sem placeholder, o link vai numa linha separada no
+  fim; vazio = manda só o link. Texto final (mensagem+link) limitado a 1000 caracteres
+  (limite da Meta) → 400. → `{link:{...}}`
+- `DELETE /instagram/links/{mediaId}` → 204
+
+**InstagramCommentLink**: `{mediaId, url, note, keyword, message, createdBy, createdAt, updatedAt}`.
 
 ## Tarefas — `api.santos-tech.com/tasks`
 

@@ -112,6 +112,38 @@ func (q *Queries) GetDownload(ctx context.Context, id int64) (Download, error) {
 	return i, err
 }
 
+const getLatestDownloadByCategory = `-- name: GetLatestDownloadByCategory :one
+SELECT id, name, description, category, version, kind, object_key, external_url, filename, content_type, size_bytes, pinned, uploaded_by, created_at, updated_at, image_url
+FROM downloads
+WHERE category = $1
+ORDER BY pinned DESC, created_at DESC
+LIMIT 1
+`
+
+func (q *Queries) GetLatestDownloadByCategory(ctx context.Context, category string) (Download, error) {
+	row := q.db.QueryRow(ctx, getLatestDownloadByCategory, category)
+	var i Download
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Category,
+		&i.Version,
+		&i.Kind,
+		&i.ObjectKey,
+		&i.ExternalUrl,
+		&i.Filename,
+		&i.ContentType,
+		&i.SizeBytes,
+		&i.Pinned,
+		&i.UploadedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ImageUrl,
+	)
+	return i, err
+}
+
 const listDownloads = `-- name: ListDownloads :many
 SELECT id, name, description, category, version, kind, object_key, external_url, filename, content_type, size_bytes, pinned, uploaded_by, created_at, updated_at, image_url
 FROM downloads

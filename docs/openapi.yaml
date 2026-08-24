@@ -1455,8 +1455,18 @@ paths:
       tags: [Downloads]
       summary: Listar catálogo de downloads
       description: |
-        Sem autenticação — é o que o Santos Hub (app Tauri instalado nos PCs da
-        empresa) consome pra listar o que dá pra baixar. Rate limit: 120 req/min por IP.
+        Sem login de usuário, mas **exige** o token do Santos Hub (header
+        `X-Santos-Hub-Token` ou `Authorization: Bearer`) — é o que o app Tauri
+        instalado nos PCs da empresa embute no build e envia. Não é chamável de
+        JS de página web (o token ficaria visível no navegador); para isso ver
+        `/public/downloads/hub-installer`. Rate limit: 120 req/min por IP.
+      security: []
+      parameters:
+        - name: X-Santos-Hub-Token
+          in: header
+          required: true
+          schema: { type: string }
+          description: Token embarcado no build do app Santos Hub.
       responses:
         "200":
           description: Lista de itens, fixados primeiro e depois mais recente
@@ -1469,6 +1479,34 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/Download" }
                 required: [items]
+        "401":
+          description: Token ausente ou inválido (`HUB_UNAUTHORIZED`).
+        "503":
+          description: "`SANTOS_HUB_TOKEN` não configurado no servidor (`HUB_TOKEN_UNSET`)."
+
+  /public/downloads/hub-installer:
+    get:
+      tags: [Downloads]
+      summary: Instalador do próprio Santos Hub (genuinamente público)
+      description: |
+        Sem autenticação nenhuma — inclusive sem o token de `/public/downloads`.
+        Existe pra alimentar a landing page pública de download do Hub
+        (`dashboard/web:/hub`), que não pode guardar o token do Hub em JS de
+        cliente. Devolve só o item com `category="Santos Hub"` do catálogo, não
+        a lista inteira. Rate limit: 120 req/min por IP.
+      security: []
+      responses:
+        "200":
+          description: O item instalador do Santos Hub.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  item: { $ref: "#/components/schemas/Download" }
+                required: [item]
+        "404":
+          description: Nenhum item com `category="Santos Hub"` cadastrado ainda.
 
   /auth/admin/users:
     get:

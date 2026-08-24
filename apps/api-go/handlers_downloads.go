@@ -384,6 +384,25 @@ func (s *Server) handleListPublicDownloads(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
 
+// hubInstallerCategory é o valor de `category` do item que é o instalador do
+// próprio Santos Hub no catálogo — ver GetLatestDownloadByCategory.
+const hubInstallerCategory = "Santos Hub"
+
+// GET /public/downloads/hub-installer — igual a /public/downloads, mas
+// genuinamente pública (sem santosHubGuard) e devolve só o instalador do
+// próprio Hub. Existe porque a landing page pública (dashboard/web:/hub) não
+// pode embarcar o token do Hub em JS de cliente — qualquer um leria no
+// navegador, o que anularia o propósito do guard em /public/downloads (esse
+// sim reservado ao app Tauri, que embute o token no binário compilado).
+func (s *Server) handleGetPublicHubInstaller(w http.ResponseWriter, r *http.Request) {
+	item, err := s.q.GetLatestDownloadByCategory(r.Context(), hubInstallerCategory)
+	if err != nil {
+		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "instalador do Santos Hub não cadastrado"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"item": s.downloadPublicJSON(&item)})
+}
+
 // downloadURL devolve o link efetivo do item — URL ASSINADA de curta duração no
 // R2 (kind=file) ou a URL externa cadastrada (kind=link).
 //
