@@ -18,8 +18,8 @@ const (
 	emailVerifyMaxAttempts = 5 // teto de tentativas por código (anti brute-force dos 6 dígitos)
 )
 
-func emailVerifyKey(uid int64) string    { return fmt.Sprintf("email_verify:%d", uid) }
-func emailVerifyCDKey(uid int64) string  { return fmt.Sprintf("email_verify_cd:%d", uid) }
+func emailVerifyKey(uid int64) string    { return fmt.Sprintf("api-go:email_verify:%d", uid) }
+func emailVerifyCDKey(uid int64) string  { return fmt.Sprintf("api-go:email_verify_cd:%d", uid) }
 func emailVerifyAttKey(uid int64) string { return fmt.Sprintf("api-go:email_verify_att:%d", uid) }
 
 // POST /auth/email-verify/send — gera um código de 6 dígitos, guarda no Redis
