@@ -365,6 +365,10 @@ CREATE TABLE IF NOT EXISTS instagram_comment_links (
 -- Palavra-chave opcional: só responde se o texto do comentário contiver ela
 -- (case-insensitive). Vazio = responde a qualquer comentário na publicação.
 ALTER TABLE instagram_comment_links ADD COLUMN IF NOT EXISTS keyword TEXT NOT NULL DEFAULT '';
+-- Mensagem da DM configurável por mapeamento. Placeholder {link} é substituído
+-- pelo URL; sem {link}, o link vai numa linha separada no fim. Vazio = manda
+-- só o link (comportamento original).
+ALTER TABLE instagram_comment_links ADD COLUMN IF NOT EXISTS message TEXT NOT NULL DEFAULT '';
 
 -- Roteador de chaves de API: um "provider" agrupa N chaves rotacionadas em
 -- ordem (priority, id) até uma responder fora dos códigos de

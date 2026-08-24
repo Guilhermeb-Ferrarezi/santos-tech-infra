@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -15,6 +16,7 @@ type InstagramCommentLink struct {
 	URL       string    `json:"url"`
 	Note      string    `json:"note"`
 	Keyword   string    `json:"keyword"`
+	Message   string    `json:"message"`
 	CreatedBy *int64    `json:"createdBy"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -24,6 +26,26 @@ type InstagramCommentLinkInput struct {
 	URL     string `json:"url"`
 	Note    string `json:"note"`
 	Keyword string `json:"keyword"`
+	Message string `json:"message"`
+}
+
+// instagramDMMaxLen é o teto de caracteres do texto de uma private reply na
+// Graph API da Meta — validado aqui no cadastro pra falha aparecer pro admin,
+// não silenciosamente no webhook.
+const instagramDMMaxLen = 1000
+
+// composeInstagramDMText monta o texto final da DM: a mensagem configurada com
+// o placeholder {link} substituído pelo URL; sem placeholder, o link vai numa
+// linha separada no fim; mensagem vazia = só o link.
+func composeInstagramDMText(message, url string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return url
+	}
+	if strings.Contains(message, "{link}") {
+		return strings.ReplaceAll(message, "{link}", url)
+	}
+	return message + "\n\n" + url
 }
 
 func validateInstagramCommentLinkInput(mediaID string, in *InstagramCommentLinkInput) error {
@@ -35,14 +57,18 @@ func validateInstagramCommentLinkInput(mediaID string, in *InstagramCommentLinkI
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return validationErr("URL de destino inválida (use http:// ou https://)")
 	}
+	in.Message = strings.TrimSpace(in.Message)
+	if utf8.RuneCountInString(composeInstagramDMText(in.Message, in.URL)) > instagramDMMaxLen {
+		return validationErr("Mensagem muito longa: com o link, o texto da DM passa de 1000 caracteres (limite da Meta)")
+	}
 	return nil
 }
 
-const instagramCommentLinkCols = `media_id, url, note, keyword, created_by, created_at, updated_at`
+const instagramCommentLinkCols = `media_id, url, note, keyword, message, created_by, created_at, updated_at`
 
 func scanInstagramCommentLink(row pgx.Row) (*InstagramCommentLink, error) {
 	var l InstagramCommentLink
-	err := row.Scan(&l.MediaID, &l.URL, &l.Note, &l.Keyword, &l.CreatedBy, &l.CreatedAt, &l.UpdatedAt)
+	err := row.Scan(&l.MediaID, &l.URL, &l.Note, &l.Keyword, &l.Message, &l.CreatedBy, &l.CreatedAt, &l.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -78,11 +104,11 @@ func (s *Server) getInstagramCommentLinkByMediaID(ctx context.Context, mediaID s
 // UUID gerado) — repetir a mesma publicação só atualiza o link/nota.
 func (s *Server) upsertInstagramCommentLink(ctx context.Context, mediaID string, in InstagramCommentLinkInput, createdBy int64) (*InstagramCommentLink, error) {
 	link, err := scanInstagramCommentLink(s.db.QueryRow(ctx, `
-		INSERT INTO instagram_comment_links (media_id, url, note, keyword, created_by)
-		VALUES ($1,$2,$3,$4,$5)
-		ON CONFLICT (media_id) DO UPDATE SET url = EXCLUDED.url, note = EXCLUDED.note, keyword = EXCLUDED.keyword, updated_at = now()
+		INSERT INTO instagram_comment_links (media_id, url, note, keyword, message, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (media_id) DO UPDATE SET url = EXCLUDED.url, note = EXCLUDED.note, keyword = EXCLUDED.keyword, message = EXCLUDED.message, updated_at = now()
 		RETURNING `+instagramCommentLinkCols,
-		mediaID, in.URL, in.Note, in.Keyword, createdBy))
+		mediaID, in.URL, in.Note, in.Keyword, in.Message, createdBy))
 	if err != nil {
 		return nil, portalDBErr(err)
 	}

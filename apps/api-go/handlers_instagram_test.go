@@ -135,6 +135,8 @@ func TestValidateInstagramCommentLinkInput(t *testing.T) {
 		{"url vazia", "123", InstagramCommentLinkInput{URL: ""}, true},
 		{"url sem esquema", "123", InstagramCommentLinkInput{URL: "x.com"}, true},
 		{"válido", "123", InstagramCommentLinkInput{URL: "https://santos-tech.com/blog/x"}, false},
+		{"com mensagem", "123", InstagramCommentLinkInput{URL: "https://x.com", Message: "Oi! Aqui está: {link}"}, false},
+		{"mensagem estoura o limite da Meta", "123", InstagramCommentLinkInput{URL: "https://x.com", Message: strings.Repeat("a", 1001)}, true},
 	}
 	for _, tc := range cases {
 		err := validateInstagramCommentLinkInput(tc.mediaID, &tc.in)
@@ -143,6 +145,24 @@ func TestValidateInstagramCommentLinkInput(t *testing.T) {
 		}
 		if !tc.wantErr && err != nil {
 			t.Errorf("%s: erro inesperado: %v", tc.name, err)
+		}
+	}
+}
+
+func TestComposeInstagramDMText(t *testing.T) {
+	const link = "https://santos-tech.com/blog/x"
+	cases := []struct {
+		name, message, want string
+	}{
+		{"vazia = só o link", "", link},
+		{"só espaços = só o link", "   ", link},
+		{"placeholder {link} substituído", "Oi! Aqui está: {link} 🚀", "Oi! Aqui está: " + link + " 🚀"},
+		{"placeholder repetido substitui todos", "{link} e {link}", link + " e " + link},
+		{"sem placeholder, link no fim", "Obrigado pelo comentário!", "Obrigado pelo comentário!\n\n" + link},
+	}
+	for _, tc := range cases {
+		if got := composeInstagramDMText(tc.message, link); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

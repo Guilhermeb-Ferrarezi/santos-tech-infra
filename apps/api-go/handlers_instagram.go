@@ -150,7 +150,7 @@ func (s *Server) handleInstagramComment(ctx context.Context, commentID, mediaID,
 	if !acquired {
 		return // já respondido (ou em progresso) para este comentário
 	}
-	if err := s.instagram.sendPrivateReply(ctx, commentID, link.URL); err != nil {
+	if err := s.instagram.sendPrivateReply(ctx, commentID, composeInstagramDMText(link.Message, link.URL)); err != nil {
 		slog.Error("instagram webhook: falha ao enviar private reply", "commentID", commentID, "mediaID", mediaID, "err", err)
 		// Libera o slot para a Meta poder reentregar o evento e tentarmos de novo.
 		if delErr := s.rdb.Del(ctx, "api-go:instagram:replied:"+commentID).Err(); delErr != nil {
