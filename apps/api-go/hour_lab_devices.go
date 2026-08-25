@@ -39,6 +39,11 @@ type LabDevice struct {
 	// heartbeat (ver ssh_public_key no schema). nil = máquina não manda (imagem
 	// mais antiga, ou não é um PC provisionado pelo autounattend.xml).
 	SSHPublicKey *string `json:"sshPublicKey"`
+	// DiagnosticNote: auto-diagnóstico opcional mandado junto do heartbeat por
+	// scripts de instalação (não é o hour-timer-app) que não têm outro jeito de
+	// reportar status pra quem não está com acesso físico/SSH à máquina no
+	// momento. nil = ninguém mandou nada ainda.
+	DiagnosticNote *string `json:"diagnosticNote"`
 	// OpenApps: nomes dos aplicativos abertos no último heartbeat (0.1.9+).
 	// Vazio = app antigo ou nada aberto; OpenAppsAt diz quando foi visto.
 	OpenApps   []string   `json:"openApps"`
@@ -108,9 +113,9 @@ const pairTokenTTL = 10 * time.Minute
 
 const labDeviceHeartbeatUpsertSQL = `
 	INSERT INTO hour_lab_devices (device_uuid, last_seen_at, last_ip, app_version, current_session_id,
-		open_apps, open_apps_at, ssh_public_key)
+		open_apps, open_apps_at, ssh_public_key, diagnostic_note)
 	VALUES ($1, now(), $2, $3, $4::uuid, $5::jsonb, CASE WHEN $5::jsonb IS NULL THEN NULL ELSE now() END,
-		NULLIF($6, ''))
+		NULLIF($6, ''), NULLIF($7, ''))
 	ON CONFLICT (device_uuid) DO UPDATE SET
 		last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid,
 		-- App antigo não manda a lista: manter a última conhecida é melhor que
@@ -119,7 +124,8 @@ const labDeviceHeartbeatUpsertSQL = `
 		open_apps_at = CASE WHEN $5::jsonb IS NULL THEN hour_lab_devices.open_apps_at ELSE now() END,
 		-- Mandado uma vez só (primeiro heartbeat, ver autounattend.xml) — string
 		-- vazia nos heartbeats seguintes não deve apagar a chave já registrada.
-		ssh_public_key = CASE WHEN $6 = '' THEN hour_lab_devices.ssh_public_key ELSE $6 END
+		ssh_public_key = CASE WHEN $6 = '' THEN hour_lab_devices.ssh_public_key ELSE $6 END,
+		diagnostic_note = CASE WHEN $7 = '' THEN hour_lab_devices.diagnostic_note ELSE $7 END
 	RETURNING name, unpair_requested, message_id::text, message_text,
 		CASE WHEN pending_pair_token_expires_at > now() THEN pending_pair_token ELSE NULL END AS pending_pair_token,
 		screenshot_requested_at IS NOT NULL AS screenshot_requested`
@@ -217,13 +223,13 @@ func migrateLabDeviceUUIDTx(ctx context.Context, tx labDeviceQuerier, oldUUID, n
 // devolve os comandos pendentes, zerando unpair_requested/pending_pair_token na
 // mesma transação — assim cada comando é entregue exatamente uma vez.
 // message_id/text não são zerados: o app deduplica localmente pelo id.
-func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte, previousUUID, sshPublicKey string) (*LabDeviceHeartbeatResult, error) {
+func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte, previousUUID, sshPublicKey, diagnosticNote string) (*LabDeviceHeartbeatResult, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op depois do Commit
-	res, err := upsertLabDeviceHeartbeatTx(ctx, tx, deviceUUID, deviceSecret, ip, appVersion, sessionID, openApps, previousUUID, sshPublicKey)
+	res, err := upsertLabDeviceHeartbeatTx(ctx, tx, deviceUUID, deviceSecret, ip, appVersion, sessionID, openApps, previousUUID, sshPublicKey, diagnosticNote)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +279,7 @@ func authLabDeviceTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, devic
 	return &secret, nil
 }
 
-func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte, previousUUID, sshPublicKey string) (*LabDeviceHeartbeatResult, error) {
+func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte, previousUUID, sshPublicKey, diagnosticNote string) (*LabDeviceHeartbeatResult, error) {
 	// Antes de autenticar: se o app trocou de identidade (0.1.10+), costura o
 	// registro antigo na nova em vez de deixar o PC duplicado.
 	migrado, err := migrateLabDeviceUUIDTx(ctx, tx, previousUUID, deviceUUID, deviceSecret)
@@ -286,7 +292,7 @@ func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, device
 	}
 
 	var res LabDeviceHeartbeatResult
-	if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, deviceUUID, ip, appVersion, sessionID, openApps, sshPublicKey).
+	if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, deviceUUID, ip, appVersion, sessionID, openApps, sshPublicKey, diagnosticNote).
 		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken,
 			&res.ScreenshotRequested); err != nil {
 		return nil, err
@@ -340,13 +346,13 @@ func (s *Server) resetLabDeviceSecret(ctx context.Context, id string) error {
 const labDeviceCols = `d.id::text, d.device_uuid, d.name, d.last_seen_at, d.last_ip, d.app_version,
 	d.current_session_id::text, c.name, s.status,
 	(d.device_secret_hash IS NOT NULL AND d.device_secret_hash != '') AS has_secret, d.created_at,
-	coalesce(d.open_apps, '[]'::jsonb), d.open_apps_at, d.ssh_public_key`
+	coalesce(d.open_apps, '[]'::jsonb), d.open_apps_at, d.ssh_public_key, d.diagnostic_note`
 
 func scanLabDevice(row pgx.Row) (*LabDevice, error) {
 	var d LabDevice
 	err := row.Scan(&d.ID, &d.DeviceUUID, &d.Name, &d.LastSeenAt, &d.LastIP, &d.AppVersion,
 		&d.CurrentSessionID, &d.CurrentClientName, &d.CurrentStatus, &d.HasSecret, &d.CreatedAt,
-		&d.OpenApps, &d.OpenAppsAt, &d.SSHPublicKey)
+		&d.OpenApps, &d.OpenAppsAt, &d.SSHPublicKey, &d.DiagnosticNote)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

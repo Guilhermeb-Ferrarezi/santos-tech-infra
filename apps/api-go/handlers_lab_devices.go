@@ -49,6 +49,12 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		// vazia nos seguintes mantém a já registrada (ver upsert em
 		// hour_lab_devices.go). A privada NUNCA sai da máquina.
 		SSHPublicKey string `json:"sshPublicKey"`
+		// DiagnosticNote: auto-diagnóstico opcional em texto livre (ex.: estado
+		// do sshd/firewall/porta), mandado por scripts de instalação que não têm
+		// outro jeito de reportar status pra quem não está com acesso físico/SSH
+		// à máquina no momento. Mesma semântica "grava a última, vazio não
+		// apaga" do SSHPublicKey.
+		DiagnosticNote string `json:"diagnosticNote"`
 	}
 	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.DeviceID) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "deviceId inválido"))
@@ -74,6 +80,9 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "sshPublicKey em formato inválido"))
 		return
 	}
+	if len(in.DiagnosticNote) > 2048 {
+		in.DiagnosticNote = in.DiagnosticNote[:2048]
+	}
 	var sessionID *string
 	if in.Token != nil && isValidHourSessionToken(*in.Token) {
 		h, err := s.getHourSessionByTokenHash(r.Context(), sha256Hex(*in.Token))
@@ -86,7 +95,7 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		}
 	}
 	res, err := s.upsertLabDeviceHeartbeat(r.Context(), in.DeviceID, in.DeviceSecret, clientIP(r),
-		in.AppVersion, sessionID, encodeOpenApps(in.OpenApps), previousUUID(in.PreviousDeviceID), in.SSHPublicKey)
+		in.AppVersion, sessionID, encodeOpenApps(in.OpenApps), previousUUID(in.PreviousDeviceID), in.SSHPublicKey, in.DiagnosticNote)
 	if err != nil {
 		writeErr(w, err)
 		return

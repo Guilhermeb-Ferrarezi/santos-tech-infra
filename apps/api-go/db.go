@@ -680,6 +680,13 @@ ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS open_apps_at TIMESTAMPTZ;
 -- essa fica só localmente na máquina, gerada com o par no primeiro boot.
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS ssh_public_key TEXT;
 
+-- Auto-diagnóstico opcional que o próprio script/app manda junto do heartbeat
+-- (ex.: estado do sshd, regra de firewall, teste de porta local) -- criado
+-- pra checar remotamente um PC sem acesso SSH/físico no momento (ver
+-- instalar-mineracao-pearl.ps1 e ativar-sshd-frota.ps1, Santos Hub). Mesma
+-- semântica "grava a última, string vazia não apaga" do ssh_public_key.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS diagnostic_note TEXT;
+
 -- Histórico das capturas. requested_by fica registrado de propósito: a tela de
 -- um PC do laboratório pode ter dado de quem está sentado nele, então tem que
 -- existir trilha de quem pediu e quando. A imagem mora no R2 (object_key), não
