@@ -11,36 +11,40 @@ import (
 )
 
 type LinkShowcaseItem struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	ImageURL    *string   `json:"imageUrl"`
-	URL         string    `json:"url"`
-	Status      string    `json:"status"`
-	Ordem       int       `json:"ordem"`
-	CreatedBy   *int64    `json:"createdBy"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID            string    `json:"id"`
+	Title         string    `json:"title"`
+	Description   string    `json:"description"`
+	ImageURL      *string   `json:"imageUrl"`
+	URL           string    `json:"url"`
+	Status        string    `json:"status"`
+	Ordem         int       `json:"ordem"`
+	TitleGradient bool      `json:"titleGradient"`
+	CreatedBy     *int64    `json:"createdBy"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 type LinkShowcaseItemInput struct {
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	ImageURL    *string `json:"imageUrl"`
-	URL         string  `json:"url"`
-	Status      string  `json:"status"`
-	Ordem       int     `json:"ordem"`
+	Title         string  `json:"title"`
+	Description   string  `json:"description"`
+	ImageURL      *string `json:"imageUrl"`
+	URL           string  `json:"url"`
+	Status        string  `json:"status"`
+	Ordem         int     `json:"ordem"`
+	TitleGradient bool    `json:"titleGradient"`
 }
 
 // LinkShowcasePublicItem é o que a rota pública expõe — nunca inclui status,
-// createdBy ou timestamps (só o necessário pra renderizar um card).
+// createdBy ou timestamps (só o necessário pra renderizar um card). TitleGradient
+// vai pro público porque é ela que decide se o site aplica o degradê no título.
 type LinkShowcasePublicItem struct {
-	ID          string  `json:"id"`
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	ImageURL    *string `json:"imageUrl"`
-	URL         string  `json:"url"`
-	Ordem       int     `json:"ordem"`
+	ID            string  `json:"id"`
+	Title         string  `json:"title"`
+	Description   string  `json:"description"`
+	ImageURL      *string `json:"imageUrl"`
+	URL           string  `json:"url"`
+	Ordem         int     `json:"ordem"`
+	TitleGradient bool    `json:"titleGradient"`
 }
 
 var validLinkShowcaseStatuses = map[string]bool{
@@ -66,16 +70,16 @@ func validateLinkShowcaseInput(in *LinkShowcaseItemInput) error {
 func toPublicLinkShowcaseView(i LinkShowcaseItem) LinkShowcasePublicItem {
 	return LinkShowcasePublicItem{
 		ID: i.ID, Title: i.Title, Description: i.Description,
-		ImageURL: i.ImageURL, URL: i.URL, Ordem: i.Ordem,
+		ImageURL: i.ImageURL, URL: i.URL, Ordem: i.Ordem, TitleGradient: i.TitleGradient,
 	}
 }
 
-const linkShowcaseCols = `id::text, title, description, image_url, url, status, ordem, created_by, created_at, updated_at`
+const linkShowcaseCols = `id::text, title, description, image_url, url, status, ordem, title_gradient, created_by, created_at, updated_at`
 
 func scanLinkShowcaseItem(row pgx.Row) (*LinkShowcaseItem, error) {
 	var i LinkShowcaseItem
 	err := row.Scan(&i.ID, &i.Title, &i.Description, &i.ImageURL, &i.URL,
-		&i.Status, &i.Ordem, &i.CreatedBy, &i.CreatedAt, &i.UpdatedAt)
+		&i.Status, &i.Ordem, &i.TitleGradient, &i.CreatedBy, &i.CreatedAt, &i.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -125,10 +129,10 @@ func (s *Server) getLinkShowcaseItem(ctx context.Context, id string) (*LinkShowc
 
 func (s *Server) insertLinkShowcaseItem(ctx context.Context, in LinkShowcaseItemInput, createdBy int64) (*LinkShowcaseItem, error) {
 	item, err := scanLinkShowcaseItem(s.db.QueryRow(ctx, `
-		INSERT INTO link_showcase_items (title, description, image_url, url, status, ordem, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		INSERT INTO link_showcase_items (title, description, image_url, url, status, ordem, title_gradient, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		RETURNING `+linkShowcaseCols,
-		in.Title, in.Description, in.ImageURL, in.URL, in.Status, in.Ordem, createdBy))
+		in.Title, in.Description, in.ImageURL, in.URL, in.Status, in.Ordem, in.TitleGradient, createdBy))
 	if err != nil {
 		return nil, portalDBErr(err)
 	}
@@ -138,10 +142,10 @@ func (s *Server) insertLinkShowcaseItem(ctx context.Context, in LinkShowcaseItem
 func (s *Server) updateLinkShowcaseItem(ctx context.Context, id string, in LinkShowcaseItemInput) (*LinkShowcaseItem, error) {
 	item, err := scanLinkShowcaseItem(s.db.QueryRow(ctx, `
 		UPDATE link_showcase_items SET
-			title=$2, description=$3, image_url=$4, url=$5, status=$6, ordem=$7, updated_at=now()
+			title=$2, description=$3, image_url=$4, url=$5, status=$6, ordem=$7, title_gradient=$8, updated_at=now()
 		WHERE id=$1::uuid
 		RETURNING `+linkShowcaseCols,
-		id, in.Title, in.Description, in.ImageURL, in.URL, in.Status, in.Ordem))
+		id, in.Title, in.Description, in.ImageURL, in.URL, in.Status, in.Ordem, in.TitleGradient))
 	if err != nil {
 		return nil, portalDBErr(err)
 	}
