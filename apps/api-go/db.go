@@ -432,7 +432,6 @@ CREATE TABLE IF NOT EXISTS social_platform_owners (
   updated_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
 -- Web Push (notificações do navegador — nova tarefa, novo email). endpoint é
 -- único porque o mesmo dispositivo/navegador reaparece com o mesmo endpoint
 -- ao re-subscrever (upsert em vez de duplicar).
@@ -830,6 +829,10 @@ UPDATE oauth_clients SET approved_at = created_at
 -- no-op (ou já estão inativos, ou ganharam approved_at ao serem aprovados).
 UPDATE oauth_clients SET is_active = false
  WHERE approved_at IS NULL AND is_active AND client_id LIKE 'dcr\_%';
+-- link_showcase_items já existe em produção (criada fora deste arquivo); o ADD
+-- COLUMN idempotente é só pra levar o campo novo sem exigir migração manual no
+-- banco. IF EXISTS faz da tabela ausente um no-op inofensivo (dev sem seed).
+ALTER TABLE IF EXISTS link_showcase_items ADD COLUMN IF NOT EXISTS title_gradient BOOLEAN NOT NULL DEFAULT false;
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

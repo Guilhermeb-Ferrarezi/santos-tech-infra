@@ -123,11 +123,14 @@ func TestToPublicLinkShowcaseViewOmitsInternalFields(t *testing.T) {
 	createdBy := int64(4)
 	full := LinkShowcaseItem{
 		ID: "x", Title: "T", Description: "D", URL: "https://x.com",
-		Status: "active", Ordem: 1, CreatedBy: &createdBy,
+		Status: "active", Ordem: 1, TitleGradient: true, CreatedBy: &createdBy,
 	}
 	view := toPublicLinkShowcaseView(full)
 	if view.ID != full.ID || view.Title != full.Title || view.URL != full.URL {
 		t.Fatal("view deveria manter os campos públicos")
+	}
+	if !view.TitleGradient {
+		t.Fatal("titleGradient deveria passar pra view pública — é ela que decide o degradê no site")
 	}
 	// Checagem de tipo: LinkShowcasePublicItem não tem campo Status nem CreatedBy
 	// — se algum dia alguém adicionar esses campos na struct pública por engano,
