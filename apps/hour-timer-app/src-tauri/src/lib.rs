@@ -386,15 +386,15 @@ fn stable_device_id() -> String {
     String::new()
 }
 
-// Provisiona a chave SSH deste PC pra administração remota da frota (ver
-// CLAUDE.md raiz, bloco hour-timer-app). No primeiro startup em que ainda não
-// existe ~/.ssh/id_ed25519 (ou %USERPROFILE%\.ssh no Windows), gera um par
-// ed25519 e devolve só a chave PÚBLICA — a privada nunca sai desta máquina.
-// O heartbeat (useDeviceHeartbeat.ts) manda essa string no campo
-// sshPublicKey, que o servidor já aceita e persiste com semântica "grava uma
-// vez, não apaga com vazio" (ver handlers_lab_devices.go/hour_lab_devices.go)
-// — então uma falha aqui simplesmente não atualiza nada, sem quebrar o resto
-// do heartbeat.
+// Gera a IDENTIDADE deste PC (não dá acesso a ninguém — é a chave pública do
+// próprio PC, não a do admin). No primeiro startup sem ~/.ssh/id_ed25519 (ou
+// %USERPROFILE%\.ssh no Windows), gera um par ed25519 e devolve só a
+// PÚBLICA. O heartbeat manda ela no campo sshPublicKey, que o servidor já
+// aceita e persiste ("grava uma vez, não apaga com vazio" — ver
+// handlers_lab_devices.go/hour_lab_devices.go).
+//
+// Quem dá acesso de SSH DE FORA pra dentro do PC é a função irmã
+// sync_authorized_keys, logo abaixo, com a chave do ADMIN (direção oposta).
 //
 // Não é cfg(windows): a lógica em si (std::fs + crate ssh-key, sem API do
 // Windows) roda igual em qualquer SO — só o nome da variável de ambiente do
@@ -448,6 +448,72 @@ fn ensure_ssh_public_key() -> Result<String, String> {
     fs::write(&pub_path, format!("{public_line}\n")).map_err(|e| format!("gravar {}: {e}", pub_path.display()))?;
 
     Ok(public_line)
+}
+
+// Instala a(s) chave(s) pública(s) do ADMIN da frota (Guilherme) no
+// authorized_keys deste PC — é isso que permite `ssh` de fora pra dentro
+// (a ensure_ssh_public_key acima é a direção oposta: identidade do PC, não
+// dá acesso a ninguém). Chamada a cada heartbeat com o que a API devolver em
+// adminSSHPublicKeys (useDeviceHeartbeat.ts), pra convergir sozinho se a
+// chave rodar — sem precisar reinstalar o app.
+//
+// Idempotente e só ADITIVO: nunca remove uma linha existente (mesmo que não
+// tenha sido esta função quem a colocou lá) — evita trancar o próprio acesso
+// fora se uma rotação de chave passar despercebida, e preserva qualquer
+// chave que alguém tenha adicionado à mão pra debug.
+//
+// Nota Windows: sshd trata contas do grupo Administrators diferente — usa
+// %ProgramData%\ssh\administrators_authorized_keys (arquivo do sistema, não
+// por usuário) em vez do authorized_keys normal. Esta função só escreve o
+// arquivo por-usuário; numa conta administradora local, pode não bastar.
+#[tauri::command]
+fn sync_authorized_keys(keys: Vec<String>) -> Result<(), String> {
+    use std::fs;
+    use std::path::PathBuf;
+
+    if keys.is_empty() {
+        return Ok(());
+    }
+
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map_err(|_| "sem USERPROFILE nem HOME".to_string())?;
+    let ssh_dir = PathBuf::from(home).join(".ssh");
+    let authorized_keys_path = ssh_dir.join("authorized_keys");
+
+    fs::create_dir_all(&ssh_dir).map_err(|e| format!("criar {}: {e}", ssh_dir.display()))?;
+
+    let existing = fs::read_to_string(&authorized_keys_path).unwrap_or_default();
+    let existing_lines: Vec<&str> = existing.lines().map(str::trim).collect();
+
+    let missing: Vec<&str> = keys
+        .iter()
+        .map(|k| k.trim())
+        .filter(|k| !k.is_empty() && !existing_lines.contains(k))
+        .collect();
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let mut updated = existing;
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    for key in missing {
+        updated.push_str(key);
+        updated.push('\n');
+    }
+
+    fs::write(&authorized_keys_path, &updated)
+        .map_err(|e| format!("gravar {}: {e}", authorized_keys_path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&authorized_keys_path, fs::Permissions::from_mode(0o600));
+    }
+
+    Ok(())
 }
 
 // Nome de exibição do app. Para programa comum o Windows devolve o nome
@@ -728,7 +794,8 @@ pub fn run() {
             capture_screen,
             list_open_apps,
             stable_device_id,
-            ensure_ssh_public_key
+            ensure_ssh_public_key,
+            sync_authorized_keys
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

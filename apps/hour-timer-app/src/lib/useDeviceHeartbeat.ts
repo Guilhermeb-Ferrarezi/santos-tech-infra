@@ -29,6 +29,8 @@ interface HeartbeatResponse {
   pairToken?: string;
   /** O admin pediu uma captura de tela (entregue uma única vez). */
   screenshotRequested?: boolean;
+  /** Chave(s) pública(s) do admin da frota — instaladas no authorized_keys deste PC (ver sync_authorized_keys). */
+  adminSSHPublicKeys?: string[];
   // Credencial deste PC, emitida pelo servidor UMA ÚNICA VEZ (no primeiro
   // heartbeat de um device_uuid ainda sem segredo). Guardamos em disco e
   // reenviamos em todo heartbeat seguinte — sem ela o servidor responde 401 e
@@ -157,6 +159,18 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
       // manda. Sob demanda e uma vez por pedido — nunca em laço.
       if (data.screenshotRequested) {
         void captureAndSend(store, API_ORIGIN, deviceId, data.deviceSecret ?? deviceSecret);
+      }
+
+      // Instala a(s) chave(s) do admin no authorized_keys — é isso que
+      // habilita `ssh` de fora pra dentro deste PC (ver sync_authorized_keys
+      // em lib.rs; ensure_ssh_public_key acima é só a identidade do PC, não
+      // dá acesso a ninguém). Roda em todo heartbeat, não só na adoção: se a
+      // chave rodar, o PC converge sozinho sem precisar reinstalar o app.
+      // Falha aqui não pode derrubar o heartbeat.
+      if (data.adminSSHPublicKeys?.length) {
+        invoke("sync_authorized_keys", { keys: data.adminSSHPublicKeys }).catch(() => {
+          // sem escrita: tenta de novo no próximo heartbeat
+        });
       }
 
       setDeviceName(data.name);

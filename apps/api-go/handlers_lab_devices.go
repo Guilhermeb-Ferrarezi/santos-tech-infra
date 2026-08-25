@@ -116,6 +116,13 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		// que chega antes do servidor certo ou com o registro antigo travado.
 		resp["previousDeviceResolved"] = true
 	}
+	if len(s.cfg.FleetAdminSSHPublicKeys) > 0 {
+		// Chave(s) do ADMIN, não do PC — o app instala isso no próprio
+		// authorized_keys pra permitir SSH de fora pra dentro. Vai em todo
+		// heartbeat (não só o primeiro): se a chave rodar, o PC precisa
+		// convergir sozinho no próximo ciclo, sem esperar reinstalação.
+		resp["adminSSHPublicKeys"] = s.cfg.FleetAdminSSHPublicKeys
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

@@ -67,6 +67,15 @@ type Config struct {
 	// à internet por falta de configuração (fail-closed de propósito).
 	SantosHubToken string
 
+	// FleetAdminSSHPublicKeys: chave(s) pública(s) do(s) admin(s) da frota
+	// (Guilherme), devolvidas no heartbeat do hour-timer-app pra ele instalar
+	// em ~/.ssh/authorized_keys de cada PC de laboratório — é assim que dá
+	// pra entrar via SSH DE FORA pra dentro do PC (o sshPublicKey que o PC
+	// manda É a identidade do próprio PC, não abre acesso nenhum; ver
+	// handlers_lab_devices.go). VAZIO = nenhuma chave é instalada, sem quebrar
+	// nada — o heartbeat simplesmente não devolve o campo.
+	FleetAdminSSHPublicKeys []string
+
 	// Arquivos (pastas de admin vinculadas ao Google Drive, ver drive.go): JSON
 	// da service account em base64. Vazio = feature desabilitada, rotas de
 	// /drive-folders respondem 503. O admin compartilha cada pasta manualmente
@@ -165,6 +174,8 @@ func LoadConfig() Config {
 		R2PublicURL: strings.TrimRight(getEnv("CF_R2_PUBLIC_URL", ""), "/"),
 
 		SantosHubToken: getEnv("SANTOS_HUB_TOKEN", ""),
+
+		FleetAdminSSHPublicKeys: splitCSV(getEnv("FLEET_ADMIN_SSH_PUBLIC_KEYS", "")),
 
 		GoogleDriveSAJSONB64: getEnv("GOOGLE_DRIVE_SA_JSON_B64", ""),
 
