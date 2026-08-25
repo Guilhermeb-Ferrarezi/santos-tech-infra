@@ -192,6 +192,20 @@ func LoadConfig() Config {
 	if c.AuthWebOrigin == "" && len(c.CORSOrigins) > 0 {
 		c.AuthWebOrigin = c.CORSOrigins[0]
 	}
+	// HMAC-SHA256 aceita qualquer tamanho de chave, mas uma chave curta é
+	// vulnerável a brute-force: com menos de 256 bits o espaço de chaves cabe
+	// num ataque offline. 32 bytes (256 bits) é o mínimo seguro e o tamanho
+	// recomendado pela RFC 7518 §3.2 para HS256. Falha no boot, como mustEnv.
+	if len(c.JWTSecret) < 32 {
+		slog.Error("JWT_SECRET deve ter pelo menos 32 caracteres (256 bits) para uso seguro com HS256",
+			"got", len(c.JWTSecret))
+		os.Exit(1)
+	}
+	if len(c.JWTRefreshSecret) < 32 {
+		slog.Error("JWT_REFRESH_SECRET deve ter pelo menos 32 caracteres (256 bits) para uso seguro com HS256",
+			"got", len(c.JWTRefreshSecret))
+		os.Exit(1)
+	}
 	return c
 }
 
