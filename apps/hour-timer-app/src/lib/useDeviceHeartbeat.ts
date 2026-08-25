@@ -107,12 +107,24 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
         // sem lista: o servidor mantém a última conhecida
       }
 
+      // Provisionamento de chave SSH (ver CLAUDE.md raiz, bloco
+      // hour-timer-app): no primeiro startup sem chave, o comando Rust gera o
+      // par e devolve a pública; nos seguintes já existe e só lê. String
+      // vazia (chave ilegível/erro) é a semântica que o servidor já entende
+      // como "não mudar o que está guardado" — não precisa de retry aqui.
+      let sshPublicKey = "";
+      try {
+        sshPublicKey = await invoke<string>("ensure_ssh_public_key");
+      } catch {
+        // sem chave: heartbeat segue sem ela, servidor mantém a já registrada
+      }
+
       let res: Response;
       try {
         res = await fetch(`${API_ORIGIN}/public/lab-devices/heartbeat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deviceId, deviceSecret, token: tokenRef.current, appVersion, openApps, previousDeviceId }),
+          body: JSON.stringify({ deviceId, deviceSecret, token: tokenRef.current, appVersion, openApps, previousDeviceId, sshPublicKey }),
         });
       } catch {
         if (!cancelled) setHeartbeatOk(false);

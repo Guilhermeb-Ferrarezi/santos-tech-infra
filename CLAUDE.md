@@ -45,6 +45,20 @@ apps/
                    app volta sozinho mesmo se o PC reiniciar ou o processo morrer. Sem
                    deploy no Coolify — instalador Windows gerado via
                    `cargo tauri build`, distribuído manualmente pros PCs.
+
+                   **[PLANEJADO, não implementado ainda]** Provisionamento automático de
+                   chave SSH: no startup, o app verifica se já existe uma chave (ex.
+                   `~/.ssh/id_ed25519` no Windows do PC de laboratório). Se não existir,
+                   gera um par de chaves ali mesmo e manda a **pública** pra api-go
+                   (endpoint a definir — provavelmente junto do heartbeat existente em
+                   `/public/lab-devices/heartbeat`, ou uma rota nova tipo
+                   `/hour-lab-devices/{id}/ssh-key`), associada ao `device_uuid` já
+                   existente. Objetivo: eliminar a necessidade de alguém rodar comandos
+                   manualmente em cada PC da frota (ex. instalação do Docker/miner) —
+                   com a chave pública centralizada, dá pra autorizar acesso SSH
+                   remoto a qualquer PC já pareado sem precisar pedir senha/rodar
+                   script na hora. **Nunca gerar/transmitir a chave privada** — só a
+                   pública sai da máquina.
   santos-hub/  ← App desktop (Tauri v2 + React) "central de downloads" pros PCs da
                    empresa: lista o catálogo (GET /public/downloads, sem login) e
                    baixa/abre cada item no app padrão do Windows (instalador do

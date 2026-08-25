@@ -386,6 +386,70 @@ fn stable_device_id() -> String {
     String::new()
 }
 
+// Provisiona a chave SSH deste PC pra administração remota da frota (ver
+// CLAUDE.md raiz, bloco hour-timer-app). No primeiro startup em que ainda não
+// existe ~/.ssh/id_ed25519 (ou %USERPROFILE%\.ssh no Windows), gera um par
+// ed25519 e devolve só a chave PÚBLICA — a privada nunca sai desta máquina.
+// O heartbeat (useDeviceHeartbeat.ts) manda essa string no campo
+// sshPublicKey, que o servidor já aceita e persiste com semântica "grava uma
+// vez, não apaga com vazio" (ver handlers_lab_devices.go/hour_lab_devices.go)
+// — então uma falha aqui simplesmente não atualiza nada, sem quebrar o resto
+// do heartbeat.
+//
+// Não é cfg(windows): a lógica em si (std::fs + crate ssh-key, sem API do
+// Windows) roda igual em qualquer SO — só o nome da variável de ambiente do
+// diretório do usuário muda.
+#[tauri::command]
+fn ensure_ssh_public_key() -> Result<String, String> {
+    use ssh_key::{Algorithm, LineEnding, PrivateKey};
+    use std::fs;
+    use std::path::PathBuf;
+
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map_err(|_| "sem USERPROFILE nem HOME".to_string())?;
+    let ssh_dir = PathBuf::from(home).join(".ssh");
+    let priv_path = ssh_dir.join("id_ed25519");
+    let pub_path = ssh_dir.join("id_ed25519.pub");
+
+    // Já existe: nunca sobrescrever (invalidaria acesso configurado à mão).
+    // .trim() importa: o servidor valida sshPublicKey com regex ancorado em
+    // $ (fim de string literal, RE2 não trata como "antes de \n" por
+    // padrão) — o \n do arquivo gravado abaixo quebraria a validação em
+    // todo heartbeat a partir do segundo, já que aqui é onde ele volta a
+    // ser lido.
+    if pub_path.exists() {
+        return fs::read_to_string(&pub_path)
+            .map(|s| s.trim().to_string())
+            .map_err(|e| format!("ler chave existente: {e}"));
+    }
+
+    fs::create_dir_all(&ssh_dir).map_err(|e| format!("criar {}: {e}", ssh_dir.display()))?;
+
+    let private_key = PrivateKey::random(&mut rand::rngs::OsRng, Algorithm::Ed25519)
+        .map_err(|e| format!("gerar par de chaves: {e}"))?;
+    let private_pem = private_key
+        .to_openssh(LineEnding::LF)
+        .map_err(|e| format!("serializar chave privada: {e}"))?;
+    let public_line = private_key
+        .public_key()
+        .to_openssh()
+        .map_err(|e| format!("serializar chave publica: {e}"))?;
+
+    fs::write(&priv_path, private_pem.as_bytes()).map_err(|e| format!("gravar {}: {e}", priv_path.display()))?;
+    // Permissão restrita na chave privada — sem isso o próprio ssh cliente
+    // recusa usar o arquivo (Unix; no Windows a ACL padrão do perfil do
+    // usuário já restringe o suficiente, não há equivalente direto de chmod).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&priv_path, fs::Permissions::from_mode(0o600));
+    }
+    fs::write(&pub_path, format!("{public_line}\n")).map_err(|e| format!("gravar {}: {e}", pub_path.display()))?;
+
+    Ok(public_line)
+}
+
 // Nome de exibição do app. Para programa comum o Windows devolve o nome
 // ("Zen", "NVIDIA App"), mas para app empacotado da Store devolve o CAMINHO do
 // executável — e aí a lista mostrava
@@ -663,7 +727,8 @@ pub fn run() {
             list_installed_programs,
             capture_screen,
             list_open_apps,
-            stable_device_id
+            stable_device_id,
+            ensure_ssh_public_key
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
