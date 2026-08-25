@@ -833,6 +833,33 @@ UPDATE oauth_clients SET is_active = false
 -- COLUMN idempotente é só pra levar o campo novo sem exigir migração manual no
 -- banco. IF EXISTS faz da tabela ausente um no-op inofensivo (dev sem seed).
 ALTER TABLE IF EXISTS link_showcase_items ADD COLUMN IF NOT EXISTS title_gradient BOOLEAN NOT NULL DEFAULT false;
+-- Campo "Série" do Calendário Editorial — agrupa peças da mesma linha de
+-- conteúdo (ex.: "Tela&Saúde", "GMN"). Lista fechada (só admin cadastra via
+-- GET/POST/PUT /social/series), substitui a convenção manual de prefixo
+-- "[Nome]" no título. Ver docs/superpowers/specs/2026-08-25-serie-calendario-editorial-design.md.
+CREATE TABLE IF NOT EXISTS social_series (
+  id         SERIAL PRIMARY KEY,
+  nome       TEXT NOT NULL UNIQUE,
+  ativa      BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS serie_id INTEGER REFERENCES social_series(id) ON DELETE SET NULL;
+-- Migração automática dos posts existentes: extrai o "[Nome]" do início do
+-- título pra dentro de social_series e limpa o título. Idempotente — o filtro
+-- "serie_id IS NULL AND title ~ '^\[...\]'" só bate em posts ainda não
+-- migrados, então rodar de novo (todo boot) é no-op depois da primeira vez.
+INSERT INTO social_series (nome)
+SELECT DISTINCT trim(substring(title from '^\[([^\]]+)\]'))
+FROM social_posts
+WHERE serie_id IS NULL AND title ~ '^\[[^\]]+\]'
+ON CONFLICT (nome) DO NOTHING;
+UPDATE social_posts p SET
+  serie_id = ser.id,
+  title = trim(regexp_replace(p.title, '^\[[^\]]+\]\s*', ''))
+FROM social_series ser
+WHERE p.serie_id IS NULL
+  AND p.title ~ '^\[[^\]]+\]'
+  AND ser.nome = trim(substring(p.title from '^\[([^\]]+)\]'));
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

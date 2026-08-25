@@ -63,6 +63,9 @@ type SocialPost struct {
 	Mandatorios        string          `json:"mandatorios"`
 	ResponsavelID      *int64          `json:"responsavelId"`
 	FunilEtapa         string          `json:"funilEtapa"`
+	// Série (linha de conteúdo, ex.: "Tela&Saúde") — nil quando o post não
+	// está associado a nenhuma. Só leitura; ver SocialPostInput.SerieID.
+	Serie *SocialSerieRef `json:"serie"`
 
 	ResponsavelNome string `json:"responsavelNome"`
 	// AssigneeIDs são responsáveis ADICIONAIS além de ResponsavelID (o
@@ -144,6 +147,26 @@ type SocialPostInput struct {
 	ResponsavelID      *int64          `json:"responsavelId"`
 	FunilEtapa         string          `json:"funilEtapa"`
 	AssigneeIDs        []int64         `json:"assigneeIds"`
+	// SerieID referencia social_series(id); nil = sem série. Validado em
+	// validateSerieID (existência) antes de INSERT/UPDATE.
+	SerieID *int64 `json:"serieId"`
+}
+
+// SocialSerie: uma linha de conteúdo do calendário editorial (ex.:
+// "Tela&Saúde", "GMN") — lista fechada, só admin cadastra/edita/desativa
+// (GET/POST/PUT /social/series). Ativa=false só esconde do dropdown de
+// criação; posts que já usam a série continuam mostrando o nome normalmente.
+type SocialSerie struct {
+	ID        int64     `json:"id"`
+	Nome      string    `json:"nome"`
+	Ativa     bool      `json:"ativa"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// SocialSerieRef é a projeção mínima (id+nome) embutida em SocialPost.Serie.
+type SocialSerieRef struct {
+	ID   int64  `json:"id"`
+	Nome string `json:"nome"`
 }
 
 // socialPostInputFromCurrent copia os campos editáveis do post atual para um
@@ -183,7 +206,19 @@ func socialPostInputFromCurrent(p *SocialPost) SocialPostInput {
 		ResponsavelID:      p.ResponsavelID,
 		FunilEtapa:         p.FunilEtapa,
 		AssigneeIDs:        p.AssigneeIDs,
+		SerieID:            serieIDOf(p.Serie),
 	}
+}
+
+// serieIDOf extrai o id da referência de série embutida em SocialPost —
+// usado só para reidratar o SocialPostInput a partir do post atual (PUT
+// parcial); nil se o post não tem série.
+func serieIDOf(s *SocialSerieRef) *int64 {
+	if s == nil {
+		return nil
+	}
+	id := s.ID
+	return &id
 }
 
 // mergeSocialPostInput aplica em `in` só os campos presentes em `raw` (chave
@@ -226,6 +261,7 @@ func mergeSocialPostInput(in *SocialPostInput, raw map[string]json.RawMessage) e
 		"responsavelId":      &in.ResponsavelID,
 		"funilEtapa":         &in.FunilEtapa,
 		"assigneeIds":        &in.AssigneeIDs,
+		"serieId":            &in.SerieID,
 	}
 	for key, ptr := range fields {
 		v, ok := raw[key]
@@ -284,21 +320,35 @@ const socialPostCols = `id::text, title, caption, platform, pilar, status,
 	conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
 	responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
 	COALESCE((SELECT array_agg(sa.user_id ORDER BY sa.added_at) FROM social_post_assignees sa WHERE sa.post_id = social_posts.id), '{}'),
+	serie_id, (SELECT nome FROM social_series WHERE id = social_posts.serie_id),
 	created_by, created_at, updated_at`
 
 func scanSocialPost(row pgx.Row) (*SocialPost, error) {
 	var p SocialPost
+	var serieID *int64
+	var serieNome *string
 	err := row.Scan(&p.ID, &p.Title, &p.Caption, &p.Platform, &p.Pilar, &p.Status,
 		&p.ScheduledAt, &p.MediaURL, &p.ReferenceURL, &p.DriveFolderID, &p.DriveFileID, &p.DriveFileName,
 		&p.DriveCoverFolderID, &p.DriveCoverFileID, &p.DriveCoverFileName, &p.AltText, &p.CarouselItems,
 		&p.Formato, &p.Objetivo, &p.Programa, &p.Receita, &p.PlataformasDestino, &p.CopyArte, &p.Hashtags,
 		&p.ConceitoVisual, &p.Paleta, &p.PromptIA, &p.Specs, &p.MasterURL, &p.Mandatorios,
 		&p.ResponsavelID, &p.FunilEtapa, &p.ResponsavelNome, &p.AssigneeIDs,
+		&serieID, &serieNome,
 		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
-	return &p, err
+	if err != nil {
+		return nil, err
+	}
+	if serieID != nil {
+		nome := ""
+		if serieNome != nil {
+			nome = *serieNome
+		}
+		p.Serie = &SocialSerieRef{ID: *serieID, Nome: nome}
+	}
+	return &p, nil
 }
 
 func jsonbOrDefault(raw json.RawMessage, def string) json.RawMessage {
@@ -366,8 +416,8 @@ func (s *Server) insertSocialPost(ctx context.Context, in SocialPostInput, creat
 			drive_folder_id, drive_file_id, drive_file_name,
 			drive_cover_folder_id, drive_cover_file_id, drive_cover_file_name, alt_text, carousel_items,
 			formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
-			conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios, responsavel_id, funil_etapa, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12::uuid,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
+			conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios, responsavel_id, funil_etapa, serie_id, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12::uuid,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
 		RETURNING id::text`,
 		in.Title, in.Caption, in.Platform, in.Pilar, in.Status, in.ScheduledAt, in.MediaURL, in.ReferenceURL,
 		in.DriveFolderID, in.DriveFileID, in.DriveFileName,
@@ -376,7 +426,7 @@ func (s *Server) insertSocialPost(ctx context.Context, in SocialPostInput, creat
 		in.Formato, in.Objetivo, in.Programa, in.Receita, sliceOrEmpty(in.PlataformasDestino),
 		jsonbOrDefault(in.CopyArte, "[]"), sliceOrEmpty(in.Hashtags),
 		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.PromptIA, jsonbOrDefault(in.Specs, "{}"),
-		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.FunilEtapa, createdBy).Scan(&id)
+		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.FunilEtapa, in.SerieID, createdBy).Scan(&id)
 	if err != nil {
 		return nil, portalDBErr(err)
 	}
@@ -405,7 +455,7 @@ func (s *Server) updateSocialPost(ctx context.Context, id string, in SocialPostI
 			drive_folder_id=$10::uuid, drive_file_id=$11, drive_file_name=$12,
 			drive_cover_folder_id=$13::uuid, drive_cover_file_id=$14, drive_cover_file_name=$15, alt_text=$16, carousel_items=$17,
 			formato=$18, objetivo=$19, programa=$20, receita=$21, plataformas_destino=$22, copy_arte=$23, hashtags=$24,
-			conceito_visual=$25, paleta=$26, prompt_ia=$27, specs=$28, master_url=$29, mandatorios=$30, responsavel_id=$31, funil_etapa=$32, updated_at=now()
+			conceito_visual=$25, paleta=$26, prompt_ia=$27, specs=$28, master_url=$29, mandatorios=$30, responsavel_id=$31, funil_etapa=$32, serie_id=$33, updated_at=now()
 		WHERE id=$1::uuid`,
 		id, in.Title, in.Caption, in.Platform, in.Pilar, in.Status, in.ScheduledAt, in.MediaURL, in.ReferenceURL,
 		in.DriveFolderID, in.DriveFileID, in.DriveFileName,
@@ -414,7 +464,7 @@ func (s *Server) updateSocialPost(ctx context.Context, id string, in SocialPostI
 		in.Formato, in.Objetivo, in.Programa, in.Receita, sliceOrEmpty(in.PlataformasDestino),
 		jsonbOrDefault(in.CopyArte, "[]"), sliceOrEmpty(in.Hashtags),
 		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.PromptIA, jsonbOrDefault(in.Specs, "{}"),
-		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.FunilEtapa); err != nil {
+		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.FunilEtapa, in.SerieID); err != nil {
 		return nil, portalDBErr(err)
 	}
 	if err := replaceSocialPostAssignees(ctx, tx, id, in.AssigneeIDs, updatedBy); err != nil {
@@ -678,3 +728,80 @@ func (s *Server) checkPublishConfirmationsComplete(ctx context.Context, postID s
 
 var errPublishNotConfirmed = appErr(http.StatusBadRequest, "PUBLISH_NOT_CONFIRMED",
 	"Não é possível concluir — publique o conteúdo em todas as redes definidas e confirme cada uma antes de marcar como concluído.")
+
+var errSocialSerieNotFound = appErr(http.StatusNotFound, "SOCIAL_SERIE_NOT_FOUND", "Série não encontrada")
+
+func (s *Server) listSocialSeries(ctx context.Context) ([]SocialSerie, error) {
+	rows, err := s.db.Query(ctx, `SELECT id, nome, ativa, created_at FROM social_series ORDER BY nome`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SocialSerie{}
+	for rows.Next() {
+		var se SocialSerie
+		if err := rows.Scan(&se.ID, &se.Nome, &se.Ativa, &se.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, se)
+	}
+	return out, rows.Err()
+}
+
+func (s *Server) getSocialSerie(ctx context.Context, id int64) (*SocialSerie, error) {
+	var se SocialSerie
+	err := s.db.QueryRow(ctx, `SELECT id, nome, ativa, created_at FROM social_series WHERE id = $1`, id).
+		Scan(&se.ID, &se.Nome, &se.Ativa, &se.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &se, nil
+}
+
+// validateSerieID só confirma que a série existe (FK garantiria isso no
+// INSERT/UPDATE de qualquer forma, mas validar antes devolve um erro 400 com
+// mensagem clara em vez de um 500 de violação de FK). Não exige Ativa=true:
+// desativar uma série não pode quebrar a edição de posts que já a usam — só
+// tira ela do dropdown de novos posts (ver GET /social/series no front).
+func (s *Server) validateSerieID(ctx context.Context, id *int64) error {
+	if id == nil {
+		return nil
+	}
+	se, err := s.getSocialSerie(ctx, *id)
+	if err != nil {
+		return err
+	}
+	if se == nil {
+		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Série inválida")
+	}
+	return nil
+}
+
+func (s *Server) insertSocialSerie(ctx context.Context, nome string) (*SocialSerie, error) {
+	var se SocialSerie
+	err := s.db.QueryRow(ctx,
+		`INSERT INTO social_series (nome) VALUES ($1) RETURNING id, nome, ativa, created_at`, nome).
+		Scan(&se.ID, &se.Nome, &se.Ativa, &se.CreatedAt)
+	if err != nil {
+		return nil, portalDBErr(err)
+	}
+	return &se, nil
+}
+
+func (s *Server) updateSocialSerie(ctx context.Context, id int64, nome string, ativa bool) (*SocialSerie, error) {
+	var se SocialSerie
+	err := s.db.QueryRow(ctx,
+		`UPDATE social_series SET nome = $2, ativa = $3 WHERE id = $1 RETURNING id, nome, ativa, created_at`,
+		id, nome, ativa).
+		Scan(&se.ID, &se.Nome, &se.Ativa, &se.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, portalDBErr(err)
+	}
+	return &se, nil
+}

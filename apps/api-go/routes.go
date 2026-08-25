@@ -267,6 +267,12 @@ func (s *Server) registerSocialRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /social/platform-owners/{platform}", s.adminGuard(s.handleDeleteSocialPlatformOwner))
 	mux.HandleFunc("GET /social/settings", s.permGuard("social", "read", false, s.handleGetSocialSettings))
 	mux.HandleFunc("PUT /social/settings", s.rateLimit(30, min, s.adminGuard(s.handleUpdateSocialSettings)))
+	// Série: lista fechada de linhas de conteúdo do calendário — leitura pra
+	// quem já vê o calendário, cadastro/edição só admin (mesma convenção de
+	// platform-owners/settings acima).
+	mux.HandleFunc("GET /social/series", s.permGuard("social", "read", false, s.handleListSocialSeries))
+	mux.HandleFunc("POST /social/series", s.rateLimit(20, min, s.adminGuard(s.handleCreateSocialSerie)))
+	mux.HandleFunc("PUT /social/series/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateSocialSerie)))
 	mux.HandleFunc("GET /tasks", s.permGuard("tarefas", "read", true, s.handleListTasks))
 	mux.HandleFunc("GET /tasks/{id}", s.permGuard("tarefas", "read", true, s.handleGetTask))
 	mux.HandleFunc("POST /tasks", s.rateLimit(30, min, s.permGuard("tarefas", "write", true, s.handleCreateTask)))

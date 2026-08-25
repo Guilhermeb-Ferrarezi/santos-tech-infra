@@ -157,3 +157,52 @@ func TestMergeSocialPostInput_TipoInvalidoRetornaErro(t *testing.T) {
 		t.Fatal("esperava erro de tipo inválido em responsavelId")
 	}
 }
+
+// --- Série (social_series) ---
+
+func TestSerieIDOf(t *testing.T) {
+	if got := serieIDOf(nil); got != nil {
+		t.Fatalf("esperava nil pra post sem série, veio %v", *got)
+	}
+	got := serieIDOf(&SocialSerieRef{ID: 7, Nome: "Tela&Saúde"})
+	if got == nil || *got != 7 {
+		t.Fatalf("esperava ponteiro pra 7, veio %v", got)
+	}
+}
+
+func TestSocialPostInputFromCurrent_PreservaSerie(t *testing.T) {
+	current := baseCurrentPost()
+	current.Serie = &SocialSerieRef{ID: 3, Nome: "GMN"}
+	in := socialPostInputFromCurrent(current)
+	if in.SerieID == nil || *in.SerieID != 3 {
+		t.Fatalf("esperava serieId=3 reidratado do post atual, veio %v", in.SerieID)
+	}
+}
+
+func TestMergeSocialPostInput_SerieIdMerge(t *testing.T) {
+	in := socialPostInputFromCurrent(baseCurrentPost()) // sem série
+	raw := map[string]json.RawMessage{
+		"serieId": json.RawMessage(`5`),
+	}
+	if err := mergeSocialPostInput(&in, raw); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if in.SerieID == nil || *in.SerieID != 5 {
+		t.Fatalf("esperava serieId=5 aplicado pelo merge, veio %v", in.SerieID)
+	}
+}
+
+func TestMergeSocialPostInput_SerieIdNullLimpaSerie(t *testing.T) {
+	current := baseCurrentPost()
+	current.Serie = &SocialSerieRef{ID: 3, Nome: "GMN"}
+	in := socialPostInputFromCurrent(current)
+	raw := map[string]json.RawMessage{
+		"serieId": json.RawMessage(`null`),
+	}
+	if err := mergeSocialPostInput(&in, raw); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if in.SerieID != nil {
+		t.Fatalf("esperava serieId nil após serieId:null explícito, veio %v", *in.SerieID)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -138,6 +139,10 @@ func (s *Server) handleCreateSocialPost(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
+	if err := s.validateSerieID(r.Context(), in.SerieID); err != nil {
+		writeErr(w, err)
+		return
+	}
 	post, err := s.insertSocialPost(r.Context(), in, userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
@@ -186,6 +191,10 @@ func (s *Server) handleUpdateSocialPost(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.validateAssigneeIDs(r.Context(), in.AssigneeIDs); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.validateSerieID(r.Context(), in.SerieID); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -542,6 +551,73 @@ func (s *Server) handleDeleteSocialPlatformOwner(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"owners": owners})
+}
+
+// GET /social/series — lista todas (ativas e inativas); o front filtra as
+// inativas fora do dropdown de criação e mostra todas na tela de gestão.
+func (s *Server) handleListSocialSeries(w http.ResponseWriter, r *http.Request) {
+	series, err := s.listSocialSeries(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"series": series})
+}
+
+// POST /social/series
+func (s *Server) handleCreateSocialSerie(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var in struct {
+		Nome string `json:"nome"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	in.Nome = strings.TrimSpace(in.Nome)
+	if in.Nome == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Nome obrigatório"))
+		return
+	}
+	serie, err := s.insertSocialSerie(r.Context(), in.Nome)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"serie": serie})
+}
+
+// PUT /social/series/{id}
+func (s *Server) handleUpdateSocialSerie(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, errSocialSerieNotFound)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var in struct {
+		Nome  string `json:"nome"`
+		Ativa bool   `json:"ativa"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	in.Nome = strings.TrimSpace(in.Nome)
+	if in.Nome == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Nome obrigatório"))
+		return
+	}
+	serie, err := s.updateSocialSerie(r.Context(), id, in.Nome, in.Ativa)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if serie == nil {
+		writeErr(w, errSocialSerieNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"serie": serie})
 }
 
 // GET /social/settings

@@ -774,6 +774,21 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
   (máx 100 chars cada) — não confirma que o ID é válido na Meta, isso só se descobre na
   hora de publicar. → `{settings: SocialSettings}` · corpo inválido/ID grande demais → 400.
   Feature de 19/08/2026.
+- `GET /social/series` — lista TODAS as séries (ativas e inativas — o front filtra as
+  inativas fora do dropdown de criação de post e mostra todas na tela de gestão).
+  → `{series:[SocialSerie]}`. **Série**: agrupa peças da mesma linha de conteúdo (ex.:
+  "Tela&Saúde", "GMN") — substitui a antiga convenção manual de prefixo `[Nome]` no
+  `title`. Lista fechada (só admin cadastra/edita).
+- `POST /social/series {nome}` → 201 `{serie: SocialSerie}`. **Admin-only**. `nome` vazio
+  → 400; `nome` duplicado → 409 `registro duplicado` (constraint `UNIQUE`).
+- `PUT /social/series/{id} {nome, ativa}` → `{serie: SocialSerie}`. **Admin-only**. Mesmas
+  validações do POST; id inexistente → 404 `SOCIAL_SERIE_NOT_FOUND`. `ativa: false` só tira
+  a série do dropdown de criação — posts que já a usam continuam mostrando o nome, e editar
+  esses posts (sem trocar a série) continua funcionando normalmente.
+  Post ganha campo `serieId` (nullable, FK `social_series.id`) no `SocialPostInput` — valor
+  inexistente → 400 (`validateSerieID`, existência apenas, não exige `ativa: true`).
+  Migração automática rodou 1x no boot: posts antigos com `title` no formato `[Nome] resto`
+  tiveram a série extraída/criada e o `[Nome]` removido do título. Feature de 25/08/2026.
 
 **SocialPost** (campos do briefing): `title` (interno), `caption` (legenda),
 `platform`, `pilar` (educacional|institucional|captacao|prova_social|bastidores|tech_mundo_real),
@@ -804,13 +819,18 @@ envolvido". Feature de 18/08/2026),
 `funilEtapa` (''|topo|meio|fundo — função da peça no funil de tráfego pago; vazio é o
 default das peças criadas antes do campo existir. Valor inválido → 400),
 `publishConfirmations[]` ({platform,confirmedById,confirmedByName,confirmedAt} — só
-populado em `GET /social/posts/{id}` (post único), vazio em `GET /social/posts` (lista)).
+populado em `GET /social/posts/{id}` (post único), vazio em `GET /social/posts` (lista)),
+`serie` (nullable, `{id,nome}` — só leitura, denormalizado a partir de `serieId`; ver
+`GET/POST/PUT /social/series` acima. Feature de 25/08/2026).
 
 **SocialPlatformOwner**: `{platform, userId, userName, updatedAt}` — mapeamento global
 (não por post) de quem pode confirmar aquele canal.
 
 **SocialSettings**: `{instagramLocationId, facebookPlaceId, updatedById, updatedByName,
 updatedAt}` — config fixa (não por post) do publicador, ver `GET/PUT /social/settings`.
+
+**SocialSerie**: `{id, nome, ativa, createdAt}` — uma linha de conteúdo do calendário
+editorial, ver `GET/POST/PUT /social/series` acima.
 
 ## Automação Instagram (comentário → DM) — `api.santos-tech.com/instagram`
 
