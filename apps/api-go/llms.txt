@@ -48,6 +48,20 @@
 - `GET https://api.santos-tech.com/status` — saúde agregada do ecossistema
   (`{status: ok|degraded, services: {auth,db,redis,email,claude}}`)
 
+## Observabilidade (admin-only)
+
+- Logs (Loki): `GET /logs` · `GET /logs/labels` · `GET /logs/top-ips`.
+  Responde 503 sem `LOKI_URL`.
+- Erros (Sentry): `GET /sentry/issues?project&status&q&stats_period&limit` ·
+  `GET /sentry/issues/{id}` (stacktrace normalizado) · `GET /sentry/projects`
+  (slugs conhecidos). Responde 503 sem `SENTRY_API_TOKEN`/`SENTRY_ORG_SLUG`.
+- Analytics (PostHog): `GET /analytics/overview?range=7d|30d|90d` (totais +
+  período anterior p/ delta%) · `GET /analytics/timeseries?range=` (pageviews/
+  dia) · `GET /analytics/top-pages?range=` · `GET /analytics/referrers?range=`
+  · `GET /analytics/by-site?range=` (compara santos-tech.com / /blog /
+  /dashboard — mesmo projeto PostHog, distinguido por prefixo de path).
+  Responde 503 sem `POSTHOG_PERSONAL_API_KEY`/`POSTHOG_PROJECT_ID`.
+
 ## Auth central — `api.santos-tech.com/auth`
 
 ### Sessão

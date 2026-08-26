@@ -39,6 +39,7 @@ type Server struct {
 	drive     *DriveClient     // pastas de arquivos no Google Drive (Arquivos); nil = desabilitado
 	loki      *lokiClient      // consulta de logs (Loki); nil = desabilitado
 	sentry    *sentryClient    // consulta de issues (Sentry); nil = desabilitado
+	posthog   *posthogClient   // consulta HogQL (PostHog); nil = desabilitado
 	queue     *asynq.Client    // fila durável de emails; nil = sem fila (fallback fire-and-forget)
 	instagram *instagramClient // private reply automática (comentário -> DM) + publicação de conteúdo; enabled()=false = desabilitado
 	facebook  *facebookClient  // publicação automática na Página (ver social_publish.go); enabled()=false = desabilitado
@@ -46,7 +47,7 @@ type Server struct {
 }
 
 func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), instagram: newInstagramClient(cfg), facebook: newFacebookClient(cfg), vault: newVault(cfg.VaultSecret, cfg.VaultSalt)}
+	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), posthog: newPostHogClient(cfg.PostHogHost, cfg.PostHogProjectID, cfg.PostHogAPIKey), instagram: newInstagramClient(cfg), facebook: newFacebookClient(cfg), vault: newVault(cfg.VaultSecret, cfg.VaultSalt)}
 	if s.portalDB == nil {
 		s.portalDB = authDB
 	}

@@ -153,6 +153,14 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sentry/issues/{id}", s.rateLimit(60, min, s.adminGuard(s.handleSentryIssueDetail)))
 	mux.HandleFunc("GET /sentry/projects", s.rateLimit(30, min, s.adminGuard(s.handleSentryProjects)))
 
+	// Analytics do ecossistema (PostHog) — admin-only. Responde 503 se
+	// POSTHOG_PERSONAL_API_KEY não configurado.
+	mux.HandleFunc("GET /analytics/overview", s.rateLimit(30, min, s.adminGuard(s.handlePostHogOverview)))
+	mux.HandleFunc("GET /analytics/timeseries", s.rateLimit(30, min, s.adminGuard(s.handlePostHogTimeseries)))
+	mux.HandleFunc("GET /analytics/top-pages", s.rateLimit(30, min, s.adminGuard(s.handlePostHogTopPages)))
+	mux.HandleFunc("GET /analytics/referrers", s.rateLimit(30, min, s.adminGuard(s.handlePostHogReferrers)))
+	mux.HandleFunc("GET /analytics/by-site", s.rateLimit(30, min, s.adminGuard(s.handlePostHogBySite)))
+
 	// Saúde agregada do ecossistema — autenticada (sessão ou PAT)
 	mux.HandleFunc("GET /status", s.rateLimit(30, min, s.authGuard(s.handleStatus)))
 

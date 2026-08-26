@@ -3365,6 +3365,158 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /analytics/overview:
+    get:
+      tags: [Observabilidade]
+      summary: Totais de pageviews/visitantes (período atual e anterior) via PostHog
+      description: |
+        Admin-only. Consulta a Query API (HogQL) da PostHog dos eventos `$pageview`
+        dos 3 sites do ecossistema (santos-tech.com, /blog, /dashboard — mesmo
+        projeto PostHog). Responde 503 se `POSTHOG_PERSONAL_API_KEY`/
+        `POSTHOG_PROJECT_ID` não configurados.
+      parameters:
+        - { in: query, name: range, description: "7d (default) | 30d | 90d", schema: { type: string } }
+      responses:
+        "200":
+          description: Totais do período atual e do período anterior de mesmo tamanho (pra delta%).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PostHogOverview" }
+        "400":
+          description: range inválido.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Admin-only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: POSTHOG_PERSONAL_API_KEY não configurado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /analytics/timeseries:
+    get:
+      tags: [Observabilidade]
+      summary: Pageviews por dia (série temporal) via PostHog
+      description: Admin-only. Responde 503 se PostHog não configurado.
+      parameters:
+        - { in: query, name: range, description: "7d (default) | 30d | 90d", schema: { type: string } }
+      responses:
+        "200":
+          description: Pontos diários, em ordem cronológica.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PostHogTimeseriesPoint" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Admin-only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: POSTHOG_PERSONAL_API_KEY não configurado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /analytics/top-pages:
+    get:
+      tags: [Observabilidade]
+      summary: Ranking de páginas ($pathname) por pageviews via PostHog
+      description: Admin-only. Top 20. Responde 503 se PostHog não configurado.
+      parameters:
+        - { in: query, name: range, description: "7d (default) | 30d | 90d", schema: { type: string } }
+      responses:
+        "200":
+          description: Ranking de páginas, mais vistas primeiro.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PostHogCount" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Admin-only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: POSTHOG_PERSONAL_API_KEY não configurado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /analytics/referrers:
+    get:
+      tags: [Observabilidade]
+      summary: Ranking de origem do tráfego (domínio de referrer) via PostHog
+      description: |
+        Admin-only. Top 20. Visitas sem referrer (URL digitada, app nativo) vêm
+        rotuladas "Direto". Responde 503 se PostHog não configurado.
+      parameters:
+        - { in: query, name: range, description: "7d (default) | 30d | 90d", schema: { type: string } }
+      responses:
+        "200":
+          description: Ranking de referrers, mais frequentes primeiro.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PostHogCount" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Admin-only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: POSTHOG_PERSONAL_API_KEY não configurado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /analytics/by-site:
+    get:
+      tags: [Observabilidade]
+      summary: Compara pageviews entre os 3 sites do ecossistema via PostHog
+      description: |
+        Admin-only. Os 3 sites (Site principal, Blog, Dashboard) mandam evento
+        pro mesmo projeto PostHog, distinguidos pelo prefixo do path (mesmo
+        $host, santos-tech.com). Responde 503 se PostHog não configurado.
+      parameters:
+        - { in: query, name: range, description: "7d (default) | 30d | 90d", schema: { type: string } }
+      responses:
+        "200":
+          description: Um item por site, mais visto primeiro.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PostHogCount" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Admin-only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: POSTHOG_PERSONAL_API_KEY não configurado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /hour-clients:
     get:
       tags: [Horas]
@@ -5347,6 +5499,29 @@ components:
                 properties:
                   key: { type: string }
                   value: { type: string }
+
+    PostHogOverview:
+      type: object
+      description: Totais de /analytics/overview — período atual e anterior de mesmo tamanho.
+      properties:
+        pageviews: { type: integer }
+        visitors: { type: integer, description: "Visitantes únicos (person_id distinto)" }
+        prevPageviews: { type: integer }
+        prevVisitors: { type: integer }
+
+    PostHogTimeseriesPoint:
+      type: object
+      description: Um ponto de /analytics/timeseries — pageviews de um dia.
+      properties:
+        bucket: { type: string, description: "Data (YYYY-MM-DD)" }
+        pageviews: { type: integer }
+
+    PostHogCount:
+      type: object
+      description: Um item de ranking (páginas, referrers, ou site) — {key,count}.
+      properties:
+        key: { type: string, description: "Página, domínio de referrer, ou nome do site" }
+        count: { type: integer }
 
     # ── payments-go schemas ────────────────────────────────────────────────
     Movement:

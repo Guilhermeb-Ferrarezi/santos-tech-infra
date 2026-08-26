@@ -54,6 +54,13 @@ type Config struct {
 	SentryOrgSlug string
 	SentryToken   string
 
+	// PostHog (tela de Analytics, admin-only). Vazio = endpoints respondem 503.
+	// Personal API Key (Settings → Personal API Keys, escopo query:read) — NUNCA
+	// o Project API Key (esse é público, vai embutido no client dos 3 sites).
+	PostHogAPIKey    string
+	PostHogProjectID string
+	PostHogHost      string // base da API, ex: https://us.posthog.com (sem barra final)
+
 	// Cloudflare R2 (S3-compatível) para uploads (ex: avatares). Vazio = desabilitado.
 	R2AccountID string
 	R2AccessKey string
@@ -166,6 +173,10 @@ func LoadConfig() Config {
 
 		SentryOrgSlug: getEnv("SENTRY_ORG_SLUG", ""),
 		SentryToken:   getEnv("SENTRY_API_TOKEN", ""),
+
+		PostHogAPIKey:    getEnv("POSTHOG_PERSONAL_API_KEY", ""),
+		PostHogProjectID: getEnv("POSTHOG_PROJECT_ID", ""),
+		PostHogHost:      strings.TrimRight(getEnv("POSTHOG_HOST", "https://us.posthog.com"), "/"),
 
 		R2AccountID: getEnv("CF_ACCOUNT_ID", ""),
 		R2AccessKey: getEnv("CF_R2_ACCESS_KEY", ""),
