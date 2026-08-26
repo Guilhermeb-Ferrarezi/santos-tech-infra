@@ -60,8 +60,8 @@
   dia) · `GET /analytics/top-pages?range=` · `GET /analytics/referrers?range=`
   · `GET /analytics/by-site?range=` (compara santos-tech.com / /blog /
   /dashboard — mesmo projeto PostHog, distinguido por prefixo de path) ·
-  `GET /analytics/breakdown?by=device|country|browser&range=` (country devolve
-  código ISO alpha-2). Replay: `GET /analytics/recordings?range=&limit=`
+  `GET /analytics/breakdown?by=device|country|browser|utm_source&range=`
+  (country devolve código ISO alpha-2). Replay: `GET /analytics/recordings?range=&limit=`
   (lista gravações) · `GET /analytics/recordings/{id}/events` (eventos rrweb
   já descompactados, prontos pro rrweb-player — pode levar alguns segundos e
   chegar a alguns MB numa sessão longa). Responde 503 sem

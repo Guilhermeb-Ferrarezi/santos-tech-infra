@@ -193,13 +193,14 @@ func (s *Server) handlePostHogBySite(w http.ResponseWriter, r *http.Request) {
 // HogQL fixa — nunca aceita o nome de propriedade vindo direto da query
 // string, pra não abrir brecha de injeção.
 var posthogBreakdownFields = map[string]string{
-	"device":  "properties.$device_type",
-	"country": "properties.$geoip_country_code", // ISO alpha-2 — front usa pra mostrar a bandeira
-	"browser": "properties.$browser",
+	"device":     "properties.$device_type",
+	"country":    "properties.$geoip_country_code", // ISO alpha-2 — front usa pra mostrar a bandeira
+	"browser":    "properties.$browser",
+	"utm_source": "properties.utm_source", // sem "$" — utm_* são propriedades regulares, não built-in do posthog-js
 }
 
-// GET /analytics/breakdown?by=device|country|browser&range=7d|30d|90d
-// Ranking de pageviews por dispositivo/país/navegador.
+// GET /analytics/breakdown?by=device|country|browser|utm_source&range=7d|30d|90d
+// Ranking de pageviews por dispositivo/país/navegador/origem de campanha.
 func (s *Server) handlePostHogBreakdown(w http.ResponseWriter, r *http.Request) {
 	if s.posthogUnavailable(w) {
 		return
@@ -211,7 +212,7 @@ func (s *Server) handlePostHogBreakdown(w http.ResponseWriter, r *http.Request) 
 	}
 	field, ok := posthogBreakdownFields[r.URL.Query().Get("by")]
 	if !ok {
-		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "by inválido (use device, country ou browser)"))
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "by inválido (use device, country, browser ou utm_source)"))
 		return
 	}
 	q := fmt.Sprintf(`

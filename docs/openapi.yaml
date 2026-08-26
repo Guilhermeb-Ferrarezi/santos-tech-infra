@@ -4059,10 +4059,10 @@ paths:
   /analytics/breakdown:
     get:
       tags: [Observabilidade]
-      summary: Ranking de pageviews por dispositivo, país ou navegador via PostHog
+      summary: Ranking de pageviews por dispositivo, país, navegador ou origem de campanha (UTM) via PostHog
       description: Admin-only. Top 20. Responde 503 se PostHog não configurado.
       parameters:
-        - { in: query, name: by, required: true, description: "device | country | browser", schema: { type: string } }
+        - { in: query, name: by, required: true, description: "device | country | browser | utm_source", schema: { type: string } }
         - { in: query, name: range, description: "7d (default) | 30d | 90d", schema: { type: string } }
       responses:
         "200":
