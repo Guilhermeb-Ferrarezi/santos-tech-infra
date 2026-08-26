@@ -189,7 +189,12 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		}
 		w.Header().Add("Vary", "Origin")
 		if r.Method == http.MethodOptions {
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			// X-Requested-With: o @santos-techrp/account-kit manda esse header
+			// (proteção anti-CSRF) em toda chamada POST/PUT/PATCH/DELETE SEM
+			// corpo (needsCsrfHeader em api()/authApi()) — faltava aqui, então
+			// só quebrava em rotas sem body (ex.: publish-confirmations),
+			// nunca nas que mandam JSON (esse header some quando hasBody=true).
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Max-Age", "86400")
 			w.WriteHeader(http.StatusNoContent)
