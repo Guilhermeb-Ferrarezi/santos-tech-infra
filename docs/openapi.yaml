@@ -84,6 +84,17 @@ tags:
       da empresa). `/auth/admin/downloads*` (cadastro/edição/remoção, upload
       presigned pro R2) é admin-only. `/public/downloads` é leitura 100% pública,
       sem cookie/token — o app não pede autenticação nenhuma.
+  - name: Social
+    description: |
+      Calendário Editorial — gestão de posts de redes sociais com briefing
+      pré-mastigado (formato, texto-da-arte por slide, legenda, hashtags,
+      direção visual, specs) pra o colaborador só executar a arte. Leitura
+      (`GET`) requer Admin **ou** cargo personalizado com a permissão
+      `social:read`; ações de execução (mudar status, notas, publicar,
+      confirmar/desconfirmar publicação) requerem `social:execute`. CRUD de
+      posts, séries, donos de plataforma e configurações é **Admin-only**.
+      Professor **não** tem acesso automático (diferente de outros módulos do
+      painel) — só Admin ou cargo com a permissão explícita.
 
 paths:
   /health:
@@ -3270,6 +3281,534 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /social/posts:
+    get:
+      tags: [Social]
+      summary: Lista todos os posts do calendário editorial
+      description: "Requer Admin ou cargo com `social:read`. Não paga N+1 de `publishConfirmations` (vem `null` em toda linha) — só populado em `GET /social/posts/{id}`."
+      responses:
+        "200":
+          description: Lista de posts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  posts: { type: array, items: { $ref: "#/components/schemas/SocialPost" } }
+                required: [posts]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão social:read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    post:
+      tags: [Social]
+      summary: Cria post
+      description: "Admin-only. Rate limit 20/min."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SocialPostInput" }
+      responses:
+        "201":
+          description: Post criado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { post: { $ref: "#/components/schemas/SocialPost" } }
+                required: [post]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Não é Admin.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /social/posts/{id}:
+    get:
+      tags: [Social]
+      summary: Busca post por id
+      description: "Requer Admin ou cargo com `social:read`. Único endpoint que popula `publishConfirmations`."
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Post.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { post: { $ref: "#/components/schemas/SocialPost" } }
+                required: [post]
+        "404":
+          description: Post não encontrado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SOCIAL_POST_NOT_FOUND, message: "Post não encontrado" }
+    put:
+      tags: [Social]
+      summary: Atualiza post (parcial)
+      description: |
+        Admin-only. Rate limit 30/min. Atualização **PARCIAL**: só os campos
+        presentes no corpo JSON são sobrescritos — campo ausente mantém o
+        valor atual, campo presente (mesmo `""`/`[]`/`null`) é aplicado.
+        Continua aceitando o objeto completo (contrato antigo) sem diferença
+        de comportamento. Transição pra `status: publicado` exige que toda
+        `plataformasDestino` já tenha confirmação de publicação — senão 400
+        `PUBLISH_NOT_CONFIRMED`.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SocialPostInput" }
+      responses:
+        "200":
+          description: Post atualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { post: { $ref: "#/components/schemas/SocialPost" } }
+                required: [post]
+        "400":
+          description: Corpo inválido, campo enum inválido, ou transição pra publicado sem confirmar toda plataforma.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: PUBLISH_NOT_CONFIRMED, message: "Não é possível concluir — publique o conteúdo em todas as redes definidas e confirme cada uma antes de marcar como concluído." }
+        "404":
+          description: Post não encontrado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [Social]
+      summary: Apaga post
+      description: Admin-only.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204":
+          description: Apagado.
+        "404":
+          description: Post não encontrado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /social/posts/{id}/status:
+    patch:
+      tags: [Social]
+      summary: Atualiza só o status do post
+      description: |
+        Requer Admin ou cargo com `social:execute`. Rate limit 30/min. Registra
+        histórico de transição (`GET .../history`); mover pra `revisao` dispara
+        email pra `SOCIAL_ALERT_EMAIL`. Mesma trava de confirmação de
+        publicação de `PUT /social/posts/{id}` na transição pra `publicado`.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { status: { $ref: "#/components/schemas/SocialStatus" } }
+              required: [status]
+      responses:
+        "200":
+          description: Post com novo status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { post: { $ref: "#/components/schemas/SocialPost" } }
+                required: [post]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          description: Post não encontrado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /social/posts/{id}/history:
+    get:
+      tags: [Social]
+      summary: Histórico de transições de status do post
+      description: Requer Admin ou cargo com `social:read`.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Histórico, mais recente primeiro.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  history: { type: array, items: { $ref: "#/components/schemas/SocialPostStatusHistory" } }
+                required: [history]
+
+  /social/posts/{id}/notes:
+    get:
+      tags: [Social]
+      summary: Lista comentários internos do post
+      description: Requer Admin ou cargo com `social:read`.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Notas, mais antiga primeiro.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  notes: { type: array, items: { $ref: "#/components/schemas/SocialPostNote" } }
+                required: [notes]
+    post:
+      tags: [Social]
+      summary: Adiciona um comentário interno ao post
+      description: Requer Admin ou cargo com `social:execute`. Rate limit 30/min.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { content: { type: string } }
+              required: [content]
+      responses:
+        "201":
+          description: Nota criada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { note: { $ref: "#/components/schemas/SocialPostNote" } }
+                required: [note]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /social/posts/{id}/publish:
+    post:
+      tags: [Social]
+      summary: Publicador universal — dispara publicação automática nas redes já suportadas
+      description: |
+        Requer Admin ou cargo com `social:execute`. Rate limit 10/min.
+
+        Publica de verdade (hoje: Instagram e Facebook, via Graph API) em toda
+        `plataformasDestino` que já tem adaptador configurado (envs
+        `INSTAGRAM_ACCESS_TOKEN`/`INSTAGRAM_USER_ID`,
+        `FACEBOOK_ACCESS_TOKEN`/`FACEBOOK_PAGE_ID`) — as demais voltam
+        `status: manual`, sem erro. Corpo opcional `platforms` restringe a um
+        subconjunto de `plataformasDestino` (evita duplicar em rede já
+        confirmada); sem corpo, publica em todas. Mídia vem de
+        `driveFolderId`/`driveFileId` (baixa do Drive, sobe temporário pro R2)
+        ou, sem isso, de `mediaUrl` direto. Sucesso já confirma a plataforma no
+        checklist (mesmo efeito de `POST .../publish-confirmations/{platform}`)
+        e grava uma nota de auditoria com o ID externo. Reenviar publica de
+        novo (a rede não edita, sempre cria post novo) — nunca reenviar
+        automaticamente uma rede já confirmada.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                platforms:
+                  type: array
+                  items: { $ref: "#/components/schemas/SocialPlatform" }
+                  description: Subconjunto de plataformasDestino pra publicar agora. Omitido = todas.
+      responses:
+        "200":
+          description: Resultado por plataforma.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results: { type: array, items: { $ref: "#/components/schemas/SocialPublishResult" } }
+                required: [results]
+        "400":
+          description: "`platforms` fora de `plataformasDestino`, nenhuma plataforma com adaptador, ou sem `plataformasDestino` definida."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: PLATFORM_NOT_TARGET, message: "Plataforma fora de plataformasDestino" }
+
+  /social/posts/{id}/publish-confirmations/{platform}:
+    post:
+      tags: [Social]
+      summary: Confirma publicação numa plataforma (checklist manual)
+      description: |
+        Requer Admin ou cargo com `social:execute`. Rate limit 60/min. Upsert
+        — reconfirmar atualiza, não duplica. `confirmedBy` vem sempre da
+        sessão autenticada. Se a plataforma tiver **dono** definido
+        (`GET /social/platform-owners`), só ele confirma — outro usuário leva
+        403 `NOT_PLATFORM_OWNER`.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: platform, required: true, schema: { $ref: "#/components/schemas/SocialPlatform" } }
+      responses:
+        "200":
+          description: Checklist atualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  confirmations: { type: array, items: { $ref: "#/components/schemas/SocialPostPublishConfirmation" } }
+                required: [confirmations]
+        "403":
+          description: Plataforma tem dono e não é o usuário autenticado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: NOT_PLATFORM_OWNER, message: "Só Fulano pode confirmar esta plataforma." }
+        "404":
+          description: Post não encontrado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [Social]
+      summary: Desconfirma publicação numa plataforma
+      description: Requer Admin ou cargo com `social:execute`. Rate limit 60/min. Mesma trava de dono da confirmação.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: platform, required: true, schema: { $ref: "#/components/schemas/SocialPlatform" } }
+      responses:
+        "200":
+          description: Checklist atualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  confirmations: { type: array, items: { $ref: "#/components/schemas/SocialPostPublishConfirmation" } }
+                required: [confirmations]
+        "403":
+          description: Plataforma tem dono e não é o usuário autenticado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /social/platform-owners:
+    get:
+      tags: [Social]
+      summary: Lista o mapeamento dono → plataforma
+      description: |
+        Requer Admin ou cargo com `social:read`. Se uma plataforma não tem
+        dono aqui, qualquer um com `social:execute` confirma/desconfirma ela
+        no checklist.
+      responses:
+        "200":
+          description: Donos configurados.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  owners: { type: array, items: { $ref: "#/components/schemas/SocialPlatformOwner" } }
+                required: [owners]
+
+  /social/platform-owners/{platform}:
+    put:
+      tags: [Social]
+      summary: Define (ou troca) o dono de uma plataforma
+      description: Admin-only. Rate limit 30/min. Upsert.
+      parameters:
+        - { in: path, name: platform, required: true, schema: { $ref: "#/components/schemas/SocialPlatform" } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { userId: { type: integer, format: int64 } }
+              required: [userId]
+      responses:
+        "200":
+          description: Lista de donos atualizada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  owners: { type: array, items: { $ref: "#/components/schemas/SocialPlatformOwner" } }
+                required: [owners]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+    delete:
+      tags: [Social]
+      summary: Remove o dono de uma plataforma
+      description: Admin-only. Volta pro modelo de confiança (qualquer um com social:execute confirma).
+      parameters:
+        - { in: path, name: platform, required: true, schema: { $ref: "#/components/schemas/SocialPlatform" } }
+      responses:
+        "200":
+          description: Lista de donos atualizada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  owners: { type: array, items: { $ref: "#/components/schemas/SocialPlatformOwner" } }
+                required: [owners]
+
+  /social/settings:
+    get:
+      tags: [Social]
+      summary: Configuração fixa do publicador universal
+      description: "Requer Admin ou cargo com `social:read`. Hoje só localização automática. Sempre existe (seed pela migração)."
+      responses:
+        "200":
+          description: Configuração atual.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { settings: { $ref: "#/components/schemas/SocialSettings" } }
+                required: [settings]
+    put:
+      tags: [Social]
+      summary: Atualiza a configuração do publicador
+      description: |
+        Admin-only. Rate limit 30/min. `instagramLocationId` marca local em
+        toda publicação de foto/vídeo/reel do Instagram; `facebookPlaceId`
+        marca local em foto da Página do Facebook (vídeo não suporta). Ambos
+        vazios = não marca local. São o ID de uma Page da Meta com
+        latitude/longitude, não um endereço — não é validado contra a Meta
+        aqui, só o tamanho (máx 100 chars).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                instagramLocationId: { type: string, maxLength: 100 }
+                facebookPlaceId: { type: string, maxLength: 100 }
+      responses:
+        "200":
+          description: Configuração atualizada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { settings: { $ref: "#/components/schemas/SocialSettings" } }
+                required: [settings]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /social/series:
+    get:
+      tags: [Social]
+      summary: Lista todas as séries (ativas e inativas)
+      description: |
+        Requer Admin ou cargo com `social:read`. Série agrupa peças da mesma
+        linha de conteúdo (ex. "Tela&Saúde") — substitui a antiga convenção
+        manual de prefixo `[Nome]` no título. Lista fechada: só Admin
+        cadastra/edita. O front filtra as inativas fora do dropdown de
+        criação de post e mostra todas na tela de gestão.
+      responses:
+        "200":
+          description: Todas as séries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  series: { type: array, items: { $ref: "#/components/schemas/SocialSerie" } }
+                required: [series]
+
+    post:
+      tags: [Social]
+      summary: Cria série
+      description: Admin-only. Rate limit 20/min. `nome` único.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { nome: { type: string } }
+              required: [nome]
+      responses:
+        "201":
+          description: Série criada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { serie: { $ref: "#/components/schemas/SocialSerie" } }
+                required: [serie]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          description: Já existe uma série com esse nome.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: CONFLICT, message: "registro duplicado" }
+
+  /social/series/{id}:
+    put:
+      tags: [Social]
+      summary: Edita nome ou ativa/desativa uma série
+      description: |
+        Admin-only. Rate limit 30/min. `ativa: false` só tira a série do
+        dropdown de criação de post novo — posts que já a usam continuam
+        mostrando o nome, e editar esses posts sem trocar a série continua
+        funcionando normalmente.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: integer, format: int64 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nome: { type: string }
+                ativa: { type: boolean }
+              required: [nome, ativa]
+      responses:
+        "200":
+          description: Série atualizada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { serie: { $ref: "#/components/schemas/SocialSerie" } }
+                required: [serie]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          description: Série não encontrada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SOCIAL_SERIE_NOT_FOUND, message: "Série não encontrada" }
+
   /sentry/issues:
     get:
       tags: [Observabilidade]
@@ -6091,6 +6630,238 @@ components:
         reached: { type: integer, format: int64, description: "Sessões que chegaram até pelo menos esse decil." }
         total: { type: integer, format: int64, description: "Total de sessões no período." }
       required: [decile, reached, total]
+
+    SocialPlatform:
+      type: string
+      enum: [facebook, instagram, tiktok, youtube, threads, google_meu_negocio, blog, twitter_x, linkedin]
+    SocialStatus:
+      type: string
+      enum: [ideia, planejado, em_producao, revisao, aprovado, agendado, publicado, arquivado]
+    SocialPilar:
+      type: string
+      enum: [educacional, institucional, captacao, prova_social, bastidores, tech_mundo_real]
+    SocialFormato:
+      type: string
+      enum: [estatico, carrossel, reel, story, video_longo, short, thumbnail, card_link]
+    SocialObjetivo:
+      type: string
+      enum: [alcance, engajamento, conversao, autoridade]
+    SocialPrograma:
+      type: string
+      enum: ["", create, jr, camps, academies]
+      description: "String vazia = institucional, sem programa."
+    SocialFunilEtapa:
+      type: string
+      enum: ["", topo, meio, fundo]
+      description: "String vazia = sem etapa definida (default de peças antigas)."
+    SocialReceita:
+      type: string
+      enum: ["", capa_gancho, hero_numero, versus, antes_depois, desenvolvimento, cta_fechamento, checklist, passo_a_passo, citacao_depoimento, poster_anuncio]
+
+    SocialCopyArteSlide:
+      type: object
+      description: Texto-da-arte de 1 slide/frame do post.
+      properties:
+        slide: { type: integer }
+        headline: { type: string }
+        subtitulo: { type: string }
+        corpo: { type: string }
+        cta: { type: string }
+        hookOnScreen: { type: string }
+      required: [slide, headline]
+
+    SocialPaleta:
+      type: object
+      properties:
+        fundo: { type: string, description: "Hex." }
+        destaque: { type: string, description: "Hex." }
+        corPrograma: { type: string, description: "Hex, herdado do programa selecionado." }
+
+    SocialSpecs:
+      type: object
+      description: Specs técnicas da arte — preenchidas automaticamente pelo formato.
+      properties:
+        proporcao: { type: string, example: "9:16" }
+        largura: { type: integer }
+        altura: { type: integer }
+        safeZone: { type: string }
+        formatoArquivo: { type: string }
+        duracaoSeg: { type: integer, description: "Só vídeo/reel." }
+
+    SocialCarouselItem:
+      type: object
+      description: 1 item (2..10) de um carrossel — mesmo trio de driveFolderId/driveFileId/driveFileName do post.
+      properties:
+        folderId: { type: string, format: uuid }
+        fileId: { type: string }
+        fileName: { type: string }
+
+    SocialPost:
+      type: object
+      description: Post do calendário editorial — briefing completo pronto pra execução.
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string, description: "Título interno — não vai pra rede." }
+        caption: { type: string, description: "Legenda de verdade, publicada." }
+        platform: { $ref: "#/components/schemas/SocialPlatform" }
+        pilar: { $ref: "#/components/schemas/SocialPilar" }
+        status: { $ref: "#/components/schemas/SocialStatus" }
+        scheduledAt: { type: string, format: date-time, nullable: true }
+        mediaUrl: { type: string }
+        referenceUrl: { type: string, description: "Link da foto de referência." }
+        driveFolderId: { type: string, format: uuid, nullable: true, description: "FK drive_folders — qualquer pasta cadastrada em Arquivos." }
+        driveFileId: { type: string }
+        driveFileName: { type: string, description: "Cache de exibição." }
+        driveCoverFolderId: { type: string, format: uuid, nullable: true, description: "Capa customizada de Reel — mesmo trio, outro arquivo." }
+        driveCoverFileId: { type: string }
+        driveCoverFileName: { type: string }
+        altText: { type: string, description: "Texto alternativo de acessibilidade — só imagem estática." }
+        carouselItems: { type: array, items: { $ref: "#/components/schemas/SocialCarouselItem" }, description: "Itens 2..10 — item 1 é o trio driveFolderId/driveFileId/driveFileName acima. Teto de 9 aqui (10 no total)." }
+        formato: { $ref: "#/components/schemas/SocialFormato" }
+        objetivo: { $ref: "#/components/schemas/SocialObjetivo" }
+        programa: { $ref: "#/components/schemas/SocialPrograma" }
+        receita: { $ref: "#/components/schemas/SocialReceita" }
+        plataformasDestino: { type: array, items: { $ref: "#/components/schemas/SocialPlatform" }, description: "Repurposing — onde esse conteúdo também vai." }
+        copyArte: { type: array, items: { $ref: "#/components/schemas/SocialCopyArteSlide" } }
+        hashtags: { type: array, items: { type: string } }
+        conceitoVisual: { type: string }
+        paleta: { $ref: "#/components/schemas/SocialPaleta" }
+        promptIa: { type: string }
+        specs: { $ref: "#/components/schemas/SocialSpecs" }
+        masterUrl: { type: string }
+        mandatorios: { type: string }
+        responsavelId: { type: integer, format: int64, nullable: true, description: "Quem executa o post (principal)." }
+        responsavelNome: { type: string, description: "Denormalizado, só leitura — vazio se sem responsável ou usuário removido." }
+        assigneeIds: { type: array, items: { type: integer, format: int64 }, description: "Responsáveis ADICIONAIS ao principal." }
+        funilEtapa: { $ref: "#/components/schemas/SocialFunilEtapa" }
+        serie:
+          type: object
+          nullable: true
+          description: Denormalizado a partir de serieId — null quando o post não tem série. Só leitura.
+          properties:
+            id: { type: integer, format: int64 }
+            nome: { type: string }
+        createdBy: { type: integer, format: int64, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        publishConfirmations:
+          type: array
+          nullable: true
+          description: "Só populado em GET de post único — null em GET /social/posts (lista, evita N+1)."
+          items: { $ref: "#/components/schemas/SocialPostPublishConfirmation" }
+      required: [id, title, caption, platform, pilar, status, formato, objetivo, programa, receita, funilEtapa, createdAt, updatedAt]
+
+    SocialPostInput:
+      type: object
+      description: Corpo de POST/PUT /social/posts — PUT é parcial (ver descrição do endpoint).
+      properties:
+        title: { type: string }
+        caption: { type: string }
+        platform: { $ref: "#/components/schemas/SocialPlatform" }
+        pilar: { $ref: "#/components/schemas/SocialPilar" }
+        status: { $ref: "#/components/schemas/SocialStatus" }
+        scheduledAt: { type: string, format: date-time, nullable: true }
+        mediaUrl: { type: string }
+        referenceUrl: { type: string }
+        driveFolderId: { type: string, format: uuid, nullable: true }
+        driveFileId: { type: string }
+        driveFileName: { type: string }
+        driveCoverFolderId: { type: string, format: uuid, nullable: true }
+        driveCoverFileId: { type: string }
+        driveCoverFileName: { type: string }
+        altText: { type: string }
+        carouselItems: { type: array, items: { $ref: "#/components/schemas/SocialCarouselItem" } }
+        formato: { $ref: "#/components/schemas/SocialFormato" }
+        objetivo: { $ref: "#/components/schemas/SocialObjetivo" }
+        programa: { $ref: "#/components/schemas/SocialPrograma" }
+        receita: { $ref: "#/components/schemas/SocialReceita" }
+        plataformasDestino: { type: array, items: { $ref: "#/components/schemas/SocialPlatform" } }
+        copyArte: { type: array, items: { $ref: "#/components/schemas/SocialCopyArteSlide" } }
+        hashtags: { type: array, items: { type: string } }
+        conceitoVisual: { type: string }
+        paleta: { $ref: "#/components/schemas/SocialPaleta" }
+        promptIa: { type: string }
+        specs: { $ref: "#/components/schemas/SocialSpecs" }
+        masterUrl: { type: string }
+        mandatorios: { type: string }
+        responsavelId: { type: integer, format: int64, nullable: true }
+        assigneeIds: { type: array, items: { type: integer, format: int64 }, description: "Substitui a lista inteira a cada save." }
+        funilEtapa: { $ref: "#/components/schemas/SocialFunilEtapa" }
+        serieId: { type: integer, format: int64, nullable: true, description: "FK social_series.id — null = sem série. Id inexistente → 400." }
+      required: [title, platform, pilar, status, formato, objetivo, programa, receita]
+
+    SocialPostNote:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        postId: { type: string, format: uuid }
+        authorId: { type: integer, format: int64, nullable: true }
+        authorName: { type: string }
+        content: { type: string }
+        createdAt: { type: string, format: date-time }
+      required: [id, postId, authorName, content, createdAt]
+
+    SocialPostStatusHistory:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        postId: { type: string, format: uuid }
+        changedById: { type: integer, format: int64, nullable: true }
+        changedBy: { type: string }
+        oldStatus: { $ref: "#/components/schemas/SocialStatus" }
+        newStatus: { $ref: "#/components/schemas/SocialStatus" }
+        changedAt: { type: string, format: date-time }
+      required: [id, postId, changedBy, oldStatus, newStatus, changedAt]
+
+    SocialPostPublishConfirmation:
+      type: object
+      properties:
+        platform: { $ref: "#/components/schemas/SocialPlatform" }
+        confirmedById: { type: integer, format: int64, nullable: true }
+        confirmedByName: { type: string }
+        confirmedAt: { type: string, format: date-time }
+      required: [platform, confirmedByName, confirmedAt]
+
+    SocialPublishResult:
+      type: object
+      description: Resultado de UMA plataforma ao chamar POST /social/posts/{id}/publish.
+      properties:
+        platform: { $ref: "#/components/schemas/SocialPlatform" }
+        status: { type: string, enum: [published, manual, failed, unsupported], description: "manual = sem adaptador configurado pra essa rede." }
+        externalId: { type: string, description: "ID do post na rede — só quando status=published." }
+        error: { type: string, description: "Só quando status=failed." }
+      required: [platform, status]
+
+    SocialPlatformOwner:
+      type: object
+      description: Mapeamento global (não por post) de quem confirma aquele canal no checklist.
+      properties:
+        platform: { $ref: "#/components/schemas/SocialPlatform" }
+        userId: { type: integer, format: int64 }
+        userName: { type: string }
+        updatedAt: { type: string, format: date-time }
+      required: [platform, userId, userName, updatedAt]
+
+    SocialSettings:
+      type: object
+      description: Configuração fixa (não por post) do publicador universal.
+      properties:
+        instagramLocationId: { type: string }
+        facebookPlaceId: { type: string }
+        updatedById: { type: integer, format: int64, nullable: true }
+        updatedByName: { type: string }
+        updatedAt: { type: string, format: date-time }
+      required: [instagramLocationId, facebookPlaceId, updatedByName, updatedAt]
+
+    SocialSerie:
+      type: object
+      description: Uma linha de conteúdo do calendário editorial (ex. "Tela&Saúde", "GMN").
+      properties:
+        id: { type: integer, format: int64 }
+        nome: { type: string }
+        ativa: { type: boolean }
+        createdAt: { type: string, format: date-time }
+      required: [id, nome, ativa, createdAt]
 
     APIRouterProviderInput:
       type: object
