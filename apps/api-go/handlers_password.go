@@ -112,12 +112,18 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// Revogar sessões ANTES de gravar a nova senha (fail-closed): se a revogação
+	// falhar, a senha não é alterada e nenhuma sessão antiga é indevidamente
+	// preservada. O token de reset já foi consumido; o usuário pode solicitar um
+	// novo link se necessário.
+	if err := s.deleteUserSessions(r.Context(), uid); err != nil {
+		slog.Error("reset_password: falha ao revogar sessões; abortando alteração de senha", "uid", uid, "err", err)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+		return
+	}
 	if err := s.updatePassword(r.Context(), uid, newHash); err != nil {
 		writeErr(w, err)
 		return
-	}
-	if err := s.deleteUserSessions(r.Context(), uid); err != nil {
-		slog.Error("falha ao revogar sessões após reset de senha", "uid", uid, "err", err)
 	}
 	if firstPassword {
 		s.sendWelcomeEmail(u.Email, u.Name)
