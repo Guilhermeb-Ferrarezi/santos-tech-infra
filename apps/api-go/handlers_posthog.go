@@ -189,6 +189,42 @@ func (s *Server) handlePostHogBySite(w http.ResponseWriter, r *http.Request) {
 	s.writePostHogCounts(w, r, q)
 }
 
+// posthogBreakdownFields mapeia o parâmetro público "by" pra uma expressão
+// HogQL fixa — nunca aceita o nome de propriedade vindo direto da query
+// string, pra não abrir brecha de injeção.
+var posthogBreakdownFields = map[string]string{
+	"device":  "properties.$device_type",
+	"country": "properties.$geoip_country_code", // ISO alpha-2 — front usa pra mostrar a bandeira
+	"browser": "properties.$browser",
+}
+
+// GET /analytics/breakdown?by=device|country|browser&range=7d|30d|90d
+// Ranking de pageviews por dispositivo/país/navegador.
+func (s *Server) handlePostHogBreakdown(w http.ResponseWriter, r *http.Request) {
+	if s.posthogUnavailable(w) {
+		return
+	}
+	days, err := posthogRangeDays(r.URL.Query().Get("range"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	field, ok := posthogBreakdownFields[r.URL.Query().Get("by")]
+	if !ok {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "by inválido (use device, country ou browser)"))
+		return
+	}
+	q := fmt.Sprintf(`
+		SELECT coalesce(nullIf(toString(%s), ''), 'Desconhecido') as label, count() as views
+		FROM events
+		WHERE event = '$pageview' AND timestamp >= now() - INTERVAL %d DAY
+		GROUP BY label
+		ORDER BY views DESC
+		LIMIT 20
+	`, field, days)
+	s.writePostHogCounts(w, r, q)
+}
+
 // GET /analytics/recordings?range=7d|30d|90d&limit=
 // Lista gravações de sessão (replay) dos 3 sites, mais recentes primeiro.
 func (s *Server) handlePostHogRecordings(w http.ResponseWriter, r *http.Request) {

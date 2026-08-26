@@ -3517,6 +3517,107 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /analytics/breakdown:
+    get:
+      tags: [Observabilidade]
+      summary: Ranking de pageviews por dispositivo, país ou navegador via PostHog
+      description: Admin-only. Top 20. Responde 503 se PostHog não configurado.
+      parameters:
+        - { in: query, name: by, required: true, description: "device | country | browser", schema: { type: string } }
+        - { in: query, name: range, description: "7d (default) | 30d | 90d", schema: { type: string } }
+      responses:
+        "200":
+          description: Ranking do dimension escolhido, mais frequente primeiro. Em `country`, `key` é o código ISO alpha-2 (ex.: BR).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PostHogCount" }
+        "400":
+          description: by ausente ou inválido.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Admin-only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: POSTHOG_PERSONAL_API_KEY não configurado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /analytics/recordings:
+    get:
+      tags: [Observabilidade]
+      summary: Lista gravações de sessão (replay) via PostHog, mais recentes primeiro
+      description: |
+        Admin-only. Repassa quase sem alteração o shape da API de Session
+        Recordings da PostHog (duration, start_url, click_count, etc.).
+        Responde 503 se PostHog não configurado.
+      parameters:
+        - { in: query, name: range, description: "7d (default) | 30d | 90d", schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, default: 30, maximum: 100 } }
+      responses:
+        "200":
+          description: Envelope da PostHog — `{ results: SessionRecording[] }`.
+          content:
+            application/json:
+              schema: { type: object }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Admin-only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: POSTHOG_PERSONAL_API_KEY não configurado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /analytics/recordings/{id}/events:
+    get:
+      tags: [Observabilidade]
+      summary: Eventos rrweb já descompactados de uma gravação, prontos pro rrweb-player
+      description: |
+        Admin-only. Busca todos os blobs da sessão na PostHog e descompacta
+        (a PostHog compacta o conteúdo dos snapshots em gzip — o campo `data`
+        inteiro num snapshot completo, ou só sub-campos específicos nas
+        mutações incrementais). Pode levar alguns segundos e a resposta pode
+        chegar a alguns MB numa sessão longa. Responde 503 se PostHog não
+        configurado.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: "`{ events: RRwebEvent[] }` — pronto pra passar direto ao rrweb-player."
+          content:
+            application/json:
+              schema: { type: object }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Admin-only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: Erro ao consultar a PostHog.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: POSTHOG_PERSONAL_API_KEY não configurado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /hour-clients:
     get:
       tags: [Horas]
