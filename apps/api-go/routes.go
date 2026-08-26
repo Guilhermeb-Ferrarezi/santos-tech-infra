@@ -160,6 +160,10 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /analytics/top-pages", s.rateLimit(30, min, s.adminGuard(s.handlePostHogTopPages)))
 	mux.HandleFunc("GET /analytics/referrers", s.rateLimit(30, min, s.adminGuard(s.handlePostHogReferrers)))
 	mux.HandleFunc("GET /analytics/by-site", s.rateLimit(30, min, s.adminGuard(s.handlePostHogBySite)))
+	// Replay: eventos podem levar alguns segundos e chegar a alguns MB numa
+	// sessão longa — rate limit mais apertado que os outros endpoints leves.
+	mux.HandleFunc("GET /analytics/recordings", s.rateLimit(30, min, s.adminGuard(s.handlePostHogRecordings)))
+	mux.HandleFunc("GET /analytics/recordings/{id}/events", s.rateLimit(10, min, s.adminGuard(s.handlePostHogRecordingEvents)))
 
 	// Saúde agregada do ecossistema — autenticada (sessão ou PAT)
 	mux.HandleFunc("GET /status", s.rateLimit(30, min, s.authGuard(s.handleStatus)))

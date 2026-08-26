@@ -189,6 +189,45 @@ func (s *Server) handlePostHogBySite(w http.ResponseWriter, r *http.Request) {
 	s.writePostHogCounts(w, r, q)
 }
 
+// GET /analytics/recordings?range=7d|30d|90d&limit=
+// Lista gravações de sessão (replay) dos 3 sites, mais recentes primeiro.
+func (s *Server) handlePostHogRecordings(w http.ResponseWriter, r *http.Request) {
+	if s.posthogUnavailable(w) {
+		return
+	}
+	days, err := posthogRangeDays(r.URL.Query().Get("range"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	limit := clampLimit(r.URL.Query().Get("limit"), 30, 100)
+	body, err := s.posthog.listRecordings(r.Context(), days, limit)
+	if err != nil {
+		writeErr(w, appErr(http.StatusBadGateway, "POSTHOG_ERROR", "Erro ao consultar a PostHog"))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
+// GET /analytics/recordings/{id}/events
+// Devolve os eventos rrweb já descompactados de uma gravação — pronto pro
+// rrweb-player tocar. Pode demorar alguns segundos (busca e descompacta todos
+// os blobs da sessão) e a resposta pode chegar a alguns MB numa sessão longa.
+func (s *Server) handlePostHogRecordingEvents(w http.ResponseWriter, r *http.Request) {
+	if s.posthogUnavailable(w) {
+		return
+	}
+	id := r.PathValue("id")
+	events, err := s.posthog.recordingEvents(r.Context(), id)
+	if err != nil {
+		writeErr(w, appErr(http.StatusBadGateway, "POSTHOG_ERROR", "Erro ao consultar a PostHog"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
 // writePostHogCounts executa uma HogQL de 2 colunas (label, count) e devolve
 // no shape {key,count}[] — mesmo formato do BlogMetricsCount, reaproveitado
 // pelo RankingCard do front.
