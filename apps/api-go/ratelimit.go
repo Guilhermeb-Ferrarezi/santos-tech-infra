@@ -10,7 +10,20 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
+
+// luaRateLimit increments KEYS[1] and, on first creation (count == 1), sets
+// its TTL to ARGV[1] milliseconds — both in a single atomic Redis round-trip.
+// A non-atomic INCR + EXPIRE pair leaves the key without a TTL if the
+// connection drops between the two commands, permanently blocking that
+// IP+route with no automatic recovery.
+var luaRateLimit = redis.NewScript(`
+local n = redis.call('INCR', KEYS[1])
+if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+return n
+`)
 
 // trustedProxyNets é a allowlist de redes (CIDRs) de quem pode falar por nós via
 // CF-Connecting-IP / X-Forwarded-For. Só confiamos nesses headers quando o
@@ -133,14 +146,9 @@ func clientIP(r *http.Request) string {
 // (bloqueia) para não virar fail-open de brute-force durante uma queda do Redis;
 // para o limite global não-sensível mantemos fail-open (não derruba o site todo).
 func (s *Server) allow(ctx context.Context, key string, max int, window time.Duration, failClosed bool) bool {
-	n, err := s.rdb.Incr(ctx, key).Result()
+	n, err := luaRateLimit.Run(ctx, s.rdb, []string{key}, window.Milliseconds()).Int64()
 	if err != nil {
 		return !failClosed
-	}
-	// ExpireNX (Redis 7 EXPIRE … NX) sets the TTL only if the key has none yet —
-	// single atomic command, no race between INCR and EXPIRE.
-	if err := s.rdb.ExpireNX(ctx, key, window).Err(); err != nil {
-		slog.Warn("rate limit: ExpireNX falhou; chave pode não expirar", "key", key, "err", err)
 	}
 	return n <= int64(max)
 }
