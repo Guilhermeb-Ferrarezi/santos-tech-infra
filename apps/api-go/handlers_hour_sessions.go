@@ -396,7 +396,8 @@ func (s *Server) handleAdjustHourSession(w http.ResponseWriter, r *http.Request)
 	var note *string
 	if n := strings.TrimSpace(in.Note); n != "" {
 		if len(n) > 200 {
-			n = n[:200]
+			writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Nota longa demais (máximo 200 caracteres)"))
+			return
 		}
 		note = &n
 	}
