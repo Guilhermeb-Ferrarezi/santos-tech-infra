@@ -924,6 +924,55 @@ lugar de `coResponsaveis` — substitui a lista inteira a cada save (mesmo contr
 **TaskCategory**: `id`, `name`. Apagar categoria em uso não trava — tarefas ficam com
 `categoryId: null` (ON DELETE SET NULL).
 
+## Agenda — `api.santos-tech.com/agenda`
+
+Auth: admin (3)/professor (2) sempre; role 4 com permissão `agenda` (read/write/delete).
+Calendário único de compromissos que ocupam horário e/ou PCs: aula de turma (recorrente
+semanal), aula particular, aula experimental, avulso, Corujão, Mix. Sem paginação/filtro —
+mesma convenção de `social`/`tasks`, o front resolve a janela de exibição.
+
+- `GET /agenda/eventos` — `{eventos:[AgendaEvento]}`, todos, sem filtro
+- `GET /agenda/eventos/{id}` — `{evento}` · inexistente → 404
+- `POST /agenda/eventos {AgendaEventoInput}` → 201 `{evento}` · campo inválido → 400
+  `BAD_REQUEST` · capacidade de 10 PCs excedida (bloqueio duro, sem override) → 400
+  `AGENDA_CAPACIDADE_EXCEDIDA` `{pcsOcupados, eventosConflitantes}` · conflito de política
+  (Arena em cima de aula, ou vice-versa) sem `confirmarConflito:true` → 409
+  `AGENDA_CONFLITO_POLITICA` `{eventosConflitantes}` — reenviar com `confirmarConflito:true`
+  grava o evento e registra quem confirmou
+- `PUT /agenda/eventos/{id} {AgendaEventoInput}` → `{evento}` — mesmas checagens do POST,
+  ignorando o próprio evento na comparação de conflito · inexistente → 404
+- `DELETE /agenda/eventos/{id}` → 204 · inexistente → 404
+- `POST /agenda/eventos/check {AgendaEventoInput}` — dry-run do motor de conflito, NUNCA
+  grava; usado pelo formulário do front pra feedback de capacidade em tempo real → 200
+  `{capacidadeExcedida, pcsOcupados, eventosCapacidade, eventosPolitica}`
+- `GET /agenda/feriados?ano=YYYY` — `{feriados:[AgendaFeriado]}`, nacionais (BrasilAPI,
+  cache 24h) + municipais, juntos · `ano` fora de 2000–2100 → 400
+- `GET|POST /agenda/feriados-municipais`, `DELETE /agenda/feriados-municipais/{id}` —
+  **admin-only**, cadastro manual (não existe fonte pública confiável por município)
+
+**Capacidade e conflito de política** (decisão confirmada em 26/08 — ver
+`docs/superpowers/specs/2026-08-26-agenda-arena-design.md` no repo `dashboard`): teto físico
+de **10 PCs** por horário, somando todas as ocorrências (inclusive de `aula_turma`
+recorrente) que se sobrepõem — **bloqueio automático, sem override**. Separadamente, um
+`avulso`/`corujao`/`mix` sobreposto a uma `aula_turma`/`aula_particular`/`aula_experimental`
+(ou o inverso) é um **conflito de política**, não físico: a API responde 409 e exige
+`confirmarConflito:true` no reenvio pra gravar mesmo assim — a confirmação fica registrada em
+`agenda_evento_confirmacoes` (quem confirmou, contra quais eventos), dando visibilidade de
+intervenção sem travar quem precisa vender.
+
+**AgendaEvento**: `tipo` (aula_turma|aula_particular|aula_experimental|avulso|corujao|mix),
+`titulo`, `alunoOuGrupo`, `professorOuResponsavelId`/`professorOuResponsavelNome`, `conteudo`,
+`jogo`, `qtdPessoas`, `computadoresUsados`, `dataInicio` (YYYY-MM-DD), `horaInicio`/`horaFim`
+(HH:MM:SS), `recorrencia` (nenhuma|semanal — só `aula_turma` usa `semanal`, forçado no
+servidor independente do que o cliente mandar), `diaSemana` (0-6, `time.Weekday`, só se
+semanal), `dataFimRecorrencia` (só se semanal), `statusPreparo` (nao_aplica|pendente|pronto —
+`nao_aplica` forçado pra tipos de aula, default `pendente` pra tipos de Arena), `notas`,
+`createdBy`/`createdByNome`.
+
+**Criação de Tarefa de preparo NÃO é automática** — decisão confirmada em 26/08: ao contrário
+do que se poderia esperar do módulo Tarefas, salvar um evento de Arena não cria uma Tarefa
+sozinho; isso continua manual.
+
 ## Glossário — `api.santos-tech.com/glossary`
 
 Auth: `GET` aberto a qualquer sessão autenticada (sem checagem de papel/permissão — não é

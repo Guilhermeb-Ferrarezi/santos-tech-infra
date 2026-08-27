@@ -860,6 +860,57 @@ FROM social_series ser
 WHERE p.serie_id IS NULL
   AND p.title ~ '^\[[^\]]+\]'
   AND ser.nome = trim(substring(p.title from '^\[([^\]]+)\]'));
+
+-- Agenda universal — eventos que ocupam horário e/ou PCs: aula de turma
+-- (recorrente semanal), aula particular, aula experimental, avulso, Corujão,
+-- Mix. Ver docs/superpowers/specs/2026-08-26-agenda-arena-design.md (dashboard).
+CREATE TABLE IF NOT EXISTS agenda_eventos (
+  id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tipo                        TEXT NOT NULL CHECK (tipo IN ('aula_turma','aula_particular','aula_experimental','avulso','corujao','mix')),
+  titulo                      TEXT NOT NULL,
+  aluno_ou_grupo               TEXT,
+  professor_ou_responsavel_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  conteudo                    TEXT,
+  jogo                        TEXT,
+  qtd_pessoas                 INTEGER,
+  computadores_usados         INTEGER NOT NULL CHECK (computadores_usados >= 0),
+  data_inicio                 DATE NOT NULL,
+  hora_inicio                 TIME NOT NULL,
+  hora_fim                    TIME NOT NULL CHECK (hora_fim > hora_inicio),
+  recorrencia                 TEXT NOT NULL DEFAULT 'nenhuma' CHECK (recorrencia IN ('nenhuma','semanal')),
+  dia_semana                  SMALLINT CHECK (dia_semana BETWEEN 0 AND 6),
+  data_fim_recorrencia        DATE,
+  status_preparo               TEXT CHECK (status_preparo IN ('nao_aplica','pendente','pronto')),
+  notas                       TEXT NOT NULL DEFAULT '',
+  created_by                  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agenda_eventos_data ON agenda_eventos(data_inicio);
+CREATE INDEX IF NOT EXISTS idx_agenda_eventos_tipo ON agenda_eventos(tipo);
+
+-- Registra quando alguém confirma criar/editar um evento de Arena apesar do
+-- aviso de conflito de política (Arena em cima de aula) — dá visibilidade de
+-- intervenção ao Henrique/Rodrigo sem bloquear quem precisa vender.
+CREATE TABLE IF NOT EXISTS agenda_evento_confirmacoes (
+  id                BIGSERIAL PRIMARY KEY,
+  evento_id         UUID NOT NULL REFERENCES agenda_eventos(id) ON DELETE CASCADE,
+  user_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  conflitos_com_ids TEXT[] NOT NULL DEFAULT '{}',
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agenda_confirmacoes_evento ON agenda_evento_confirmacoes(evento_id);
+
+-- Feriados municipais (cidade da escola) — não existe fonte pública agregada
+-- confiável por município, então é cadastro manual do admin. Feriados
+-- nacionais vêm da BrasilAPI em runtime (ver agenda_feriados.go), não são
+-- persistidos aqui.
+CREATE TABLE IF NOT EXISTS agenda_feriados_municipais (
+  id         SERIAL PRIMARY KEY,
+  data       DATE NOT NULL UNIQUE,
+  nome       TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
