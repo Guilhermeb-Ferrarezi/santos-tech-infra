@@ -8,6 +8,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AgendaEvento struct {
+	ID                       pgtype.UUID
+	Tipo                     string
+	Titulo                   string
+	AlunoOuGrupo             *string
+	ProfessorOuResponsavelID pgtype.Int4
+	Conteudo                 *string
+	Jogo                     *string
+	QtdPessoas               pgtype.Int4
+	ComputadoresUsados       int32
+	DataInicio               pgtype.Date
+	HoraInicio               pgtype.Time
+	HoraFim                  pgtype.Time
+	Recorrencia              string
+	DiaSemana                *int16
+	DataFimRecorrencia       pgtype.Date
+	StatusPreparo            *string
+	Notas                    string
+	CreatedBy                pgtype.Int4
+	CreatedAt                pgtype.Timestamptz
+	UpdatedAt                pgtype.Timestamptz
+}
+
+type AgendaEventoConfirmaco struct {
+	ID              int64
+	EventoID        pgtype.UUID
+	UserID          pgtype.Int4
+	ConflitosComIds []string
+	CreatedAt       pgtype.Timestamptz
+}
+
+type AgendaFeriadosMunicipai struct {
+	ID        int32
+	Data      pgtype.Date
+	Nome      string
+	CreatedAt pgtype.Timestamptz
+}
+
 type ApiKey struct {
 	ID         int64
 	UserID     int32
