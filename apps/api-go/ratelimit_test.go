@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -97,6 +98,34 @@ func TestRateLimitFailClosed(t *testing.T) {
 	}
 	if called {
 		t.Fatal("handler não deve ser chamado quando rateLimit está fail-closed e Redis falhou")
+	}
+}
+
+// TestRateLimitKeyHasTTL verifica que a chave do rate limit sempre recebe um TTL
+// na primeira chamada, garantindo que não fique "presa" no Redis indefinidamente.
+// A implementação anterior usava INCR + ExpireNX em dois round-trips separados;
+// se a conexão caísse entre os dois, a chave ficava sem TTL para sempre.
+// A implementação atual usa um script Lua atômico que elimina essa janela de falha.
+func TestRateLimitKeyHasTTL(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s := testServer(Config{})
+	s.rdb = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = s.rdb.Close() })
+
+	key := "api-go:rl:test-route:1.2.3.4"
+	ctx := context.Background()
+
+	s.allow(ctx, key, 100, time.Minute, false)
+
+	if ttl := mr.TTL(key); ttl <= 0 {
+		t.Fatalf("chave de rate limit deve ter TTL após a primeira chamada; got %v", ttl)
+	}
+
+	for i := 0; i < 5; i++ {
+		s.allow(ctx, key, 100, time.Minute, false)
+	}
+	if ttl := mr.TTL(key); ttl <= 0 {
+		t.Fatalf("chave de rate limit perdeu o TTL após chamadas subsequentes; got %v", ttl)
 	}
 }
 
