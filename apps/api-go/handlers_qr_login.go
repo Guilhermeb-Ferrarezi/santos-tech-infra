@@ -50,6 +50,9 @@ func (s *Server) saveQRLoginRecord(w http.ResponseWriter, r *http.Request, rec q
 // abrir "Outras opções" e mostra o QR (payload = token) + o código de 6
 // dígitos como alternativa digitável. Público: quem cria não está logado.
 func (s *Server) handleQRLoginCreate(w http.ResponseWriter, r *http.Request) {
+	// resposta carrega token+code — equivalem a uma credencial de login, não
+	// podem ser cacheados (ver mesmo padrão em handlers_auth/mfa/oauth_provider).
+	w.Header().Set("Cache-Control", "no-store")
 	token := randomToken(32)
 	code := randomDigits(6)
 	if err := s.rdb.Set(r.Context(), qrLoginCodeKey(code), token, qrLoginTTL).Err(); err != nil {
