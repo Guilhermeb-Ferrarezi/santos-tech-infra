@@ -400,7 +400,7 @@ CREATE INDEX IF NOT EXISTS idx_drive_folder_members_user ON drive_folder_members
 -- Mix. Ver docs/superpowers/specs/2026-08-26-agenda-arena-design.md (dashboard).
 CREATE TABLE IF NOT EXISTS agenda_eventos (
   id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tipo                        TEXT NOT NULL CHECK (tipo IN ('aula_turma','aula_particular','aula_experimental','avulso','corujao','mix')),
+  tipo                        TEXT NOT NULL CHECK (tipo IN ('aula_turma','aula_particular','aula_experimental','avulso','corujao','mix','dia_inteiro')),
   titulo                      TEXT NOT NULL,
   aluno_ou_grupo               TEXT,
   professor_ou_responsavel_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -414,6 +414,7 @@ CREATE TABLE IF NOT EXISTS agenda_eventos (
   recorrencia                 TEXT NOT NULL DEFAULT 'nenhuma' CHECK (recorrencia IN ('nenhuma','semanal')),
   dia_semana                  SMALLINT CHECK (dia_semana BETWEEN 0 AND 6),
   data_fim_recorrencia        DATE,
+  data_fim                    DATE,
   status_preparo               TEXT CHECK (status_preparo IN ('nao_aplica','pendente','pronto')),
   notas                       TEXT NOT NULL DEFAULT '',
   created_by                  INTEGER REFERENCES users(id) ON DELETE SET NULL,

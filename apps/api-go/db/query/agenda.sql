@@ -7,6 +7,7 @@ SELECT id::text, tipo, titulo, aluno_ou_grupo,
   conteudo, jogo, qtd_pessoas, computadores_usados,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
+  COALESCE(data_fim::text, '')::text AS data_fim,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at
@@ -20,6 +21,7 @@ SELECT id::text, tipo, titulo, aluno_ou_grupo,
   conteudo, jogo, qtd_pessoas, computadores_usados,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
+  COALESCE(data_fim::text, '')::text AS data_fim,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at
@@ -29,12 +31,12 @@ FROM agenda_eventos WHERE id = $1::uuid;
 INSERT INTO agenda_eventos (
   tipo, titulo, aluno_ou_grupo, professor_ou_responsavel_id, conteudo, jogo,
   qtd_pessoas, computadores_usados, data_inicio, hora_inicio, hora_fim,
-  recorrencia, dia_semana, data_fim_recorrencia, status_preparo, notas, created_by
+  recorrencia, dia_semana, data_fim_recorrencia, data_fim, status_preparo, notas, created_by
 ) VALUES (
   sqlc.arg(tipo), sqlc.arg(titulo), sqlc.arg(aluno_ou_grupo), sqlc.arg(professor_ou_responsavel_id),
   sqlc.arg(conteudo), sqlc.arg(jogo), sqlc.arg(qtd_pessoas), sqlc.arg(computadores_usados),
   sqlc.arg(data_inicio)::date, sqlc.arg(hora_inicio)::time, sqlc.arg(hora_fim)::time,
-  sqlc.arg(recorrencia), sqlc.arg(dia_semana), sqlc.arg(data_fim_recorrencia)::date,
+  sqlc.arg(recorrencia), sqlc.arg(dia_semana), sqlc.arg(data_fim_recorrencia)::date, sqlc.arg(data_fim)::date,
   sqlc.arg(status_preparo), sqlc.arg(notas), sqlc.arg(created_by)
 )
 RETURNING id::text, tipo, titulo, aluno_ou_grupo,
@@ -43,6 +45,7 @@ RETURNING id::text, tipo, titulo, aluno_ou_grupo,
   conteudo, jogo, qtd_pessoas, computadores_usados,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
+  COALESCE(data_fim::text, '')::text AS data_fim,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at;
@@ -54,6 +57,7 @@ UPDATE agenda_eventos SET
   qtd_pessoas=sqlc.arg(qtd_pessoas), computadores_usados=sqlc.arg(computadores_usados),
   data_inicio=sqlc.arg(data_inicio)::date, hora_inicio=sqlc.arg(hora_inicio)::time, hora_fim=sqlc.arg(hora_fim)::time,
   recorrencia=sqlc.arg(recorrencia), dia_semana=sqlc.arg(dia_semana), data_fim_recorrencia=sqlc.arg(data_fim_recorrencia)::date,
+  data_fim=sqlc.arg(data_fim)::date,
   status_preparo=sqlc.arg(status_preparo), notas=sqlc.arg(notas), updated_at=now()
 WHERE id=sqlc.arg(id)::uuid
 RETURNING id::text, tipo, titulo, aluno_ou_grupo,
@@ -62,6 +66,7 @@ RETURNING id::text, tipo, titulo, aluno_ou_grupo,
   conteudo, jogo, qtd_pessoas, computadores_usados,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
+  COALESCE(data_fim::text, '')::text AS data_fim,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at;

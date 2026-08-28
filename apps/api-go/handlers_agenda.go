@@ -32,16 +32,39 @@ func validateAgendaEventoInput(in *AgendaEventoInput) error {
 	if _, err := time.Parse("2006-01-02", in.DataInicio); err != nil {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de início inválida")
 	}
-	hi, err := parseHoraMinutos(in.HoraInicio)
-	if err != nil {
-		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Hora de início inválida")
-	}
-	hf, err := parseHoraMinutos(in.HoraFim)
-	if err != nil {
-		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Hora de fim inválida")
-	}
-	if hf <= hi {
-		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Hora de fim deve ser depois da hora de início")
+
+	// dia_inteiro é um banner de N dias consecutivos (ex.: "Recesso escolar"),
+	// não ocupa PC nem tem horário real — hora_inicio/hora_fim continuam
+	// preenchidos com sentinelas fixas só pra não mexer no NOT NULL/CHECK da
+	// coluna (ver checkConflitos, que exclui esse tipo do motor de conflito
+	// por completo, então as sentinelas nunca chegam a ser comparadas).
+	if in.Tipo == "dia_inteiro" {
+		if in.DataFim == nil || strings.TrimSpace(*in.DataFim) == "" {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim obrigatória pra evento de dia inteiro")
+		}
+		fim, err := time.Parse("2006-01-02", *in.DataFim)
+		if err != nil {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim inválida")
+		}
+		inicio, _ := time.Parse("2006-01-02", in.DataInicio)
+		if fim.Before(inicio) {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim não pode ser antes do início")
+		}
+		in.HoraInicio, in.HoraFim = "00:00:00", "23:59:59"
+		in.ComputadoresUsados = 0
+	} else {
+		in.DataFim = nil
+		hi, err := parseHoraMinutos(in.HoraInicio)
+		if err != nil {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Hora de início inválida")
+		}
+		hf, err := parseHoraMinutos(in.HoraFim)
+		if err != nil {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Hora de fim inválida")
+		}
+		if hf <= hi {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Hora de fim deve ser depois da hora de início")
+		}
 	}
 
 	// Só aula_turma é recorrente — regra fixa da spec, não é escolha do usuário.

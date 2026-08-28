@@ -133,6 +133,12 @@ func checkConflitos(candidato AgendaEvento, existentes []AgendaEvento) (AgendaCo
 		EventosPolitica:   []AgendaEvento{},
 	}
 
+	// dia_inteiro é um banner (ex.: "Recesso escolar") — não ocupa PC nem
+	// disputa horário com nada, então nem entra no motor de conflito.
+	if candidato.Tipo == "dia_inteiro" {
+		return resultado, nil
+	}
+
 	rangeStart, err := parseData(candidato.DataInicio)
 	if err != nil {
 		return resultado, err
@@ -159,6 +165,9 @@ func checkConflitos(candidato AgendaEvento, existentes []AgendaEvento) (AgendaCo
 		for _, ev := range existentes {
 			if ev.ID == candidato.ID {
 				continue // update: não compara consigo mesmo
+			}
+			if ev.Tipo == "dia_inteiro" {
+				continue // banner de dia inteiro nunca ocupa PC nem conta pra política
 			}
 			ocorrenciasEv, err := resolveOcorrencias(ev, co.Data, co.Data)
 			if err != nil {

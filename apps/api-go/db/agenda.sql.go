@@ -42,6 +42,7 @@ SELECT id::text, tipo, titulo, aluno_ou_grupo,
   conteudo, jogo, qtd_pessoas, computadores_usados,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
+  COALESCE(data_fim::text, '')::text AS data_fim,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at
@@ -65,6 +66,7 @@ type GetAgendaEventoRow struct {
 	Recorrencia                string
 	DiaSemana                  *int16
 	DataFimRecorrencia         string
+	DataFim                    string
 	StatusPreparo              *string
 	Notas                      string
 	CreatedBy                  pgtype.Int4
@@ -93,6 +95,7 @@ func (q *Queries) GetAgendaEvento(ctx context.Context, dollar_1 pgtype.UUID) (Ge
 		&i.Recorrencia,
 		&i.DiaSemana,
 		&i.DataFimRecorrencia,
+		&i.DataFim,
 		&i.StatusPreparo,
 		&i.Notas,
 		&i.CreatedBy,
@@ -107,13 +110,13 @@ const insertAgendaEvento = `-- name: InsertAgendaEvento :one
 INSERT INTO agenda_eventos (
   tipo, titulo, aluno_ou_grupo, professor_ou_responsavel_id, conteudo, jogo,
   qtd_pessoas, computadores_usados, data_inicio, hora_inicio, hora_fim,
-  recorrencia, dia_semana, data_fim_recorrencia, status_preparo, notas, created_by
+  recorrencia, dia_semana, data_fim_recorrencia, data_fim, status_preparo, notas, created_by
 ) VALUES (
   $1, $2, $3, $4,
   $5, $6, $7, $8,
   $9::date, $10::time, $11::time,
-  $12, $13, $14::date,
-  $15, $16, $17
+  $12, $13, $14::date, $15::date,
+  $16, $17, $18
 )
 RETURNING id::text, tipo, titulo, aluno_ou_grupo,
   professor_ou_responsavel_id,
@@ -121,6 +124,7 @@ RETURNING id::text, tipo, titulo, aluno_ou_grupo,
   conteudo, jogo, qtd_pessoas, computadores_usados,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
+  COALESCE(data_fim::text, '')::text AS data_fim,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at
@@ -141,6 +145,7 @@ type InsertAgendaEventoParams struct {
 	Recorrencia              string
 	DiaSemana                *int16
 	DataFimRecorrencia       pgtype.Date
+	DataFim                  pgtype.Date
 	StatusPreparo            *string
 	Notas                    string
 	CreatedBy                pgtype.Int4
@@ -163,6 +168,7 @@ type InsertAgendaEventoRow struct {
 	Recorrencia                string
 	DiaSemana                  *int16
 	DataFimRecorrencia         string
+	DataFim                    string
 	StatusPreparo              *string
 	Notas                      string
 	CreatedBy                  pgtype.Int4
@@ -187,6 +193,7 @@ func (q *Queries) InsertAgendaEvento(ctx context.Context, arg InsertAgendaEvento
 		arg.Recorrencia,
 		arg.DiaSemana,
 		arg.DataFimRecorrencia,
+		arg.DataFim,
 		arg.StatusPreparo,
 		arg.Notas,
 		arg.CreatedBy,
@@ -209,6 +216,7 @@ func (q *Queries) InsertAgendaEvento(ctx context.Context, arg InsertAgendaEvento
 		&i.Recorrencia,
 		&i.DiaSemana,
 		&i.DataFimRecorrencia,
+		&i.DataFim,
 		&i.StatusPreparo,
 		&i.Notas,
 		&i.CreatedBy,
@@ -272,6 +280,7 @@ SELECT id::text, tipo, titulo, aluno_ou_grupo,
   conteudo, jogo, qtd_pessoas, computadores_usados,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
+  COALESCE(data_fim::text, '')::text AS data_fim,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at
@@ -296,6 +305,7 @@ type ListAgendaEventosRow struct {
 	Recorrencia                string
 	DiaSemana                  *int16
 	DataFimRecorrencia         string
+	DataFim                    string
 	StatusPreparo              *string
 	Notas                      string
 	CreatedBy                  pgtype.Int4
@@ -331,6 +341,7 @@ func (q *Queries) ListAgendaEventos(ctx context.Context) ([]ListAgendaEventosRow
 			&i.Recorrencia,
 			&i.DiaSemana,
 			&i.DataFimRecorrencia,
+			&i.DataFim,
 			&i.StatusPreparo,
 			&i.Notas,
 			&i.CreatedBy,
@@ -428,14 +439,16 @@ UPDATE agenda_eventos SET
   qtd_pessoas=$7, computadores_usados=$8,
   data_inicio=$9::date, hora_inicio=$10::time, hora_fim=$11::time,
   recorrencia=$12, dia_semana=$13, data_fim_recorrencia=$14::date,
-  status_preparo=$15, notas=$16, updated_at=now()
-WHERE id=$17::uuid
+  data_fim=$15::date,
+  status_preparo=$16, notas=$17, updated_at=now()
+WHERE id=$18::uuid
 RETURNING id::text, tipo, titulo, aluno_ou_grupo,
   professor_ou_responsavel_id,
   COALESCE((SELECT name FROM users WHERE id = professor_ou_responsavel_id), '')::text AS professor_ou_responsavel_nome,
   conteudo, jogo, qtd_pessoas, computadores_usados,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
+  COALESCE(data_fim::text, '')::text AS data_fim,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at
@@ -456,6 +469,7 @@ type UpdateAgendaEventoParams struct {
 	Recorrencia              string
 	DiaSemana                *int16
 	DataFimRecorrencia       pgtype.Date
+	DataFim                  pgtype.Date
 	StatusPreparo            *string
 	Notas                    string
 	ID                       pgtype.UUID
@@ -478,6 +492,7 @@ type UpdateAgendaEventoRow struct {
 	Recorrencia                string
 	DiaSemana                  *int16
 	DataFimRecorrencia         string
+	DataFim                    string
 	StatusPreparo              *string
 	Notas                      string
 	CreatedBy                  pgtype.Int4
@@ -502,6 +517,7 @@ func (q *Queries) UpdateAgendaEvento(ctx context.Context, arg UpdateAgendaEvento
 		arg.Recorrencia,
 		arg.DiaSemana,
 		arg.DataFimRecorrencia,
+		arg.DataFim,
 		arg.StatusPreparo,
 		arg.Notas,
 		arg.ID,
@@ -524,6 +540,7 @@ func (q *Queries) UpdateAgendaEvento(ctx context.Context, arg UpdateAgendaEvento
 		&i.Recorrencia,
 		&i.DiaSemana,
 		&i.DataFimRecorrencia,
+		&i.DataFim,
 		&i.StatusPreparo,
 		&i.Notas,
 		&i.CreatedBy,

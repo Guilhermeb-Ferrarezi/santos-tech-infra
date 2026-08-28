@@ -889,6 +889,15 @@ CREATE TABLE IF NOT EXISTS agenda_eventos (
 CREATE INDEX IF NOT EXISTS idx_agenda_eventos_data ON agenda_eventos(data_inicio);
 CREATE INDEX IF NOT EXISTS idx_agenda_eventos_tipo ON agenda_eventos(tipo);
 
+-- Evento "dia inteiro" (banner de N dias consecutivos, ex.: "Recesso escolar") —
+-- não ocupa PC nem entra no conflito de política; horaInicio/horaFim continuam
+-- preenchidos com sentinelas (00:00:00/23:59:59) pra não mexer no NOT NULL/CHECK
+-- de hora_fim > hora_inicio. data_fim é o último dia (inclusive) do intervalo.
+ALTER TABLE agenda_eventos ADD COLUMN IF NOT EXISTS data_fim DATE;
+ALTER TABLE agenda_eventos DROP CONSTRAINT IF EXISTS agenda_eventos_tipo_check;
+ALTER TABLE agenda_eventos ADD CONSTRAINT agenda_eventos_tipo_check
+  CHECK (tipo IN ('aula_turma','aula_particular','aula_experimental','avulso','corujao','mix','dia_inteiro'));
+
 -- Registra quando alguém confirma criar/editar um evento de Arena apesar do
 -- aviso de conflito de política (Arena em cima de aula) — dá visibilidade de
 -- intervenção ao Henrique/Rodrigo sem bloquear quem precisa vender.

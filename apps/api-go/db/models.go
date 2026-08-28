@@ -24,6 +24,7 @@ type AgendaEvento struct {
 	Recorrencia              string
 	DiaSemana                *int16
 	DataFimRecorrencia       pgtype.Date
+	DataFim                  pgtype.Date
 	StatusPreparo            *string
 	Notas                    string
 	CreatedBy                pgtype.Int4

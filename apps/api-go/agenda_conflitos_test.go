@@ -128,3 +128,29 @@ func TestCheckConflitosIgnoraSiMesmoEmUpdate(t *testing.T) {
 		t.Fatal("evento não deveria conflitar consigo mesmo numa edição")
 	}
 }
+
+func TestCheckConflitosDiaInteiroCandidatoNaoConflita(t *testing.T) {
+	turma := agendaEventoFixture("turma", "aula_turma", "2026-09-04", "19:30", "21:30", 8)
+	// mesmo dia, "horário" sentinela (00:00-23:59) que sobreporia qualquer coisa
+	// se dia_inteiro não fosse excluído do motor de conflito por completo.
+	candidato := agendaEventoFixture("", "dia_inteiro", "2026-09-04", "00:00", "23:59", 0)
+	res, err := checkConflitos(candidato, []AgendaEvento{turma})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.CapacidadeExcedida || res.PCsOcupados != 0 || len(res.EventosPolitica) != 0 || len(res.EventosCapacidade) != 0 {
+		t.Fatal("evento dia_inteiro não deveria gerar conflito nenhum, mesmo sobrepondo um evento existente")
+	}
+}
+
+func TestCheckConflitosDiaInteiroExistenteNaoContaCapacidade(t *testing.T) {
+	banner := agendaEventoFixture("banner", "dia_inteiro", "2026-09-04", "00:00", "23:59", 0)
+	candidato := agendaEventoFixture("", "avulso", "2026-09-04", "20:00", "22:00", 8)
+	res, err := checkConflitos(candidato, []AgendaEvento{banner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.CapacidadeExcedida || res.PCsOcupados != 8 || len(res.EventosPolitica) != 0 {
+		t.Fatal("banner dia_inteiro existente não deveria contar PCs nem gerar conflito de política pra outro evento")
+	}
+}

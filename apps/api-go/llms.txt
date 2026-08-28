@@ -928,8 +928,10 @@ lugar de `coResponsaveis` — substitui a lista inteira a cada save (mesmo contr
 
 Auth: admin (3)/professor (2) sempre; role 4 com permissão `agenda` (read/write/delete).
 Calendário único de compromissos que ocupam horário e/ou PCs: aula de turma (recorrente
-semanal), aula particular, aula experimental, avulso, Corujão, Mix. Sem paginação/filtro —
-mesma convenção de `social`/`tasks`, o front resolve a janela de exibição.
+semanal), aula particular, aula experimental, avulso, Corujão, Mix, e evento de **dia
+inteiro** (banner de N dias consecutivos, ex.: "Recesso escolar" — não ocupa PC nem
+horário real). Sem paginação/filtro — mesma convenção de `social`/`tasks`, o front resolve
+a janela de exibição.
 
 - `GET /agenda/eventos` — `{eventos:[AgendaEvento]}`, todos, sem filtro
 - `GET /agenda/eventos/{id}` — `{evento}` · inexistente → 404
@@ -958,16 +960,27 @@ recorrente) que se sobrepõem — **bloqueio automático, sem override**. Separa
 (ou o inverso) é um **conflito de política**, não físico: a API responde 409 e exige
 `confirmarConflito:true` no reenvio pra gravar mesmo assim — a confirmação fica registrada em
 `agenda_evento_confirmacoes` (quem confirmou, contra quais eventos), dando visibilidade de
-intervenção sem travar quem precisa vender.
+intervenção sem travar quem precisa vender. `dia_inteiro` fica de fora desse motor por
+completo — não conta pra `pcsOcupados` de ninguém, nem gera `eventosPolitica` nem
+`eventosCapacidade`, mesmo sobrepondo horário de outro evento (não tem horário real).
 
-**AgendaEvento**: `tipo` (aula_turma|aula_particular|aula_experimental|avulso|corujao|mix),
-`titulo`, `alunoOuGrupo`, `professorOuResponsavelId`/`professorOuResponsavelNome`, `conteudo`,
-`jogo`, `qtdPessoas`, `computadoresUsados`, `dataInicio` (YYYY-MM-DD), `horaInicio`/`horaFim`
+**AgendaEvento**: `tipo`
+(aula_turma|aula_particular|aula_experimental|avulso|corujao|mix|dia_inteiro), `titulo`,
+`alunoOuGrupo`, `professorOuResponsavelId`/`professorOuResponsavelNome`, `conteudo`, `jogo`,
+`qtdPessoas`, `computadoresUsados`, `dataInicio` (YYYY-MM-DD), `horaInicio`/`horaFim`
 (HH:MM:SS), `recorrencia` (nenhuma|semanal — só `aula_turma` usa `semanal`, forçado no
 servidor independente do que o cliente mandar), `diaSemana` (0-6, `time.Weekday`, só se
-semanal), `dataFimRecorrencia` (só se semanal), `statusPreparo` (nao_aplica|pendente|pronto —
-`nao_aplica` forçado pra tipos de aula, default `pendente` pra tipos de Arena), `notas`,
+semanal), `dataFimRecorrencia` (só se semanal), `dataFim` (só se `tipo=dia_inteiro` —
+último dia, inclusive, do banner; obrigatório e ≥ `dataInicio` nesse caso, `null` pros
+demais tipos), `statusPreparo` (nao_aplica|pendente|pronto — `nao_aplica` forçado pra tipos
+de aula e pra `dia_inteiro`, default `pendente` pra tipos de Arena), `notas`,
 `createdBy`/`createdByNome`.
+
+**`dia_inteiro` na prática**: o servidor ignora `horaInicio`/`horaFim`/`computadoresUsados`
+enviados pelo cliente pra esse tipo e força `horaInicio="00:00:00"`,
+`horaFim="23:59:59"`, `computadoresUsados=0` — sentinelas, não horário real (a coluna
+continua `NOT NULL` no banco, e forçar aqui evita mexer nesse constraint). `dataFim` é
+obrigatório só pra esse tipo; pros demais o servidor força `null`.
 
 **Criação de Tarefa de preparo NÃO é automática** — decisão confirmada em 26/08: ao contrário
 do que se poderia esperar do módulo Tarefas, salvar um evento de Arena não cria uma Tarefa

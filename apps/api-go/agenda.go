@@ -11,28 +11,32 @@ import (
 )
 
 type AgendaEvento struct {
-	ID                         string    `json:"id"`
-	Tipo                       string    `json:"tipo"`
-	Titulo                     string    `json:"titulo"`
-	AlunoOuGrupo               *string   `json:"alunoOuGrupo"`
-	ProfessorOuResponsavelID   *int64    `json:"professorOuResponsavelId"`
-	ProfessorOuResponsavelNome string    `json:"professorOuResponsavelNome"`
-	Conteudo                   *string   `json:"conteudo"`
-	Jogo                       *string   `json:"jogo"`
-	QtdPessoas                 *int      `json:"qtdPessoas"`
-	ComputadoresUsados         int       `json:"computadoresUsados"`
-	DataInicio                 string    `json:"dataInicio"`
-	HoraInicio                 string    `json:"horaInicio"`
-	HoraFim                    string    `json:"horaFim"`
-	Recorrencia                string    `json:"recorrencia"`
-	DiaSemana                  *int      `json:"diaSemana"`
-	DataFimRecorrencia         *string   `json:"dataFimRecorrencia"`
-	StatusPreparo              *string   `json:"statusPreparo"`
-	Notas                      string    `json:"notas"`
-	CreatedBy                  *int64    `json:"createdBy"`
-	CreatedByNome              string    `json:"createdByNome"`
-	CreatedAt                  time.Time `json:"createdAt"`
-	UpdatedAt                  time.Time `json:"updatedAt"`
+	ID                         string  `json:"id"`
+	Tipo                       string  `json:"tipo"`
+	Titulo                     string  `json:"titulo"`
+	AlunoOuGrupo               *string `json:"alunoOuGrupo"`
+	ProfessorOuResponsavelID   *int64  `json:"professorOuResponsavelId"`
+	ProfessorOuResponsavelNome string  `json:"professorOuResponsavelNome"`
+	Conteudo                   *string `json:"conteudo"`
+	Jogo                       *string `json:"jogo"`
+	QtdPessoas                 *int    `json:"qtdPessoas"`
+	ComputadoresUsados         int     `json:"computadoresUsados"`
+	DataInicio                 string  `json:"dataInicio"`
+	HoraInicio                 string  `json:"horaInicio"`
+	HoraFim                    string  `json:"horaFim"`
+	Recorrencia                string  `json:"recorrencia"`
+	DiaSemana                  *int    `json:"diaSemana"`
+	DataFimRecorrencia         *string `json:"dataFimRecorrencia"`
+	// DataFim: último dia (inclusive) de um evento "dia_inteiro" que abrange
+	// vários dias consecutivos — distinto de DataFimRecorrencia (recorrência
+	// semanal). Só usado quando Tipo == "dia_inteiro".
+	DataFim       *string   `json:"dataFim"`
+	StatusPreparo *string   `json:"statusPreparo"`
+	Notas         string    `json:"notas"`
+	CreatedBy     *int64    `json:"createdBy"`
+	CreatedByNome string    `json:"createdByNome"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 type AgendaEventoInput struct {
@@ -50,6 +54,7 @@ type AgendaEventoInput struct {
 	Recorrencia              string  `json:"recorrencia"`
 	DiaSemana                *int    `json:"diaSemana"`
 	DataFimRecorrencia       *string `json:"dataFimRecorrencia"`
+	DataFim                  *string `json:"dataFim"`
 	StatusPreparo            *string `json:"statusPreparo"`
 	Notas                    string  `json:"notas"`
 	// ConfirmarConflito: reenvio do form depois do usuário confirmar o aviso
@@ -70,13 +75,13 @@ func (in AgendaEventoInput) toEvento(id string) AgendaEvento {
 		Jogo: in.Jogo, QtdPessoas: in.QtdPessoas, ComputadoresUsados: in.ComputadoresUsados,
 		DataInicio: in.DataInicio, HoraInicio: in.HoraInicio, HoraFim: in.HoraFim,
 		Recorrencia: in.Recorrencia, DiaSemana: in.DiaSemana,
-		DataFimRecorrencia: in.DataFimRecorrencia, StatusPreparo: in.StatusPreparo, Notas: in.Notas,
+		DataFimRecorrencia: in.DataFimRecorrencia, DataFim: in.DataFim, StatusPreparo: in.StatusPreparo, Notas: in.Notas,
 	}
 }
 
 var validAgendaTipos = map[string]bool{
 	"aula_turma": true, "aula_particular": true, "aula_experimental": true,
-	"avulso": true, "corujao": true, "mix": true,
+	"avulso": true, "corujao": true, "mix": true, "dia_inteiro": true,
 }
 var validAgendaStatusPreparo = map[string]bool{"nao_aplica": true, "pendente": true, "pronto": true}
 
@@ -166,7 +171,7 @@ func mkAgendaEvento(
 	id, tipo, titulo string, alunoOuGrupo *string,
 	professorID pgtype.Int4, professorNome string,
 	conteudo, jogo *string, qtdPessoas pgtype.Int4, pcs int32,
-	dataInicio, horaInicio, horaFim, recorrencia string, diaSemana *int16, dataFimRecorrencia string,
+	dataInicio, horaInicio, horaFim, recorrencia string, diaSemana *int16, dataFimRecorrencia, dataFim string,
 	statusPreparo *string, notas string, createdBy pgtype.Int4, createdByNome string,
 	createdAt, updatedAt pgtype.Timestamptz,
 ) AgendaEvento {
@@ -176,7 +181,7 @@ func mkAgendaEvento(
 		Conteudo: conteudo, Jogo: jogo, QtdPessoas: pgInt4ToIntPtr(qtdPessoas), ComputadoresUsados: int(pcs),
 		DataInicio: dataInicio, HoraInicio: horaInicio, HoraFim: horaFim,
 		Recorrencia: recorrencia, DiaSemana: int16PtrToIntPtr(diaSemana), DataFimRecorrencia: strPtrOrNil(dataFimRecorrencia),
-		StatusPreparo: statusPreparo, Notas: notas,
+		DataFim: strPtrOrNil(dataFim), StatusPreparo: statusPreparo, Notas: notas,
 		CreatedBy: pgInt4ToInt64Ptr(createdBy), CreatedByNome: createdByNome,
 		CreatedAt: createdAt.Time, UpdatedAt: updatedAt.Time,
 	}
@@ -185,28 +190,28 @@ func mkAgendaEvento(
 func agendaEventoFromList(r db.ListAgendaEventosRow) AgendaEvento {
 	return mkAgendaEvento(r.ID, r.Tipo, r.Titulo, r.AlunoOuGrupo, r.ProfessorOuResponsavelID, r.ProfessorOuResponsavelNome,
 		r.Conteudo, r.Jogo, r.QtdPessoas, r.ComputadoresUsados, r.DataInicio, r.HoraInicio, r.HoraFim,
-		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
+		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.DataFim, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
 		r.CreatedAt, r.UpdatedAt)
 }
 
 func agendaEventoFromGet(r db.GetAgendaEventoRow) AgendaEvento {
 	return mkAgendaEvento(r.ID, r.Tipo, r.Titulo, r.AlunoOuGrupo, r.ProfessorOuResponsavelID, r.ProfessorOuResponsavelNome,
 		r.Conteudo, r.Jogo, r.QtdPessoas, r.ComputadoresUsados, r.DataInicio, r.HoraInicio, r.HoraFim,
-		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
+		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.DataFim, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
 		r.CreatedAt, r.UpdatedAt)
 }
 
 func agendaEventoFromInsert(r db.InsertAgendaEventoRow) AgendaEvento {
 	return mkAgendaEvento(r.ID, r.Tipo, r.Titulo, r.AlunoOuGrupo, r.ProfessorOuResponsavelID, r.ProfessorOuResponsavelNome,
 		r.Conteudo, r.Jogo, r.QtdPessoas, r.ComputadoresUsados, r.DataInicio, r.HoraInicio, r.HoraFim,
-		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
+		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.DataFim, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
 		r.CreatedAt, r.UpdatedAt)
 }
 
 func agendaEventoFromUpdate(r db.UpdateAgendaEventoRow) AgendaEvento {
 	return mkAgendaEvento(r.ID, r.Tipo, r.Titulo, r.AlunoOuGrupo, r.ProfessorOuResponsavelID, r.ProfessorOuResponsavelNome,
 		r.Conteudo, r.Jogo, r.QtdPessoas, r.ComputadoresUsados, r.DataInicio, r.HoraInicio, r.HoraFim,
-		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
+		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.DataFim, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
 		r.CreatedAt, r.UpdatedAt)
 }
 
@@ -253,6 +258,7 @@ func (s *Server) insertAgendaEvento(ctx context.Context, in AgendaEventoInput, c
 		ComputadoresUsados: int32(in.ComputadoresUsados),
 		DataInicio:         dateStrToPgDate(&in.DataInicio), HoraInicio: timeStrToPgTime(in.HoraInicio), HoraFim: timeStrToPgTime(in.HoraFim),
 		Recorrencia: in.Recorrencia, DiaSemana: intPtrToInt16Ptr(in.DiaSemana), DataFimRecorrencia: dateStrToPgDate(in.DataFimRecorrencia),
+		DataFim:       dateStrToPgDate(in.DataFim),
 		StatusPreparo: in.StatusPreparo, Notas: in.Notas, CreatedBy: pgtype.Int4{Int32: int32(createdBy), Valid: true},
 	})
 	if err != nil {
@@ -270,6 +276,7 @@ func (s *Server) updateAgendaEvento(ctx context.Context, id string, in AgendaEve
 		ComputadoresUsados: int32(in.ComputadoresUsados),
 		DataInicio:         dateStrToPgDate(&in.DataInicio), HoraInicio: timeStrToPgTime(in.HoraInicio), HoraFim: timeStrToPgTime(in.HoraFim),
 		Recorrencia: in.Recorrencia, DiaSemana: intPtrToInt16Ptr(in.DiaSemana), DataFimRecorrencia: dateStrToPgDate(in.DataFimRecorrencia),
+		DataFim:       dateStrToPgDate(in.DataFim),
 		StatusPreparo: in.StatusPreparo, Notas: in.Notas,
 	})
 	if err != nil {
