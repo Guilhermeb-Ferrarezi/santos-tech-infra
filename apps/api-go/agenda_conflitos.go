@@ -124,7 +124,14 @@ type AgendaConflitos struct {
 // refletem o PIOR dia entre as ocorrências do candidato, não um resultado
 // por-dia — suficiente pro aviso na criação, que é o caso de uso real.
 func checkConflitos(candidato AgendaEvento, existentes []AgendaEvento) (AgendaConflitos, error) {
-	var resultado AgendaConflitos
+	// Slices inicializados vazios (não nil): o front trata os dois campos como
+	// array sempre presente (AgendaEvento[]) e o encoding/json serializa slice
+	// nil como `null`, não `[]` — sem isso, o caso comum (nenhum conflito de
+	// política) manda `eventosPolitica: null` e quebra `dryRun.eventosPolitica.length`.
+	resultado := AgendaConflitos{
+		EventosCapacidade: []AgendaEvento{},
+		EventosPolitica:   []AgendaEvento{},
+	}
 
 	rangeStart, err := parseData(candidato.DataInicio)
 	if err != nil {
