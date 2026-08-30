@@ -61,6 +61,7 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 
 // handleListAPIKeys lista os tokens do usuário (sem o segredo — só prefixo e metadados).
 func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	keys, err := s.listAPIKeys(r.Context(), userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
