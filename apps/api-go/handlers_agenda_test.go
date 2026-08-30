@@ -86,3 +86,16 @@ func TestValidateAgendaEventoInputNormalizaRecorrencia(t *testing.T) {
 		t.Fatal("avulso sem statusPreparo deveria default pra 'pendente'")
 	}
 }
+
+func TestValidateAgendaEventoInputRecorrenciaMaxSpan(t *testing.T) {
+	dia := 2
+	fim := "9999-12-31"
+	in := AgendaEventoInput{
+		Tipo: "aula_turma", Titulo: "Turma", DataInicio: "2026-09-01",
+		HoraInicio: "19:30", HoraFim: "21:30", ComputadoresUsados: 8,
+		DiaSemana: &dia, DataFimRecorrencia: &fim,
+	}
+	if err := validateAgendaEventoInput(&in); err == nil {
+		t.Fatal("dataFimRecorrencia a mais de 2 anos do início deveria ser rejeitada")
+	}
+}

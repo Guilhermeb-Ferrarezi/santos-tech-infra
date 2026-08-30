@@ -88,6 +88,14 @@ func validateAgendaEventoInput(in *AgendaEventoInput) error {
 		if !fim.After(inicio) {
 			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim da recorrência deve ser depois do início")
 		}
+		// Sem teto, um intervalo absurdo (ex.: "9999-12-31") faz resolveOcorrencias
+		// gerar centenas de milhares de ocorrências semanais — e checkConflitos
+		// compara cada uma contra todo evento existente. POST /agenda/eventos/check
+		// roda isso a cada keystroke do form (60 req/min, qualquer usuário com
+		// agenda:write), então esse custo é multiplicável.
+		if fim.After(inicio.AddDate(0, 0, agendaRecorrenciaMaxDias)) {
+			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim da recorrência não pode ser mais de 2 anos após o início")
+		}
 	} else {
 		in.DiaSemana = nil
 		in.DataFimRecorrencia = nil

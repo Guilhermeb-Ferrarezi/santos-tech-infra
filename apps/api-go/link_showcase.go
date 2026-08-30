@@ -61,6 +61,18 @@ func validateLinkShowcaseInput(in *LinkShowcaseItemInput) error {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return validationErr("URL de destino inválida (use http:// ou https://)")
 	}
+	if in.ImageURL != nil {
+		trimmed := strings.TrimSpace(*in.ImageURL)
+		if trimmed == "" {
+			in.ImageURL = nil
+		} else {
+			imgParsed, err := url.ParseRequestURI(trimmed)
+			if err != nil || (imgParsed.Scheme != "http" && imgParsed.Scheme != "https") {
+				return validationErr("URL da imagem inválida (use http:// ou https://)")
+			}
+			in.ImageURL = &trimmed
+		}
+	}
 	if !validLinkShowcaseStatuses[in.Status] {
 		return validationErr("Status inválido")
 	}

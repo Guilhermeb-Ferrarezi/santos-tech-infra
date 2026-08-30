@@ -8,6 +8,12 @@ import (
 
 const agendaCapacidadeMaximaPCs = 10
 
+// agendaRecorrenciaMaxDias limita o span de um evento semanal (dataInicio →
+// dataFimRecorrencia): sem teto, resolveOcorrencias geraria uma ocorrência por
+// semana até uma data arbitrária, e checkConflitos multiplica isso por todo
+// evento existente a cada chamada de /agenda/eventos/check.
+const agendaRecorrenciaMaxDias = 730
+
 var agendaTiposArena = map[string]bool{"avulso": true, "corujao": true, "mix": true}
 var agendaTiposAula = map[string]bool{"aula_turma": true, "aula_particular": true, "aula_experimental": true}
 

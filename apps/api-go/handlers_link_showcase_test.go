@@ -47,6 +47,7 @@ func TestHandleCreateLinkShowcaseItemValidation(t *testing.T) {
 		{"url sem esquema", `{"title":"T","url":"x.com","status":"active"}`},
 		{"url vazia", `{"title":"T","url":"","status":"active"}`},
 		{"status inválido", `{"title":"T","url":"https://x.com","status":"pausado"}`},
+		{"imageUrl sem esquema", `{"title":"T","url":"https://x.com","status":"active","imageUrl":"x.com/img.png"}`},
 	}
 	for _, tc := range cases {
 		w := httptest.NewRecorder()
@@ -65,6 +66,23 @@ func TestValidateLinkShowcaseInputAcceptsValid(t *testing.T) {
 	}
 	if in.Title != "Artigo" {
 		t.Fatalf("título deveria ser aparado, veio %q", in.Title)
+	}
+}
+
+func TestValidateLinkShowcaseInputImageURL(t *testing.T) {
+	blank := "   "
+	in := LinkShowcaseItemInput{Title: "T", URL: "https://x.com", Status: "active", ImageURL: &blank}
+	if err := validateLinkShowcaseInput(&in); err != nil {
+		t.Fatalf("não esperava erro: %v", err)
+	}
+	if in.ImageURL != nil {
+		t.Fatalf("imageUrl só com espaços deveria virar nil, veio %q", *in.ImageURL)
+	}
+
+	invalid := "ftp://x.com/img.png"
+	in2 := LinkShowcaseItemInput{Title: "T", URL: "https://x.com", Status: "active", ImageURL: &invalid}
+	if err := validateLinkShowcaseInput(&in2); err == nil {
+		t.Fatal("imageUrl com esquema não-http(s) deveria ser rejeitada")
 	}
 }
 
