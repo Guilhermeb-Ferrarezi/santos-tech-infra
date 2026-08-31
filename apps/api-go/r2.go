@@ -57,11 +57,24 @@ func r2HMAC(key []byte, msg string) []byte {
 	return m.Sum(nil)
 }
 
+// r2EncodePath codifica CADA segmento de um path (bucket ou key) nas regras
+// de path-escaping do SigV4 (RFC 3986, "/" preservado como separador) — sem
+// isso, uma key com espaço ou acento (ex: "Sequência 21.mp4") assina um
+// canonical URI cru, mas o net/http reescreve o path de verdade (%20, %C3%AA
+// etc.) antes de mandar pra rede: a assinatura nunca bate com o que o R2
+// recebe e todo PUT/DELETE/HEAD nesse objeto falha com SignatureDoesNotMatch.
+func r2EncodePath(p string) string {
+	segments := strings.Split(p, "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	return strings.Join(segments, "/")
+}
+
 // Upload faz PUT do objeto em key e devolve a URL pública ({publicURL}/{key}).
-// key deve usar apenas caracteres seguros de caminho (ex: "avatars/12/abcd.png").
 func (r *R2) Upload(ctx context.Context, key, contentType string, body []byte) (string, error) {
 	host := r.accountID + ".r2.cloudflarestorage.com"
-	canonURI := "/" + r.bucket + "/" + key
+	canonURI := "/" + r2EncodePath(r.bucket) + "/" + r2EncodePath(key)
 
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
@@ -124,7 +137,7 @@ func (r *R2) PublicURL(key string) string {
 // e sem corpo (payload hash do vazio).
 func (r *R2) Delete(ctx context.Context, key string) error {
 	host := r.accountID + ".r2.cloudflarestorage.com"
-	canonURI := "/" + r.bucket + "/" + key
+	canonURI := "/" + r2EncodePath(r.bucket) + "/" + r2EncodePath(key)
 
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
@@ -184,7 +197,7 @@ func (r *R2) Delete(ctx context.Context, key string) error {
 // found=false (404) significa que o PUT nunca aconteceu.
 func (r *R2) HeadObject(ctx context.Context, key string) (size int64, contentType string, found bool, err error) {
 	host := r.accountID + ".r2.cloudflarestorage.com"
-	canonURI := "/" + r.bucket + "/" + key
+	canonURI := "/" + r2EncodePath(r.bucket) + "/" + r2EncodePath(key)
 
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
@@ -281,7 +294,7 @@ func (r *R2) PresignPut(key, contentType string, expiry time.Duration) string {
 // "content-type;host" (ver PresignPut).
 func (r *R2) presign(method, key, contentType string, expiry time.Duration) string {
 	host := r.accountID + ".r2.cloudflarestorage.com"
-	canonURI := "/" + r.bucket + "/" + key
+	canonURI := "/" + r2EncodePath(r.bucket) + "/" + r2EncodePath(key)
 
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
