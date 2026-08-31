@@ -46,6 +46,7 @@ func TestHandleCreateAgendaEventoValidation(t *testing.T) {
 		{"tipo inválido", `{"titulo":"T","tipo":"invalido","dataInicio":"2026-09-04","horaInicio":"20:00","horaFim":"22:00","computadoresUsados":5}`},
 		{"hora fim antes de hora início", `{"titulo":"T","tipo":"avulso","dataInicio":"2026-09-04","horaInicio":"22:00","horaFim":"20:00","computadoresUsados":5}`},
 		{"pcs negativo", `{"titulo":"T","tipo":"avulso","dataInicio":"2026-09-04","horaInicio":"20:00","horaFim":"22:00","computadoresUsados":-1}`},
+		{"pcs acima do teto", `{"titulo":"T","tipo":"avulso","dataInicio":"2026-09-04","horaInicio":"20:00","horaFim":"22:00","computadoresUsados":1001}`},
 		{"aula_turma sem diaSemana", `{"titulo":"T","tipo":"aula_turma","dataInicio":"2026-09-04","horaInicio":"19:30","horaFim":"21:30","computadoresUsados":8}`},
 	}
 	for _, tc := range cases {

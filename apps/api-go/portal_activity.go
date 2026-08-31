@@ -108,6 +108,12 @@ type portalActivityFilters struct {
 // portalActivityTimeLayouts — formatos aceitos em ?from= / ?to=.
 var portalActivityTimeLayouts = []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"}
 
+// portalActivityMaxOffset — teto do OFFSET. Sem ele, um ?offset= arbitrariamente
+// grande faz o Postgres varrer/descartar essa quantidade de linhas em `logs`
+// (potencialmente milhões) antes de aplicar o LIMIT, a cada chamada — caro e
+// sem ganho real (mesmo princípio do portalMaxPage em portal_models.go).
+const portalActivityMaxOffset = 1_000_000
+
 // portalParseActivityTime valida a data ANTES de ela virar parâmetro da query.
 // Antes a string crua ia direto pro comparador com l."LogDate", então ?from=ontem
 // virava erro de cast no Postgres → 500 em vez de 400.
@@ -130,6 +136,9 @@ func portalActivityFiltersFrom(r *http.Request) (portalActivityFilters, error) {
 		limit = 500
 	}
 	offset := atoiMin(q.Get("offset"), 0, 0)
+	if offset > portalActivityMaxOffset {
+		offset = portalActivityMaxOffset
+	}
 	from, err := portalParseActivityTime("from", strings.TrimSpace(q.Get("from")))
 	if err != nil {
 		return portalActivityFilters{}, err
