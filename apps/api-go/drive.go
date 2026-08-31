@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
 
@@ -51,10 +52,17 @@ type DriveClient struct {
 	http *http.Client
 	// stream: transferência do conteúdo do arquivo (download e upload). NÃO
 	// pode ter Timeout no cliente: http.Client.Timeout cobre também a leitura
-	// do corpo, e cortaria no meio o download de um vídeo ou o upload de 25MB
-	// numa conexão lenta. O limite aqui é o ctx da request (cancelado quando o
-	// navegador desiste) mais os timeouts de dial/TLS do transport.
+	// do corpo, e cortaria no meio o download de um vídeo ou o upload de
+	// 500MB numa conexão lenta. O limite aqui é o ctx da request (cancelado
+	// quando o navegador desiste) mais os timeouts de dial/TLS do transport.
 	stream *http.Client
+	// uploadStream: mesma política de stream (sem Timeout), mas autenticado
+	// como uma conta Google real via OAuth em vez da service account — só
+	// UploadFile usa isto. Nil quando as credenciais OAuth não estão
+	// configuradas, e UploadFile cai para stream (service account), que
+	// resulta no já conhecido 403 storageQuotaExceeded — ver comentário em
+	// Config.GoogleDriveOAuthClientID.
+	uploadStream *http.Client
 }
 
 const (
@@ -131,9 +139,28 @@ func newDriveClient(cfg Config) *DriveClient {
 	// clientes com políticas de timeout diferentes.
 	oauthTransport := jwtCfg.Client(context.Background()).Transport
 	return &DriveClient{
-		http:   &http.Client{Transport: oauthTransport, Timeout: driveAPITimeout},
-		stream: &http.Client{Transport: oauthTransport},
+		http:         &http.Client{Transport: oauthTransport, Timeout: driveAPITimeout},
+		stream:       &http.Client{Transport: oauthTransport},
+		uploadStream: newDriveUploadOAuthClient(cfg),
 	}
+}
+
+// newDriveUploadOAuthClient monta o client autenticado como usuário real (ver
+// comentário em Config.GoogleDriveOAuthClientID) — nil se as 3 credenciais
+// não estiverem todas presentes, e UploadFile cai de volta pra service
+// account nesse caso.
+func newDriveUploadOAuthClient(cfg Config) *http.Client {
+	if cfg.GoogleDriveOAuthClientID == "" || cfg.GoogleDriveOAuthClientSecret == "" || cfg.GoogleDriveOAuthRefreshToken == "" {
+		return nil
+	}
+	oauthCfg := &oauth2.Config{
+		ClientID:     cfg.GoogleDriveOAuthClientID,
+		ClientSecret: cfg.GoogleDriveOAuthClientSecret,
+		Endpoint:     google.Endpoint,
+		Scopes:       []string{driveScope},
+	}
+	token := &oauth2.Token{RefreshToken: cfg.GoogleDriveOAuthRefreshToken}
+	return oauthCfg.Client(context.Background(), token)
 }
 
 // DriveFile é o que expomos pro frontend — só o essencial da resposta do Drive.
@@ -646,11 +673,16 @@ func (d *DriveClient) UploadFile(ctx context.Context, driveFolderID, filename, c
 	}
 	req.Header.Set("Content-Type", "multipart/related; boundary="+boundary)
 
-	// d.stream (sem Timeout de cliente): sobem até 25MB streamados do io.Pipe,
-	// que numa conexão lenta passa de qualquer teto fixo. Sem GetBody o pipe
-	// não é replayável, então d.do faz uma tentativa só — correto: reenviar
+	// Prefere uploadStream (usuário real, tem cota) — stream (service
+	// account) é só o fallback quando o OAuth não está configurado, e
+	// resulta no 403 storageQuotaExceeded conhecido. Sem GetBody o pipe não
+	// é replayável, então d.do faz uma tentativa só — correto: reenviar
 	// metade de um upload seria pior que falhar.
-	resp, err := d.do(d.stream, req)
+	client := d.uploadStream
+	if client == nil {
+		client = d.stream
+	}
+	resp, err := d.do(client, req)
 	if err != nil {
 		return DriveFile{}, err
 	}

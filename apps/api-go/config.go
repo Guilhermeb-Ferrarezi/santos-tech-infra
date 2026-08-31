@@ -89,6 +89,19 @@ type Config struct {
 	// com o e-mail da service account no próprio Google Drive.
 	GoogleDriveSAJSONB64 string
 
+	// Upload no Drive (ver UploadFile em drive.go): service accounts do
+	// Google não têm cota de armazenamento própria (só em Shared Drives, que
+	// exige Workspace) — todo POST de arquivo novo falha com 403
+	// storageQuotaExceeded. Como não temos Workspace, o upload roda com um
+	// token OAuth de uma conta Google real (com plano de armazenamento
+	// pago), obtido uma vez via authorization code flow e renovado por este
+	// refresh token. Vazio = upload cai no client da service account mesmo
+	// (mantém o 403 de antes); leitura/listagem/download não são afetados,
+	// eles não consomem cota.
+	GoogleDriveOAuthClientID     string
+	GoogleDriveOAuthClientSecret string
+	GoogleDriveOAuthRefreshToken string
+
 	// Automação de resposta a comentário do Instagram (private reply via
 	// Graph API — substitui o ManyChat). Vazio (AppSecret ou AccessToken) =
 	// webhook desabilitado (responde 503 em vez de processar sem validar
@@ -189,6 +202,10 @@ func LoadConfig() Config {
 		FleetAdminSSHPublicKeys: splitCSV(getEnv("FLEET_ADMIN_SSH_PUBLIC_KEYS", "")),
 
 		GoogleDriveSAJSONB64: getEnv("GOOGLE_DRIVE_SA_JSON_B64", ""),
+
+		GoogleDriveOAuthClientID:     getEnv("GOOGLE_DRIVE_OAUTH_CLIENT_ID", ""),
+		GoogleDriveOAuthClientSecret: getEnv("GOOGLE_DRIVE_OAUTH_CLIENT_SECRET", ""),
+		GoogleDriveOAuthRefreshToken: getEnv("GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN", ""),
 
 		InstagramAppSecret:          getEnv("INSTAGRAM_APP_SECRET", ""),
 		InstagramAccessToken:        getEnv("INSTAGRAM_ACCESS_TOKEN", ""),
