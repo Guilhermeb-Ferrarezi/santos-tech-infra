@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -323,6 +324,17 @@ func (s *Server) handleUpdateSocialPostStatus(w http.ResponseWriter, r *http.Req
 // de plataformasDestino nesta chamada (ex.: diálogo de revisão deixando de
 // fora uma plataforma já confirmada, pra não duplicar a publicação lá) — sem
 // corpo/vazio, publica em todas de plataformasDestino (comportamento original).
+//
+// ASSÍNCRONO: só a validação (preparePublish) roda antes de responder — o
+// processamento de verdade (runPublish) dispara numa goroutine à parte, com
+// um contexto DESCOLADO desta requisição (context.WithoutCancel), e o
+// handler responde 202 na hora. Sem isso, o Instagram processando um vídeo
+// (minutos, via waitMediaFinished) estourava o WriteTimeout do servidor, o
+// timeout do proxy da Cloudflare ou do navegador — o request morria
+// ("context canceled") mesmo quando a publicação real ainda podia funcionar.
+// Resultado por plataforma não volta nesta resposta: sucesso confirma o
+// checklist + nota de auditoria, falha vira nota de auditoria (ver
+// social_publish.go) — o client acompanha via GET /social/posts/{id}.
 func (s *Server) handlePublishSocialPost(w http.ResponseWriter, r *http.Request) {
 	id, err := socialPostIDFrom(r)
 	if err != nil {
@@ -337,12 +349,14 @@ func (s *Server) handlePublishSocialPost(w http.ResponseWriter, r *http.Request)
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
 		return
 	}
-	results, err := s.PublishSocialPost(r.Context(), id, userIDFrom(r), in.Platforms)
+	post, targets, adapters, caption, err := s.preparePublish(r.Context(), id, in.Platforms)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+	actingUserID := userIDFrom(r)
+	go s.runPublish(context.WithoutCancel(r.Context()), post, targets, adapters, actingUserID, caption)
+	writeJSON(w, http.StatusAccepted, map[string]any{"queued": true, "platforms": targets})
 }
 
 // GET /social/posts/{id}/history

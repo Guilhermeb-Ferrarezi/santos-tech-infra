@@ -37,15 +37,6 @@ type socialPublisher interface {
 	publishMedia(ctx context.Context, mediaURL, caption string, isVideo bool, opts publishOptions) (externalID string, err error)
 }
 
-// SocialPublishResult descreve o que aconteceu ao tentar publicar em UMA das
-// plataformas de destino do post.
-type SocialPublishResult struct {
-	Platform   string `json:"platform"`
-	Status     string `json:"status"` // "published" | "manual" | "failed" | "unsupported"
-	ExternalID string `json:"externalId,omitempty"`
-	Error      string `json:"error,omitempty"`
-}
-
 // socialPublishAdapters resolve quais plataformas têm publicação automática
 // plugada AGORA. Uma plataforma ausente daqui não é erro — ela continua no
 // checklist manual que já existia antes desta feature; é assim que o
@@ -176,29 +167,29 @@ func captionWithHashtags(caption string, hashtags []string) string {
 	return caption + "\n\n" + tags
 }
 
-// PublishSocialPost dispara a publicação automática do post nas plataformas
-// resolvidas por resolvePublishTargets que já têm adaptador plugado.
-// Publicação com sucesso já confirma a plataforma no checklist (mesma tabela
-// usada pela confirmação manual) e registra uma nota de auditoria com o ID
-// externo — plataformas sem adaptador continuam exigindo confirmação manual,
-// como hoje. `requestedPlatforms` vazio publica em toda plataformasDestino.
-func (s *Server) PublishSocialPost(ctx context.Context, postID string, actingUserID int64, requestedPlatforms []string) ([]SocialPublishResult, error) {
-	post, err := s.getSocialPost(ctx, postID)
+// preparePublish faz a parte RÁPIDA e síncrona de uma publicação — uma
+// leitura no banco + validações puras, sem chamar rede nenhuma (Drive/R2/Graph
+// API). Erros aqui viram resposta HTTP imediata (400/404), como sempre foi.
+// A parte LENTA (rede) é responsabilidade do caller rodar à parte — ver
+// runPublish — porque só o Instagram processando um vídeo pode levar
+// minutos, bem além de qualquer timeout de request HTTP razoável.
+func (s *Server) preparePublish(ctx context.Context, postID string, requestedPlatforms []string) (post *SocialPost, targets []string, adapters map[string]socialPublisher, caption string, err error) {
+	post, err = s.getSocialPost(ctx, postID)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, "", err
 	}
 	if post == nil {
-		return nil, errSocialPostNotFound
+		return nil, nil, nil, "", errSocialPostNotFound
 	}
 	if len(post.PlataformasDestino) == 0 {
-		return nil, appErr(http.StatusBadRequest, "NO_TARGET_PLATFORMS", "Post sem plataformas de destino definidas")
+		return nil, nil, nil, "", appErr(http.StatusBadRequest, "NO_TARGET_PLATFORMS", "Post sem plataformas de destino definidas")
 	}
-	targets, err := resolvePublishTargets(post.PlataformasDestino, requestedPlatforms)
+	targets, err = resolvePublishTargets(post.PlataformasDestino, requestedPlatforms)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, "", err
 	}
 
-	adapters := s.socialPublishAdapters()
+	adapters = s.socialPublishAdapters()
 	hasAdapter := false
 	for _, p := range targets {
 		if adapters[p] != nil {
@@ -207,65 +198,115 @@ func (s *Server) PublishSocialPost(ctx context.Context, postID string, actingUse
 		}
 	}
 	if !hasAdapter {
-		return nil, appErr(http.StatusBadRequest, "NO_AUTOMATED_PLATFORMS",
+		return nil, nil, nil, "", appErr(http.StatusBadRequest, "NO_AUTOMATED_PLATFORMS",
 			"Nenhuma das plataformas de destino tem publicação automática configurada ainda — confirme manualmente no checklist.")
 	}
 
-	caption := captionWithHashtags(post.Caption, post.Hashtags)
+	caption = captionWithHashtags(post.Caption, post.Hashtags)
+	return post, targets, adapters, caption, nil
+}
+
+// runPublish é a parte LENTA da publicação (Drive → R2 → Graph API) — chame
+// numa goroutine própria, com um ctx DESCOLADO da requisição HTTP que a
+// disparou (context.WithoutCancel no handler). Sem isso, o request HTTP
+// morre no meio: o Instagram sozinho pode levar minutos processando o vídeo
+// (waitMediaFinished), bem além do WriteTimeout do servidor, do timeout do
+// proxy da Cloudflare ou do navegador — foi exatamente isso que quebrava
+// antes ("context canceled" nos dois lados, Instagram e Facebook, mesmo a
+// publicação real podendo ter dado certo segundos depois).
+//
+// Por rodar solta, fora da cadeia normal do http.Server, NÃO tem o recover de
+// pânico do middleware por cima — por isso recupera pânico aqui mesmo, senão
+// um pânico nessa goroutine derruba o processo inteiro.
+//
+// Resultado não volta por HTTP pra ninguém: sucesso confirma a plataforma no
+// checklist (mesma tabela da confirmação manual) e grava uma nota de
+// auditoria com o ID externo; falha grava uma nota de auditoria com o
+// motivo, sem confirmar nada — é assim que o client (GET /social/posts/{id})
+// sabe o que aconteceu depois de disparar.
+func (s *Server) runPublish(ctx context.Context, post *SocialPost, targets []string, adapters map[string]socialPublisher, actingUserID int64, caption string) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("social publish: pânico recuperado", "post_id", post.ID, "panic", rec)
+		}
+	}()
 
 	if post.Formato == "carrossel" {
-		return s.publishCarouselPost(ctx, post, targets, adapters, actingUserID, caption)
+		s.publishCarouselPost(ctx, post, targets, adapters, actingUserID, caption)
+		return
 	}
 
 	isVideo, supported := socialPostIsVideo(post.Formato)
 	mediaURL, cleanup, err := s.resolveSocialPostMediaURL(ctx, post)
 	if err != nil {
-		return nil, err
+		slog.Error("social publish: falha ao resolver mídia", "post_id", post.ID, "err", err)
+		s.notePublishFailure(ctx, post.ID, actingUserID, targets, err)
+		return
 	}
 	defer cleanup()
 
 	settings, err := s.getSocialSettings(ctx)
 	if err != nil {
-		return nil, err
+		slog.Error("social publish: falha ao carregar configurações", "post_id", post.ID, "err", err)
+		s.notePublishFailure(ctx, post.ID, actingUserID, targets, err)
+		return
 	}
 	opts := publishOptions{altText: post.AltText, locationID: settings.InstagramLocationID, placeID: settings.FacebookPlaceID}
 	if isVideo {
 		coverURL, coverCleanup, err := s.resolveSocialPostCoverURL(ctx, post)
 		if err != nil {
-			return nil, err
+			slog.Error("social publish: falha ao resolver capa", "post_id", post.ID, "err", err)
+			s.notePublishFailure(ctx, post.ID, actingUserID, targets, err)
+			return
 		}
 		defer coverCleanup()
 		opts.coverURL = coverURL
 	}
 
-	results := make([]SocialPublishResult, 0, len(targets))
 	for _, platform := range targets {
 		adapter, ok := adapters[platform]
 		if !ok {
-			results = append(results, SocialPublishResult{Platform: platform, Status: "manual"})
-			continue
+			continue // sem adaptador: segue no checklist manual, como sempre
 		}
 		if !supported {
-			results = append(results, SocialPublishResult{Platform: platform, Status: "unsupported",
-				Error: fmt.Sprintf("formato %q ainda não tem publicação automática (story) — confirme manualmente", post.Formato)})
+			slog.Warn("social publish: formato sem publicação automática", "post_id", post.ID, "platform", platform, "formato", post.Formato)
+			s.insertPublishFailureNote(ctx, post.ID, actingUserID, platform,
+				fmt.Sprintf("formato %q ainda não tem publicação automática (story) — confirme manualmente", post.Formato))
 			continue
 		}
 		externalID, err := adapter.publishMedia(ctx, mediaURL, caption, isVideo, opts)
 		if err != nil {
-			slog.Error("social publish: falha ao publicar", "post_id", postID, "platform", platform, "err", err)
-			results = append(results, SocialPublishResult{Platform: platform, Status: "failed", Error: err.Error()})
+			slog.Error("social publish: falha ao publicar", "post_id", post.ID, "platform", platform, "err", err)
+			s.insertPublishFailureNote(ctx, post.ID, actingUserID, platform, err.Error())
 			continue
 		}
-		if err := s.upsertSocialPostPublishConfirmation(ctx, postID, platform, actingUserID); err != nil {
-			slog.Error("social publish: publicou mas falhou ao confirmar checklist", "post_id", postID, "platform", platform, "err", err)
+		if err := s.upsertSocialPostPublishConfirmation(ctx, post.ID, platform, actingUserID); err != nil {
+			slog.Error("social publish: publicou mas falhou ao confirmar checklist", "post_id", post.ID, "platform", platform, "err", err)
 		}
-		if _, err := s.insertSocialPostNote(ctx, postID, actingUserID,
+		if _, err := s.insertSocialPostNote(ctx, post.ID, actingUserID,
 			fmt.Sprintf("Publicado automaticamente em %s — ID %s", platform, externalID)); err != nil {
-			slog.Warn("social publish: falha ao registrar nota de auditoria", "post_id", postID, "platform", platform, "err", err)
+			slog.Warn("social publish: falha ao registrar nota de auditoria", "post_id", post.ID, "platform", platform, "err", err)
 		}
-		results = append(results, SocialPublishResult{Platform: platform, Status: "published", ExternalID: externalID})
 	}
-	return results, nil
+}
+
+// notePublishFailure registra uma falha que impede TODAS as plataformas desta
+// chamada de sequer tentar publicar (ex.: mídia não resolveu) — sem isso, uma
+// publicação assíncrona que falha cedo desaparece sem deixar rastro nenhum
+// pro usuário.
+func (s *Server) notePublishFailure(ctx context.Context, postID string, actingUserID int64, targets []string, err error) {
+	msg := fmt.Sprintf("Falha ao preparar a publicação automática (%s): %s", strings.Join(targets, ", "), err.Error())
+	if _, noteErr := s.insertSocialPostNote(ctx, postID, actingUserID, msg); noteErr != nil {
+		slog.Warn("social publish: falha ao registrar nota de auditoria", "post_id", postID, "err", noteErr)
+	}
+}
+
+// insertPublishFailureNote registra a falha de UMA plataforma específica.
+func (s *Server) insertPublishFailureNote(ctx context.Context, postID string, actingUserID int64, platform, reason string) {
+	msg := fmt.Sprintf("Falha ao publicar automaticamente em %s: %s", platform, reason)
+	if _, err := s.insertSocialPostNote(ctx, postID, actingUserID, msg); err != nil {
+		slog.Warn("social publish: falha ao registrar nota de auditoria", "post_id", postID, "platform", platform, "err", err)
+	}
 }
 
 // publishCarouselPost despacha um post formato=carrossel. Suporte real (via
@@ -274,40 +315,33 @@ func (s *Server) PublishSocialPost(ctx context.Context, postID string, actingUse
 // (unpublished photos + /feed com attached_media) que ainda não vale o
 // esforço/risco dado o volume de uso atual; outras plataformas continuam no
 // checklist manual, como qualquer plataforma sem adaptador.
-func (s *Server) publishCarouselPost(ctx context.Context, post *SocialPost, targets []string, adapters map[string]socialPublisher, actingUserID int64, caption string) ([]SocialPublishResult, error) {
+func (s *Server) publishCarouselPost(ctx context.Context, post *SocialPost, targets []string, adapters map[string]socialPublisher, actingUserID int64, caption string) {
 	items, err := parseCarouselItems(post)
 	if err != nil {
-		return nil, err
+		slog.Error("social publish: carrossel inválido", "post_id", post.ID, "err", err)
+		s.notePublishFailure(ctx, post.ID, actingUserID, targets, err)
+		return
 	}
 
-	results := make([]SocialPublishResult, 0, len(targets))
 	var resolved []carouselMediaItem
 	var resolvedCleanup func()
 	for _, platform := range targets {
-		if platform != "instagram" {
-			if adapters[platform] == nil {
-				results = append(results, SocialPublishResult{Platform: platform, Status: "manual"})
-				continue
-			}
-			results = append(results, SocialPublishResult{Platform: platform, Status: "unsupported",
-				Error: "carrossel com publicação automática só está disponível pro Instagram por enquanto — confirme manualmente"})
-			continue
-		}
-		if adapters["instagram"] == nil {
-			results = append(results, SocialPublishResult{Platform: platform, Status: "manual"})
-			continue
+		if platform != "instagram" || adapters["instagram"] == nil {
+			continue // sem suporte automático fora do Instagram: manual, como sempre
 		}
 		if resolved == nil {
 			resolved, resolvedCleanup, err = s.resolveCarouselItemURLs(ctx, post.ID, items)
 			if err != nil {
-				return nil, err
+				slog.Error("social publish: falha ao resolver itens do carrossel", "post_id", post.ID, "err", err)
+				s.notePublishFailure(ctx, post.ID, actingUserID, targets, err)
+				return
 			}
 			defer resolvedCleanup()
 		}
 		externalID, err := s.instagram.publishCarousel(ctx, resolved, caption)
 		if err != nil {
 			slog.Error("social publish: falha ao publicar carrossel", "post_id", post.ID, "platform", platform, "err", err)
-			results = append(results, SocialPublishResult{Platform: platform, Status: "failed", Error: err.Error()})
+			s.insertPublishFailureNote(ctx, post.ID, actingUserID, platform, err.Error())
 			continue
 		}
 		if err := s.upsertSocialPostPublishConfirmation(ctx, post.ID, platform, actingUserID); err != nil {
@@ -317,9 +351,7 @@ func (s *Server) publishCarouselPost(ctx context.Context, post *SocialPost, targ
 			fmt.Sprintf("Carrossel publicado automaticamente em %s — ID %s", platform, externalID)); err != nil {
 			slog.Warn("social publish: falha ao registrar nota de auditoria", "post_id", post.ID, "platform", platform, "err", err)
 		}
-		results = append(results, SocialPublishResult{Platform: platform, Status: "published", ExternalID: externalID})
 	}
-	return results, nil
 }
 
 // resolveDriveFileToPublicURL baixa UM arquivo privado do Drive (service

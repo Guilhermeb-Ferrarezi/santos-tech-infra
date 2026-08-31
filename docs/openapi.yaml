@@ -3512,19 +3512,32 @@ paths:
       description: |
         Requer Admin ou cargo com `social:execute`. Rate limit 10/min.
 
-        Publica de verdade (hoje: Instagram e Facebook, via Graph API) em toda
+        **Assíncrono**: valida e responde 202 na hora (`{queued, platforms}`);
+        o processamento de verdade (Drive → R2 → Graph API) roda em background.
+        Publica (hoje: Instagram e Facebook, via Graph API) em toda
         `plataformasDestino` que já tem adaptador configurado (envs
         `INSTAGRAM_ACCESS_TOKEN`/`INSTAGRAM_USER_ID`,
-        `FACEBOOK_ACCESS_TOKEN`/`FACEBOOK_PAGE_ID`) — as demais voltam
-        `status: manual`, sem erro. Corpo opcional `platforms` restringe a um
+        `FACEBOOK_ACCESS_TOKEN`/`FACEBOOK_PAGE_ID`) — as demais seguem no
+        checklist manual, sem erro. Corpo opcional `platforms` restringe a um
         subconjunto de `plataformasDestino` (evita duplicar em rede já
         confirmada); sem corpo, publica em todas. Mídia vem de
         `driveFolderId`/`driveFileId` (baixa do Drive, sobe temporário pro R2)
-        ou, sem isso, de `mediaUrl` direto. Sucesso já confirma a plataforma no
-        checklist (mesmo efeito de `POST .../publish-confirmations/{platform}`)
-        e grava uma nota de auditoria com o ID externo. Reenviar publica de
-        novo (a rede não edita, sempre cria post novo) — nunca reenviar
-        automaticamente uma rede já confirmada.
+        ou, sem isso, de `mediaUrl` direto.
+
+        Não existe resposta síncrona de sucesso/falha por plataforma — o
+        Instagram sozinho pode levar minutos processando o vídeo antes de
+        publicar (`waitMediaFinished`), bem além de qualquer timeout de
+        request HTTP razoável (era exatamente isso que quebrava antes: o
+        request morria no meio por `WriteTimeout`/timeout do proxy/navegador,
+        mesmo quando a publicação real ainda podia dar certo depois). O
+        resultado chega por dois canais já existentes, que o client deve
+        consultar/atualizar depois de disparar: sucesso confirma a plataforma
+        no checklist (mesmo efeito de `POST .../publish-confirmations/{platform}`,
+        ver `GET /social/posts/{id}`) e grava uma nota de auditoria com o ID
+        externo; falha grava uma nota de auditoria com o motivo, sem confirmar
+        nada no checklist. Reenviar publica de novo (a rede não edita, sempre
+        cria post novo) — nunca reenviar automaticamente uma rede já
+        confirmada.
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -3538,15 +3551,16 @@ paths:
                   items: { $ref: "#/components/schemas/SocialPlatform" }
                   description: Subconjunto de plataformasDestino pra publicar agora. Omitido = todas.
       responses:
-        "200":
-          description: Resultado por plataforma.
+        "202":
+          description: Validado e enfileirado — processamento real roda em background (ver checklist/notas do post pro resultado).
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  results: { type: array, items: { $ref: "#/components/schemas/SocialPublishResult" } }
-                required: [results]
+                  queued: { type: boolean }
+                  platforms: { type: array, items: { $ref: "#/components/schemas/SocialPlatform" }, description: Plataformas que entraram na fila (pode incluir as sem adaptador, que seguem manuais). }
+                required: [queued, platforms]
         "400":
           description: "`platforms` fora de `plataformasDestino`, nenhuma plataforma com adaptador, ou sem `plataformasDestino` definida."
           content:
@@ -6821,16 +6835,6 @@ components:
         confirmedByName: { type: string }
         confirmedAt: { type: string, format: date-time }
       required: [platform, confirmedByName, confirmedAt]
-
-    SocialPublishResult:
-      type: object
-      description: Resultado de UMA plataforma ao chamar POST /social/posts/{id}/publish.
-      properties:
-        platform: { $ref: "#/components/schemas/SocialPlatform" }
-        status: { type: string, enum: [published, manual, failed, unsupported], description: "manual = sem adaptador configurado pra essa rede." }
-        externalId: { type: string, description: "ID do post na rede — só quando status=published." }
-        error: { type: string, description: "Só quando status=failed." }
-      required: [platform, status]
 
     SocialPlatformOwner:
       type: object
