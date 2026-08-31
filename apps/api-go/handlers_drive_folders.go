@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -16,7 +17,8 @@ const (
 	driveFolderNameMax        = 120
 	driveFolderDescriptionMax = 500
 	driveFolderIDMax          = 200
-	maxDriveUploadSize        = 25 << 20 // 25MB — streamado, nunca bufferizado inteiro em memória
+	maxDriveUploadSize        = 500 << 20        // 500MB — streamado, nunca bufferizado inteiro em memória
+	driveUploadReadTimeout    = 10 * time.Minute // sobrepõe o ReadTimeout global (15s), curto demais p/ vídeo
 )
 
 // extractDriveFolderID aceita tanto o ID puro quanto uma URL de pasta colada
@@ -819,8 +821,14 @@ func (s *Server) handleUploadDriveFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.ContentLength > maxDriveUploadSize+(64<<10) {
-		writeErr(w, appErr(http.StatusRequestEntityTooLarge, "VALIDATION_ERROR", "arquivo grande demais (máx 25MB)"))
+		writeErr(w, appErr(http.StatusRequestEntityTooLarge, "VALIDATION_ERROR", "arquivo grande demais (máx 500MB)"))
 		return
+	}
+
+	if rc := http.NewResponseController(w); rc != nil {
+		if err := rc.SetReadDeadline(time.Now().Add(driveUploadReadTimeout)); err != nil {
+			slog.Error("falha ao estender read deadline do upload", "err", err)
+		}
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxDriveUploadSize+(64<<10))
@@ -837,7 +845,7 @@ func (s *Server) handleUploadDriveFile(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if err != nil {
-			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "requisição multipart inválida ou arquivo grande demais (máx 25MB)"))
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "requisição multipart inválida ou arquivo grande demais (máx 500MB)"))
 			return
 		}
 		if part.FormName() != "file" {
