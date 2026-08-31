@@ -338,11 +338,13 @@ func (s *Server) resolveDriveFileToPublicURL(ctx context.Context, keyPrefix, dri
 
 	body, filename, contentType, _, _, err := s.drive.StreamDownload(ctx, driveFileID, "")
 	if err != nil {
+		slog.Error("social publish: falha ao baixar arquivo do Drive", "drive_file_id", driveFileID, "err", err)
 		return "", noop, appErr(http.StatusBadGateway, "DRIVE_DOWNLOAD_FAILED", "Falha ao baixar o arquivo do Drive")
 	}
 	defer body.Close()
 	data, err := io.ReadAll(io.LimitReader(body, maxSocialPublishMediaSize+1))
 	if err != nil {
+		slog.Error("social publish: falha ao ler arquivo do Drive", "drive_file_id", driveFileID, "err", err)
 		return "", noop, appErr(http.StatusBadGateway, "DRIVE_DOWNLOAD_FAILED", "Falha ao ler o arquivo do Drive")
 	}
 	if len(data) > maxSocialPublishMediaSize {
@@ -352,6 +354,7 @@ func (s *Server) resolveDriveFileToPublicURL(ctx context.Context, keyPrefix, dri
 	key := keyPrefix + "/" + sanitizeFilenameForHeader(filename)
 	publicURL, err = s.r2.Upload(ctx, key, contentType, data)
 	if err != nil {
+		slog.Error("social publish: falha ao subir mídia pro R2", "key", key, "content_type", contentType, "bytes", len(data), "err", err)
 		return "", noop, appErr(http.StatusBadGateway, "R2_UPLOAD_FAILED", "Falha ao preparar a mídia para publicação")
 	}
 	cleanup = func() {
