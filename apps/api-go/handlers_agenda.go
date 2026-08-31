@@ -26,7 +26,10 @@ func validateAgendaEventoInput(in *AgendaEventoInput) error {
 	if !validAgendaTipos[in.Tipo] {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Tipo inválido")
 	}
-	if in.ComputadoresUsados < 0 {
+	// Teto: sem ele, um valor absurdo (ex.: fat-finger ou POST malicioso) passa
+	// direto pelo `int32(...)` em agenda.go e trunca/wrap silenciosamente — podendo
+	// virar até um int32 negativo, corrompendo a soma de checkConflitos.
+	if in.ComputadoresUsados < 0 || in.ComputadoresUsados > 1000 {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Quantidade de computadores inválida")
 	}
 	if _, err := time.Parse("2006-01-02", in.DataInicio); err != nil {
