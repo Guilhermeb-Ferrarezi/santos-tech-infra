@@ -724,8 +724,14 @@ func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
 			WHERE tenant_id = l.tenant_id AND contact_id = l.contact_id LIMIT 1
 		) ci ON true
 		LEFT JOIN LATERAL (
+			-- conversation não tem contact_id direto — o vínculo é indireto via
+			-- channel_identity_id (um contato pode ter mais de um canal/número;
+			-- pega a conversa mais recente entre todos eles).
 			SELECT id, last_inbound_at FROM conversation
-			WHERE tenant_id = l.tenant_id AND contact_id = l.contact_id
+			WHERE tenant_id = l.tenant_id AND channel_identity_id IN (
+				SELECT id FROM channel_identity
+				WHERE tenant_id = l.tenant_id AND contact_id = l.contact_id
+			)
 			ORDER BY last_inbound_at DESC NULLS LAST LIMIT 1
 		) cv ON true
 		WHERE l.tenant_id = $1

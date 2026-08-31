@@ -454,12 +454,14 @@ func (r *MessageRepo) GetRecentTurns(ctx context.Context, tx pgx.Tx, convID Conv
 
 type LeadRepo struct{ pool *pgxpool.Pool }
 
-// FindByConversation encontra o lead vinculado a uma conversa via contact_id.
+// FindByConversation encontra o lead vinculado a uma conversa. conversation
+// não tem contact_id direto — o vínculo é indireto via channel_identity_id.
 func (r *LeadRepo) FindByConversation(ctx context.Context, tenantID TenantID, convID ConversationID) (*Lead, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT l.id, l.tenant_id, l.contact_id, $2::uuid AS conversation_id, l.status, l.created_at
 		FROM lead l
-		JOIN conversation c ON c.contact_id = l.contact_id AND c.tenant_id = l.tenant_id
+		JOIN channel_identity ci ON ci.tenant_id = l.tenant_id AND ci.contact_id = l.contact_id
+		JOIN conversation c ON c.tenant_id = l.tenant_id AND c.channel_identity_id = ci.id
 		WHERE l.tenant_id = $1 AND c.id = $2
 	`, tenantID, convID)
 
