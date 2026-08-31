@@ -130,7 +130,7 @@ func (r *R2) Upload(ctx context.Context, key, contentType string, body []byte) (
 // PublicURL devolve a URL pública de um objeto já enviado (ou que vai ser enviado
 // via PresignPut) em key.
 func (r *R2) PublicURL(key string) string {
-	return strings.TrimRight(r.publicURL, "/") + "/" + key
+	return strings.TrimRight(r.publicURL, "/") + "/" + r2EncodePath(key)
 }
 
 // Delete remove o objeto em key. Mesma assinatura SigV4 do Upload, método DELETE
