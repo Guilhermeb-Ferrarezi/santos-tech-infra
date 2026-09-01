@@ -17,6 +17,7 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	const min = time.Minute
 
 	mux.HandleFunc("GET /portal/overview", s.portalAnyRead(s.handlePortalOverview))
+	mux.HandleFunc("GET /portal/students-overview", s.portalAnyRead(s.handlePortalStudentsOverview))
 
 	// Cursos / módulos / fases → portal_cursos
 	mux.HandleFunc("GET /portal/courses", s.portalRead("portal_cursos", s.handlePortalListCourses))

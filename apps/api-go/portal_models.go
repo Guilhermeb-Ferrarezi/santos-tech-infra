@@ -216,6 +216,27 @@ type portalStudentDTO struct {
 	Role  int16  `json:"role"`
 }
 
+// portalStudentOverviewDTO é uma linha do dashboard administrativo de alunos
+// (ver dashboard/web Home.tsx) — um aluno matriculado, com progresso agregado
+// no curso. "1 aula" = 1 phase; totalPhases/completedPhases somam TODOS os
+// módulos do curso (não só o módulo atual da turma — a pergunta aqui é
+// "quantas aulas o programa inteiro tem", não "quantas o módulo atual tem").
+// teacherName vem null até alguém popular class_teacher pra essa turma (ver
+// portal_class_scope.go) — não existe hoje nenhuma fonte pra derivar isso
+// automaticamente.
+type portalStudentOverviewDTO struct {
+	StudentID       string  `json:"studentId"`
+	StudentName     string  `json:"studentName"`
+	StudentEmail    string  `json:"studentEmail"`
+	ClassID         string  `json:"classId"`
+	ClassName       string  `json:"className"`
+	CourseID        string  `json:"courseId"`
+	CourseName      string  `json:"courseName"`
+	TotalPhases     int     `json:"totalPhases"`
+	CompletedPhases int     `json:"completedPhases"`
+	TeacherName     *string `json:"teacherName"`
+}
+
 type portalClassInput struct {
 	Name            string `json:"name"`
 	CourseID        int64  `json:"courseId"`

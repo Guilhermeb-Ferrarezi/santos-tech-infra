@@ -525,6 +525,65 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p p
 	return items, total, rows.Err()
 }
 
+// portalStudentsOverview lista todos os alunos matriculados com progresso
+// agregado no curso — ver portalStudentOverviewDTO. teacherName vem de
+// class_teacher: null enquanto ninguém populou o vínculo daquela turma (não é
+// erro, é a realidade — a maioria das turmas ainda não tem essa atribuição
+// registrada em lugar nenhum); string_agg em vez de JOIN direto porque
+// class_teacher permite mais de um professor por turma (chave composta
+// class_id+user_id) — um JOIN simples duplicaria a linha do aluno nesse caso.
+func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination) ([]portalStudentOverviewDTO, int64, error) {
+	args := []any{}
+	where := ""
+	if p.Query != "" {
+		args = append(args, "%"+p.Query+"%")
+		where = "AND (u.name ILIKE $1 OR u.email ILIKE $1)"
+	}
+	var total int64
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM enrollment e
+		JOIN "user" u ON u.id = e.user_id AND u.role = %d %s`, RoleStudent, where)
+	if err := s.portalDB.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	args = append(args, p.Limit, p.Offset)
+	query := fmt.Sprintf(`
+		SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''),
+		       cl.id::text, COALESCE(cl.name,''), c.id::text, COALESCE(c.name,''),
+		       (SELECT COUNT(*) FROM phase ph JOIN module m ON m.id = ph.module_id WHERE m.course_id = c.id),
+		       (SELECT COUNT(*) FROM progress_student_phase psp
+		          JOIN phase ph ON ph.id = psp.phase_id
+		          JOIN module m ON m.id = ph.module_id
+		        WHERE m.course_id = c.id AND psp.user_id = u.id AND psp.completed_at IS NOT NULL),
+		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
+		          JOIN "user" t ON t.id = ct.user_id
+		        WHERE ct.class_id = cl.id)
+		FROM enrollment e
+		JOIN "user" u ON u.id = e.user_id AND u.role = %d %s
+		JOIN class cl ON cl.id = e.class_id
+		JOIN course c ON c.id = cl.course_id
+		ORDER BY u.name ASC, u.id ASC
+		LIMIT $%d OFFSET $%d`, RoleStudent, where, len(args)-1, len(args))
+	rows, err := s.portalDB.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	items := []portalStudentOverviewDTO{}
+	for rows.Next() {
+		var dto portalStudentOverviewDTO
+		if err := rows.Scan(&dto.StudentID, &dto.StudentName, &dto.StudentEmail,
+			&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
+			&dto.TotalPhases, &dto.CompletedPhases, &dto.TeacherName); err != nil {
+			return nil, 0, err
+		}
+		if dto.ClassName == "" {
+			dto.ClassName = "Turma " + dto.ClassID
+		}
+		items = append(items, dto)
+	}
+	return items, total, rows.Err()
+}
+
 // portalAddClassStudents matricula os usuários na turma, ignorando duplicatas.
 // Devolve quantos foram efetivamente inseridos. Um INSERT só (unnest sobre o
 // array de ids) — antes era um INSERT por aluno dentro de uma transação, sem
