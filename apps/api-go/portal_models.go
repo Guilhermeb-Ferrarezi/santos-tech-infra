@@ -207,6 +207,10 @@ type portalClassDTO struct {
 	EndDate         time.Time `json:"endDate"`
 	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
+	// IndividualClass separa aula particular (1 aluno, fora do fluxo de turma de
+	// grupo) de turma normal — coluna `individual_class` que já existia no schema
+	// legado (.NET) mas nunca tinha sido exposta pela API nem pelo dashboard.
+	IndividualClass bool `json:"individualClass"`
 }
 
 type portalStudentDTO struct {
@@ -235,6 +239,7 @@ type portalStudentOverviewDTO struct {
 	TotalPhases     int     `json:"totalPhases"`
 	CompletedPhases int     `json:"completedPhases"`
 	TeacherName     *string `json:"teacherName"`
+	IndividualClass bool    `json:"individualClass"`
 }
 
 type portalClassInput struct {
@@ -243,6 +248,10 @@ type portalClassInput struct {
 	CurrentModuleID int64  `json:"currentModuleId"`
 	StartDate       string `json:"startDate"`
 	DurationWeeks   int    `json:"durationWeeks"`
+	// IndividualClass é ponteiro (não bool puro) pra distinguir "não veio no
+	// PATCH" de "veio false" — sem isso, um PATCH de nome/curso que não mande
+	// o campo reverteria silenciosamente uma turma particular pra grupo.
+	IndividualClass *bool `json:"individualClass"`
 }
 
 func (in *portalClassInput) validateCreate() error {

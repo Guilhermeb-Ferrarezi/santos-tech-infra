@@ -376,7 +376,7 @@ func (s *Server) portalListClasses(ctx context.Context, p portalPagination) ([]p
 		return nil, 0, err
 	}
 	args = append(args, p.Limit, p.Offset)
-	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at
+	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at, individual_class
 		FROM class %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
@@ -385,7 +385,7 @@ func (s *Server) portalListClasses(ctx context.Context, p portalPagination) ([]p
 	items := []portalClassDTO{}
 	for rows.Next() {
 		var dto portalClassDTO
-		if err := rows.Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt); err != nil {
+		if err := rows.Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt, &dto.IndividualClass); err != nil {
 			return nil, 0, err
 		}
 		if dto.Name == "" {
@@ -402,8 +402,8 @@ func portalClassEndDate(start time.Time, weeks int) time.Time {
 
 func (s *Server) portalGetClass(ctx context.Context, id int64) (*portalClassDTO, error) {
 	var dto portalClassDTO
-	err := s.portalDB.QueryRow(ctx, `SELECT id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at
-		FROM class WHERE id=$1`, id).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt)
+	err := s.portalDB.QueryRow(ctx, `SELECT id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at, individual_class
+		FROM class WHERE id=$1`, id).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt, &dto.IndividualClass)
 	if err != nil {
 		return nil, err
 	}
@@ -419,11 +419,12 @@ func (s *Server) portalCreateClass(ctx context.Context, in portalClassInput) (*p
 		return nil, err
 	}
 	end := portalClassEndDate(start, in.DurationWeeks)
+	individual := in.IndividualClass != nil && *in.IndividualClass
 	var dto portalClassDTO
-	err = s.portalDB.QueryRow(ctx, `INSERT INTO class (name, course_id, current_module_id, start_date, end_date, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,NOW(),NOW())
-		RETURNING id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at`,
-		in.Name, in.CourseID, in.CurrentModuleID, start, end).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt)
+	err = s.portalDB.QueryRow(ctx, `INSERT INTO class (name, course_id, current_module_id, start_date, end_date, individual_class, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,NOW(),NOW())
+		RETURNING id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at, individual_class`,
+		in.Name, in.CourseID, in.CurrentModuleID, start, end, individual).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt, &dto.IndividualClass)
 	if err != nil {
 		return nil, portalDBErr(err)
 	}
@@ -457,10 +458,11 @@ func (s *Server) portalUpdateClass(ctx context.Context, id int64, in portalClass
 			WHEN $5 IS NOT NULL THEN end_date + ($5 - start_date)
 			ELSE end_date
 		END,
+		individual_class=COALESCE($7, individual_class),
 		updated_at=NOW()
 		WHERE id=$1
-		RETURNING id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at`,
-		id, in.Name, in.CourseID, in.CurrentModuleID, startPtr, in.DurationWeeks).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt)
+		RETURNING id::text, COALESCE(name,''), course_id::text, current_module_id::text, start_date, end_date, created_at, updated_at, individual_class`,
+		id, in.Name, in.CourseID, in.CurrentModuleID, startPtr, in.DurationWeeks, in.IndividualClass).Scan(&dto.ID, &dto.Name, &dto.CourseID, &dto.CurrentModuleID, &dto.StartDate, &dto.EndDate, &dto.CreatedAt, &dto.UpdatedAt, &dto.IndividualClass)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, notFoundErr("Turma")
 	}
@@ -556,7 +558,8 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		        WHERE m.course_id = c.id AND psp.user_id = u.id AND psp.completed_at IS NOT NULL),
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
 		          JOIN "user" t ON t.id = ct.user_id
-		        WHERE ct.class_id = cl.id)
+		        WHERE ct.class_id = cl.id),
+		       cl.individual_class
 		FROM enrollment e
 		JOIN "user" u ON u.id = e.user_id AND u.role = %d %s
 		JOIN class cl ON cl.id = e.class_id
@@ -573,7 +576,7 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		var dto portalStudentOverviewDTO
 		if err := rows.Scan(&dto.StudentID, &dto.StudentName, &dto.StudentEmail,
 			&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
-			&dto.TotalPhases, &dto.CompletedPhases, &dto.TeacherName); err != nil {
+			&dto.TotalPhases, &dto.CompletedPhases, &dto.TeacherName, &dto.IndividualClass); err != nil {
 			return nil, 0, err
 		}
 		if dto.ClassName == "" {
