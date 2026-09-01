@@ -645,12 +645,17 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 // Devolve quantos foram efetivamente inseridos. Um INSERT só (unnest sobre o
 // array de ids) — antes era um INSERT por aluno dentro de uma transação, sem
 // teto de tamanho.
+// portalAddClassStudents: $2 precisa do cast ::bigint explícito nas DUAS
+// ocorrências — sem isso o Postgres deduz tipos diferentes pra cada uso
+// (SQLSTATE 42P08 "inconsistent types deduced for parameter $2": integer no
+// SELECT DISTINCT, text no WHERE), e a query falha sempre com 500, mesmo
+// sendo válida — reproduzido e confirmado via psql direto em produção.
 func (s *Server) portalAddClassStudents(ctx context.Context, classID int64, ids []int64) (int, error) {
 	tag, err := s.portalDB.Exec(ctx, `INSERT INTO enrollment (user_id, class_id, created_at)
-		SELECT DISTINCT u.id, $2, NOW()
+		SELECT DISTINCT u.id, $2::bigint, NOW()
 		FROM unnest($1::bigint[]) AS u(id)
 		WHERE NOT EXISTS (
-			SELECT 1 FROM enrollment e WHERE e.user_id = u.id AND e.class_id = $2
+			SELECT 1 FROM enrollment e WHERE e.user_id = u.id AND e.class_id = $2::bigint
 		)`, ids, classID)
 	if err != nil {
 		return 0, portalDBErr(err)
