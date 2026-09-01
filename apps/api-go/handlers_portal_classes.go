@@ -199,6 +199,62 @@ func (s *Server) handlePortalSetStudentIndividual(w http.ResponseWriter, r *http
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handlePortalListClassTeachers(w http.ResponseWriter, r *http.Request) {
+	classID, err := portalPathID(r, "classId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	items, err := s.portalListClassTeachers(r.Context(), classID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handlePortalAddClassTeacher(w http.ResponseWriter, r *http.Request) {
+	classID, err := portalPathID(r, "classId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in portalTeacherInput
+	if err := portalBodyJSON(w, r, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	if in.TeacherID <= 0 {
+		writeErr(w, validationErr("teacherId obrigatório"))
+		return
+	}
+	if err := s.portalAddClassTeacher(r.Context(), classID, in.TeacherID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.portalLogActivity(r, "class_teacher_add", "class", fmt.Sprint(classID), map[string]any{"teacherId": fmt.Sprint(in.TeacherID)})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePortalRemoveClassTeacher(w http.ResponseWriter, r *http.Request) {
+	classID, err := portalPathID(r, "classId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	teacherID, err := portalPathID(r, "teacherId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalRemoveClassTeacher(r.Context(), classID, teacherID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.portalLogActivity(r, "class_teacher_remove", "class", fmt.Sprint(classID), map[string]any{"teacherId": fmt.Sprint(teacherID)})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handlePortalClassCronograma(w http.ResponseWriter, r *http.Request) {
 	id, err := portalPathID(r, "classId")
 	if err != nil {

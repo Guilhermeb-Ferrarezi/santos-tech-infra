@@ -718,6 +718,52 @@ func (s *Server) portalRemoveClassStudent(ctx context.Context, classID, studentI
 	return nil
 }
 
+// ── Professores da turma (class_teacher) ──────────────────────────────────────
+// Vínculo fixo professor↔turma — hoje só alimenta o campo teacherName exibido
+// em Home/Turmas (ver portalStudentsOverview/portalMyOverview). Mais de um
+// professor por turma é permitido (chave composta class_id+user_id).
+
+func (s *Server) portalListClassTeachers(ctx context.Context, classID int64) ([]portalTeacherDTO, error) {
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role
+		FROM class_teacher ct JOIN "user" u ON u.id = ct.user_id
+		WHERE ct.class_id = $1 ORDER BY COALESCE(u.name,'') ASC, u.id ASC`, classID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []portalTeacherDTO{}
+	for rows.Next() {
+		var dto portalTeacherDTO
+		if err := rows.Scan(&dto.ID, &dto.Email, &dto.Name, &dto.Role); err != nil {
+			return nil, err
+		}
+		items = append(items, dto)
+	}
+	return items, rows.Err()
+}
+
+func (s *Server) portalAddClassTeacher(ctx context.Context, classID, teacherID int64) error {
+	_, err := s.portalDB.Exec(ctx, `INSERT INTO class_teacher (class_id, user_id, created_at)
+		VALUES ($1, $2, NOW()) ON CONFLICT (class_id, user_id) DO NOTHING`, classID, teacherID)
+	if err != nil {
+		return portalDBErr(err)
+	}
+	s.invalidatePortalOverview()
+	return nil
+}
+
+func (s *Server) portalRemoveClassTeacher(ctx context.Context, classID, teacherID int64) error {
+	tag, err := s.portalDB.Exec(ctx, `DELETE FROM class_teacher WHERE class_id=$1 AND user_id=$2`, classID, teacherID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return notFoundErr("Vínculo de professor")
+	}
+	s.invalidatePortalOverview()
+	return nil
+}
+
 // ── Salas (class_rooms) ──────────────────────────────────────────────────────
 
 const portalRoomCols = `id::text, class_id::text, COALESCE(name,''), created_at, is_authorized, target_limited`

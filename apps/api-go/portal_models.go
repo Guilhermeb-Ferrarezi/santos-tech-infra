@@ -220,6 +220,20 @@ type portalStudentDTO struct {
 	Individual bool   `json:"individual"`
 }
 
+// portalTeacherDTO é um professor vinculado a uma turma (class_teacher) —
+// diferente de portalStudentDTO porque o vínculo não é uma matrícula
+// (não tem o conceito de "particular").
+type portalTeacherDTO struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+	Role  int16  `json:"role"`
+}
+
+type portalTeacherInput struct {
+	TeacherID int64 `json:"teacherId"`
+}
+
 // portalStudentOverviewDTO é uma linha do dashboard administrativo de alunos
 // (ver dashboard/web Home.tsx) — um aluno matriculado, com progresso agregado
 // no curso. "1 aula" = 1 phase; totalPhases/completedPhases somam TODOS os
