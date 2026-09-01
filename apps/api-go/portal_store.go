@@ -641,6 +641,50 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 	return items, total, rows.Err()
 }
 
+// portalMyOverview é a versão "self-service" de portalStudentsOverview — o
+// próprio aluno vendo o progresso dele (Home, quando não é staff), casado
+// por email (mesma ponte auth central ↔ Portal usada em
+// portalSyncUserFromAuth). Sem paginação/busca: são as matrículas de UMA
+// pessoa só, não uma lista administrativa. Sem filtro de role — se a pessoa
+// tem matrícula, mostra, seja qual for o role dela no Portal.
+func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalStudentOverviewDTO, error) {
+	rows, err := s.portalDB.Query(ctx, `
+		SELECT u.id::text, COALESCE(u.name,''), COALESCE(u.email,''),
+		       cl.id::text, COALESCE(cl.name,''), c.id::text, COALESCE(c.name,''),
+		       (SELECT COUNT(*) FROM phase ph JOIN module m ON m.id = ph.module_id WHERE m.course_id = c.id),
+		       (SELECT COUNT(*) FROM progress_student_phase psp
+		          JOIN phase ph ON ph.id = psp.phase_id
+		          JOIN module m ON m.id = ph.module_id
+		        WHERE m.course_id = c.id AND psp.user_id = u.id AND psp.completed_at IS NOT NULL),
+		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
+		          JOIN "user" t ON t.id = ct.user_id
+		        WHERE ct.class_id = cl.id),
+		       e.individual
+		FROM enrollment e
+		JOIN "user" u ON u.id = e.user_id AND u.email = $1
+		JOIN class cl ON cl.id = e.class_id
+		JOIN course c ON c.id = cl.course_id
+		ORDER BY c.name ASC, cl.name ASC`, strings.ToLower(email))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []portalStudentOverviewDTO{}
+	for rows.Next() {
+		var dto portalStudentOverviewDTO
+		if err := rows.Scan(&dto.StudentID, &dto.StudentName, &dto.StudentEmail,
+			&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
+			&dto.TotalPhases, &dto.CompletedPhases, &dto.TeacherName, &dto.Individual); err != nil {
+			return nil, err
+		}
+		if dto.ClassName == "" {
+			dto.ClassName = "Turma " + dto.ClassID
+		}
+		items = append(items, dto)
+	}
+	return items, rows.Err()
+}
+
 // portalAddClassStudents matricula os usuários na turma, ignorando duplicatas.
 // Devolve quantos foram efetivamente inseridos. Um INSERT só (unnest sobre o
 // array de ids) — antes era um INSERT por aluno dentro de uma transação, sem

@@ -18,6 +18,7 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /portal/overview", s.portalAnyRead(s.handlePortalOverview))
 	mux.HandleFunc("GET /portal/students-overview", s.portalAnyRead(s.handlePortalStudentsOverview))
+	mux.HandleFunc("GET /portal/me/overview", s.authGuard(s.handlePortalMyOverview))
 
 	// Cursos / módulos / fases → portal_cursos
 	mux.HandleFunc("GET /portal/courses", s.portalRead("portal_cursos", s.handlePortalListCourses))
