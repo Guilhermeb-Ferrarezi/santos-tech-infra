@@ -12,6 +12,25 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// portalSyncUserFromAuth espelha um usuário do auth central (banco `santos-tech`,
+// tabela `users`) pra tabela de usuários do Portal (banco `portal_santos_tech`,
+// tabela `"user"` — legado do sistema .NET, congelado, SEM sincronia automática
+// nenhuma até este código existir). Os dois bancos são instâncias Postgres
+// diferentes — não dá FK entre eles — então o casamento é por email (único nos
+// dois lados), não por id: os ids de cada tabela são independentes e já existem
+// casos onde o MESMO id numérico é uma pessoa diferente em cada banco (não dá
+// pra alinhar por id sem corromper dado existente). Upsert: cria se não existe,
+// atualiza nome/role se já existe — nunca mexe no id/senha/demais campos do
+// Portal (progress, matrículas etc. continuam presos ao id local do Portal).
+func (s *Server) portalSyncUserFromAuth(ctx context.Context, name, email string, role int16) error {
+	_, err := s.portalDB.Exec(ctx, `
+		INSERT INTO "user" (name, email, role, created_at, updated_at)
+		VALUES ($1, $2, $3, NOW(), NOW())
+		ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role, updated_at = NOW()`,
+		name, email, role)
+	return err
+}
+
 // portalDBErr converte erros de integridade do Postgres num 409/400 legível;
 // qualquer outro erro passa intacto (writeErr → 500). Isso evita que IDs de FK
 // inexistentes (curso/módulo/turma/aluno) virem um 500 genérico.

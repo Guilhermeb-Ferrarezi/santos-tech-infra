@@ -68,6 +68,7 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, err)
 			return
 		}
+		s.portalSyncUserBestEffort(r.Context(), u)
 		writeJSON(w, http.StatusCreated, map[string]any{"user": adminUserJSON(u)})
 		return
 	}
@@ -133,6 +134,7 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, err)
 			return
 		}
+		s.portalSyncUserBestEffort(r.Context(), u)
 		writeJSON(w, http.StatusCreated, map[string]any{"user": adminUserJSON(u)})
 		return
 	}
@@ -143,6 +145,7 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sendInvite(r.Context(), u) // best-effort: loga erro, não falha a criação
+	s.portalSyncUserBestEffort(r.Context(), u)
 	writeJSON(w, http.StatusCreated, map[string]any{"user": adminUserJSON(u)})
 }
 
@@ -242,6 +245,7 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusNotFound, "NOT_FOUND", "usuário não encontrado"))
 		return
 	}
+	s.portalSyncUserBestEffort(r.Context(), u)
 	writeJSON(w, http.StatusOK, map[string]any{"user": adminUserJSON(u)})
 }
 
@@ -365,12 +369,22 @@ func (s *Server) sendInviteEmail(to, name, url string) {
 	s.enqueueEmail("sendInviteEmail", to, "Seu acesso à Santos Tech", html)
 }
 
+// portalSyncUserBestEffort espelha o usuário no Portal (ver portalSyncUserFromAuth)
+// sem propagar erro — o Portal é um consumidor externo do auth central, uma falha
+// dele não pode quebrar criar/atualizar um usuário no auth.
+func (s *Server) portalSyncUserBestEffort(ctx context.Context, u *User) {
+	if err := s.portalSyncUserFromAuth(ctx, u.Name, u.Email, u.Role); err != nil {
+		slog.Error("falha ao sincronizar usuário com o portal", "err", err, "user", u.ID)
+	}
+}
+
 // adminUserJSON é a forma pública de um usuário nas rotas admin.
 func adminUserJSON(u *User) map[string]any {
 	return map[string]any{
 		"id":            u.ID,
 		"email":         u.Email,
 		"name":          u.Name,
+		"avatarUrl":     u.AvatarURL,
 		"role":          u.Role,
 		"customRoleId":  u.CustomRoleID,
 		"suspendedAt":   u.SuspendedAt,
