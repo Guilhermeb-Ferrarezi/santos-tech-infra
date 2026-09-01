@@ -207,17 +207,17 @@ type portalClassDTO struct {
 	EndDate         time.Time `json:"endDate"`
 	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
-	// IndividualClass separa aula particular (1 aluno, fora do fluxo de turma de
-	// grupo) de turma normal — coluna `individual_class` que já existia no schema
-	// legado (.NET) mas nunca tinha sido exposta pela API nem pelo dashboard.
-	IndividualClass bool `json:"individualClass"`
 }
 
+// portalStudentDTO é um aluno matriculado numa turma. Individual marca a
+// matrícula (não a turma) como particular — turma de grupo pode ter alunos
+// misturados, um marcado como particular e o resto não (ver enrollment.individual).
 type portalStudentDTO struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
-	Name  string `json:"name"`
-	Role  int16  `json:"role"`
+	ID         string `json:"id"`
+	Email      string `json:"email"`
+	Name       string `json:"name"`
+	Role       int16  `json:"role"`
+	Individual bool   `json:"individual"`
 }
 
 // portalStudentOverviewDTO é uma linha do dashboard administrativo de alunos
@@ -227,7 +227,9 @@ type portalStudentDTO struct {
 // "quantas aulas o programa inteiro tem", não "quantas o módulo atual tem").
 // teacherName vem null até alguém popular class_teacher pra essa turma (ver
 // portal_class_scope.go) — não existe hoje nenhuma fonte pra derivar isso
-// automaticamente.
+// automaticamente. Individual vem da matrícula (enrollment.individual), não
+// da turma — uma turma de grupo pode ter um aluno marcado como particular
+// dentro dela.
 type portalStudentOverviewDTO struct {
 	StudentID       string  `json:"studentId"`
 	StudentName     string  `json:"studentName"`
@@ -239,7 +241,13 @@ type portalStudentOverviewDTO struct {
 	TotalPhases     int     `json:"totalPhases"`
 	CompletedPhases int     `json:"completedPhases"`
 	TeacherName     *string `json:"teacherName"`
-	IndividualClass bool    `json:"individualClass"`
+	Individual      bool    `json:"individual"`
+}
+
+// portalStudentIndividualInput é o corpo do PATCH que marca/desmarca uma
+// matrícula como particular.
+type portalStudentIndividualInput struct {
+	Individual bool `json:"individual"`
 }
 
 type portalClassInput struct {
@@ -248,10 +256,6 @@ type portalClassInput struct {
 	CurrentModuleID int64  `json:"currentModuleId"`
 	StartDate       string `json:"startDate"`
 	DurationWeeks   int    `json:"durationWeeks"`
-	// IndividualClass é ponteiro (não bool puro) pra distinguir "não veio no
-	// PATCH" de "veio false" — sem isso, um PATCH de nome/curso que não mande
-	// o campo reverteria silenciosamente uma turma particular pra grupo.
-	IndividualClass *bool `json:"individualClass"`
 }
 
 func (in *portalClassInput) validateCreate() error {

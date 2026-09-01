@@ -175,6 +175,30 @@ func (s *Server) handlePortalRemoveClassStudent(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handlePortalSetStudentIndividual(w http.ResponseWriter, r *http.Request) {
+	classID, err := portalPathID(r, "classId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	studentID, err := portalPathID(r, "studentId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in portalStudentIndividualInput
+	if err := portalBodyJSON(w, r, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	if err := s.portalSetStudentIndividual(r.Context(), classID, studentID, in.Individual); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.portalLogActivity(r, "class_student_individual", "class", fmt.Sprint(classID), map[string]any{"studentId": fmt.Sprint(studentID), "individual": in.Individual})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handlePortalClassCronograma(w http.ResponseWriter, r *http.Request) {
 	id, err := portalPathID(r, "classId")
 	if err != nil {

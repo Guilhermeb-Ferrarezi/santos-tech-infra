@@ -47,6 +47,7 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /portal/classes/{classId}/students", s.portalRead("portal_turmas", s.handlePortalListClassStudents))
 	mux.HandleFunc("POST /portal/classes/{classId}/students", s.rateLimit(20, min, s.portalWrite("portal_turmas", s.handlePortalAddClassStudents)))
 	mux.HandleFunc("DELETE /portal/classes/{classId}/students/{studentId}", s.adminGuard(s.handlePortalRemoveClassStudent))
+	mux.HandleFunc("PATCH /portal/classes/{classId}/students/{studentId}", s.rateLimit(30, min, s.portalWrite("portal_turmas", s.handlePortalSetStudentIndividual)))
 	mux.HandleFunc("GET /portal/classes/{classId}/cronograma", s.portalRead("portal_turmas", s.handlePortalClassCronograma))
 	mux.HandleFunc("POST /portal/classes/{classId}/iniciar-fases", s.rateLimit(20, min, s.portalWrite("portal_turmas", s.handlePortalIniciarFases)))
 
