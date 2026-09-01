@@ -210,10 +210,16 @@ func (s *Server) portalCreateCourse(ctx context.Context, in portalCourseInput) (
 	if in.IsPaid != nil {
 		isPaid = *in.IsPaid
 	}
+	// price é NOT NULL no banco; curso gratuito (o caso comum) não manda price
+	// nenhum — sem esse default o INSERT tentava gravar NULL e estourava 500.
+	price := "0"
+	if in.Price != nil && strings.TrimSpace(*in.Price) != "" {
+		price = *in.Price
+	}
 	var id int64
 	err := s.portalDB.QueryRow(ctx, `INSERT INTO course (name, description, is_paid, duration_hours, level_difficulty, paid_focus, price, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7::numeric,NOW(),NOW()) RETURNING id`,
-		in.Name, in.Description, isPaid, in.DurationHours, in.Level, in.Focus, in.Price).Scan(&id)
+		in.Name, in.Description, isPaid, in.DurationHours, in.Level, in.Focus, price).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
