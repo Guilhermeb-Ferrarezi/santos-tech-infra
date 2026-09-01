@@ -69,6 +69,7 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.portalSyncUserBestEffort(r.Context(), u)
+		s.provisionMailboxBestEffort(r.Context(), u)
 		writeJSON(w, http.StatusCreated, map[string]any{"user": adminUserJSON(u)})
 		return
 	}
@@ -135,6 +136,7 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.portalSyncUserBestEffort(r.Context(), u)
+		s.provisionMailboxBestEffort(r.Context(), u)
 		writeJSON(w, http.StatusCreated, map[string]any{"user": adminUserJSON(u)})
 		return
 	}
@@ -146,6 +148,7 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sendInvite(r.Context(), u) // best-effort: loga erro, não falha a criação
 	s.portalSyncUserBestEffort(r.Context(), u)
+	s.provisionMailboxBestEffort(r.Context(), u)
 	writeJSON(w, http.StatusCreated, map[string]any{"user": adminUserJSON(u)})
 }
 
@@ -375,6 +378,18 @@ func (s *Server) sendInviteEmail(to, name, url string) {
 func (s *Server) portalSyncUserBestEffort(ctx context.Context, u *User) {
 	if err := s.portalSyncUserFromAuth(ctx, u.Name, u.Email, u.Role); err != nil {
 		slog.Error("falha ao sincronizar usuário com o portal", "err", err, "user", u.ID)
+	}
+}
+
+// provisionMailboxBestEffort cria a caixa de email do usuário só quando o
+// endereço é @santos-tech.com (o mailserver não hospeda domínio externo tipo
+// gmail.com) — best-effort, mesmo padrão do sync com o Portal.
+func (s *Server) provisionMailboxBestEffort(ctx context.Context, u *User) {
+	if !strings.HasSuffix(strings.ToLower(u.Email), "@"+staffDomain) {
+		return
+	}
+	if err := s.email.provisionMailbox(ctx, u.Email); err != nil {
+		slog.Error("falha ao provisionar caixa de email", "err", err, "user", u.ID)
 	}
 }
 
