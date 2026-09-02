@@ -384,13 +384,22 @@ func (s *Server) portalSyncUserBestEffort(ctx context.Context, u *User) {
 // provisionMailboxBestEffort cria a caixa de email do usuário só quando o
 // endereço é @santos-tech.com (o mailserver não hospeda domínio externo tipo
 // gmail.com) — best-effort, mesmo padrão do sync com o Portal.
+//
+// Roda em background (safeGo + contexto descolado da requisição): o
+// provisionamento chama e.client, que tem 20s de timeout — chamado direto no
+// caminho da requisição, isso prendia handleCreateAdminUser até 20s se o
+// email-sender estivesse lento/fora, mesmo essa função dizendo (e o caller
+// esperando) que "nunca bloqueia a operação de auth".
 func (s *Server) provisionMailboxBestEffort(ctx context.Context, u *User) {
 	if !strings.HasSuffix(strings.ToLower(u.Email), "@"+staffDomain) {
 		return
 	}
-	if err := s.email.provisionMailbox(ctx, u.Email); err != nil {
-		slog.Error("falha ao provisionar caixa de email", "err", err, "user", u.ID)
-	}
+	bg := context.WithoutCancel(ctx)
+	safeGo("provisionMailbox", func() {
+		if err := s.email.provisionMailbox(bg, u.Email); err != nil {
+			slog.Error("falha ao provisionar caixa de email", "err", err, "user", u.ID)
+		}
+	})
 }
 
 // adminUserJSON é a forma pública de um usuário nas rotas admin.
