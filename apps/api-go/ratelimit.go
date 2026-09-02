@@ -208,10 +208,12 @@ func (s *Server) syncBansToRedis(ctx context.Context) {
 		if ban.ExpiresAt.Valid {
 			ttl := time.Until(ban.ExpiresAt.Time)
 			if ttl > 0 {
-				_ = s.rdb.Set(ctx, key, "1", ttl).Err()
+				if err := s.rdb.Set(ctx, key, "1", ttl).Err(); err != nil {
+					slog.Warn("syncBansToRedis: falha ao sincronizar ban no Redis; IP não fica banido até a próxima sync/restart", "ip", ban.Ip, "err", err)
+				}
 			}
-		} else {
-			_ = s.rdb.Set(ctx, key, "1", 0).Err()
+		} else if err := s.rdb.Set(ctx, key, "1", 0).Err(); err != nil {
+			slog.Warn("syncBansToRedis: falha ao sincronizar ban no Redis; IP não fica banido até a próxima sync/restart", "ip", ban.Ip, "err", err)
 		}
 	}
 	slog.Info("ip bans sincronizados com Redis", "count", len(bans))

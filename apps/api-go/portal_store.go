@@ -1045,11 +1045,20 @@ func (s *Server) portalDeleteClassRoom(ctx context.Context, roomID int64) error 
 // ── Reorder, cronograma e iniciar-fases ──────────────────────────────────────
 
 // portalReorder troca o index_order de uma linha com seu vizinho imediato dentro
-// do mesmo escopo (module→course_id, phase→module_id). table/scopeCol vêm de uma
-// allowlist (não de input), então a interpolação é segura.
+// do mesmo escopo (module→course_id, phase→module_id, exercise→phase_id).
+// table/scopeCol são interpolados na query (não dá pra parametrizar nome de
+// tabela/coluna), então os dois precisam bater com o par exato desta allowlist —
+// não só o table, senão um scopeCol futuro vindo de outro lugar (ex.: input do
+// usuário) entraria direto na query sem checagem.
+var portalReorderScopeByTable = map[string]string{
+	"module":   "course_id",
+	"phase":    "module_id",
+	"exercise": "phase_id",
+}
+
 func (s *Server) portalReorder(ctx context.Context, table, scopeCol, entity string, id int64, direction string) error {
-	if table != "module" && table != "phase" && table != "exercise" {
-		return validationErr("tabela inválida")
+	if portalReorderScopeByTable[table] != scopeCol {
+		return validationErr("tabela ou coluna de escopo inválida")
 	}
 	tx, err := s.portalDB.Begin(ctx)
 	if err != nil {

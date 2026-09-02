@@ -51,7 +51,14 @@ func (s *Server) checkHTTP(url string) func(ctx context.Context) error {
 // GET /status — saúde agregada do ecossistema (autenticado): banco e Redis do
 // auth + health das APIs vizinhas (email e claude agent). Checagens em paralelo
 // com timeout de 3s cada.
+//
+// A rota é authGuard (qualquer usuário logado), não adminGuard — então o
+// detalhe de erro (err.Error(), que pode vazar host/porta/DSN de Postgres,
+// Redis ou das APIs vizinhas) só é incluído na resposta para admin. Usuários
+// não-admin ainda veem ok/latencyMs por serviço, só sem o texto do erro
+// (mesmo espírito do /ready, que nunca expõe err.Error()).
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	isAdmin := s.requesterIsAdmin(r)
 	results := map[string]svcStatus{}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -65,6 +72,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			}()
 			defer wg.Done()
 			st := check(fn)
+			if !isAdmin {
+				st.Error = ""
+			}
 			mu.Lock()
 			results[name] = st
 			mu.Unlock()
