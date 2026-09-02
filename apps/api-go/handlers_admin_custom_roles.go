@@ -17,24 +17,11 @@ func customRoleJSON(cr *CustomRole) map[string]any {
 	}
 }
 
-// isValidUUID valida UUID v4 básico (8-4-4-4-12 hex).
+// isValidUUID valida formato UUID (8-4-4-4-12 hex). Delega pro mesmo uuidRe
+// (handlers_boards.go) usado no resto do código — duas implementações
+// independentes da mesma checagem podiam divergir silenciosamente.
 func isValidUUID(s string) bool {
-	parts := strings.Split(s, "-")
-	if len(parts) != 5 {
-		return false
-	}
-	lens := []int{8, 4, 4, 4, 12}
-	for i, p := range parts {
-		if len(p) != lens[i] {
-			return false
-		}
-		for _, c := range p {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-				return false
-			}
-		}
-	}
-	return true
+	return uuidRe.MatchString(s)
 }
 
 // GET /auth/admin/custom-roles
