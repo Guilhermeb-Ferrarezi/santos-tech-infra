@@ -255,6 +255,63 @@ func (s *Server) handlePortalRemoveClassTeacher(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handlePortalListClassSchedule(w http.ResponseWriter, r *http.Request) {
+	classID, err := portalPathID(r, "classId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	items, err := s.portalListClassSchedule(r.Context(), classID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handlePortalAddClassSchedule(w http.ResponseWriter, r *http.Request) {
+	classID, err := portalPathID(r, "classId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in portalScheduleInput
+	if err := portalBodyJSON(w, r, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	if err := in.validate(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	dto, err := s.portalAddClassSchedule(r.Context(), classID, in)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.portalLogActivity(r, "class_schedule_add", "class", fmt.Sprint(classID), map[string]any{"dayOfWeek": in.DayOfWeek, "startTime": in.StartTime, "endTime": in.EndTime})
+	writeJSON(w, http.StatusCreated, map[string]any{"schedule": dto})
+}
+
+func (s *Server) handlePortalRemoveClassSchedule(w http.ResponseWriter, r *http.Request) {
+	classID, err := portalPathID(r, "classId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	scheduleID, err := portalPathID(r, "scheduleId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalRemoveClassSchedule(r.Context(), classID, scheduleID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.portalLogActivity(r, "class_schedule_remove", "class", fmt.Sprint(classID), map[string]any{"scheduleId": fmt.Sprint(scheduleID)})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handlePortalClassCronograma(w http.ResponseWriter, r *http.Request) {
 	id, err := portalPathID(r, "classId")
 	if err != nil {

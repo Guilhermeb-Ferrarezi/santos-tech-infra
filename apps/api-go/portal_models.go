@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -245,23 +246,56 @@ type portalTeacherInput struct {
 // da turma — uma turma de grupo pode ter um aluno marcado como particular
 // dentro dela.
 type portalStudentOverviewDTO struct {
-	StudentID       string  `json:"studentId"`
-	StudentName     string  `json:"studentName"`
-	StudentEmail    string  `json:"studentEmail"`
-	ClassID         string  `json:"classId"`
-	ClassName       string  `json:"className"`
-	CourseID        string  `json:"courseId"`
-	CourseName      string  `json:"courseName"`
-	TotalPhases     int     `json:"totalPhases"`
-	CompletedPhases int     `json:"completedPhases"`
-	TeacherName     *string `json:"teacherName"`
-	Individual      bool    `json:"individual"`
+	StudentID       string     `json:"studentId"`
+	StudentName     string     `json:"studentName"`
+	StudentEmail    string     `json:"studentEmail"`
+	ClassID         string     `json:"classId"`
+	ClassName       string     `json:"className"`
+	CourseID        string     `json:"courseId"`
+	CourseName      string     `json:"courseName"`
+	TotalPhases     int        `json:"totalPhases"`
+	CompletedPhases int        `json:"completedPhases"`
+	TeacherName     *string    `json:"teacherName"`
+	Individual      bool       `json:"individual"`
+	NextClassAt     *time.Time `json:"nextClassAt"`
 }
 
 // portalStudentIndividualInput é o corpo do PATCH que marca/desmarca uma
 // matrícula como particular.
 type portalStudentIndividualInput struct {
 	Individual bool `json:"individual"`
+}
+
+// portalScheduleDTO é um horário fixo semanal da turma (class_schedule) —
+// ex.: "toda terça 19h30–21h". StartTime/EndTime em "HH:MM" (não time.Time:
+// é hora do relógio, sem fuso/data, não faz sentido como Time completo).
+type portalScheduleDTO struct {
+	ID        string `json:"id"`
+	ClassID   string `json:"classId"`
+	DayOfWeek int16  `json:"dayOfWeek"` // 0=domingo .. 6=sábado (bate com time.Weekday do Go)
+	StartTime string `json:"startTime"`
+	EndTime   string `json:"endTime"`
+}
+
+type portalScheduleInput struct {
+	DayOfWeek int16  `json:"dayOfWeek"`
+	StartTime string `json:"startTime"`
+	EndTime   string `json:"endTime"`
+}
+
+var portalTimeRe = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
+
+func (in *portalScheduleInput) validate() error {
+	if in.DayOfWeek < 0 || in.DayOfWeek > 6 {
+		return validationErr("dayOfWeek deve ficar entre 0 (domingo) e 6 (sábado)")
+	}
+	if !portalTimeRe.MatchString(in.StartTime) || !portalTimeRe.MatchString(in.EndTime) {
+		return validationErr("startTime/endTime devem estar no formato HH:MM")
+	}
+	if in.StartTime >= in.EndTime {
+		return validationErr("startTime deve ser antes de endTime")
+	}
+	return nil
 }
 
 type portalClassInput struct {

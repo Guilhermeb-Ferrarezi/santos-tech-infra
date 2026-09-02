@@ -39,6 +39,27 @@ CREATE TABLE IF NOT EXISTS class_teacher (
 	PRIMARY KEY (class_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_class_teacher_user ON class_teacher(user_id);
+
+-- enrollment.individual: marca a MATRÍCULA (não a turma) como aula particular
+-- — uma turma de grupo pode ter um aluno particular matriculado nela junto
+-- com os demais. Registrado aqui pra documentar o que já foi aplicado
+-- manualmente em produção (ver portalSetStudentIndividual).
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS individual BOOLEAN NOT NULL DEFAULT false;
+
+-- class_schedule: grade semanal recorrente da turma (dia da semana + horário)
+-- — não existia NADA de horário/calendário pro Portal antes disso; "próxima
+-- aula" e visão de calendário dependem desta tabela. Mais de um horário por
+-- turma é permitido (ex.: terça E quinta), por isso sem UNIQUE em class_id.
+CREATE TABLE IF NOT EXISTS class_schedule (
+	id SERIAL PRIMARY KEY,
+	class_id INTEGER NOT NULL,
+	day_of_week SMALLINT NOT NULL CHECK (day_of_week BETWEEN 0 AND 6), -- 0=domingo .. 6=sábado
+	start_time TIME NOT NULL,
+	end_time TIME NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_class_schedule_class ON class_schedule(class_id);
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal

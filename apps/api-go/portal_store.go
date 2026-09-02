@@ -638,7 +638,13 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		}
 		items = append(items, dto)
 	}
-	return items, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if err := s.portalAttachNextClassAt(ctx, items); err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
 }
 
 // portalMyOverview é a versão "self-service" de portalStudentsOverview — o
@@ -682,7 +688,13 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 		}
 		items = append(items, dto)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.portalAttachNextClassAt(ctx, items); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // portalAddClassStudents matricula os usuários na turma, ignorando duplicatas.
@@ -761,6 +773,147 @@ func (s *Server) portalRemoveClassTeacher(ctx context.Context, classID, teacherI
 		return notFoundErr("Vínculo de professor")
 	}
 	s.invalidatePortalOverview()
+	return nil
+}
+
+// ── Horário semanal da turma (class_schedule) ─────────────────────────────────
+
+func (s *Server) portalListClassSchedule(ctx context.Context, classID int64) ([]portalScheduleDTO, error) {
+	rows, err := s.portalDB.Query(ctx, `SELECT id::text, class_id::text, day_of_week,
+		to_char(start_time,'HH24:MI'), to_char(end_time,'HH24:MI')
+		FROM class_schedule WHERE class_id=$1 ORDER BY day_of_week ASC, start_time ASC`, classID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []portalScheduleDTO{}
+	for rows.Next() {
+		var dto portalScheduleDTO
+		if err := rows.Scan(&dto.ID, &dto.ClassID, &dto.DayOfWeek, &dto.StartTime, &dto.EndTime); err != nil {
+			return nil, err
+		}
+		items = append(items, dto)
+	}
+	return items, rows.Err()
+}
+
+func (s *Server) portalAddClassSchedule(ctx context.Context, classID int64, in portalScheduleInput) (*portalScheduleDTO, error) {
+	var dto portalScheduleDTO
+	err := s.portalDB.QueryRow(ctx, `INSERT INTO class_schedule (class_id, day_of_week, start_time, end_time, created_at, updated_at)
+		VALUES ($1,$2,$3::time,$4::time,NOW(),NOW())
+		RETURNING id::text, class_id::text, day_of_week, to_char(start_time,'HH24:MI'), to_char(end_time,'HH24:MI')`,
+		classID, in.DayOfWeek, in.StartTime, in.EndTime).Scan(&dto.ID, &dto.ClassID, &dto.DayOfWeek, &dto.StartTime, &dto.EndTime)
+	if err != nil {
+		return nil, portalDBErr(err)
+	}
+	s.invalidatePortalOverview()
+	return &dto, nil
+}
+
+func (s *Server) portalRemoveClassSchedule(ctx context.Context, classID, scheduleID int64) error {
+	tag, err := s.portalDB.Exec(ctx, `DELETE FROM class_schedule WHERE id=$1 AND class_id=$2`, scheduleID, classID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return notFoundErr("Horário")
+	}
+	s.invalidatePortalOverview()
+	return nil
+}
+
+// portalNextClassAt calcula a próxima ocorrência de aula (a partir de agora)
+// pra cada turma em classIDs, usando os horários semanais cadastrados
+// (class_schedule) e limitada à janela start_date/end_date da turma. Devolve
+// um mapa classID→*time.Time (nil quando a turma não tem horário cadastrado,
+// ou nenhuma ocorrência cabe na janela restante). Uma query só pra todas as
+// turmas pedidas — pensado pra alimentar uma lista (students-overview), não
+// uma turma isolada.
+func (s *Server) portalNextClassAt(ctx context.Context, classIDs []int64) (map[string]*time.Time, error) {
+	result := map[string]*time.Time{}
+	if len(classIDs) == 0 {
+		return result, nil
+	}
+	rows, err := s.portalDB.Query(ctx, `
+		SELECT cs.class_id::text, cs.day_of_week,
+		       EXTRACT(HOUR FROM cs.start_time)::int, EXTRACT(MINUTE FROM cs.start_time)::int,
+		       c.start_date, c.end_date
+		FROM class_schedule cs
+		JOIN class c ON c.id = cs.class_id
+		WHERE cs.class_id = ANY($1::bigint[])`, classIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type slot struct{ dow, hour, min int }
+	slotsByClass := map[string][]slot{}
+	windowByClass := map[string][2]time.Time{}
+	for rows.Next() {
+		var classID string
+		var dow, hour, min int
+		var start, end time.Time
+		if err := rows.Scan(&classID, &dow, &hour, &min, &start, &end); err != nil {
+			return nil, err
+		}
+		slotsByClass[classID] = append(slotsByClass[classID], slot{dow, hour, min})
+		windowByClass[classID] = [2]time.Time{start, end}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	now := portalNowUTC()
+	for classID, slots := range slotsByClass {
+		window := windowByClass[classID]
+		var best *time.Time
+		for offset := 0; offset < 8; offset++ {
+			day := now.AddDate(0, 0, offset)
+			dow := int(day.Weekday())
+			for _, sl := range slots {
+				if sl.dow != dow {
+					continue
+				}
+				cand := time.Date(day.Year(), day.Month(), day.Day(), sl.hour, sl.min, 0, 0, day.Location())
+				if cand.Before(now) || cand.Before(window[0]) || cand.After(window[1]) {
+					continue
+				}
+				if best == nil || cand.Before(*best) {
+					c := cand
+					best = &c
+				}
+			}
+		}
+		result[classID] = best
+	}
+	return result, nil
+}
+
+// portalAttachNextClassAt preenche NextClassAt em cada item, buscando os
+// horários de todas as turmas envolvidas numa query só (evita N+1 quando
+// items tem várias linhas — students-overview pagina até 200).
+func (s *Server) portalAttachNextClassAt(ctx context.Context, items []portalStudentOverviewDTO) error {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	classIDs := make([]int64, 0, len(items))
+	for _, it := range items {
+		if seen[it.ClassID] {
+			continue
+		}
+		seen[it.ClassID] = true
+		id, err := strconv.ParseInt(it.ClassID, 10, 64)
+		if err != nil {
+			continue
+		}
+		classIDs = append(classIDs, id)
+	}
+	next, err := s.portalNextClassAt(ctx, classIDs)
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		items[i].NextClassAt = next[items[i].ClassID]
+	}
 	return nil
 }
 
