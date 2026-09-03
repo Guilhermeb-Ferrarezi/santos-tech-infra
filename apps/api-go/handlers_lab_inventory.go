@@ -22,13 +22,21 @@ func (s *Server) handleLabDeviceInventory(w http.ResponseWriter, r *http.Request
 	// nome, versão, fabricante e o ÍCONE em base64 (~3-6 KB cada). 80 programas
 	// com ícone dão uns 400 KB; 4 MB cobre um PC cheio com folga e ainda fica
 	// abaixo do LOG_BODY_HARD_CAP, que evita bufferizar isso no log de acesso.
-	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
+	const limite = 4 << 20
+	r.Body = http.MaxBytesReader(w, r.Body, limite)
 	var in struct {
 		DeviceID     string       `json:"deviceId"`
 		DeviceSecret string       `json:"deviceSecret"`
 		Programs     []LabProgram `json:"programs"`
 	}
-	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.DeviceID) {
+	// decodeJSONLimit: o decodeJSON embute 1 MB, que prevaleceria sobre os 4 MB
+	// acima e recusaria justamente o PC com muitos programas — o caso que este
+	// orçamento existe pra cobrir.
+	if err := decodeJSONLimit(r, &in, limite); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido ou grande demais"))
+		return
+	}
+	if !uuidRe.MatchString(in.DeviceID) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "deviceId inválido"))
 		return
 	}
@@ -57,13 +65,20 @@ func (s *Server) handleLabDeviceInventory(w http.ResponseWriter, r *http.Request
 // Segundo passo da coleta: só as imagens que vieram em missingIcons. É o que
 // evita reenviar ~200 KB de ícone a cada PC e a cada coleta.
 func (s *Server) handleLabDeviceIcons(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
+	// 200 ícones de até 32 KB não cabem no 1 MB embutido do decodeJSON — ver o
+	// mesmo ajuste no inventário acima.
+	const limite = 8 << 20
+	r.Body = http.MaxBytesReader(w, r.Body, limite)
 	var in struct {
 		DeviceID     string          `json:"deviceId"`
 		DeviceSecret string          `json:"deviceSecret"`
 		Icons        []LabIconUpload `json:"icons"`
 	}
-	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.DeviceID) {
+	if err := decodeJSONLimit(r, &in, limite); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido ou grande demais"))
+		return
+	}
+	if !uuidRe.MatchString(in.DeviceID) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "deviceId inválido"))
 		return
 	}

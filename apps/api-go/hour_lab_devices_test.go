@@ -8,10 +8,14 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// daquiA10min é a validade futura que um pareamento por QR deixa gravada.
+var daquiA10min = time.Now().Add(10 * time.Minute)
 
 // fakeLabDeviceDB simula UMA linha de hour_lab_devices com a semântica real do
 // Postgres para os dois comandos do heartbeat: o INSERT ... ON CONFLICT DO UPDATE
@@ -20,22 +24,27 @@ import (
 // exatamente-uma-vez sem um Postgres real — o harness deste pacote roda com
 // s.db == nil (ver nota em handlers_social_test.go).
 type fakeLabDeviceDB struct {
-	exists              bool
-	name                *string
-	unpairRequested     bool
-	messageID           *string
-	messageText         *string
-	pendingPairToken    *string
-	screenshotRequested bool
-	secretHash          *string
-	migrationBlocked    bool
-	sshPublicKey        *string
-	diagnosticNote      *string
-	hostname            *string
-	cpuPercent          *float64
-	ramPercent          *float64
-	gpuPercent          *float64
-	gpuName             *string
+	exists           bool
+	name             *string
+	unpairRequested  bool
+	messageID        *string
+	messageText      *string
+	pendingPairToken *string
+	// pendingPairTokenExpiresAt modela o CASE do RETURNING real. Sem isso o
+	// fake entregava o token SEMPRE, e um teste verde escondeu por meses o bug
+	// de o pareamento por QR nunca funcionar em produção: a coluna nunca era
+	// gravada, e em SQL `NULL > now()` é NULL, então o token nunca saía.
+	pendingPairTokenExpiresAt *time.Time
+	screenshotRequested       bool
+	secretHash                *string
+	migrationBlocked          bool
+	sshPublicKey              *string
+	diagnosticNote            *string
+	hostname                  *string
+	cpuPercent                *float64
+	ramPercent                *float64
+	gpuPercent                *float64
+	gpuName                   *string
 	// metricsBumps conta quantas vezes metrics_at avançou — é o que prova que
 	// um heartbeat sem métrica não finge leitura nova.
 	metricsBumps int
@@ -73,7 +82,12 @@ func (r fakeLabDeviceRow) Scan(dest ...any) error {
 	*(dest[1].(*bool)) = r.db.unpairRequested
 	*(dest[2].(**string)) = r.db.messageID
 	*(dest[3].(**string)) = r.db.messageText
-	*(dest[4].(**string)) = r.db.pendingPairToken
+	// Mesmo CASE do SQL: token só sai se a validade existir E for futura.
+	if r.db.pendingPairTokenExpiresAt != nil && r.db.pendingPairTokenExpiresAt.After(time.Now()) {
+		*(dest[4].(**string)) = r.db.pendingPairToken
+	} else {
+		*(dest[4].(**string)) = nil
+	}
 	*(dest[5].(*bool)) = r.db.screenshotRequested
 	return nil
 }
@@ -167,11 +181,12 @@ func ptrTo(s string) *string { return &s }
 func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 	const segredo = "segredo-do-pc"
 	fake := &fakeLabDeviceDB{
-		exists:           true,
-		name:             ptrTo("PC-01"),
-		unpairRequested:  true,
-		pendingPairToken: ptrTo("tok-secreto"),
-		secretHash:       ptrTo(sha256Hex(segredo)),
+		exists:                    true,
+		name:                      ptrTo("PC-01"),
+		unpairRequested:           true,
+		pendingPairToken:          ptrTo("tok-secreto"),
+		pendingPairTokenExpiresAt: &daquiA10min,
+		secretHash:                ptrTo(sha256Hex(segredo)),
 	}
 	ctx := context.Background()
 
@@ -334,10 +349,11 @@ func TestHeartbeatEmiteSegredoUmaVez(t *testing.T) {
 // receber o token de pareamento em texto puro.
 func TestHeartbeatSemSegredoNaoVazaPairToken(t *testing.T) {
 	fake := &fakeLabDeviceDB{
-		exists:           true,
-		name:             ptrTo("PC-01"),
-		pendingPairToken: ptrTo("tok-secreto"),
-		secretHash:       ptrTo(sha256Hex("segredo-do-pc")),
+		exists:                    true,
+		name:                      ptrTo("PC-01"),
+		pendingPairToken:          ptrTo("tok-secreto"),
+		pendingPairTokenExpiresAt: &daquiA10min,
+		secretHash:                ptrTo(sha256Hex("segredo-do-pc")),
 	}
 	ctx := context.Background()
 
@@ -363,9 +379,10 @@ func TestHeartbeatSemSegredoNaoVazaPairToken(t *testing.T) {
 // pareamento nesse mesmo heartbeat.
 func TestHeartbeatAdocaoNaoEntregaPairToken(t *testing.T) {
 	fake := &fakeLabDeviceDB{
-		exists:           true,
-		name:             ptrTo("PC-legado"),
-		pendingPairToken: ptrTo("tok-secreto"),
+		exists:                    true,
+		name:                      ptrTo("PC-legado"),
+		pendingPairToken:          ptrTo("tok-secreto"),
+		pendingPairTokenExpiresAt: &daquiA10min,
 	}
 	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: "", IP: "1.2.3.4", AppVersion: "1.0.0"})
 	if err != nil {
@@ -642,5 +659,65 @@ func TestValidPercentDescartaForaDaFaixa(t *testing.T) {
 		if (got != nil) != c.quer {
 			t.Errorf("%s: aceito=%v, quer %v", c.nome, got != nil, c.quer)
 		}
+	}
+}
+
+// ── pareamento por QR: a validade do token ───────────────────────────────────
+
+// O RETURNING do heartbeat só entrega o token quando
+// `pending_pair_token_expires_at > now()`. Em SQL, `NULL > now()` é NULL — ou
+// seja, deixar a coluna nula não "desliga a expiração", desliga a ENTREGA.
+// Durante meses o UPDATE do pareamento gravava só o token, e o PC nunca o
+// recebia: ficava na tela de pareamento com a sessão de horas já aberta e sem
+// dono. Este teste é a guarda estática contra isso voltar.
+func TestPareamentoGravaValidadeJuntoComOToken(t *testing.T) {
+	if !strings.Contains(labDevicePairTokenSQL, "pending_pair_token_expires_at") {
+		t.Fatal("o UPDATE do pareamento precisa gravar pending_pair_token_expires_at; sem isso o token nunca é entregue")
+	}
+	if !strings.Contains(labDevicePairTokenSQL, "pending_pair_token =") {
+		t.Fatal("o UPDATE do pareamento precisa gravar o próprio token")
+	}
+}
+
+// E a contraparte de comportamento: token sem validade não sai no heartbeat.
+func TestHeartbeatNaoEntregaTokenSemValidade(t *testing.T) {
+	const segredo = "segredo-do-pc"
+	fake := &fakeLabDeviceDB{
+		exists:           true,
+		pendingPairToken: ptrTo("tok-sem-validade"),
+		// pendingPairTokenExpiresAt deixado nil de propósito: é o estado que o
+		// código quebrado produzia.
+		secretHash: ptrTo(sha256Hex(segredo)),
+	}
+	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, labHeartbeat{
+		DeviceUUID: "dev-uuid", DeviceSecret: segredo, IP: "1.2.3.4", AppVersion: "1.0.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PairToken != nil {
+		t.Errorf("token sem validade não pode ser entregue, veio %q", *res.PairToken)
+	}
+}
+
+// Token já vencido também não sai — a janela existe pra um pareamento nunca
+// entregue não ressuscitar uma sessão velha horas depois.
+func TestHeartbeatNaoEntregaTokenVencido(t *testing.T) {
+	const segredo = "segredo-do-pc"
+	vencido := time.Now().Add(-time.Minute)
+	fake := &fakeLabDeviceDB{
+		exists:                    true,
+		pendingPairToken:          ptrTo("tok-vencido"),
+		pendingPairTokenExpiresAt: &vencido,
+		secretHash:                ptrTo(sha256Hex(segredo)),
+	}
+	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, labHeartbeat{
+		DeviceUUID: "dev-uuid", DeviceSecret: segredo, IP: "1.2.3.4", AppVersion: "1.0.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PairToken != nil {
+		t.Errorf("token vencido não pode ser entregue, veio %q", *res.PairToken)
 	}
 }

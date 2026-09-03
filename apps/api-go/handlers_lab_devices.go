@@ -32,7 +32,12 @@ var sshPublicKeyRe = regexp.MustCompile(`^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(
 // token é o mesmo token de sessão de horas que o app já guarda pareado (se
 // houver); resolve pra current_session_id só se ainda for um token válido.
 func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	// 32 KB, não 4 KB: sshPublicKey (2 KB) e diagnosticNote (2 KB) sozinhos já
+	// estouravam o teto antigo, e openApps aceita 100 nomes de até 100 runas
+	// (~10 KB). Com 4 KB, um PC com muitas janelas abertas levava 400 em TODO
+	// heartbeat, sumia do dashboard e parava de receber comando — e a mensagem
+	// de erro culpava o deviceId.
+	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
 	var in struct {
 		DeviceID     string  `json:"deviceId"`
 		DeviceSecret string  `json:"deviceSecret"`
@@ -71,7 +76,14 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		// Modelo da GPU, pra distinguir os rigs ("NVIDIA GeForce RTX 5060 Ti").
 		GPUName string `json:"gpuName"`
 	}
-	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.DeviceID) {
+	// Erro de decode separado do deviceId inválido: juntar os dois fazia um
+	// corpo grande demais ser reportado como "deviceId inválido", mandando quem
+	// investiga procurar no lugar errado.
+	if err := decodeJSONLimit(r, &in, 32<<10); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido ou grande demais"))
+		return
+	}
+	if !uuidRe.MatchString(in.DeviceID) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "deviceId inválido"))
 		return
 	}

@@ -73,7 +73,8 @@ func (s *Server) handleDeleteLabDeviceScreenshot(w http.ResponseWriter, r *http.
 // screenshotPendingWindow): a rota é pública, então sem isso um PC poderia
 // mandar imagem de tela quando quisesse.
 func (s *Server) handleLabDeviceScreenshot(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxScreenshotBytes+(1<<20))
+	const limite = maxScreenshotBytes + (1 << 20)
+	r.Body = http.MaxBytesReader(w, r.Body, limite)
 	var in struct {
 		DeviceID     string `json:"deviceId"`
 		DeviceSecret string `json:"deviceSecret"`
@@ -81,7 +82,15 @@ func (s *Server) handleLabDeviceScreenshot(w http.ResponseWriter, r *http.Reques
 		Width        int    `json:"width"`
 		Height       int    `json:"height"`
 	}
-	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.DeviceID) {
+	// decodeJSONLimit, não decodeJSON: o decodeJSON embute um teto de 1 MB que
+	// PREVALECE sobre o MaxBytesReader de fora (o menor sempre ganha), e uma
+	// tela 1440p vira ~1,3 MB em base64. Com o teto de 1 MB o upload morria e
+	// o admin via "deviceId inválido" — erro que aponta pro campo errado.
+	if err := decodeJSONLimit(r, &in, limite); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido ou grande demais"))
+		return
+	}
+	if !uuidRe.MatchString(in.DeviceID) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "deviceId inválido"))
 		return
 	}
