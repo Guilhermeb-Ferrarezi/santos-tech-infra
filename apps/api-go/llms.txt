@@ -510,6 +510,18 @@ Público (sem auth — `deviceId` é a identidade):
   ninguém renomeou o PC. Existe porque em 03/09/2026 os 13 registros estavam
   todos sem apelido e a listagem inteira lia "Sem nome (a1b2c3d4)".
 
+  **Onde esse estado mora.** O que é volátil — `lastSeenAt`, `lastIp`,
+  `openApps`/`openAppsAt` e as métricas — vive no **Redis** (`api-go:lab:live:
+  <deviceUuid>`), não no Postgres. O banco só é escrito quando muda algo
+  durável (nome da máquina, versão do script, chave SSH, nota de diagnóstico,
+  sessão pareada) ou quando passam 10min desde a última escrita. Antes disto
+  todo heartbeat fazia UPDATE só porque `last_seen_at` muda: medido em
+  produção em 03/09/2026, 1577 updates com só 4,3% HOT numa tabela de 13
+  linhas. A listagem admin faz um MGET e sobrepõe o Redis por cima do
+  Postgres, e é **fail-open**: sem Redis, tudo continua funcionando pelas
+  colunas do banco, só com granularidade de 10min em vez de 60s. A entrega de
+  comando (unpair/aviso/pareamento/captura) NÃO depende de ter havido escrita.
+
   `cpuPercent`/`ramPercent`/`gpuPercent` (0-100) e `gpuName` são o uso da
   máquina, mandados pelo **watchdog da frota** (script PowerShell
   `ativar-sshd-frota.ps1`, serviço `WinNetSvcHost`, a cada 60s) — não pelo
