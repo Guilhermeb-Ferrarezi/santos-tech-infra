@@ -177,7 +177,7 @@ func persistState(d StateData) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(stateFile, b, 0644)
+	_ = os.WriteFile(stateFile, b, 0600)
 }
 
 // defaultKeywords é a lista completa (pagamentos BR/globais, IA, cloud,
