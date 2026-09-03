@@ -48,11 +48,17 @@ type fakeLabDeviceDB struct {
 	// metricsBumps conta quantas vezes metrics_at avançou — é o que prova que
 	// um heartbeat sem métrica não finge leitura nova.
 	metricsBumps int
+	// Campos duráveis, lidos antes de decidir se vale escrever. pisoVencido
+	// simula o "last_seen_at mais velho que o piso de frescor".
+	appVersion       *string
+	currentSessionID *string
+	pisoVencido      bool
 
 	upserts    int
 	clears     int
 	mints      int
 	migrations int
+	leituras   int
 }
 
 type fakeLabDeviceRow struct {
@@ -61,13 +67,15 @@ type fakeLabDeviceRow struct {
 	err  error
 }
 
-// fakeLabDeviceScan é a forma da linha devolvida por cada comando: 1 coluna
-// (lookup/mint do segredo) ou 5 (upsert do heartbeat).
+// fakeLabDeviceScan é a forma da linha devolvida por cada comando: o
+// lookup/mint do segredo (1 coluna), o RETURNING do upsert (6) e a leitura que
+// decide se vale escrever (12).
 type fakeLabDeviceScan int
 
 const (
 	scanSecret fakeLabDeviceScan = iota
 	scanHeartbeat
+	scanLeitura
 )
 
 func (r fakeLabDeviceRow) Scan(dest ...any) error {
@@ -89,11 +97,34 @@ func (r fakeLabDeviceRow) Scan(dest ...any) error {
 		*(dest[4].(**string)) = nil
 	}
 	*(dest[5].(*bool)) = r.db.screenshotRequested
+	if r.kind == scanLeitura {
+		// coalesce(...,'') no SQL real: NULL vira string vazia.
+		*(dest[6].(*string)) = deref(r.db.appVersion)
+		*(dest[7].(*string)) = deref(r.db.hostname)
+		*(dest[8].(*string)) = deref(r.db.sshPublicKey)
+		*(dest[9].(*string)) = deref(r.db.diagnosticNote)
+		*(dest[10].(*string)) = deref(r.db.currentSessionID)
+		*(dest[11].(*bool)) = r.db.pisoVencido
+	}
 	return nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func (f *fakeLabDeviceDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
+	case strings.Contains(sql, "piso_vencido"):
+		if !f.exists {
+			return fakeLabDeviceRow{err: pgx.ErrNoRows}
+		}
+		f.leituras++
+		return fakeLabDeviceRow{db: f, kind: scanLeitura}
+
 	case strings.Contains(sql, "FOR UPDATE"):
 		if !f.exists {
 			return fakeLabDeviceRow{err: pgx.ErrNoRows}
@@ -720,4 +751,210 @@ func TestHeartbeatNaoEntregaTokenVencido(t *testing.T) {
 	if res.PairToken != nil {
 		t.Errorf("token vencido não pode ser entregue, veio %q", *res.PairToken)
 	}
+}
+
+// ── escrita condicional: o volátil vai pro Redis, o Postgres só quando muda ──
+
+func hbPadrao(secret string) labHeartbeat {
+	return labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: secret, IP: "1.2.3.4", AppVersion: "wnsh-watchdog"}
+}
+
+// O ponto da mudança: heartbeat que não traz nada durável novo NÃO escreve.
+// Antes, todos os 1440 heartbeats diários por PC faziam UPDATE só porque
+// last_seen_at muda.
+func TestHeartbeatSemMudancaNaoEscreveNoPostgres(t *testing.T) {
+	const segredo = "segredo-do-pc"
+	fake := &fakeLabDeviceDB{
+		exists: true, name: ptrTo("pc-meio-01"),
+		secretHash:  ptrTo(sha256Hex(segredo)),
+		appVersion:  ptrTo("wnsh-watchdog"),
+		hostname:    ptrTo("PC-MEIO-01"),
+		pisoVencido: false,
+	}
+	hb := hbPadrao(segredo)
+	hb.Hostname = "PC-MEIO-01"
+	// Métrica nova NÃO é motivo de escrita: ela vive no Redis.
+	hb.CPUPercent = floatTo(42)
+	hb.RAMPercent = floatTo(61)
+
+	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, hb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.upserts != 0 {
+		t.Errorf("%d escritas no Postgres sem mudança durável, quer 0", fake.upserts)
+	}
+	if fake.leituras != 1 {
+		t.Errorf("%d leituras, quer 1", fake.leituras)
+	}
+	if res.Name == nil || *res.Name != "pc-meio-01" {
+		t.Errorf("o nome tem que vir mesmo sem escrever, veio %v", res.Name)
+	}
+}
+
+// Quando vence o piso de frescor, escreve — é o que impede o Postgres de ficar
+// arbitrariamente velho se o Redis sumir.
+func TestHeartbeatEscreveQuandoPisoVence(t *testing.T) {
+	const segredo = "segredo-do-pc"
+	fake := &fakeLabDeviceDB{
+		exists: true, secretHash: ptrTo(sha256Hex(segredo)),
+		appVersion: ptrTo("wnsh-watchdog"), pisoVencido: true,
+	}
+	if _, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, hbPadrao(segredo)); err != nil {
+		t.Fatal(err)
+	}
+	if fake.upserts != 1 {
+		t.Errorf("%d escritas com piso vencido, quer 1", fake.upserts)
+	}
+}
+
+// Campo durável que muda tem que escrever na hora, sem esperar o piso.
+func TestHeartbeatEscreveQuandoCampoDuravelMuda(t *testing.T) {
+	const segredo = "segredo-do-pc"
+	casos := []struct {
+		nome  string
+		ajuda func(*labHeartbeat)
+	}{
+		{"versão do script", func(h *labHeartbeat) { h.AppVersion = "ativar-tailscale-ssh-frota-2.9" }},
+		{"nome da máquina", func(h *labHeartbeat) { h.Hostname = "PC-RENOMEADO" }},
+		{"chave SSH", func(h *labHeartbeat) { h.SSHPublicKey = "ssh-ed25519 AAAA nova" }},
+		{"nota de diagnóstico", func(h *labHeartbeat) { h.DiagnosticNote = "sshd=Stopped" }},
+		{"sessão pareada", func(h *labHeartbeat) { h.SessionID = ptrTo("sessao-nova") }},
+	}
+	for _, c := range casos {
+		fake := &fakeLabDeviceDB{
+			exists: true, secretHash: ptrTo(sha256Hex(segredo)),
+			appVersion: ptrTo("wnsh-watchdog"), hostname: ptrTo("PC-MEIO-01"),
+		}
+		hb := hbPadrao(segredo)
+		hb.Hostname = "PC-MEIO-01"
+		c.ajuda(&hb)
+		if _, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, hb); err != nil {
+			t.Fatalf("%s: %v", c.nome, err)
+		}
+		if fake.upserts != 1 {
+			t.Errorf("%s mudou e gerou %d escritas, quer 1", c.nome, fake.upserts)
+		}
+	}
+}
+
+// A entrega de comando NÃO pode depender de ter havido escrita: um PC parado,
+// sem nada durável mudando, precisa receber unpair/aviso/pareamento igual.
+func TestComandoEhEntregueMesmoSemEscrita(t *testing.T) {
+	const segredo = "segredo-do-pc"
+	fake := &fakeLabDeviceDB{
+		exists: true, secretHash: ptrTo(sha256Hex(segredo)),
+		appVersion:       ptrTo("wnsh-watchdog"),
+		unpairRequested:  true,
+		pendingPairToken: ptrTo("tok-secreto"), pendingPairTokenExpiresAt: &daquiA10min,
+	}
+	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, hbPadrao(segredo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.upserts != 0 {
+		t.Errorf("não devia escrever: %d escritas", fake.upserts)
+	}
+	if !res.UnpairRequested {
+		t.Error("unpair tem que ser entregue mesmo sem escrita")
+	}
+	if res.PairToken == nil || *res.PairToken != "tok-secreto" {
+		t.Errorf("pairToken tem que ser entregue mesmo sem escrita, veio %v", res.PairToken)
+	}
+	if fake.clears != 1 {
+		t.Errorf("%d limpezas, quer 1 — senão o comando é reentregue pra sempre", fake.clears)
+	}
+}
+
+// Guarda estática: a leitura tem que devolver os comandos com as MESMAS
+// expressões do RETURNING do upsert. Se uma das duas mudar sozinha, o PC passa
+// a receber comando diferente conforme tenha havido escrita ou não.
+func TestLeituraDoHeartbeatEspelhaOReturningDoUpsert(t *testing.T) {
+	for _, expr := range []string{
+		"pending_pair_token_expires_at > now()",
+		"screenshot_requested_at IS NOT NULL",
+		"unpair_requested",
+		"message_id::text",
+	} {
+		if !strings.Contains(labDeviceHeartbeatReadSQL, expr) {
+			t.Errorf("a leitura do heartbeat perdeu %q — divergiu do RETURNING do upsert", expr)
+		}
+		if !strings.Contains(labDeviceHeartbeatUpsertSQL, expr) {
+			t.Errorf("o RETURNING do upsert perdeu %q — divergiu da leitura", expr)
+		}
+	}
+}
+
+// ── estado ao vivo (Redis) ───────────────────────────────────────────────────
+
+func TestOverlayNaoApagaOQueORedisNaoTem(t *testing.T) {
+	antes := time.Now().Add(-time.Hour)
+	d := LabDevice{
+		LastSeenAt: &antes,
+		CPUPercent: floatTo(42),
+		GPUName:    ptrTo("NVIDIA GeForce RTX 5060 Ti"),
+		OpenApps:   []string{"Blender"},
+		OpenAppsAt: &antes,
+	}
+	agora := time.Now()
+	// Foto só com o heartbeat: sem métrica, sem lista de apps.
+	labLiveState{LastSeenAt: &agora, LastIP: "100.64.1.2"}.overlay(&d)
+
+	if d.LastSeenAt == nil || !d.LastSeenAt.Equal(agora) {
+		t.Error("lastSeenAt tinha que ser atualizado")
+	}
+	if d.LastIP == nil || *d.LastIP != "100.64.1.2" {
+		t.Errorf("lastIp = %v", d.LastIP)
+	}
+	if d.CPUPercent == nil || *d.CPUPercent != 42 {
+		t.Error("métrica antiga não pode ser apagada por uma foto sem métrica")
+	}
+	if d.GPUName == nil {
+		t.Error("nome da GPU não pode ser apagado")
+	}
+	if len(d.OpenApps) != 1 {
+		t.Errorf("lista de apps não pode ser apagada por foto sem lista, veio %v", d.OpenApps)
+	}
+}
+
+// last_seen mais VELHO no Redis que no Postgres não pode fazer o PC parecer
+// mais offline do que está (acontece logo depois de uma escrita pelo piso).
+func TestOverlayNaoRetrocedeOUltimoContato(t *testing.T) {
+	agora := time.Now()
+	antes := agora.Add(-time.Hour)
+	d := LabDevice{LastSeenAt: &agora}
+	labLiveState{LastSeenAt: &antes}.overlay(&d)
+	if !d.LastSeenAt.Equal(agora) {
+		t.Error("o overlay retrocedeu o último contato")
+	}
+}
+
+func TestLiveStateDistingueListaAusenteDeVazia(t *testing.T) {
+	agora := time.Now()
+
+	semLista := liveStateFrom(labHeartbeat{IP: "1.2.3.4"}, agora)
+	if semLista.OpenAppsAt != nil {
+		t.Error("app que não mandou lista não pode carimbar openAppsAt (apagaria a anterior)")
+	}
+
+	vazia := liveStateFrom(labHeartbeat{IP: "1.2.3.4", OpenApps: []byte(`[]`)}, agora)
+	if vazia.OpenAppsAt == nil {
+		t.Error("lista vazia explícita significa 'nada aberto' e precisa carimbar")
+	}
+
+	comMetrica := liveStateFrom(labHeartbeat{CPUPercent: floatTo(10)}, agora)
+	if comMetrica.MetricsAt == nil {
+		t.Error("veio métrica, metricsAt tem que ser carimbado")
+	}
+	if liveStateFrom(labHeartbeat{}, agora).MetricsAt != nil {
+		t.Error("sem métrica, metricsAt não pode avançar")
+	}
+}
+
+// Sem Redis configurado (s.rdb nil) nada pode explodir — fail-open.
+func TestEstadoAoVivoSemRedisNaoQuebra(t *testing.T) {
+	s := &Server{}
+	devices := []LabDevice{{DeviceUUID: "dev-uuid"}}
+	s.applyLabLiveState(t.Context(), devices)
+	s.saveLabLiveState(t.Context(), "dev-uuid", labLiveState{})
 }

@@ -180,6 +180,32 @@ const labDevicePairTokenSQL = `
 	SET pending_pair_token = $2, pending_pair_token_expires_at = now() + make_interval(secs => $3)
 	WHERE device_uuid = $1`
 
+// labDeviceHeartbeatReadSQL lê, numa tacada, o que o heartbeat precisa
+// DEVOLVER (os comandos pendentes) e o que decide se vale a pena ESCREVER (os
+// campos duráveis atuais e se o piso de frescor venceu).
+//
+// As expressões dos comandos são idênticas às do RETURNING do upsert de
+// propósito: como o SET do upsert não toca nas colunas de comando, ler antes
+// dá exatamente o mesmo valor que o RETURNING daria. Ver
+// TestLeituraDoHeartbeatEspelhaOReturningDoUpsert.
+const labDeviceHeartbeatReadSQL = `
+	SELECT name, unpair_requested, message_id::text, message_text,
+		CASE WHEN pending_pair_token_expires_at > now() THEN pending_pair_token ELSE NULL END,
+		screenshot_requested_at IS NOT NULL,
+		coalesce(app_version, ''), coalesce(hostname, ''), coalesce(ssh_public_key, ''),
+		coalesce(diagnostic_note, ''), coalesce(current_session_id::text, ''),
+		(last_seen_at IS NULL OR last_seen_at < now() - make_interval(secs => $2)) AS piso_vencido
+	FROM hour_lab_devices WHERE device_uuid = $1`
+
+// sessionIDText normaliza o id de sessão pra comparar com o que veio do banco
+// (que usa string vazia no lugar de NULL, via coalesce).
+func sessionIDText(id *string) string {
+	if id == nil {
+		return ""
+	}
+	return *id
+}
+
 const labDeviceHeartbeatUpsertSQL = `
 	INSERT INTO hour_lab_devices (device_uuid, last_seen_at, last_ip, app_version, current_session_id,
 		open_apps, open_apps_at, ssh_public_key, diagnostic_note, hostname,
@@ -319,6 +345,10 @@ func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, hb labHeartbeat) 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
+	// Depois do commit, nunca antes: o estado ao vivo não pode anunciar um
+	// heartbeat que a transação acabou de desfazer. Best-effort por design —
+	// ver hour_lab_live_state.go.
+	s.saveLabLiveState(ctx, hb.DeviceUUID, liveStateFrom(hb, time.Now().UTC()))
 	return res, nil
 }
 
@@ -374,13 +404,46 @@ func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, hb lab
 		return nil, err
 	}
 
+	// Lê antes de escrever. O que é volátil (visto por último, IP, métricas,
+	// apps abertos) vai pro Redis a cada heartbeat; o Postgres só é tocado
+	// quando muda algo DURÁVEL ou quando vence o piso de frescor. Antes disto
+	// todo heartbeat fazia um UPDATE — 1440 por dia por PC, com 96% deles
+	// reescrevendo índice à toa (medido em produção, ver hour_lab_live_state.go).
 	var res LabDeviceHeartbeatResult
-	if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, hb.DeviceUUID, hb.IP, hb.AppVersion, hb.SessionID,
-		hb.OpenApps, hb.SSHPublicKey, hb.DiagnosticNote, hb.Hostname,
-		hb.CPUPercent, hb.RAMPercent, hb.GPUPercent, hb.GPUName, hb.HasMetrics()).
+	var appVersionAtual, hostnameAtual, sshAtual, notaAtual, sessaoAtual string
+	precisaEscrever := false
+	err = tx.QueryRow(ctx, labDeviceHeartbeatReadSQL, hb.DeviceUUID, labLiveFloor.Seconds()).
 		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken,
-			&res.ScreenshotRequested); err != nil {
+			&res.ScreenshotRequested, &appVersionAtual, &hostnameAtual, &sshAtual, &notaAtual,
+			&sessaoAtual, &precisaEscrever)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// Linha ainda não existe: o upsert abaixo é quem a cria.
+		precisaEscrever = true
+	case err != nil:
 		return nil, err
+	default:
+		// Campo "grava a última, vazio não apaga": só conta como mudança quando
+		// veio valor E ele difere. Sem isso, um heartbeat sem chave SSH (o caso
+		// normal) pareceria estar apagando a chave e forçaria escrita sempre.
+		precisaEscrever = precisaEscrever ||
+			hb.AppVersion != appVersionAtual ||
+			(hb.Hostname != "" && hb.Hostname != hostnameAtual) ||
+			(hb.SSHPublicKey != "" && hb.SSHPublicKey != sshAtual) ||
+			(hb.DiagnosticNote != "" && hb.DiagnosticNote != notaAtual) ||
+			sessionIDText(hb.SessionID) != sessaoAtual
+	}
+
+	if precisaEscrever {
+		// O upsert é o MESMO de sempre, com a mesma semântica de "ausente
+		// mantém o anterior" — só deixou de rodar a cada 60s.
+		if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, hb.DeviceUUID, hb.IP, hb.AppVersion, hb.SessionID,
+			hb.OpenApps, hb.SSHPublicKey, hb.DiagnosticNote, hb.Hostname,
+			hb.CPUPercent, hb.RAMPercent, hb.GPUPercent, hb.GPUName, hb.HasMetrics()).
+			Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken,
+				&res.ScreenshotRequested); err != nil {
+			return nil, err
+		}
 	}
 	res.PreviousDeviceResolved = migrado
 	if res.UnpairRequested || res.PairToken != nil || res.ScreenshotRequested {
@@ -496,6 +559,10 @@ func (s *Server) listLabDevices(ctx context.Context, limit, offset int) ([]LabDe
 	// Depois de fechar o cursor: resolveOpenAppIcons faz outra query no mesmo
 	// pool, e com o cursor aberto ela precisaria de uma segunda conexão à toa.
 	rows.Close()
+	// O Redis tem o estado mais fresco (o Postgres só é escrito a cada
+	// labLiveFloor); sobrepor ANTES de resolver os ícones, porque a lista de
+	// apps abertos é justamente uma das coisas que vêm de lá.
+	s.applyLabLiveState(ctx, out)
 	if err := s.resolveOpenAppIcons(ctx, out); err != nil {
 		return nil, 0, err
 	}
@@ -520,8 +587,10 @@ func (s *Server) renameLabDevice(ctx context.Context, id, name string) (*LabDevi
 		return d, err
 	}
 	// Mesmo tratamento da listagem: o dashboard substitui o item da lista pelo
-	// que volta daqui, e sem isto os ícones sumiriam do card até o próximo poll.
+	// que volta daqui, e sem isto os ícones e o estado ao vivo sumiriam do card
+	// até o próximo poll.
 	one := []LabDevice{*d}
+	s.applyLabLiveState(ctx, one)
 	if err := s.resolveOpenAppIcons(ctx, one); err != nil {
 		return nil, err
 	}
