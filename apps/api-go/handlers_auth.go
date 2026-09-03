@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -108,6 +109,21 @@ const (
 	loginFailWindow = 15 * time.Minute
 )
 
+// Lockout agregado SÓ por conta (sem o IP na chave), teto mais folgado que
+// maxLoginFails: existe para o caso em que o IP do atacante é forjável (ver
+// achado #2/#7 da auditoria de 2026-09 — clientIP() confia no peer do Traefik,
+// que hoje aceita tráfego que não passou pela Cloudflare). Enquanto isso não
+// for corrigido na borda, rotacionar CF-Connecting-IP abriria um balde novo do
+// contador por (IP+conta) a cada tentativa; este contador não depende do IP,
+// então continua travando o brute-force numa conta específica mesmo assim.
+// Teto mais alto que o por-IP para não punir cedo demais o caso normal
+// (várias contas erradas vindas de fato de IPs diferentes e legítimos, ex.:
+// vários alunos no mesmo laboratório).
+const (
+	maxLoginFailsAccount   = 30
+	loginFailAccountWindow = 15 * time.Minute
+)
+
 // dummyPasswordHash é computado uma vez no boot para que handleLogin sempre
 // execute verifyPassword (argon2id, ~300ms) mesmo quando o identificador não
 // corresponde a nenhuma conta — impede enumeração de usuários por timing.
@@ -162,6 +178,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
 		return
 	}
+	acctLockKey := "api-go:login_fail_acct:" + strings.ToLower(ident)
+	acctLockN, acctLockErr := s.rdb.Get(r.Context(), acctLockKey).Int()
+	if acctLockErr != nil && !errors.Is(acctLockErr, redis.Nil) {
+		slog.Error("login: erro Redis ao verificar lockout por conta", "key", acctLockKey, "err", acctLockErr)
+		writeErr(w, appErr(http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "Serviço temporariamente indisponível"))
+		return
+	}
+	if acctLockN >= maxLoginFailsAccount {
+		writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
+		return
+	}
 	u, err := s.userByIdentifier(r.Context(), ident)
 	if err != nil {
 		writeErr(w, err)
@@ -187,13 +214,22 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if err := s.rdb.ExpireNX(r.Context(), lockKey, loginFailWindow).Err(); err != nil {
 			slog.Warn("login_fail: ExpireNX falhou; contador de lockout pode não expirar", "key", lockKey, "err", err)
 		}
+		acctIncrCmd := s.rdb.Incr(r.Context(), acctLockKey)
+		if acctIncrCmd.Err() != nil {
+			slog.Warn("login_fail: Incr (conta) falhou; rejeitando (fail-closed)", "key", acctLockKey, "err", acctIncrCmd.Err())
+			writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno. Tente novamente."))
+			return
+		}
+		if err := s.rdb.ExpireNX(r.Context(), acctLockKey, loginFailAccountWindow).Err(); err != nil {
+			slog.Warn("login_fail: ExpireNX (conta) falhou; contador de lockout pode não expirar", "key", acctLockKey, "err", err)
+		}
 		// Verifica o valor APÓS o Incr atômico para fechar a janela TOCTOU: dois
 		// requests simultâneos podem ambos passar pelo Get pré-check (ambos veem
 		// n=9), mas o Incr é atômico — o primeiro chega a 10, o segundo a 11.
 		// Sem esta verificação, ambos retornariam INVALID_CREDENTIALS em vez de
 		// TOO_MANY_ATTEMPTS, permitindo N extra tentativas iguais ao número de
 		// goroutines concorrentes na janela argon2id (~300 ms).
-		if incrCmd.Val() > maxLoginFails {
+		if incrCmd.Val() > maxLoginFails || acctIncrCmd.Val() > maxLoginFailsAccount {
 			writeErr(w, appErr(http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde."))
 			return
 		}
@@ -202,6 +238,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.rdb.Del(r.Context(), lockKey).Err(); err != nil {
 		slog.Warn("login: falha ao limpar contador de lockout no Redis", "key", lockKey, "err", err)
+	}
+	if err := s.rdb.Del(r.Context(), acctLockKey).Err(); err != nil {
+		slog.Warn("login: falha ao limpar contador de lockout por conta no Redis", "key", acctLockKey, "err", err)
 	}
 	if u.SuspendedAt != nil {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta suspensa"))
@@ -359,7 +398,34 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sid, _, expires, err := s.sessionByHash(r.Context(), hashRefreshToken(raw))
-	if err != nil || expires.Before(time.Now()) {
+	if errors.Is(err, pgx.ErrNoRows) {
+		// JWT de refresh criptograficamente válido (verifyToken já passou) mas sem
+		// sessão correspondente no banco: a sessão já foi encerrada normalmente
+		// (logout/reset de senha/suspensão) OU este é um refresh token JÁ
+		// ROTACIONADO sendo reusado — indício de roubo (alguém copiou o token antes
+		// da rotação e está tentando usá-lo depois que o dono renovou). Não dá pra
+		// distinguir os dois casos aqui com certeza, então tratamos como suspeito
+		// por precaução: revoga TODAS as sessões do usuário, não só esta. Um
+		// logout/reset legítimo já não tem sessões pra revogar (no-op na prática);
+		// só o caso de roubo real paga o preço de perder as outras sessões —
+		// aceitável frente ao risco de acesso persistente indefinido. IMPORTANTE:
+		// só entra aqui em ErrNoRows (linha realmente ausente) — um erro de banco
+		// genérico (conexão instável, timeout) cai no ramo abaixo e NÃO revoga
+		// nada, pra não derrubar sessões legítimas por uma falha transitória.
+		if delErr := s.deleteUserSessions(r.Context(), uid); delErr != nil {
+			slog.Error("refresh: falha ao revogar sessões após possível reuso de refresh token", "uid", uid, "err", delErr)
+		} else {
+			slog.Warn("refresh: refresh token sem sessão correspondente — sessões revogadas por precaução", "uid", uid)
+		}
+		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Sessão expirada"))
+		return
+	}
+	if err != nil {
+		slog.Error("refresh: erro ao consultar sessão", "err", err)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao renovar sessão"))
+		return
+	}
+	if expires.Before(time.Now()) {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Sessão expirada"))
 		return
 	}
