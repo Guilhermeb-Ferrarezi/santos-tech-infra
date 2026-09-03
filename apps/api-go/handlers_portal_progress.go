@@ -17,6 +17,10 @@ func (s *Server) handlePortalExerciseAnswers(w http.ResponseWriter, r *http.Requ
 		writeErr(w, err)
 		return
 	}
+	if err := s.portalCanAccessExercise(r.Context(), userIDFrom(r), exerciseID); err != nil {
+		writeErr(w, err)
+		return
+	}
 	p := portalPaginationFrom(r)
 	q := p.Query
 	f := portalAnswerFilter{Status: r.URL.Query().Get("status")}
@@ -42,6 +46,10 @@ func (s *Server) handlePortalExerciseAnswers(w http.ResponseWriter, r *http.Requ
 func (s *Server) handlePortalExerciseAnswerStudents(w http.ResponseWriter, r *http.Request) {
 	exerciseID, err := portalPathID(r, "exerciseId")
 	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalCanAccessExercise(r.Context(), userIDFrom(r), exerciseID); err != nil {
 		writeErr(w, err)
 		return
 	}

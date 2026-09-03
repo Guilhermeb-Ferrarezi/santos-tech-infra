@@ -245,6 +245,15 @@ func LoadConfig() Config {
 			"got", len(c.JWTRefreshSecret))
 		os.Exit(1)
 	}
+	// JWT_SECRET e JWT_REFRESH_SECRET iguais por erro de config fariam um
+	// refresh token (7 dias) validar como access token em qualquer token SEM o
+	// claim "typ" — só tokens antigos, emitidos antes da introdução desse claim
+	// (ver token.go), mas o boot é o lugar certo pra fechar essa classe de erro
+	// de vez, mesmo que o risco prático hoje seja residual.
+	if c.JWTSecret == c.JWTRefreshSecret {
+		slog.Error("JWT_SECRET e JWT_REFRESH_SECRET não podem ser iguais")
+		os.Exit(1)
+	}
 	return c
 }
 

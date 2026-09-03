@@ -256,8 +256,29 @@ func (s *Server) authGuard(next http.HandlerFunc) http.HandlerFunc {
 
 // adminGuard exige sessão válida E role de administrador. Reaproveita authGuard
 // para resolver o token e injetar o userID; depois carrega o usuário e checa o role.
+//
+// Nunca aceita um token do /oauth/token aqui, INDEPENDENTE de OAUTH_AUD_ENFORCE:
+// esse token sai com aud=<client_id> (ver oauthprovider.go) e um client OAuth
+// aprovado por um admin (ex.: um app terceiro) não deveria virar posse completa
+// de admin só porque a flag global ainda está desligada para não quebrar
+// consumidores não-admin. As rotas de admin são o pior caso de confused deputy
+// do achado #2 da auditoria de 2026-09 — por isso o corte aqui é sempre ativo,
+// mesmo que OAUTH_AUD_ENFORCE continue desligado nas demais rotas.
 func (s *Server) adminGuard(next http.HandlerFunc) http.HandlerFunc {
 	return s.authGuard(func(w http.ResponseWriter, r *http.Request) {
+		token := ""
+		if c, err := r.Cookie("access_token"); err == nil {
+			token = c.Value
+		}
+		if token == "" {
+			if after, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+				token = after
+			}
+		}
+		if token != "" && tokenAudience(token, s.cfg.JWTSecret) != "" {
+			writeErr(w, appErr(http.StatusForbidden, "FORBIDDEN", "Acesso restrito a administradores"))
+			return
+		}
 		u, err := s.cachedUserByID(r.Context(), userIDFrom(r))
 		if err != nil {
 			writeErr(w, err)

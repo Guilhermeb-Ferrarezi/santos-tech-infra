@@ -221,6 +221,12 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "SELF_ACTION", "você não pode suspender a própria conta"))
 		return
 	}
+	// Self-proteção: admin não pode alterar o próprio role (evita se rebaixar
+	// e, se for o único admin, travar o sistema sem ninguém com adminGuard).
+	if body.Role != nil && *body.Role != RoleAdmin && id == userIDFrom(r) {
+		writeErr(w, appErr(http.StatusBadRequest, "SELF_ACTION", "você não pode alterar o próprio papel"))
+		return
+	}
 	if body.Suspended != nil {
 		if err := s.setUserSuspended(r.Context(), id, *body.Suspended); err != nil {
 			writeErr(w, err)

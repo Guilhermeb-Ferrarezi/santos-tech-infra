@@ -5,9 +5,22 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+)
+
+// wsPromptMax/Window limitam quantos prompts um WS já aberto pode disparar — sem
+// isso, uma sessão de admin comprometida (JWT vazado, XSS) mandava prompts em
+// rajada indefinida pelo mesmo socket, cada um disparando um turno completo do
+// claude (custo de API + CPU), sem qualquer teto (achado da auditoria de 2026-09;
+// a criação de conversa já era limitada por s.rateLimit, mas o WS já conectado
+// não passava por nenhum controle). Generoso o bastante pra não atrapalhar uso
+// interativo normal.
+const (
+	wsPromptMax    = 30
+	wsPromptWindow = time.Minute
 )
 
 // wsInbound é a mensagem que o cliente envia pelo WebSocket.
@@ -85,6 +98,10 @@ func (s *Server) handleConversationWS(w http.ResponseWriter, r *http.Request) {
 		}
 		switch msg.Type {
 		case "prompt":
+			if !s.allow(ctx, "agent-go:rl:ws-prompt:"+conv.ID, wsPromptMax, wsPromptWindow) {
+				s.mgr.dispatch(conv.ID, turnEvent{Type: "error", Code: "TOO_MANY_REQUESTS", Message: "Muitos prompts em pouco tempo. Aguarde um instante."})
+				continue
+			}
 			fresh, err := s.conversationByID(ctx, id, uid)
 			if err != nil || fresh == nil {
 				s.mgr.dispatch(conv.ID, turnEvent{Type: "error", Code: "NOT_FOUND", Message: "Conversa não encontrada"})

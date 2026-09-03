@@ -181,6 +181,10 @@ func (s *Server) handlePortalSetStudentIndividual(w http.ResponseWriter, r *http
 		writeErr(w, err)
 		return
 	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), classID); err != nil {
+		writeErr(w, err)
+		return
+	}
 	studentID, err := portalPathID(r, "studentId")
 	if err != nil {
 		writeErr(w, err)
@@ -202,6 +206,10 @@ func (s *Server) handlePortalSetStudentIndividual(w http.ResponseWriter, r *http
 func (s *Server) handlePortalListClassTeachers(w http.ResponseWriter, r *http.Request) {
 	classID, err := portalPathID(r, "classId")
 	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), classID); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -258,6 +266,10 @@ func (s *Server) handlePortalRemoveClassTeacher(w http.ResponseWriter, r *http.R
 func (s *Server) handlePortalListClassSchedule(w http.ResponseWriter, r *http.Request) {
 	classID, err := portalPathID(r, "classId")
 	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), classID); err != nil {
 		writeErr(w, err)
 		return
 	}

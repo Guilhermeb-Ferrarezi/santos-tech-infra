@@ -9,7 +9,7 @@ RUN go mod download
 COPY apps/api-go/ ./
 RUN CGO_ENABLED=0 go build -trimpath -o /auth .
 
-FROM gcr.io/distroless/static-debian12
+FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /auth /auth
 EXPOSE 3000
 ENTRYPOINT ["/auth"]

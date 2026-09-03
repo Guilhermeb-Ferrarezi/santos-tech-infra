@@ -117,6 +117,35 @@ func (s *Server) portalCanAccessPhase(ctx context.Context, actorID, phaseID int6
 	return nil
 }
 
+// portalCanAccessExercise: o exercício pertence a uma fase de uma turma do
+// ator. Mesmo JOIN de portalCanAccessPhase, só que partindo de exercise.phase_id
+// em vez de receber o phaseID direto.
+func (s *Server) portalCanAccessExercise(ctx context.Context, actorID, exerciseID int64) error {
+	if !portalClassScopeEnabled() {
+		return nil
+	}
+	if actorID <= 0 {
+		return portalScopeForbidden()
+	}
+	if s.portalActorIsAdmin(ctx, actorID) {
+		return nil
+	}
+	var ok bool
+	if err := s.portalDB.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM exercise ex
+		JOIN phase p ON p.id = ex.phase_id
+		JOIN module m ON m.id = p.module_id
+		JOIN class c ON c.course_id = m.course_id
+		JOIN class_teacher ct ON ct.class_id = c.id
+		WHERE ex.id = $1 AND ct.user_id = $2)`, exerciseID, actorID).Scan(&ok); err != nil {
+		return err
+	}
+	if !ok {
+		return portalScopeForbidden()
+	}
+	return nil
+}
+
 // portalCanAccessStudent: o aluno está matriculado em alguma turma do ator.
 func (s *Server) portalCanAccessStudent(ctx context.Context, actorID, studentID int64) error {
 	if !portalClassScopeEnabled() {

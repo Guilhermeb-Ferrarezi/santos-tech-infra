@@ -7,7 +7,7 @@ RUN go mod download
 COPY apps/bot-go/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bot .
 
-FROM gcr.io/distroless/static-debian12
+FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=builder /bot /bot
 # LGPD: o golog captura request+response e redige por NOME de chave — text.body,
 # from, wa_id e profile.name não casam com nenhuma regra e iriam íntegros para o

@@ -37,6 +37,10 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "Campo 'model' obrigatório"))
 		return
 	}
+	if !validModels[model] {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "model inválido (use sonnet, opus ou haiku)"))
+		return
+	}
 	if err := s.updateConversationModel(r.Context(), conv.ID, conv.UserID, model); err != nil {
 		writeErr(w, err)
 		return

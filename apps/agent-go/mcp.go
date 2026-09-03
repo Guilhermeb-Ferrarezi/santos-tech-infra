@@ -59,14 +59,23 @@ func (s *Server) writeMCPConfig(conv *Conversation) error {
 
 // prepareWorkspace clona o repo (se informado) e escreve o .mcp.json no workdir.
 // O clone vem primeiro: git clone exige diretório de destino vazio.
+//
+// writeMCPConfig SÓ roda quando há repo: o servidor MCP do GitHub sai armado com o
+// GITHUB_TOKEN completo, e o campo "repo" é a única fronteira que o produto oferece
+// pra dizer com o que aquela conversa deveria mexer. Escrever o .mcp.json incondicionalmente
+// (como era antes) dava a QUALQUER conversa nova acesso ao GitHub inteiro do token, mesmo
+// sem repositório declarado — contradizia o comentário de claudeArgs em session.go, que
+// promete GITHUB_TOKEN "só quando há repo clonado" (verdade só pra env var do processo
+// claude, não pro servidor MCP, que é um processo filho separado iniciado a partir deste
+// arquivo).
 func (s *Server) prepareWorkspace(ctx context.Context, conv *Conversation) error {
 	if conv.Repo != nil && *conv.Repo != "" {
 		if err := s.cloneRepo(ctx, conv); err != nil {
 			return err
 		}
-	}
-	if err := s.writeMCPConfig(conv); err != nil {
-		return fmt.Errorf("escrever .mcp.json: %w", err)
+		if err := s.writeMCPConfig(conv); err != nil {
+			return fmt.Errorf("escrever .mcp.json: %w", err)
+		}
 	}
 	return nil
 }

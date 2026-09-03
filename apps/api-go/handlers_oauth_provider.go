@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -10,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // GET /oauth/authorize?client_id&redirect_uri&response_type=code&state
@@ -214,7 +217,8 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "refresh_token é obrigatório"))
 		return
 	}
-	if _, _, err := verifyToken(refresh, s.cfg.JWTRefreshSecret, tokenTypeRefresh); err != nil {
+	tokenUID, _, err := verifyToken(refresh, s.cfg.JWTRefreshSecret, tokenTypeRefresh)
+	if err != nil {
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_GRANT", "refresh_token inválido"))
 		return
 	}
@@ -223,7 +227,26 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 	// Vazio para refresh tokens emitidos antes desta mudança.
 	clientID := tokenAudience(refresh, s.cfg.JWTRefreshSecret)
 	sid, uid, expires, err := s.sessionByHash(r.Context(), hashRefreshToken(refresh))
-	if err != nil || expires.Before(time.Now()) {
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Mesma detecção de reuso de handleRefresh (ver comentário lá): JWT válido
+		// sem sessão correspondente é indício de token já rotacionado sendo
+		// reusado. Usamos tokenUID (do JWT), não o uid de sessionByHash — este
+		// último vem zerado quando a linha não existe. Só entra aqui em
+		// ErrNoRows; erro de banco genérico cai no ramo seguinte, sem revogar nada.
+		if delErr := s.deleteUserSessions(r.Context(), tokenUID); delErr != nil {
+			slog.Error("oauth_token_refresh: falha ao revogar sessões após possível reuso", "uid", tokenUID, "err", delErr)
+		} else {
+			slog.Warn("oauth_token_refresh: refresh token sem sessão correspondente — sessões revogadas por precaução", "uid", tokenUID)
+		}
+		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_GRANT", "Sessão expirada"))
+		return
+	}
+	if err != nil {
+		slog.Error("oauth_token_refresh: erro ao consultar sessão", "err", err)
+		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao renovar sessão"))
+		return
+	}
+	if expires.Before(time.Now()) {
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_GRANT", "Sessão expirada"))
 		return
 	}
