@@ -36,6 +36,11 @@ type fakeLabDeviceDB struct {
 	// gravada, e em SQL `NULL > now()` é NULL, então o token nunca saía.
 	pendingPairTokenExpiresAt *time.Time
 	screenshotRequested       bool
+	lockRequested             bool
+	restartRequested          bool
+	shutdownRequested         bool
+	commandID                 *string
+	commandText               *string
 	secretHash                *string
 	migrationBlocked          bool
 	sshPublicKey              *string
@@ -68,8 +73,8 @@ type fakeLabDeviceRow struct {
 }
 
 // fakeLabDeviceScan é a forma da linha devolvida por cada comando: o
-// lookup/mint do segredo (1 coluna), o RETURNING do upsert (6) e a leitura que
-// decide se vale escrever (12).
+// lookup/mint do segredo (1 coluna), o RETURNING do upsert (11) e a leitura
+// que decide se vale escrever (17).
 type fakeLabDeviceScan int
 
 const (
@@ -97,14 +102,19 @@ func (r fakeLabDeviceRow) Scan(dest ...any) error {
 		*(dest[4].(**string)) = nil
 	}
 	*(dest[5].(*bool)) = r.db.screenshotRequested
+	*(dest[6].(*bool)) = r.db.lockRequested
+	*(dest[7].(*bool)) = r.db.restartRequested
+	*(dest[8].(*bool)) = r.db.shutdownRequested
+	*(dest[9].(**string)) = r.db.commandID
+	*(dest[10].(**string)) = r.db.commandText
 	if r.kind == scanLeitura {
 		// coalesce(...,'') no SQL real: NULL vira string vazia.
-		*(dest[6].(*string)) = deref(r.db.appVersion)
-		*(dest[7].(*string)) = deref(r.db.hostname)
-		*(dest[8].(*string)) = deref(r.db.sshPublicKey)
-		*(dest[9].(*string)) = deref(r.db.diagnosticNote)
-		*(dest[10].(*string)) = deref(r.db.currentSessionID)
-		*(dest[11].(*bool)) = r.db.pisoVencido
+		*(dest[11].(*string)) = deref(r.db.appVersion)
+		*(dest[12].(*string)) = deref(r.db.hostname)
+		*(dest[13].(*string)) = deref(r.db.sshPublicKey)
+		*(dest[14].(*string)) = deref(r.db.diagnosticNote)
+		*(dest[15].(*string)) = deref(r.db.currentSessionID)
+		*(dest[16].(*bool)) = r.db.pisoVencido
 	}
 	return nil
 }
@@ -194,10 +204,14 @@ func (f *fakeLabDeviceDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.
 		return pgconn.CommandTag{}, nil
 	}
 	f.clears++
-	if f.unpairRequested || f.pendingPairToken != nil || f.screenshotRequested {
+	if f.unpairRequested || f.pendingPairToken != nil || f.screenshotRequested ||
+		f.lockRequested || f.restartRequested || f.shutdownRequested {
 		f.unpairRequested = false
 		f.pendingPairToken = nil
 		f.screenshotRequested = false
+		f.lockRequested = false
+		f.restartRequested = false
+		f.shutdownRequested = false
 	}
 	return pgconn.NewCommandTag("UPDATE 1"), nil
 }
@@ -263,6 +277,65 @@ func TestHeartbeatNaoLimpaQuandoNaoHaComando(t *testing.T) {
 	}
 	if fake.clears != 0 {
 		t.Errorf("%d UPDATEs de limpeza sem comando pendente, quer 0", fake.clears)
+	}
+}
+
+// TestHeartbeatLockRestartShutdownEntregamUmaVezSo é a mesma regressão de
+// TestHeartbeatEntregaComandosUmaVezSo, aplicada aos comandos remotos (travar
+// tela / reiniciar / desligar) — a rota que os admite (POST .../lock etc.)
+// nunca tinha existido no servidor antes de 03/09/2026, então isto também
+// cobre a entrega desses três pela primeira vez.
+func TestHeartbeatLockRestartShutdownEntregamUmaVezSo(t *testing.T) {
+	const segredo = "segredo-do-pc"
+	fake := &fakeLabDeviceDB{
+		exists: true, name: ptrTo("PC-03"), secretHash: ptrTo(sha256Hex(segredo)),
+		lockRequested: true, restartRequested: true, shutdownRequested: true,
+	}
+	ctx := context.Background()
+
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: segredo, IP: "1.2.3.4", AppVersion: "1.0.0"})
+	if err != nil {
+		t.Fatalf("primeiro heartbeat: %v", err)
+	}
+	if !first.LockRequested || !first.RestartRequested || !first.ShutdownRequested {
+		t.Errorf("primeiro heartbeat: lock=%v restart=%v shutdown=%v, queria os 3 true",
+			first.LockRequested, first.RestartRequested, first.ShutdownRequested)
+	}
+
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: segredo, IP: "1.2.3.4", AppVersion: "1.0.0"})
+	if err != nil {
+		t.Fatalf("segundo heartbeat: %v", err)
+	}
+	if second.LockRequested || second.RestartRequested || second.ShutdownRequested {
+		t.Errorf("segundo heartbeat: lock=%v restart=%v shutdown=%v, queria os 3 false (limpeza não rodou)",
+			second.LockRequested, second.RestartRequested, second.ShutdownRequested)
+	}
+}
+
+// TestHeartbeatCommandNaoEZeradoNaEntrega prova que command_id/command_text
+// (diferente de unpair/lock/restart/shutdown) continuam voltando em TODO
+// heartbeat depois de entregues — o PC deduplica pelo id, porque o resultado
+// só chega bem depois de o comando terminar de rodar.
+func TestHeartbeatCommandNaoEZeradoNaEntrega(t *testing.T) {
+	const segredo = "segredo-do-pc"
+	fake := &fakeLabDeviceDB{
+		exists: true, name: ptrTo("PC-04"), secretHash: ptrTo(sha256Hex(segredo)),
+		commandID: ptrTo("cmd-1"), commandText: ptrTo("Get-Process"),
+	}
+	ctx := context.Background()
+
+	for i := 0; i < 2; i++ {
+		res, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: segredo, IP: "1.2.3.4", AppVersion: "1.0.0"})
+		if err != nil {
+			t.Fatalf("heartbeat %d: %v", i, err)
+		}
+		if res.CommandID == nil || *res.CommandID != "cmd-1" || res.CommandText == nil || *res.CommandText != "Get-Process" {
+			t.Errorf("heartbeat %d: commandId=%v commandText=%v, queria \"cmd-1\"/\"Get-Process\" nos dois",
+				i, res.CommandID, res.CommandText)
+		}
+	}
+	if fake.clears != 0 {
+		t.Errorf("%d UPDATEs de limpeza — comando não deveria disparar limpeza nenhuma", fake.clears)
 	}
 }
 

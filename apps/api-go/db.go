@@ -937,6 +937,23 @@ CREATE TABLE IF NOT EXISTS agenda_feriados_municipais (
   nome       TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Comandos remotos pros PCs do laboratório (travar tela, reiniciar, desligar,
+-- comando livre) — o frontend já existia chamando estas rotas, mas nunca
+-- tinha ganhado a contraparte no banco/servidor (confirmado ao vivo
+-- 03/09/2026, admin levando 404 em "Travar tela"). Mesmo padrão de entrega
+-- do unpair_requested: o heartbeat lê, devolve, e limpa na mesma transação —
+-- entregue exatamente uma vez. command_id/command_text NÃO são limpos depois
+-- de entregues (o PC deduplica pelo id, mesma ideia de message_id) porque o
+-- resultado programa a chegar bem depois do comando ter sido entregue.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS lock_requested_at TIMESTAMPTZ;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS restart_requested_at TIMESTAMPTZ;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS shutdown_requested_at TIMESTAMPTZ;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS command_id UUID;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS command_text TEXT;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS command_sent_at TIMESTAMPTZ;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS command_result TEXT;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS command_result_at TIMESTAMPTZ;
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

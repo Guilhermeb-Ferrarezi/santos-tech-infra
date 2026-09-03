@@ -430,6 +430,13 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /hour-lab-devices/{id}/unpair", s.rateLimit(30, min, s.adminGuard(s.handleUnpairLabDevice)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/message", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceMessage)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/reset-secret", s.rateLimit(30, min, s.adminGuard(s.handleResetLabDeviceSecret)))
+	// Comandos remotos: travar tela / reiniciar / desligar / rodar PowerShell
+	// livre — entregues no próximo heartbeat (até ~30s), executados pelo
+	// watchdog em contexto SYSTEM.
+	mux.HandleFunc("POST /hour-lab-devices/{id}/lock", s.rateLimit(30, min, s.adminGuard(s.handleLockLabDevice)))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/restart", s.rateLimit(30, min, s.adminGuard(s.handleRestartLabDevice)))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/shutdown", s.rateLimit(30, min, s.adminGuard(s.handleShutdownLabDevice)))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/command", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceCommand)))
 	mux.HandleFunc("GET /hour-lab-devices/{id}/programs", s.adminGuard(s.handleGetLabDevicePrograms))
 	// Captura de tela sob demanda: pedir é admin, a imagem chega pelo próprio
 	// PC (rota pública abaixo) e o histórico fica com quem pediu registrado.
@@ -458,6 +465,8 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	// Imagem da captura — só entra com pedido recente do admin (a rota é
 	// pública, autenticada pelo segredo do dispositivo).
 	mux.HandleFunc("POST /public/lab-devices/screenshot", s.rateLimit(10, min, s.handleLabDeviceScreenshot))
+	// Resultado do comando livre — o PC manda quando termina de rodar.
+	mux.HandleFunc("POST /public/lab-devices/command-result", s.rateLimit(30, min, s.handleLabDeviceCommandResult))
 }
 
 // registerDownloadsRoutes: catálogo de downloads do Santos Hub. Cadastro/edição/

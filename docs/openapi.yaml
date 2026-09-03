@@ -4893,6 +4893,101 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /hour-lab-devices/{id}/lock:
+    post:
+      tags: [Horas]
+      summary: Trava a tela do PC
+      description: |
+        Admin-only. Entregue no heartbeat seguinte (até ~30s de atraso).
+        Regravar por cima de um pedido pendente é inofensivo. Rate limit
+        30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Comando registrado.
+        "404":
+          description: Dispositivo não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/{id}/restart:
+    post:
+      tags: [Horas]
+      summary: Reinicia o PC
+      description: |
+        Admin-only. Entregue no heartbeat seguinte (até ~30s de atraso).
+        Rate limit 30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Comando registrado.
+        "404":
+          description: Dispositivo não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/{id}/shutdown:
+    post:
+      tags: [Horas]
+      summary: Desliga o PC
+      description: |
+        Admin-only. Entregue no heartbeat seguinte (até ~30s de atraso).
+        Rate limit 30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Comando registrado.
+        "404":
+          description: Dispositivo não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hour-lab-devices/{id}/command:
+    post:
+      tags: [Horas]
+      summary: Roda um comando PowerShell livre no PC
+      description: |
+        Admin-only. O comando sai no heartbeat seguinte (até ~30s de atraso)
+        e roda no watchdog (contexto SYSTEM). O resultado chega depois via
+        POST /public/lab-devices/command-result e aparece em
+        commandResult/commandResultAt na listagem — mandar um comando novo
+        zera o resultado do anterior. Rate limit 30/min.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: { type: string, maxLength: 4000 }
+              required: [text]
+      responses:
+        "204":
+          description: Comando registrado.
+        "400":
+          description: Comando vazio ou maior que 4000 caracteres.
+        "404":
+          description: Dispositivo não encontrado.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /public/lab-devices/heartbeat:
     post:
       tags: [Horas]
@@ -5350,6 +5445,39 @@ paths:
           description: Nenhuma captura pendente para este dispositivo (SCREENSHOT_NOT_REQUESTED).
         "413":
           description: Imagem acima de 6 MB (SCREENSHOT_TOO_LARGE).
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /public/lab-devices/command-result:
+    post:
+      tags: [Horas]
+      summary: Reporta o resultado de um comando livre (sem login, autenticado pelo segredo do dispositivo)
+      description: |
+        O PC manda quando termina de rodar o comando entregue no heartbeat.
+        commandId precisa bater com o comando pendente ATUAL — um resultado
+        atrasado de um comando já substituído por outro é descartado em
+        silêncio (resposta 204 do mesmo jeito; o PC não tem como distinguir
+        os dois casos, e não precisa). Rate limit 30/min.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceId: { type: string, format: uuid }
+                deviceSecret: { type: string }
+                commandId: { type: string, format: uuid }
+                result: { type: string, maxLength: 8000 }
+              required: [deviceId, deviceSecret, commandId]
+      responses:
+        "204":
+          description: Resultado registrado (ou descartado em silêncio, ver acima).
+        "400":
+          description: deviceId ou commandId inválido.
+        "401":
+          description: Segredo do dispositivo ausente ou inválido (LAB_DEVICE_UNAUTHORIZED).
         "429":
           $ref: "#/components/responses/RateLimited"
 

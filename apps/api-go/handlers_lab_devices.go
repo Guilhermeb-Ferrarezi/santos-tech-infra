@@ -166,6 +166,21 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		// POST /public/lab-devices/screenshot.
 		resp["screenshotRequested"] = true
 	}
+	if res.LockRequested {
+		resp["lockRequested"] = true
+	}
+	if res.RestartRequested {
+		resp["restartRequested"] = true
+	}
+	if res.ShutdownRequested {
+		resp["shutdownRequested"] = true
+	}
+	if res.CommandID != nil {
+		// Igual ao message: sempre volta (não só na entrega), e o app
+		// deduplica localmente pelo id — o resultado (POST
+		// /public/lab-devices/command-result) chega bem depois de rodar.
+		resp["command"] = map[string]any{"id": *res.CommandID, "text": *res.CommandText}
+	}
 	if res.DeviceSecret != nil {
 		// Única vez que o segredo trafega — o app PRECISA persistir agora.
 		resp["deviceSecret"] = *res.DeviceSecret
@@ -190,6 +205,46 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		resp["adminSSHPublicKeys"] = s.cfg.FleetAdminSSHPublicKeys
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// POST /public/lab-devices/command-result — {deviceId, deviceSecret, commandId, result}
+//
+// O PC manda quando termina de rodar o comando livre entregue no heartbeat.
+// commandId tem que bater com o comando pendente ATUAL — um resultado
+// atrasado de um comando já substituído por outro é descartado em silêncio
+// (o PC não tem como saber que isso aconteceu, e não precisa saber).
+func (s *Server) handleLabDeviceCommandResult(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	var in struct {
+		DeviceID     string `json:"deviceId"`
+		DeviceSecret string `json:"deviceSecret"`
+		CommandID    string `json:"commandId"`
+		Result       string `json:"result"`
+	}
+	if err := decodeJSONLimit(r, &in, 16<<10); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido ou grande demais"))
+		return
+	}
+	if !uuidRe.MatchString(in.DeviceID) {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "deviceId inválido"))
+		return
+	}
+	if len(in.DeviceSecret) > 2*labDeviceSecretBytes {
+		writeErr(w, errLabDeviceUnauthorized)
+		return
+	}
+	if !uuidRe.MatchString(in.CommandID) {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "commandId inválido"))
+		return
+	}
+	if len(in.Result) > maxCommandResultLength {
+		in.Result = in.Result[:maxCommandResultLength]
+	}
+	if err := s.storeLabDeviceCommandResult(r.Context(), in.DeviceID, in.DeviceSecret, in.CommandID, in.Result); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ── admin ────────────────────────────────────────────────────────────────────
@@ -348,6 +403,78 @@ func (s *Server) handleSendLabDeviceMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := s.sendLabDeviceMessage(r.Context(), id, in.Text); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /hour-lab-devices/{id}/lock — trava a tela no próximo heartbeat.
+func (s *Server) handleLockLabDevice(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errLabDeviceNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.requestLabDeviceLock(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /hour-lab-devices/{id}/restart
+func (s *Server) handleRestartLabDevice(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errLabDeviceNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.requestLabDeviceRestart(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /hour-lab-devices/{id}/shutdown
+func (s *Server) handleShutdownLabDevice(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errLabDeviceNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.requestLabDeviceShutdown(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /hour-lab-devices/{id}/command — {text} — comando PowerShell livre,
+// rodado pelo watchdog (contexto SYSTEM) no próximo heartbeat. O resultado
+// chega depois, em POST /public/lab-devices/command-result — ver GET
+// /hour-lab-devices pra ler commandResult/commandResultAt.
+func (s *Server) handleSendLabDeviceCommand(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errLabDeviceNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+	var in struct {
+		Text string `json:"text"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	in.Text = strings.TrimSpace(in.Text)
+	if in.Text == "" || len(in.Text) > maxCommandTextLength {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Comando obrigatório (até 4000 caracteres)"))
+		return
+	}
+	if err := s.sendLabDeviceCommand(r.Context(), id, in.Text); err != nil {
 		writeErr(w, err)
 		return
 	}

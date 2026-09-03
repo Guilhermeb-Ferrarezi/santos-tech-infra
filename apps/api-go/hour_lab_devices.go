@@ -68,6 +68,21 @@ type LabDevice struct {
 	GPUPercent *float64   `json:"gpuPercent"`
 	GPUName    *string    `json:"gpuName"`
 	MetricsAt  *time.Time `json:"metricsAt"`
+	// LockRequestedAt/RestartRequestedAt/ShutdownRequestedAt: não-nil enquanto o
+	// pedido não foi entregue no heartbeat (ver labDeviceHeartbeatClearSQL) —
+	// o dashboard usa só pra saber que ainda está "em voo", a ação em si não
+	// tem resultado a mostrar.
+	LockRequestedAt     *time.Time `json:"lockRequestedAt"`
+	RestartRequestedAt  *time.Time `json:"restartRequestedAt"`
+	ShutdownRequestedAt *time.Time `json:"shutdownRequestedAt"`
+	// CommandText/CommandSentAt: último comando livre mandado pro PC.
+	// CommandResult/CommandResultAt: o que ele reportou de volta (ver POST
+	// /public/lab-devices/command-result) — nil até o PC responder, e fica
+	// nulo pra sempre se o PC nunca rodar (script antigo, ou PC desligado).
+	CommandText     *string    `json:"commandText"`
+	CommandSentAt   *time.Time `json:"commandSentAt"`
+	CommandResult   *string    `json:"commandResult"`
+	CommandResultAt *time.Time `json:"commandResultAt"`
 }
 
 // labHeartbeat é tudo que um heartbeat traz pro store gravar.
@@ -126,6 +141,17 @@ type LabDeviceHeartbeatResult struct {
 	// criado (dispositivo novo, ou legado ainda sem segredo). O app tem que
 	// gravar em disco: sem ele os heartbeats seguintes levam 401.
 	DeviceSecret *string
+	// LockRequested/RestartRequested/ShutdownRequested: entregues exatamente
+	// uma vez (mesma semântica do UnpairRequested) — o app trava a tela,
+	// reinicia ou desliga a máquina ao receber true.
+	LockRequested     bool
+	RestartRequested  bool
+	ShutdownRequested bool
+	// CommandID/CommandText: comando livre pendente. NÃO é zerado na entrega —
+	// o app deduplica localmente pelo id (mesma ideia do MessageID), porque o
+	// resultado (POST /public/lab-devices/command-result) só chega bem depois.
+	CommandID   *string
+	CommandText *string
 }
 
 var errLabDeviceNotFound = appErr(http.StatusNotFound, "LAB_DEVICE_NOT_FOUND", "Dispositivo não encontrado")
@@ -192,6 +218,8 @@ const labDeviceHeartbeatReadSQL = `
 	SELECT name, unpair_requested, message_id::text, message_text,
 		CASE WHEN pending_pair_token_expires_at > now() THEN pending_pair_token ELSE NULL END,
 		screenshot_requested_at IS NOT NULL,
+		lock_requested_at IS NOT NULL, restart_requested_at IS NOT NULL, shutdown_requested_at IS NOT NULL,
+		command_id::text, command_text,
 		coalesce(app_version, ''), coalesce(hostname, ''), coalesce(ssh_public_key, ''),
 		coalesce(diagnostic_note, ''), coalesce(current_session_id::text, ''),
 		(last_seen_at IS NULL OR last_seen_at < now() - make_interval(secs => $2)) AS piso_vencido
@@ -237,7 +265,10 @@ const labDeviceHeartbeatUpsertSQL = `
 		metrics_at = CASE WHEN $13 THEN now() ELSE hour_lab_devices.metrics_at END
 	RETURNING name, unpair_requested, message_id::text, message_text,
 		CASE WHEN pending_pair_token_expires_at > now() THEN pending_pair_token ELSE NULL END AS pending_pair_token,
-		screenshot_requested_at IS NOT NULL AS screenshot_requested`
+		screenshot_requested_at IS NOT NULL AS screenshot_requested,
+		lock_requested_at IS NOT NULL AS lock_requested, restart_requested_at IS NOT NULL AS restart_requested,
+		shutdown_requested_at IS NOT NULL AS shutdown_requested,
+		command_id::text, command_text`
 
 // labDeviceHeartbeatClearSQL roda como comando SEPARADO, na mesma transação do
 // upsert — é assim que a limpeza de fato acontece. Como o upsert já segurou o
@@ -246,9 +277,11 @@ const labDeviceHeartbeatUpsertSQL = `
 const labDeviceHeartbeatClearSQL = `
 	UPDATE hour_lab_devices SET unpair_requested = false, pending_pair_token = NULL, pending_pair_token_expires_at = NULL,
 		screenshot_delivered_at = CASE WHEN screenshot_requested_at IS NOT NULL THEN now() ELSE screenshot_delivered_at END,
-		screenshot_requested_at = NULL
+		screenshot_requested_at = NULL,
+		lock_requested_at = NULL, restart_requested_at = NULL, shutdown_requested_at = NULL
 	WHERE device_uuid = $1
-	  AND (unpair_requested = true OR pending_pair_token IS NOT NULL OR screenshot_requested_at IS NOT NULL)`
+	  AND (unpair_requested = true OR pending_pair_token IS NOT NULL OR screenshot_requested_at IS NOT NULL
+	       OR lock_requested_at IS NOT NULL OR restart_requested_at IS NOT NULL OR shutdown_requested_at IS NOT NULL)`
 
 // labDeviceSecretLookupSQL trava a linha do dispositivo (FOR UPDATE) e lê o hash
 // do segredo — a trava é o que serializa a adoção contra um heartbeat
@@ -414,7 +447,8 @@ func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, hb lab
 	precisaEscrever := false
 	err = tx.QueryRow(ctx, labDeviceHeartbeatReadSQL, hb.DeviceUUID, labLiveFloor.Seconds()).
 		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken,
-			&res.ScreenshotRequested, &appVersionAtual, &hostnameAtual, &sshAtual, &notaAtual,
+			&res.ScreenshotRequested, &res.LockRequested, &res.RestartRequested, &res.ShutdownRequested,
+			&res.CommandID, &res.CommandText, &appVersionAtual, &hostnameAtual, &sshAtual, &notaAtual,
 			&sessaoAtual, &precisaEscrever)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -441,12 +475,14 @@ func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, hb lab
 			hb.OpenApps, hb.SSHPublicKey, hb.DiagnosticNote, hb.Hostname,
 			hb.CPUPercent, hb.RAMPercent, hb.GPUPercent, hb.GPUName, hb.HasMetrics()).
 			Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken,
-				&res.ScreenshotRequested); err != nil {
+				&res.ScreenshotRequested, &res.LockRequested, &res.RestartRequested, &res.ShutdownRequested,
+				&res.CommandID, &res.CommandText); err != nil {
 			return nil, err
 		}
 	}
 	res.PreviousDeviceResolved = migrado
-	if res.UnpairRequested || res.PairToken != nil || res.ScreenshotRequested {
+	if res.UnpairRequested || res.PairToken != nil || res.ScreenshotRequested ||
+		res.LockRequested || res.RestartRequested || res.ShutdownRequested {
 		if _, err := tx.Exec(ctx, labDeviceHeartbeatClearSQL, hb.DeviceUUID); err != nil {
 			return nil, err
 		}
@@ -495,14 +531,18 @@ const labDeviceCols = `d.id::text, d.device_uuid, d.name, d.last_seen_at, d.last
 	d.current_session_id::text, c.name, s.status,
 	(d.device_secret_hash IS NOT NULL AND d.device_secret_hash != '') AS has_secret, d.created_at,
 	coalesce(d.open_apps, '[]'::jsonb), d.open_apps_at, d.ssh_public_key, d.diagnostic_note,
-	d.hostname, d.cpu_percent, d.ram_percent, d.gpu_percent, d.gpu_name, d.metrics_at`
+	d.hostname, d.cpu_percent, d.ram_percent, d.gpu_percent, d.gpu_name, d.metrics_at,
+	d.lock_requested_at, d.restart_requested_at, d.shutdown_requested_at,
+	d.command_text, d.command_sent_at, d.command_result, d.command_result_at`
 
 func scanLabDevice(row pgx.Row) (*LabDevice, error) {
 	var d LabDevice
 	err := row.Scan(&d.ID, &d.DeviceUUID, &d.Name, &d.LastSeenAt, &d.LastIP, &d.AppVersion,
 		&d.CurrentSessionID, &d.CurrentClientName, &d.CurrentStatus, &d.HasSecret, &d.CreatedAt,
 		&d.OpenApps, &d.OpenAppsAt, &d.SSHPublicKey, &d.DiagnosticNote,
-		&d.Hostname, &d.CPUPercent, &d.RAMPercent, &d.GPUPercent, &d.GPUName, &d.MetricsAt)
+		&d.Hostname, &d.CPUPercent, &d.RAMPercent, &d.GPUPercent, &d.GPUName, &d.MetricsAt,
+		&d.LockRequestedAt, &d.RestartRequestedAt, &d.ShutdownRequestedAt,
+		&d.CommandText, &d.CommandSentAt, &d.CommandResult, &d.CommandResultAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -658,6 +698,110 @@ func (s *Server) sendLabDeviceMessage(ctx context.Context, id, text string) erro
 		return errLabDeviceNotFound
 	}
 	return nil
+}
+
+// maxCommandTextLength/maxCommandResultLength: comando livre digitado pelo
+// admin e a saída que o PC devolve — tetos generosos (é PowerShell rodado por
+// quem já tem acesso admin ao dashboard, não input de terceiro), só pra não
+// deixar a coluna crescer sem limite com um script colado inteiro.
+const (
+	maxCommandTextLength   = 4000
+	maxCommandResultLength = 8000
+)
+
+// requestLabDeviceLock/Restart/Shutdown: mesma semântica de unpair_requested
+// — regravar por cima de um pedido pendente é inofensivo (continua sendo a
+// mesma ação), então não há erro de "já pediu". Entregues exatamente uma vez
+// pelo heartbeat (ver labDeviceHeartbeatClearSQL).
+func (s *Server) requestLabDeviceLock(ctx context.Context, id string) error {
+	tag, err := s.db.Exec(ctx, `UPDATE hour_lab_devices SET lock_requested_at = now() WHERE id = $1::uuid`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errLabDeviceNotFound
+	}
+	return nil
+}
+
+func (s *Server) requestLabDeviceRestart(ctx context.Context, id string) error {
+	tag, err := s.db.Exec(ctx, `UPDATE hour_lab_devices SET restart_requested_at = now() WHERE id = $1::uuid`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errLabDeviceNotFound
+	}
+	return nil
+}
+
+func (s *Server) requestLabDeviceShutdown(ctx context.Context, id string) error {
+	tag, err := s.db.Exec(ctx, `UPDATE hour_lab_devices SET shutdown_requested_at = now() WHERE id = $1::uuid`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errLabDeviceNotFound
+	}
+	return nil
+}
+
+// sendLabDeviceCommand grava um comando PowerShell livre pro PC rodar no
+// próximo heartbeat. command_id novo a cada envio (mesma ideia do message_id)
+// é o que permite mandar o MESMO texto de novo e o app reconhecer como um
+// pedido novo. Zera o resultado anterior: um resultado velho ao lado de um
+// comando novo confundiria mais do que ajudaria.
+func (s *Server) sendLabDeviceCommand(ctx context.Context, id, text string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE hour_lab_devices
+		SET command_id = gen_random_uuid(), command_text = $2, command_sent_at = now(),
+			command_result = NULL, command_result_at = NULL
+		WHERE id = $1::uuid`,
+		id, text)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errLabDeviceNotFound
+	}
+	return nil
+}
+
+// storeLabDeviceCommandResult grava o resultado que o PC reportou. Autentica
+// pelo segredo do dispositivo (rota pública, mesmo padrão do heartbeat) e só
+// aceita quando commandID bate com o comando pendente atual — um resultado
+// atrasado de um comando JÁ SUBSTITUÍDO por um mais novo não deve sobrescrever
+// o resultado do comando atual.
+func (s *Server) storeLabDeviceCommandResult(ctx context.Context, deviceUUID, deviceSecret, commandID, result string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op depois do Commit
+
+	minted, err := authLabDeviceTx(ctx, tx, deviceUUID, deviceSecret)
+	if err != nil {
+		return err
+	}
+	if minted != nil {
+		return errLabDeviceUnauthorized
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE hour_lab_devices
+		SET command_result = $3, command_result_at = now()
+		WHERE device_uuid = $1 AND command_id::text = $2`,
+		deviceUUID, commandID, result)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		// Não é erro: comando já foi substituído por outro, ou device_uuid não
+		// existe (heartbeat nunca chegou a criar a linha) — o PC não tem como
+		// distinguir os dois casos, e nenhum dos dois precisa de retry dele.
+		return tx.Commit(ctx)
+	}
+	return tx.Commit(ctx)
 }
 
 // Tetos da lista de apps abertos: o PC manda a cada heartbeat (2/min), então o

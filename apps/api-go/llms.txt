@@ -445,15 +445,33 @@ Admin:
 - `POST /hour-lab-devices/{id}/message {text}` → 204 · rate limit 30/min —
   aviso mostrado uma vez na tela do PC; `message.id` novo a cada envio, então
   reenviar o mesmo texto exibe de novo (o app deduplica pelo id, não pelo texto)
+- `POST /hour-lab-devices/{id}/lock` → 204 · rate limit 30/min — trava a tela
+  no heartbeat seguinte (até ~30s de atraso)
+- `POST /hour-lab-devices/{id}/restart` → 204 · rate limit 30/min — reinicia
+  o PC no heartbeat seguinte
+- `POST /hour-lab-devices/{id}/shutdown` → 204 · rate limit 30/min — desliga
+  o PC no heartbeat seguinte
+- `POST /hour-lab-devices/{id}/command {text}` → 204 · rate limit 30/min —
+  comando PowerShell livre, roda no watchdog (contexto SYSTEM); `text` até
+  4000 caracteres. `command.id` novo a cada envio (mesma ideia do `message`) —
+  o resultado chega depois via `POST /public/lab-devices/command-result` e
+  aparece em `commandResult`/`commandResultAt` no `LabDevice` da listagem;
+  mandar um comando novo zera o resultado do anterior
 
 Público (sem auth — `deviceId` é a identidade):
 - `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?, previousDeviceId?, sshPublicKey?, hostname?, cpuPercent?, ramPercent?, gpuPercent?, gpuName?}` →
-  `{name, unpairRequested, message?, pairToken?}` · rate limit 120/min. `token`
-  é o token da sessão de horas pareada localmente, se houver (resolve pra
-  `currentSessionId`/`currentClientName` na listagem admin). Comandos
-  (`unpairRequested`, `message`, `pairToken`, `screenshotRequested`) são
-  entregues exatamente uma vez — a query seguinte já não os vê mais (exceto
-  `message`, que o app deduplica pelo id).
+  `{name, unpairRequested, message?, pairToken?, lockRequested?, restartRequested?, shutdownRequested?, command?}` ·
+  rate limit 120/min. `token` é o token da sessão de horas pareada localmente,
+  se houver (resolve pra `currentSessionId`/`currentClientName` na listagem
+  admin). Comandos (`unpairRequested`, `message`, `pairToken`,
+  `screenshotRequested`, `lockRequested`, `restartRequested`,
+  `shutdownRequested`) são entregues exatamente uma vez — a query seguinte já
+  não os vê mais (exceto `message` e `command`, que o app deduplica pelo id).
+- `POST /public/lab-devices/command-result {deviceId, deviceSecret, commandId, result}` →
+  204 · rate limit 30/min — reporta o que o comando livre imprimiu.
+  `commandId` precisa bater com o comando pendente ATUAL (`result` até 8000
+  caracteres); um resultado atrasado de um comando já substituído é
+  descartado em silêncio (204 do mesmo jeito).
 
   `previousDeviceId` (0.1.10+) é a identidade ANTERIOR do PC, mandada quando o
   app passa a derivar o id do MachineGuid do Windows: o servidor MOVE o registro
