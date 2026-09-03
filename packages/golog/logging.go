@@ -482,6 +482,18 @@ func redactValue(v any) {
 	}
 }
 
+// RedactValue redige, recursivamente e IN PLACE, qualquer chave de mapa cujo
+// nome contenha um termo sensível (mesma lista usada na redação de corpo HTTP
+// deste pacote — ver sensitiveKeySubstrings). Ao contrário de redactBody, NÃO
+// é controlada por LOG_REDACT: existe para chamadores que persistem dados
+// estruturados fora do log de acesso (ex.: transcript de conversas do agent-go
+// salvo no Postgres) e que precisam redigir segredos incondicionalmente, não
+// só quando o operador está depurando com LOG_REDACT=0. Aceita o resultado de
+// json.Unmarshal (map[string]any / []any); tipos escalares são no-op.
+func RedactValue(v any) {
+	redactValue(v)
+}
+
 // redactKVRe casa pares chave=valor (form/query) e "chave":"valor" (JSON cru)
 // cujo nome de chave contém um termo sensível.
 var redactKVRe = regexp.MustCompile(

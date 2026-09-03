@@ -19,6 +19,13 @@ type createConvBody struct {
 // validEfforts são os níveis aceitos pelo claude CLI (--effort). Vazio = default.
 var validEfforts = map[string]bool{"": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 
+// validModels são os apelidos aceitos pelo claude CLI (--model). Mesma lista já
+// usada em normalizeGenerate (handlers_generate_stream.go) para /claude/generate —
+// aqui replicada porque handleCreateConversation/handleSetModel não passavam por
+// nenhuma validação: o valor ia direto pro argv de --model sem allowlist (achado
+// da auditoria de 2026-09), diferente de effort, que já tinha uma.
+var validModels = map[string]bool{"": true, "sonnet": true, "opus": true, "haiku": true}
+
 func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request) {
 	convs, err := s.listConversations(r.Context(), userIDFrom(r))
 	if err != nil {
@@ -33,6 +40,10 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 	_ = decodeJSON(r, &body)
 
 	model := strings.TrimSpace(body.Model)
+	if !validModels[model] {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "model inválido (use sonnet, opus ou haiku)"))
+		return
+	}
 	if model == "" {
 		model = s.cfg.DefaultModel
 	}

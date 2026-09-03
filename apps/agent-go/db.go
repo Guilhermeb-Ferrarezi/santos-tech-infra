@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	agentdb "github.com/santos-tech/agent/db"
+	"github.com/santos-tech/golog"
 )
 
 func newDB(ctx context.Context, url string) (*pgxpool.Pool, error) {
@@ -328,6 +329,14 @@ func (s *Server) insertMessage(ctx context.Context, m *Message) error {
 		slog.Warn("insertMessage: queries nil (esperado só em teste; em produção indica misconfiguração)")
 		return nil
 	}
+	// Redige segredos antes de persistir: o transcript inclui tool_result bruto
+	// (ex.: saída de um `cat .env` ou `env` que o agente tenha rodado, dentro ou
+	// fora do próprio escopo — ver achado crítico #1 da auditoria de 2026-09
+	// sobre isolamento entre conversas). Sem isto, qualquer segredo tocado
+	// durante uma sessão ficava arquivado em texto puro no Postgres pra sempre,
+	// diferente do log de acesso HTTP (golog.RequestLogger), que já redige.
+	// IN PLACE: golog.RedactValue muta m.Content antes do Marshal abaixo.
+	golog.RedactValue(m.Content)
 	content, _ := json.Marshal(m.Content)
 	var usage []byte
 	if m.Usage != nil {

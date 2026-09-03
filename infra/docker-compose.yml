@@ -100,6 +100,16 @@ services:
       dockerfile: infra/Dockerfile.agent-go
     ports:
       - "3334:3334"
+    # Teto de memória/CPU do container (achado da auditoria de 2026-09): sem
+    # isto, um turno comprometido (fork bomb, alocação de memória via Bash —
+    # o processo claude roda com --dangerously-skip-permissions) podia consumir
+    # o container inteiro até o OOM do host agir — e este host também roda
+    # Postgres/Redis de produção. 4g/2 cpus é generoso (baseline observado em
+    # produção é ~17MiB ocioso) mas limitado o bastante pra não afetar os
+    # demais serviços do host. Espelha o mesmo limite já aplicado em produção
+    # via limits_memory/limits_cpus da Coolify.
+    mem_limit: 4g
+    cpus: 2
     depends_on:
       pgbouncer:
         condition: service_healthy
