@@ -61,3 +61,58 @@ func TestInstagramClientDisabled(t *testing.T) {
 		t.Error("client desabilitado deveria recusar o envio")
 	}
 }
+
+// Carrossel só de imagens: o container PAI ainda assim é montado de forma
+// assíncrona pela Meta. Publicar sem consultar o status devolve
+// "Media ID is not available" (code 9007) e o post nunca vai ao ar — foi o que
+// aconteceu em produção em 03/09/2026. Este teste trava a ORDEM: o status do
+// pai tem que ser consultado ANTES do media_publish.
+func TestInstagramClientPublishCarouselEsperaContainerPai(t *testing.T) {
+	var calls []string
+	mediaCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/999/media":
+			mediaCalls++
+			id := "child-" + string(rune('0'+mediaCalls))
+			if mediaCalls == 3 { // 2 filhos, depois o pai
+				id = "parent-1"
+			}
+			_, _ = w.Write([]byte(`{"id":"` + id + `"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/parent-1":
+			_, _ = w.Write([]byte(`{"status_code":"FINISHED"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/999/media_publish":
+			_, _ = w.Write([]byte(`{"id":"pub-1"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := &instagramClient{baseURL: srv.URL, userID: "999", token: "tok-123", client: srv.Client()}
+	items := []carouselMediaItem{{URL: "https://cdn/1.png"}, {URL: "https://cdn/2.png"}}
+	id, err := c.publishCarousel(context.Background(), items, "legenda")
+	if err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if id != "pub-1" {
+		t.Errorf("id publicado = %q, queria pub-1", id)
+	}
+
+	statusIdx, publishIdx := -1, -1
+	for i, call := range calls {
+		if call == "GET /parent-1" && statusIdx == -1 {
+			statusIdx = i
+		}
+		if call == "POST /999/media_publish" && publishIdx == -1 {
+			publishIdx = i
+		}
+	}
+	if statusIdx == -1 {
+		t.Fatalf("status do container pai nunca foi consultado; chamadas=%v", calls)
+	}
+	if publishIdx == -1 || statusIdx > publishIdx {
+		t.Errorf("publicou antes de conferir o status do pai; chamadas=%v", calls)
+	}
+}

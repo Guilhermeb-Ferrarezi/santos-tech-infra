@@ -217,6 +217,14 @@ func (c *instagramClient) publishCarousel(ctx context.Context, items []carouselM
 	if err != nil {
 		return "", fmt.Errorf("criar container do carrossel: %w", err)
 	}
+	// O container PAI também é montado de forma assíncrona pela Meta, mesmo
+	// quando todos os filhos são imagem: publicar sem esperar devolve
+	// "Media ID is not available" (code 9007 / subcode 2207027, "The media is
+	// not ready for publishing"). Esperar aqui cobre os filhos de imagem de
+	// quebra — o pai só fica FINISHED depois que todos eles ficam.
+	if err := c.waitMediaFinished(ctx, creationID); err != nil {
+		return "", fmt.Errorf("container do carrossel: %w", err)
+	}
 	publishForm := url.Values{}
 	publishForm.Set("creation_id", creationID)
 	mediaID, err := c.postForm(ctx, fmt.Sprintf("%s/media_publish", c.userID), publishForm)
