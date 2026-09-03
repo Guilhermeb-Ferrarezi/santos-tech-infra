@@ -4938,6 +4938,7 @@ paths:
                     lista anterior. Ausente ≠ vazio: campo omitido mantém a última lista
                     conhecida (app antigo), enquanto [] significa "nada aberto". Só nomes —
                     título de janela carregaria conteúdo e fica de fora de propósito.
+                    O primeiro item é o app da janela em foco.
                 sshPublicKey:
                   type: string
                   maxLength: 2048
@@ -6975,12 +6976,21 @@ components:
         openApps:
           type: array
           items: { type: string }
-          description: "Nomes dos aplicativos abertos no último heartbeat (app 0.1.9+)."
+          description: "Nomes dos aplicativos abertos no último heartbeat (app 0.1.9+). O primeiro é o app da janela em foco."
         openAppsAt:
           type: string
           format: date-time
           nullable: true
           description: "Quando a lista de abertos foi vista; null = o PC nunca reportou."
+        openAppIcons:
+          type: object
+          additionalProperties: { type: string }
+          description: >
+            Nome do app aberto → sha256 do PNG do ícone (URL: GET /program-icons/{hash}).
+            Resolvido pelo servidor cruzando o nome com o INVENTÁRIO do próprio PC, por
+            semelhança ("Unity" ↔ "Unity 6000.0.23f1") — a imagem já vem do inventário,
+            nenhum campo novo no heartbeat e nenhuma mudança no app. Sempre um objeto;
+            nome ausente = sem ícone conhecido (mostre um placeholder).
         sshPublicKey:
           type: string
           nullable: true

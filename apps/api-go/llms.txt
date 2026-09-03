@@ -489,7 +489,20 @@ Público (sem auth — `deviceId` é a identidade):
   app antigo não manda o campo e a última lista conhecida é mantida; `[]`
   explícito significa "nada aberto". Sem histórico e sem título de janela de
   propósito — o título carrega conteúdo ("Conversa com Fulano", "contrato.docx")
-  e o nome do app já responde o que a máquina está rodando.
+  e o nome do app já responde o que a máquina está rodando. O **primeiro da
+  lista é o app da janela em foco** — é o que o dashboard destaca como "em uso
+  agora".
+
+  `openAppIcons` no `LabDevice` da listagem admin é `{nome do app aberto →
+  sha256 do PNG do ícone}`, com a URL da imagem em `GET /program-icons/{hash}`.
+  **Não é campo do heartbeat**: o servidor resolve cruzando cada nome de app
+  aberto com o INVENTÁRIO do próprio PC, que já traz o ícone de cada programa
+  instalado (extraído do executável, ver abaixo) — ou seja, sai de graça pra
+  qualquer PC que já reporta inventário, sem mudar nada no app nem exigir
+  versão nova. O casamento é por semelhança de nome ("Unity" ↔ "Unity
+  6000.0.23f1", "Visual Studio Code" ↔ "Microsoft Visual Studio Code (User)");
+  quando nada casa com segurança, o nome fica FORA do objeto e o dashboard
+  mostra um placeholder — ícone errado seria pior que nenhum.
 
   `sshPublicKey` é a chave pública SSH gerada localmente pela máquina (ex.: pela
   imagem Windows via autounattend.xml) e mandada só no primeiro heartbeat —
