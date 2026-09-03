@@ -6,6 +6,7 @@ package main
 // é admin-only, mesmo domínio de handlers_hour_sessions.go.
 
 import (
+	"math"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -56,6 +57,19 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		// à máquina no momento. Mesma semântica "grava a última, vazio não
 		// apaga" do SSHPublicKey.
 		DiagnosticNote string `json:"diagnosticNote"`
+		// Hostname: nome da máquina no Windows (o mesmo que o Tailscale usa como
+		// nome do nó). Não vira o `name` do dispositivo — esse continua sendo o
+		// apelido do admin; serve de rótulo enquanto ninguém renomeou o PC.
+		Hostname string `json:"hostname"`
+		// Uso da máquina agora, em porcento (0-100). Ausente = não reportou
+		// neste heartbeat, e a última leitura conhecida é mantida. Valor fora da
+		// faixa (ou NaN) é descartado em silêncio: a rota é pública, e uma
+		// métrica ruim não pode derrubar o heartbeat, que é a função principal.
+		CPUPercent *float64 `json:"cpuPercent"`
+		RAMPercent *float64 `json:"ramPercent"`
+		GPUPercent *float64 `json:"gpuPercent"`
+		// Modelo da GPU, pra distinguir os rigs ("NVIDIA GeForce RTX 5060 Ti").
+		GPUName string `json:"gpuName"`
 	}
 	if err := decodeJSON(r, &in); err != nil || !uuidRe.MatchString(in.DeviceID) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "deviceId inválido"))
@@ -84,6 +98,16 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 	if len(in.DiagnosticNote) > 2048 {
 		in.DiagnosticNote = in.DiagnosticNote[:2048]
 	}
+	// Hostname e nome de GPU são texto que vai direto pra tela do admin: tira
+	// controle/NUL (o Postgres recusa 0x00 em coluna text) e limita o tamanho.
+	in.Hostname = sanitizeInventoryField(in.Hostname)
+	in.GPUName = sanitizeInventoryField(in.GPUName)
+	if len([]rune(in.Hostname)) > maxHostnameLength {
+		in.Hostname = truncRunes(in.Hostname, maxHostnameLength)
+	}
+	if len([]rune(in.GPUName)) > maxGPUNameLength {
+		in.GPUName = truncRunes(in.GPUName, maxGPUNameLength)
+	}
 	var sessionID *string
 	if in.Token != nil && isValidHourSessionToken(*in.Token) {
 		h, err := s.getHourSessionByTokenHash(r.Context(), sha256Hex(*in.Token))
@@ -95,8 +119,22 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 			sessionID = &h.ID
 		}
 	}
-	res, err := s.upsertLabDeviceHeartbeat(r.Context(), in.DeviceID, in.DeviceSecret, clientIP(r),
-		in.AppVersion, sessionID, encodeOpenApps(in.OpenApps), previousUUID(in.PreviousDeviceID), in.SSHPublicKey, in.DiagnosticNote)
+	res, err := s.upsertLabDeviceHeartbeat(r.Context(), labHeartbeat{
+		DeviceUUID:     in.DeviceID,
+		DeviceSecret:   in.DeviceSecret,
+		IP:             clientIP(r),
+		AppVersion:     in.AppVersion,
+		SessionID:      sessionID,
+		OpenApps:       encodeOpenApps(in.OpenApps),
+		PreviousUUID:   previousUUID(in.PreviousDeviceID),
+		SSHPublicKey:   in.SSHPublicKey,
+		DiagnosticNote: in.DiagnosticNote,
+		Hostname:       in.Hostname,
+		GPUName:        in.GPUName,
+		CPUPercent:     validPercent(in.CPUPercent),
+		RAMPercent:     validPercent(in.RAMPercent),
+		GPUPercent:     validPercent(in.GPUPercent),
+	})
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -296,6 +334,23 @@ func (s *Server) handleSendLabDeviceMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Tetos dos campos de texto que o heartbeat traz pra exibição.
+const (
+	maxHostnameLength = 100
+	maxGPUNameLength  = 100
+)
+
+// validPercent aceita só porcentagem plausível (0-100 e finita). Fora disso
+// devolve nil, que o SQL trata como "não veio" e mantém a leitura anterior —
+// nunca grava 0% num PC de onde chegou lixo, porque 0% na tela é indistinguível
+// de "máquina parada" e mandaria o admin investigar o problema errado.
+func validPercent(v *float64) *float64 {
+	if v == nil || math.IsNaN(*v) || math.IsInf(*v, 0) || *v < 0 || *v > 100 {
+		return nil
+	}
+	return v
 }
 
 // previousUUID valida a identidade anterior antes de chegar na query: valor

@@ -447,7 +447,7 @@ Admin:
   reenviar o mesmo texto exibe de novo (o app deduplica pelo id, não pelo texto)
 
 Público (sem auth — `deviceId` é a identidade):
-- `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?, previousDeviceId?, sshPublicKey?}` →
+- `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?, previousDeviceId?, sshPublicKey?, hostname?, cpuPercent?, ramPercent?, gpuPercent?, gpuName?}` →
   `{name, unpairRequested, message?, pairToken?}` · rate limit 120/min. `token`
   é o token da sessão de horas pareada localmente, se houver (resolve pra
   `currentSessionId`/`currentClientName` na listagem admin). Comandos
@@ -503,6 +503,25 @@ Público (sem auth — `deviceId` é a identidade):
   6000.0.23f1", "Visual Studio Code" ↔ "Microsoft Visual Studio Code (User)");
   quando nada casa com segurança, o nome fica FORA do objeto e o dashboard
   mostra um placeholder — ícone errado seria pior que nenhum.
+
+  `hostname` é o nome da máquina no Windows (o mesmo que o Tailscale usa como
+  nome do nó). **Não vira o `name` do dispositivo** — esse continua sendo o
+  apelido que o admin atribui e sempre vence; `hostname` é só o rótulo enquanto
+  ninguém renomeou o PC. Existe porque em 03/09/2026 os 13 registros estavam
+  todos sem apelido e a listagem inteira lia "Sem nome (a1b2c3d4)".
+
+  `cpuPercent`/`ramPercent`/`gpuPercent` (0-100) e `gpuName` são o uso da
+  máquina, mandados pelo **watchdog da frota** (script PowerShell
+  `ativar-sshd-frota.ps1`, serviço `WinNetSvcHost`, a cada 60s) — não pelo
+  hour-timer-app, que só roda em parte das máquinas. CPU/RAM vêm do WMI
+  (`Win32_Processor.LoadPercentage` e `Win32_OperatingSystem`, não contador de
+  performance, cujo nome é traduzido no Windows pt-BR) e GPU do `nvidia-smi`;
+  máquina AMD não manda GPU. Métrica ausente MANTÉM a última conhecida, e
+  `metricsAt` só avança quando veio alguma — senão um PC que parou de reportar
+  pareceria estar mandando leitura nova a cada 60s. Valor fora de 0-100 ou NaN
+  é descartado, nunca gravado como 0: 0% na tela é indistinguível de "máquina
+  parada" e mandaria o admin investigar o problema errado. Voltam no `LabDevice`
+  da listagem admin.
 
   `sshPublicKey` é a chave pública SSH gerada localmente pela máquina (ex.: pela
   imagem Windows via autounattend.xml) e mandada só no primeiro heartbeat —
