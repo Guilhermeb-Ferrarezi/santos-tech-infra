@@ -4939,6 +4939,43 @@ paths:
                     conhecida (app antigo), enquanto [] significa "nada aberto". Só nomes —
                     título de janela carregaria conteúdo e fica de fora de propósito.
                     O primeiro item é o app da janela em foco.
+                hostname:
+                  type: string
+                  maxLength: 100
+                  description: >
+                    Nome da máquina no Windows (o mesmo que o Tailscale usa como nome do
+                    nó). NÃO vira o `name` do dispositivo — esse continua sendo o apelido
+                    que o admin atribui e sempre vence; isto é o rótulo enquanto ninguém
+                    renomeou o PC. Vazio mantém o já registrado.
+                cpuPercent:
+                  type: number
+                  minimum: 0
+                  maximum: 100
+                  nullable: true
+                  description: >
+                    Uso de CPU agora, em porcento. Mandado pelo watchdog da frota (script
+                    PowerShell) a cada heartbeat. Ausente/null = não reportou neste
+                    heartbeat, e a última leitura é mantida. Valor fora de 0-100 (ou NaN)
+                    é descartado em silêncio, nunca gravado como 0 — 0% na tela é
+                    indistinguível de "máquina parada".
+                ramPercent:
+                  type: number
+                  minimum: 0
+                  maximum: 100
+                  nullable: true
+                  description: Uso de memória agora, em porcento. Mesmas regras de cpuPercent.
+                gpuPercent:
+                  type: number
+                  minimum: 0
+                  maximum: 100
+                  nullable: true
+                  description: >
+                    Uso de GPU agora, em porcento (nvidia-smi). Máquina sem GPU NVIDIA não
+                    manda, e o dashboard mostra traço em vez de 0%.
+                gpuName:
+                  type: string
+                  maxLength: 100
+                  description: Modelo da GPU ("NVIDIA GeForce RTX 5060 Ti"). Vazio mantém o já registrado.
                 sshPublicKey:
                   type: string
                   maxLength: 2048
@@ -6982,6 +7019,22 @@ components:
           format: date-time
           nullable: true
           description: "Quando a lista de abertos foi vista; null = o PC nunca reportou."
+        hostname:
+          type: string
+          nullable: true
+          description: "Nome da máquina no Windows (o mesmo do Tailscale), vindo do heartbeat. Use como rótulo quando `name` for null."
+        cpuPercent:
+          type: number
+          nullable: true
+          description: "Uso de CPU no último heartbeat que trouxe métricas; null = nunca reportou (mostre traço, não 0%)."
+        ramPercent: { type: number, nullable: true, description: "Uso de memória; mesma semântica de cpuPercent." }
+        gpuPercent: { type: number, nullable: true, description: "Uso de GPU; null também em máquina sem GPU NVIDIA." }
+        gpuName: { type: string, nullable: true, description: "Modelo da GPU reportado pelo nvidia-smi." }
+        metricsAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: "Quando as métricas acima foram vistas. Só avança quando veio métrica de verdade."
         openAppIcons:
           type: object
           additionalProperties: { type: string }

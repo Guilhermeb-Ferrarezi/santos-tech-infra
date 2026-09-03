@@ -686,6 +686,23 @@ ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS ssh_public_key TEXT;
 -- semântica "grava a última, string vazia não apaga" do ssh_public_key.
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS diagnostic_note TEXT;
 
+-- Nome da máquina no Windows (o mesmo que o Tailscale usa como hostname do nó),
+-- mandado junto do heartbeat. NÃO substitui a coluna name: aquela continua sendo o
+-- apelido que o admin atribui e sempre vence. Isto é só o fallback pra listagem
+-- não mostrar "Sem nome (a1b2c3d4)" num PC que ninguém renomeou ainda — o que
+-- era o caso de TODOS os 13 registros em 03/09/2026.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS hostname TEXT;
+
+-- Uso da máquina, mandado a cada heartbeat pelo watchdog da frota (CPU/RAM via
+-- WMI, GPU via nvidia-smi). É o que diferencia um rig minerando a 99% de uma
+-- máquina ociosa sem precisar entrar nela. metrics_at diz quando foi visto;
+-- NULL nas quatro = ninguém reportou ainda (script antigo).
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS cpu_percent DOUBLE PRECISION;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS ram_percent DOUBLE PRECISION;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS gpu_percent DOUBLE PRECISION;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS gpu_name TEXT;
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS metrics_at TIMESTAMPTZ;
+
 -- Histórico das capturas. requested_by fica registrado de propósito: a tela de
 -- um PC do laboratório pode ter dado de quem está sentado nele, então tem que
 -- existir trilha de quem pediu e quando. A imagem mora no R2 (object_key), não

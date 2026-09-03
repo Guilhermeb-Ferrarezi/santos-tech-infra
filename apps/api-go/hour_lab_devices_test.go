@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -30,6 +31,14 @@ type fakeLabDeviceDB struct {
 	migrationBlocked    bool
 	sshPublicKey        *string
 	diagnosticNote      *string
+	hostname            *string
+	cpuPercent          *float64
+	ramPercent          *float64
+	gpuPercent          *float64
+	gpuName             *string
+	// metricsBumps conta quantas vezes metrics_at avançou — é o que prova que
+	// um heartbeat sem métrica não finge leitura nova.
+	metricsBumps int
 
 	upserts    int
 	clears     int
@@ -99,6 +108,25 @@ func (f *fakeLabDeviceDB) QueryRow(_ context.Context, sql string, args ...any) p
 		if note, _ := args[6].(string); note != "" {
 			f.diagnosticNote = &note
 		}
+		if host, _ := args[7].(string); host != "" {
+			f.hostname = &host
+		}
+		// coalesce($9, coluna): valor nil mantém o anterior.
+		if cpu, _ := args[8].(*float64); cpu != nil {
+			f.cpuPercent = cpu
+		}
+		if ram, _ := args[9].(*float64); ram != nil {
+			f.ramPercent = ram
+		}
+		if gpu, _ := args[10].(*float64); gpu != nil {
+			f.gpuPercent = gpu
+		}
+		if name, _ := args[11].(string); name != "" {
+			f.gpuName = &name
+		}
+		if hasMetrics, _ := args[12].(bool); hasMetrics {
+			f.metricsBumps++
+		}
 		// O SET do ON CONFLICT só mexe em last_seen_at/last_ip/app_version/
 		// current_session_id — as colunas de comando ficam como estavam, e é
 		// isso que o RETURNING devolve.
@@ -147,7 +175,7 @@ func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "", "", "")
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: segredo, IP: "1.2.3.4", AppVersion: "1.0.0"})
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -161,7 +189,7 @@ func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 		t.Errorf("primeiro heartbeat: %d UPDATEs de limpeza, quer 1", fake.clears)
 	}
 
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "", "", "")
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: segredo, IP: "1.2.3.4", AppVersion: "1.0.0"})
 	if err != nil {
 		t.Fatalf("segundo heartbeat: %v", err)
 	}
@@ -184,7 +212,7 @@ func TestHeartbeatEntregaComandosUmaVezSo(t *testing.T) {
 func TestHeartbeatNaoLimpaQuandoNaoHaComando(t *testing.T) {
 	const segredo = "segredo-do-pc"
 	fake := &fakeLabDeviceDB{exists: true, name: ptrTo("PC-02"), secretHash: ptrTo(sha256Hex(segredo))}
-	if _, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "", "", ""); err != nil {
+	if _, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: segredo, IP: "1.2.3.4", AppVersion: "1.0.0"}); err != nil {
 		t.Fatalf("heartbeat: %v", err)
 	}
 	if fake.clears != 0 {
@@ -202,7 +230,7 @@ func TestHeartbeatSSHPublicKeyGravaUmaVezSoNaoApagaComVazio(t *testing.T) {
 	fake := &fakeLabDeviceDB{exists: false}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil, "", chave, "")
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: "", IP: "1.2.3.4", AppVersion: "1.0.0", SSHPublicKey: chave})
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -211,7 +239,7 @@ func TestHeartbeatSSHPublicKeyGravaUmaVezSoNaoApagaComVazio(t *testing.T) {
 	}
 
 	segredoEmitido := *first.DeviceSecret
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredoEmitido, "1.2.3.4", "1.0.0", nil, nil, "", "", "")
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: segredoEmitido, IP: "1.2.3.4", AppVersion: "1.0.0"})
 	if err != nil {
 		t.Fatalf("segundo heartbeat: %v", err)
 	}
@@ -228,7 +256,7 @@ func TestHeartbeatDiagnosticNoteGravaUltimaNaoApagaComVazio(t *testing.T) {
 	fake := &fakeLabDeviceDB{exists: false}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil, "", "", nota1)
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: "", IP: "1.2.3.4", AppVersion: "1.0.0", DiagnosticNote: nota1})
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -237,14 +265,14 @@ func TestHeartbeatDiagnosticNoteGravaUltimaNaoApagaComVazio(t *testing.T) {
 	}
 
 	segredoEmitido := *first.DeviceSecret
-	if _, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredoEmitido, "1.2.3.4", "1.0.0", nil, nil, "", "", nota2); err != nil {
+	if _, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: segredoEmitido, IP: "1.2.3.4", AppVersion: "1.0.0", DiagnosticNote: nota2}); err != nil {
 		t.Fatalf("segundo heartbeat: %v", err)
 	}
 	if fake.diagnosticNote == nil || *fake.diagnosticNote != nota2 {
 		t.Errorf("segundo heartbeat: diagnosticNote = %v, quer atualizar pra %q", fake.diagnosticNote, nota2)
 	}
 
-	if _, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredoEmitido, "1.2.3.4", "1.0.0", nil, nil, "", "", ""); err != nil {
+	if _, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: segredoEmitido, IP: "1.2.3.4", AppVersion: "1.0.0"}); err != nil {
 		t.Fatalf("terceiro heartbeat: %v", err)
 	}
 	if fake.diagnosticNote == nil || *fake.diagnosticNote != nota2 {
@@ -274,7 +302,7 @@ func TestHeartbeatEmiteSegredoUmaVez(t *testing.T) {
 	fake := &fakeLabDeviceDB{}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil, "", "", "")
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: "", IP: "1.2.3.4", AppVersion: "1.0.0"})
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -289,7 +317,7 @@ func TestHeartbeatEmiteSegredoUmaVez(t *testing.T) {
 		t.Errorf("%d emissões de segredo, quer 1", fake.mints)
 	}
 
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", secret, "1.2.3.4", "1.0.0", nil, nil, "", "", "")
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: secret, IP: "1.2.3.4", AppVersion: "1.0.0"})
 	if err != nil {
 		t.Fatalf("segundo heartbeat com o segredo: %v", err)
 	}
@@ -314,7 +342,7 @@ func TestHeartbeatSemSegredoNaoVazaPairToken(t *testing.T) {
 	ctx := context.Background()
 
 	for _, tentativa := range []string{"", "segredo-errado", sha256Hex("segredo-do-pc")} {
-		res, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", tentativa, "9.9.9.9", "1.0.0", nil, nil, "", "", "")
+		res, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: tentativa, IP: "9.9.9.9", AppVersion: "1.0.0"})
 		if !errors.Is(err, errLabDeviceUnauthorized) {
 			t.Fatalf("segredo %q: err = %v, quer errLabDeviceUnauthorized", tentativa, err)
 		}
@@ -339,7 +367,7 @@ func TestHeartbeatAdocaoNaoEntregaPairToken(t *testing.T) {
 		name:             ptrTo("PC-legado"),
 		pendingPairToken: ptrTo("tok-secreto"),
 	}
-	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, "dev-uuid", "", "1.2.3.4", "1.0.0", nil, nil, "", "", "")
+	res, err := upsertLabDeviceHeartbeatTx(context.Background(), fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: "", IP: "1.2.3.4", AppVersion: "1.0.0"})
 	if err != nil {
 		t.Fatalf("adoção de legado: %v", err)
 	}
@@ -368,7 +396,7 @@ func TestHeartbeatEntregaCapturaDeTelaUmaVezSo(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "", "", "")
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: segredo, IP: "1.2.3.4", AppVersion: "1.0.0"})
 	if err != nil {
 		t.Fatalf("primeiro heartbeat: %v", err)
 	}
@@ -376,7 +404,7 @@ func TestHeartbeatEntregaCapturaDeTelaUmaVezSo(t *testing.T) {
 		t.Fatal("primeiro heartbeat deveria pedir a captura")
 	}
 
-	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, "dev-uuid", segredo, "1.2.3.4", "1.0.0", nil, nil, "", "", "")
+	second, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{DeviceUUID: "dev-uuid", DeviceSecret: segredo, IP: "1.2.3.4", AppVersion: "1.0.0"})
 	if err != nil {
 		t.Fatalf("segundo heartbeat: %v", err)
 	}
@@ -530,6 +558,89 @@ func TestAppDisplayNameResolveCaminhoDeAppDaStore(t *testing.T) {
 	for entrada, esperado := range casos {
 		if got := appDisplayName(entrada); got != esperado {
 			t.Errorf("appDisplayName(%q) = %q, quer %q", entrada, got, esperado)
+		}
+	}
+}
+
+// ── métricas de uso (CPU/RAM/GPU) ────────────────────────────────────────────
+//
+// Quem manda é o watchdog da frota (script PowerShell, appVersion
+// "wnsh-watchdog"), no MESMO heartbeat que já mandava diagnosticNote — não o
+// hour-timer-app, que só roda em parte das máquinas.
+
+func floatTo(v float64) *float64 { return &v }
+
+func TestHeartbeatGravaMetricasEMantemQuandoNaoVem(t *testing.T) {
+	fake := &fakeLabDeviceDB{exists: false}
+	ctx := context.Background()
+
+	first, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{
+		DeviceUUID: "dev-uuid", IP: "1.2.3.4", AppVersion: "wnsh-watchdog",
+		CPUPercent: floatTo(96), RAMPercent: floatTo(52), GPUPercent: floatTo(97),
+		GPUName: "NVIDIA GeForce RTX 5060 Ti", Hostname: "gazake",
+	})
+	if err != nil {
+		t.Fatalf("primeiro heartbeat: %v", err)
+	}
+	if fake.cpuPercent == nil || *fake.cpuPercent != 96 {
+		t.Errorf("cpu = %v, quer 96", fake.cpuPercent)
+	}
+	if fake.gpuName == nil || *fake.gpuName != "NVIDIA GeForce RTX 5060 Ti" {
+		t.Errorf("gpuName = %v", fake.gpuName)
+	}
+	if fake.hostname == nil || *fake.hostname != "gazake" {
+		t.Errorf("hostname = %v, quer \"gazake\"", fake.hostname)
+	}
+	if fake.metricsBumps != 1 {
+		t.Errorf("metrics_at avançou %d vezes, quer 1", fake.metricsBumps)
+	}
+
+	// Heartbeat sem métrica (script antigo, ou máquina sem GPU): mantém a
+	// última leitura e NÃO finge que ela é de agora.
+	segredo := *first.DeviceSecret
+	if _, err := upsertLabDeviceHeartbeatTx(ctx, fake, labHeartbeat{
+		DeviceUUID: "dev-uuid", DeviceSecret: segredo, IP: "1.2.3.4", AppVersion: "wnsh-watchdog",
+	}); err != nil {
+		t.Fatalf("segundo heartbeat: %v", err)
+	}
+	if fake.cpuPercent == nil || *fake.cpuPercent != 96 {
+		t.Errorf("heartbeat sem métrica apagou a cpu: %v", fake.cpuPercent)
+	}
+	if fake.metricsBumps != 1 {
+		t.Errorf("metrics_at avançou %d vezes; heartbeat sem métrica não pode avançar", fake.metricsBumps)
+	}
+}
+
+// Um PC sem GPU manda só CPU e RAM — isso ainda conta como "veio métrica".
+func TestHasMetricsSoPrecisaDeUma(t *testing.T) {
+	if (labHeartbeat{}).HasMetrics() {
+		t.Error("heartbeat sem nenhuma métrica não deveria contar como tendo")
+	}
+	if !(labHeartbeat{RAMPercent: floatTo(31)}).HasMetrics() {
+		t.Error("só RAM já é métrica (máquina sem GPU)")
+	}
+}
+
+// A rota é pública: lixo em porcentagem não pode virar 0% na tela, porque 0%
+// é indistinguível de "máquina parada" e manda o admin investigar o errado.
+func TestValidPercentDescartaForaDaFaixa(t *testing.T) {
+	casos := []struct {
+		nome string
+		in   *float64
+		quer bool // true = aceita
+	}{
+		{"nil", nil, false},
+		{"zero", floatTo(0), true},
+		{"cheio", floatTo(100), true},
+		{"negativo", floatTo(-1), false},
+		{"acima de 100", floatTo(101), false},
+		{"NaN", floatTo(math.NaN()), false},
+		{"infinito", floatTo(math.Inf(1)), false},
+	}
+	for _, c := range casos {
+		got := validPercent(c.in)
+		if (got != nil) != c.quer {
+			t.Errorf("%s: aceito=%v, quer %v", c.nome, got != nil, c.quer)
 		}
 	}
 }

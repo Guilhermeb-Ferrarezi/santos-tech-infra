@@ -57,6 +57,51 @@ type LabDevice struct {
 	// Sempre um objeto, nunca null: nome ausente = sem ícone conhecido, e o
 	// dashboard cai num placeholder.
 	OpenAppIcons map[string]string `json:"openAppIcons"`
+	// Hostname: nome da máquina no Windows (o mesmo que vira hostname do nó no
+	// Tailscale). Não substitui Name — serve de rótulo quando o admin ainda não
+	// renomeou o PC, que é o caso comum logo depois de provisionar.
+	Hostname *string `json:"hostname"`
+	// Uso da máquina no último heartbeat que trouxe métricas. nil = o PC nunca
+	// reportou (script antigo) — o dashboard mostra traço, nunca 0%.
+	CPUPercent *float64   `json:"cpuPercent"`
+	RAMPercent *float64   `json:"ramPercent"`
+	GPUPercent *float64   `json:"gpuPercent"`
+	GPUName    *string    `json:"gpuName"`
+	MetricsAt  *time.Time `json:"metricsAt"`
+}
+
+// labHeartbeat é tudo que um heartbeat traz pro store gravar.
+//
+// Virou struct quando os campos passaram de dez: com parâmetros posicionais,
+// trocar dois strings de lugar na chamada compilava numa boa e gravava, por
+// exemplo, a nota de diagnóstico na coluna da chave SSH.
+type labHeartbeat struct {
+	DeviceUUID   string
+	DeviceSecret string
+	IP           string
+	AppVersion   string
+	SessionID    *string
+	// OpenApps já vem serializado pra jsonb; nil = o app não mandou a lista, e
+	// o SQL mantém a última conhecida em vez de apagar.
+	OpenApps []byte
+	// PreviousUUID: identidade anterior a migrar (ver migrateLabDeviceUUIDTx).
+	PreviousUUID string
+	// Campos "grava a última, vazio não apaga": o PC manda só quando tem.
+	SSHPublicKey   string
+	DiagnosticNote string
+	Hostname       string
+	GPUName        string
+	// Métricas de uso; nil = não veio neste heartbeat (mantém a anterior).
+	CPUPercent *float64
+	RAMPercent *float64
+	GPUPercent *float64
+}
+
+// HasMetrics diz se este heartbeat trouxe alguma métrica — é o que decide se
+// metrics_at avança. Sem isso, um PC que parou de reportar pareceria estar
+// mandando uso novo a cada 60s.
+func (h labHeartbeat) HasMetrics() bool {
+	return h.CPUPercent != nil || h.RAMPercent != nil || h.GPUPercent != nil
 }
 
 // LabDeviceHeartbeatResult é o que o app precisa saber a cada heartbeat: nome
@@ -122,9 +167,12 @@ const pairTokenTTL = 10 * time.Minute
 
 const labDeviceHeartbeatUpsertSQL = `
 	INSERT INTO hour_lab_devices (device_uuid, last_seen_at, last_ip, app_version, current_session_id,
-		open_apps, open_apps_at, ssh_public_key, diagnostic_note)
+		open_apps, open_apps_at, ssh_public_key, diagnostic_note, hostname,
+		cpu_percent, ram_percent, gpu_percent, gpu_name, metrics_at)
 	VALUES ($1, now(), $2, $3, $4::uuid, $5::jsonb, CASE WHEN $5::jsonb IS NULL THEN NULL ELSE now() END,
-		NULLIF($6, ''), NULLIF($7, ''))
+		NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''),
+		$9, $10, $11, NULLIF($12, ''),
+		CASE WHEN $13 THEN now() ELSE NULL END)
 	ON CONFLICT (device_uuid) DO UPDATE SET
 		last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid,
 		-- App antigo não manda a lista: manter a última conhecida é melhor que
@@ -134,7 +182,18 @@ const labDeviceHeartbeatUpsertSQL = `
 		-- Mandado uma vez só (primeiro heartbeat, ver autounattend.xml) — string
 		-- vazia nos heartbeats seguintes não deve apagar a chave já registrada.
 		ssh_public_key = CASE WHEN $6 = '' THEN hour_lab_devices.ssh_public_key ELSE $6 END,
-		diagnostic_note = CASE WHEN $7 = '' THEN hour_lab_devices.diagnostic_note ELSE $7 END
+		diagnostic_note = CASE WHEN $7 = '' THEN hour_lab_devices.diagnostic_note ELSE $7 END,
+		hostname = CASE WHEN $8 = '' THEN hour_lab_devices.hostname ELSE $8 END,
+		-- Métrica ausente mantém a última conhecida (mesma regra do resto): um
+		-- PC sem GPU nunca manda gpu_percent, e um script antigo não manda
+		-- nenhuma — em nenhum dos dois casos a coluna deve virar NULL de novo.
+		cpu_percent = coalesce($9, hour_lab_devices.cpu_percent),
+		ram_percent = coalesce($10, hour_lab_devices.ram_percent),
+		gpu_percent = coalesce($11, hour_lab_devices.gpu_percent),
+		gpu_name = CASE WHEN $12 = '' THEN hour_lab_devices.gpu_name ELSE $12 END,
+		-- Só avança quando veio métrica de verdade, senão um PC que parou de
+		-- reportar pareceria estar mandando uso novo a cada 60s.
+		metrics_at = CASE WHEN $13 THEN now() ELSE hour_lab_devices.metrics_at END
 	RETURNING name, unpair_requested, message_id::text, message_text,
 		CASE WHEN pending_pair_token_expires_at > now() THEN pending_pair_token ELSE NULL END AS pending_pair_token,
 		screenshot_requested_at IS NOT NULL AS screenshot_requested`
@@ -232,13 +291,13 @@ func migrateLabDeviceUUIDTx(ctx context.Context, tx labDeviceQuerier, oldUUID, n
 // devolve os comandos pendentes, zerando unpair_requested/pending_pair_token na
 // mesma transação — assim cada comando é entregue exatamente uma vez.
 // message_id/text não são zerados: o app deduplica localmente pelo id.
-func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte, previousUUID, sshPublicKey, diagnosticNote string) (*LabDeviceHeartbeatResult, error) {
+func (s *Server) upsertLabDeviceHeartbeat(ctx context.Context, hb labHeartbeat) (*LabDeviceHeartbeatResult, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op depois do Commit
-	res, err := upsertLabDeviceHeartbeatTx(ctx, tx, deviceUUID, deviceSecret, ip, appVersion, sessionID, openApps, previousUUID, sshPublicKey, diagnosticNote)
+	res, err := upsertLabDeviceHeartbeatTx(ctx, tx, hb)
 	if err != nil {
 		return nil, err
 	}
@@ -288,27 +347,29 @@ func authLabDeviceTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, devic
 	return &secret, nil
 }
 
-func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, deviceSecret, ip, appVersion string, sessionID *string, openApps []byte, previousUUID, sshPublicKey, diagnosticNote string) (*LabDeviceHeartbeatResult, error) {
+func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, hb labHeartbeat) (*LabDeviceHeartbeatResult, error) {
 	// Antes de autenticar: se o app trocou de identidade (0.1.10+), costura o
 	// registro antigo na nova em vez de deixar o PC duplicado.
-	migrado, err := migrateLabDeviceUUIDTx(ctx, tx, previousUUID, deviceUUID, deviceSecret)
+	migrado, err := migrateLabDeviceUUIDTx(ctx, tx, hb.PreviousUUID, hb.DeviceUUID, hb.DeviceSecret)
 	if err != nil {
 		return nil, err
 	}
-	minted, err := authLabDeviceTx(ctx, tx, deviceUUID, deviceSecret)
+	minted, err := authLabDeviceTx(ctx, tx, hb.DeviceUUID, hb.DeviceSecret)
 	if err != nil {
 		return nil, err
 	}
 
 	var res LabDeviceHeartbeatResult
-	if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, deviceUUID, ip, appVersion, sessionID, openApps, sshPublicKey, diagnosticNote).
+	if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, hb.DeviceUUID, hb.IP, hb.AppVersion, hb.SessionID,
+		hb.OpenApps, hb.SSHPublicKey, hb.DiagnosticNote, hb.Hostname,
+		hb.CPUPercent, hb.RAMPercent, hb.GPUPercent, hb.GPUName, hb.HasMetrics()).
 		Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken,
 			&res.ScreenshotRequested); err != nil {
 		return nil, err
 	}
 	res.PreviousDeviceResolved = migrado
 	if res.UnpairRequested || res.PairToken != nil || res.ScreenshotRequested {
-		if _, err := tx.Exec(ctx, labDeviceHeartbeatClearSQL, deviceUUID); err != nil {
+		if _, err := tx.Exec(ctx, labDeviceHeartbeatClearSQL, hb.DeviceUUID); err != nil {
 			return nil, err
 		}
 	}
@@ -355,13 +416,15 @@ func (s *Server) resetLabDeviceSecret(ctx context.Context, id string) error {
 const labDeviceCols = `d.id::text, d.device_uuid, d.name, d.last_seen_at, d.last_ip, d.app_version,
 	d.current_session_id::text, c.name, s.status,
 	(d.device_secret_hash IS NOT NULL AND d.device_secret_hash != '') AS has_secret, d.created_at,
-	coalesce(d.open_apps, '[]'::jsonb), d.open_apps_at, d.ssh_public_key, d.diagnostic_note`
+	coalesce(d.open_apps, '[]'::jsonb), d.open_apps_at, d.ssh_public_key, d.diagnostic_note,
+	d.hostname, d.cpu_percent, d.ram_percent, d.gpu_percent, d.gpu_name, d.metrics_at`
 
 func scanLabDevice(row pgx.Row) (*LabDevice, error) {
 	var d LabDevice
 	err := row.Scan(&d.ID, &d.DeviceUUID, &d.Name, &d.LastSeenAt, &d.LastIP, &d.AppVersion,
 		&d.CurrentSessionID, &d.CurrentClientName, &d.CurrentStatus, &d.HasSecret, &d.CreatedAt,
-		&d.OpenApps, &d.OpenAppsAt, &d.SSHPublicKey, &d.DiagnosticNote)
+		&d.OpenApps, &d.OpenAppsAt, &d.SSHPublicKey, &d.DiagnosticNote,
+		&d.Hostname, &d.CPUPercent, &d.RAMPercent, &d.GPUPercent, &d.GPUName, &d.MetricsAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
