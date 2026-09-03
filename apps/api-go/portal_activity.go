@@ -28,7 +28,11 @@ func (s *Server) portalLogActivity(r *http.Request, action, entityType, entityID
 
 	payload := map[string]any{}
 	actor := map[string]any{"id": fmt.Sprint(actorID)}
-	if u, err := s.userByID(ctx, actorID); err == nil && u != nil {
+	// cachedUserByID (não userByID): o actor já foi resolvido pelo
+	// authGuard/permGuard segundos atrás e está no cache de 30s (cache.go) —
+	// usar a versão sem cache aqui dobrava o SELECT em `user` a cada mutação
+	// do portal só para reler o mesmo registro.
+	if u, err := s.cachedUserByID(ctx, actorID); err == nil && u != nil {
 		actor["name"] = u.Name
 		actor["email"] = u.Email
 		actor["role"] = portalRoleLabel(u.Role)
