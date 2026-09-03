@@ -764,23 +764,25 @@ Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por pe
 
 ## Social — Calendário Editorial — `api.santos-tech.com/social`
 
-Auth: admin (3)/professor (2) ou role 4 com permissão `social` (read/execute).
+Auth: admin (3) ou role 4 com permissão `social` (read/write/execute) — `write` cria/edita
+posts (`POST`/`PUT`), `execute` atualiza status, publica e comenta. `DELETE` e
+`PUT /social/platform-owners`/`PUT /social/settings` continuam admin-only.
 Gestão de posts de redes sociais com **briefing pré-mastigado**: cada post carrega
 o conteúdo completo para o colaborador só executar a arte (formato, texto-da-arte
 por slide, legenda, hashtags, direção visual, specs). Notas e histórico de status;
 ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 
 - `GET /social/posts` — `{posts:[SocialPost]}`
-- `POST /social/posts {SocialPostInput}` → 201 `{post}` · campo inválido → 400
+- `POST /social/posts {SocialPostInput}` (`social:write`) → 201 `{post}` · campo inválido → 400
 - `GET /social/posts/{id}` — `{post}` · inexistente → 404
-- `PUT /social/posts/{id} {SocialPostInput parcial}` → `{post}` — atualização **PARCIAL**:
+- `PUT /social/posts/{id} {SocialPostInput parcial}` (`social:write`) → `{post}` — atualização **PARCIAL**:
   manda só os campos que mudaram, não o objeto inteiro. Campo ausente do JSON mantém o
   valor atual do post; campo presente — mesmo `""`/`[]`/`null` — sobrescreve (é uma
   alteração intencional). Continua aceitando o corpo completo (contrato antigo) sem
   diferença de comportamento, já que todo campo presente sobrescreve com o mesmo valor
   de antes. Campos fora do schema de `SocialPostInput` (`driveFileId`, `publishConfirmations`,
   `createdAt` etc.) são simplesmente ignorados — não têm efeito no update.
-- `DELETE /social/posts/{id}` → 204
+- `DELETE /social/posts/{id}` (admin-only) → 204
 - `PATCH /social/posts/{id}/status {status}` — registra histórico; `revisao` alerta o CEO
 - `GET /social/posts/{id}/history` — `{history:[{oldStatus,newStatus,changedBy,changedAt}]}`
 - `GET|POST /social/posts/{id}/notes` — comentários internos

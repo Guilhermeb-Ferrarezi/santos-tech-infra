@@ -3306,7 +3306,7 @@ paths:
     post:
       tags: [Social]
       summary: Cria post
-      description: "Admin-only. Rate limit 20/min."
+      description: "Requer Admin ou cargo com `social:write`. Rate limit 20/min."
       requestBody:
         required: true
         content:
@@ -3326,7 +3326,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          description: Não é Admin.
+          description: Sem a permissão social:write.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -3359,7 +3359,7 @@ paths:
       tags: [Social]
       summary: Atualiza post (parcial)
       description: |
-        Admin-only. Rate limit 30/min. Atualização **PARCIAL**: só os campos
+        Requer Admin ou cargo com `social:write`. Rate limit 30/min. Atualização **PARCIAL**: só os campos
         presentes no corpo JSON são sobrescritos — campo ausente mantém o
         valor atual, campo presente (mesmo `""`/`[]`/`null`) é aplicado.
         Continua aceitando o objeto completo (contrato antigo) sem diferença
