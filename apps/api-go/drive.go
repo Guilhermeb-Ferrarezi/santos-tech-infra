@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -639,6 +640,16 @@ func (d *DriveClient) UploadFile(ctx context.Context, driveFolderID, filename, c
 	boundary := mw.Boundary()
 
 	go func() {
+		// recover: sem isto, um panic aqui dentro (ex.: r.Read explodindo no
+		// meio do upload) derruba o processo inteiro — toda goroutine de fundo
+		// do serviço segue essa convenção (ver safeGo em util.go), só esta
+		// tinha ficado de fora.
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic no upload de arquivo pro Drive", "panic", rec, "stack", string(debug.Stack()))
+				pw.CloseWithError(fmt.Errorf("panic no upload: %v", rec))
+			}
+		}()
 		metaPart, err := mw.CreatePart(map[string][]string{"Content-Type": {"application/json; charset=UTF-8"}})
 		if err != nil {
 			pw.CloseWithError(err)

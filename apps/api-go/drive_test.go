@@ -304,3 +304,26 @@ func TestIsDescendantAchaAncestral(t *testing.T) {
 		t.Error("neto deveria ser descendente de raiz")
 	}
 }
+
+// panicReader simula um bug de runtime no meio do stream de upload (ex.: um
+// io.Reader de terceiros mal comportado explodindo no meio da leitura).
+type panicReader struct{}
+
+func (panicReader) Read([]byte) (int, error) {
+	panic("boom")
+}
+
+// TestUploadFileRecoversPanicNoPipe: um panic dentro da goroutine que
+// alimenta o io.Pipe do multipart (ex.: r.Read explodindo) tem que virar um
+// erro comum devolvido por UploadFile, não derrubar o processo inteiro — sem
+// o recover() em UploadFile, este teste crasha o binário de teste em vez de
+// simplesmente falhar.
+func TestUploadFileRecoversPanicNoPipe(t *testing.T) {
+	d := fakeDriveClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	_, err := d.UploadFile(context.Background(), "folder1", "a.txt", "text/plain", panicReader{})
+	if err == nil {
+		t.Fatal("esperava erro (panic recuperado), got nil")
+	}
+}

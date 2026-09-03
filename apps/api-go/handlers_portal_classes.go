@@ -227,6 +227,10 @@ func (s *Server) handlePortalAddClassTeacher(w http.ResponseWriter, r *http.Requ
 		writeErr(w, err)
 		return
 	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), classID); err != nil {
+		writeErr(w, err)
+		return
+	}
 	var in portalTeacherInput
 	if err := portalBodyJSON(w, r, &in); err != nil {
 		writeErr(w, validationErr("corpo inválido"))
