@@ -165,6 +165,21 @@ type labDeviceQuerier interface {
 // um token velho ressuscitando uma sessão antiga quebra essa regra.
 const pairTokenTTL = 10 * time.Minute
 
+// labDevicePairTokenSQL deixa o token pronto pra entrega no próximo heartbeat.
+//
+// A validade PRECISA ser gravada junto com o token. O RETURNING do heartbeat só
+// entrega quando `pending_pair_token_expires_at > now()`, e em SQL
+// `NULL > now()` é NULL — ou seja, deixar a coluna nula não "desliga a
+// expiração", desliga a ENTREGA. Enquanto este UPDATE gravava só o token, o
+// pareamento por QR nunca funcionou: o PC seguia na tela de pareamento, a
+// sessão de horas ficava aberta sem dono, e o token em texto puro permanecia no
+// banco (a limpeza só roda quando algum comando é entregue). Ver
+// TestPareamentoGravaValidadeJuntoComOToken.
+const labDevicePairTokenSQL = `
+	UPDATE hour_lab_devices
+	SET pending_pair_token = $2, pending_pair_token_expires_at = now() + make_interval(secs => $3)
+	WHERE device_uuid = $1`
+
 const labDeviceHeartbeatUpsertSQL = `
 	INSERT INTO hour_lab_devices (device_uuid, last_seen_at, last_ip, app_version, current_session_id,
 		open_apps, open_apps_at, ssh_public_key, diagnostic_note, hostname,
@@ -552,8 +567,7 @@ func (s *Server) pairLabDeviceViaQR(ctx context.Context, deviceUUID, clientID st
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE hour_lab_devices SET pending_pair_token = $2 WHERE device_uuid = $1`,
-		deviceUUID, token); err != nil {
+	if _, err := s.db.Exec(ctx, labDevicePairTokenSQL, deviceUUID, token, pairTokenTTL.Seconds()); err != nil {
 		return nil, err
 	}
 	return h, nil
