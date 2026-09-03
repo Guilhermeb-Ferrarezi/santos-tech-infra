@@ -75,6 +75,10 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		GPUPercent *float64 `json:"gpuPercent"`
 		// Modelo da GPU, pra distinguir os rigs ("NVIDIA GeForce RTX 5060 Ti").
 		GPUName string `json:"gpuName"`
+		// Consumo da GPU em watts (nvidia-smi power.draw). Mesma semântica de
+		// ausência das outras métricas; sem equivalente pra CPU/RAM (precisaria
+		// de medidor físico).
+		GPUPowerWatts *float64 `json:"gpuPowerWatts"`
 	}
 	// Erro de decode separado do deviceId inválido: juntar os dois fazia um
 	// corpo grande demais ser reportado como "deviceId inválido", mandando quem
@@ -146,6 +150,7 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		CPUPercent:     validPercent(in.CPUPercent),
 		RAMPercent:     validPercent(in.RAMPercent),
 		GPUPercent:     validPercent(in.GPUPercent),
+		GPUPowerWatts:  validWatts(in.GPUPowerWatts),
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -493,6 +498,20 @@ const (
 // de "máquina parada" e mandaria o admin investigar o problema errado.
 func validPercent(v *float64) *float64 {
 	if v == nil || math.IsNaN(*v) || math.IsInf(*v, 0) || *v < 0 || *v > 100 {
+		return nil
+	}
+	return v
+}
+
+// maxPlausibleGPUWatts: nem a GPU mais consumidora do mercado passa disso —
+// serve só pra barrar lixo (rota pública, sem auth de verdade), não pra
+// validar hardware específico.
+const maxPlausibleGPUWatts = 1000
+
+// validWatts é o validPercent para consumo em watts: mesma regra de "fora da
+// faixa plausível vira nil, mantém a leitura anterior".
+func validWatts(v *float64) *float64 {
+	if v == nil || math.IsNaN(*v) || math.IsInf(*v, 0) || *v < 0 || *v > maxPlausibleGPUWatts {
 		return nil
 	}
 	return v

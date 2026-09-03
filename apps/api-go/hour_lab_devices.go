@@ -63,11 +63,15 @@ type LabDevice struct {
 	Hostname *string `json:"hostname"`
 	// Uso da máquina no último heartbeat que trouxe métricas. nil = o PC nunca
 	// reportou (script antigo) — o dashboard mostra traço, nunca 0%.
-	CPUPercent *float64   `json:"cpuPercent"`
-	RAMPercent *float64   `json:"ramPercent"`
-	GPUPercent *float64   `json:"gpuPercent"`
-	GPUName    *string    `json:"gpuName"`
-	MetricsAt  *time.Time `json:"metricsAt"`
+	CPUPercent *float64 `json:"cpuPercent"`
+	RAMPercent *float64 `json:"ramPercent"`
+	GPUPercent *float64 `json:"gpuPercent"`
+	GPUName    *string  `json:"gpuName"`
+	// GPUPowerWatts: consumo da GPU em watts (nvidia-smi power.draw). Não tem
+	// equivalente pra CPU/RAM por software — precisaria de medidor físico na
+	// tomada — mas numa rig de mineração é a GPU que domina o consumo mesmo.
+	GPUPowerWatts *float64   `json:"gpuPowerWatts"`
+	MetricsAt     *time.Time `json:"metricsAt"`
 	// LockRequestedAt/RestartRequestedAt/ShutdownRequestedAt: não-nil enquanto o
 	// pedido não foi entregue no heartbeat (ver labDeviceHeartbeatClearSQL) —
 	// o dashboard usa só pra saber que ainda está "em voo", a ação em si não
@@ -107,16 +111,17 @@ type labHeartbeat struct {
 	Hostname       string
 	GPUName        string
 	// Métricas de uso; nil = não veio neste heartbeat (mantém a anterior).
-	CPUPercent *float64
-	RAMPercent *float64
-	GPUPercent *float64
+	CPUPercent    *float64
+	RAMPercent    *float64
+	GPUPercent    *float64
+	GPUPowerWatts *float64
 }
 
 // HasMetrics diz se este heartbeat trouxe alguma métrica — é o que decide se
 // metrics_at avança. Sem isso, um PC que parou de reportar pareceria estar
 // mandando uso novo a cada 60s.
 func (h labHeartbeat) HasMetrics() bool {
-	return h.CPUPercent != nil || h.RAMPercent != nil || h.GPUPercent != nil
+	return h.CPUPercent != nil || h.RAMPercent != nil || h.GPUPercent != nil || h.GPUPowerWatts != nil
 }
 
 // LabDeviceHeartbeatResult é o que o app precisa saber a cada heartbeat: nome
@@ -237,11 +242,11 @@ func sessionIDText(id *string) string {
 const labDeviceHeartbeatUpsertSQL = `
 	INSERT INTO hour_lab_devices (device_uuid, last_seen_at, last_ip, app_version, current_session_id,
 		open_apps, open_apps_at, ssh_public_key, diagnostic_note, hostname,
-		cpu_percent, ram_percent, gpu_percent, gpu_name, metrics_at)
+		cpu_percent, ram_percent, gpu_percent, gpu_name, metrics_at, gpu_power_watts)
 	VALUES ($1, now(), $2, $3, $4::uuid, $5::jsonb, CASE WHEN $5::jsonb IS NULL THEN NULL ELSE now() END,
 		NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''),
 		$9, $10, $11, NULLIF($12, ''),
-		CASE WHEN $13 THEN now() ELSE NULL END)
+		CASE WHEN $13 THEN now() ELSE NULL END, $14)
 	ON CONFLICT (device_uuid) DO UPDATE SET
 		last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid,
 		-- App antigo não manda a lista: manter a última conhecida é melhor que
@@ -260,6 +265,7 @@ const labDeviceHeartbeatUpsertSQL = `
 		ram_percent = coalesce($10, hour_lab_devices.ram_percent),
 		gpu_percent = coalesce($11, hour_lab_devices.gpu_percent),
 		gpu_name = CASE WHEN $12 = '' THEN hour_lab_devices.gpu_name ELSE $12 END,
+		gpu_power_watts = coalesce($14, hour_lab_devices.gpu_power_watts),
 		-- Só avança quando veio métrica de verdade, senão um PC que parou de
 		-- reportar pareceria estar mandando uso novo a cada 60s.
 		metrics_at = CASE WHEN $13 THEN now() ELSE hour_lab_devices.metrics_at END
@@ -473,7 +479,7 @@ func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, hb lab
 		// mantém o anterior" — só deixou de rodar a cada 60s.
 		if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, hb.DeviceUUID, hb.IP, hb.AppVersion, hb.SessionID,
 			hb.OpenApps, hb.SSHPublicKey, hb.DiagnosticNote, hb.Hostname,
-			hb.CPUPercent, hb.RAMPercent, hb.GPUPercent, hb.GPUName, hb.HasMetrics()).
+			hb.CPUPercent, hb.RAMPercent, hb.GPUPercent, hb.GPUName, hb.HasMetrics(), hb.GPUPowerWatts).
 			Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken,
 				&res.ScreenshotRequested, &res.LockRequested, &res.RestartRequested, &res.ShutdownRequested,
 				&res.CommandID, &res.CommandText); err != nil {
@@ -533,7 +539,7 @@ const labDeviceCols = `d.id::text, d.device_uuid, d.name, d.last_seen_at, d.last
 	coalesce(d.open_apps, '[]'::jsonb), d.open_apps_at, d.ssh_public_key, d.diagnostic_note,
 	d.hostname, d.cpu_percent, d.ram_percent, d.gpu_percent, d.gpu_name, d.metrics_at,
 	d.lock_requested_at, d.restart_requested_at, d.shutdown_requested_at,
-	d.command_text, d.command_sent_at, d.command_result, d.command_result_at`
+	d.command_text, d.command_sent_at, d.command_result, d.command_result_at, d.gpu_power_watts`
 
 func scanLabDevice(row pgx.Row) (*LabDevice, error) {
 	var d LabDevice
@@ -542,7 +548,7 @@ func scanLabDevice(row pgx.Row) (*LabDevice, error) {
 		&d.OpenApps, &d.OpenAppsAt, &d.SSHPublicKey, &d.DiagnosticNote,
 		&d.Hostname, &d.CPUPercent, &d.RAMPercent, &d.GPUPercent, &d.GPUName, &d.MetricsAt,
 		&d.LockRequestedAt, &d.RestartRequestedAt, &d.ShutdownRequestedAt,
-		&d.CommandText, &d.CommandSentAt, &d.CommandResult, &d.CommandResultAt)
+		&d.CommandText, &d.CommandSentAt, &d.CommandResult, &d.CommandResultAt, &d.GPUPowerWatts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

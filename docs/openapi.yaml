@@ -5071,6 +5071,16 @@ paths:
                   type: string
                   maxLength: 100
                   description: Modelo da GPU ("NVIDIA GeForce RTX 5060 Ti"). Vazio mantém o já registrado.
+                gpuPowerWatts:
+                  type: number
+                  minimum: 0
+                  maximum: 1000
+                  nullable: true
+                  description: >
+                    Consumo da GPU agora, em watts (nvidia-smi power.draw). Mesmas regras de
+                    cpuPercent (ausente/null mantém a última leitura). Sem equivalente pra
+                    CPU/RAM por software — precisaria de medidor físico na tomada — mas numa
+                    rig de mineração é a GPU que domina o consumo mesmo.
                 sshPublicKey:
                   type: string
                   maxLength: 2048
@@ -7158,6 +7168,7 @@ components:
         ramPercent: { type: number, nullable: true, description: "Uso de memória; mesma semântica de cpuPercent." }
         gpuPercent: { type: number, nullable: true, description: "Uso de GPU; null também em máquina sem GPU NVIDIA." }
         gpuName: { type: string, nullable: true, description: "Modelo da GPU reportado pelo nvidia-smi." }
+        gpuPowerWatts: { type: number, nullable: true, description: "Consumo da GPU em watts (nvidia-smi power.draw); mesma semântica de gpuPercent." }
         metricsAt:
           type: string
           format: date-time

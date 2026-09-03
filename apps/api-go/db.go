@@ -954,6 +954,12 @@ ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS command_text TEXT;
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS command_sent_at TIMESTAMPTZ;
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS command_result TEXT;
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS command_result_at TIMESTAMPTZ;
+
+-- Consumo da GPU em watts (nvidia-smi power.draw) -- numa rig de mineração é
+-- o que mais importa de "energia": CPU/RAM não tem leitura de watts
+-- confiável e portátil por software (precisaria de medidor físico na
+-- tomada), mas a GPU é de longe o maior consumidor mesmo.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS gpu_power_watts DOUBLE PRECISION;
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

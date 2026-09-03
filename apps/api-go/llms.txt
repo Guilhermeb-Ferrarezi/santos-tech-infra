@@ -459,7 +459,7 @@ Admin:
   mandar um comando novo zera o resultado do anterior
 
 Público (sem auth — `deviceId` é a identidade):
-- `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?, previousDeviceId?, sshPublicKey?, hostname?, cpuPercent?, ramPercent?, gpuPercent?, gpuName?}` →
+- `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?, previousDeviceId?, sshPublicKey?, hostname?, cpuPercent?, ramPercent?, gpuPercent?, gpuName?, gpuPowerWatts?}` →
   `{name, unpairRequested, message?, pairToken?, lockRequested?, restartRequested?, shutdownRequested?, command?}` ·
   rate limit 120/min. `token` é o token da sessão de horas pareada localmente,
   se houver (resolve pra `currentSessionId`/`currentClientName` na listagem
