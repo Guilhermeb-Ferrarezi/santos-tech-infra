@@ -45,9 +45,18 @@ type LabDevice struct {
 	// momento. nil = ninguém mandou nada ainda.
 	DiagnosticNote *string `json:"diagnosticNote"`
 	// OpenApps: nomes dos aplicativos abertos no último heartbeat (0.1.9+).
-	// Vazio = app antigo ou nada aberto; OpenAppsAt diz quando foi visto.
+	// Vazio = app antigo ou nada aberto; OpenAppsAt diz quando foi visto. O
+	// primeiro da lista é o app da janela em foco — o que o dashboard destaca
+	// como "em uso agora".
 	OpenApps   []string   `json:"openApps"`
 	OpenAppsAt *time.Time `json:"openAppsAt"`
+	// OpenAppIcons: nome do app aberto → sha256 do PNG do ícone (URL em
+	// /program-icons/{hash}). Preenchido na listagem cruzando o nome com o
+	// inventário do PC (ver resolveOpenAppIcons) — a imagem já veio no
+	// inventário, não num campo novo do heartbeat, então nada muda no app.
+	// Sempre um objeto, nunca null: nome ausente = sem ícone conhecido, e o
+	// dashboard cai num placeholder.
+	OpenAppIcons map[string]string `json:"openAppIcons"`
 }
 
 // LabDeviceHeartbeatResult é o que o app precisa saber a cada heartbeat: nome
@@ -359,6 +368,9 @@ func scanLabDevice(row pgx.Row) (*LabDevice, error) {
 	if err != nil {
 		return nil, err
 	}
+	// resolveOpenAppIcons preenche isto na listagem; começa {} pra o JSON de um
+	// PC que não passou por lá (ou sem apps abertos) nunca sair null.
+	d.OpenAppIcons = map[string]string{}
 	return &d, nil
 }
 
@@ -400,7 +412,16 @@ func (s *Server) listLabDevices(ctx context.Context, limit, offset int) ([]LabDe
 		}
 		out = append(out, *d)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	// Depois de fechar o cursor: resolveOpenAppIcons faz outra query no mesmo
+	// pool, e com o cursor aberto ela precisaria de uma segunda conexão à toa.
+	rows.Close()
+	if err := s.resolveOpenAppIcons(ctx, out); err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 func (s *Server) renameLabDevice(ctx context.Context, id, name string) (*LabDevice, error) {
@@ -411,12 +432,22 @@ func (s *Server) renameLabDevice(ctx context.Context, id, name string) (*LabDevi
 	if tag.RowsAffected() == 0 {
 		return nil, errLabDeviceNotFound
 	}
-	return scanLabDevice(s.db.QueryRow(ctx, `
+	d, err := scanLabDevice(s.db.QueryRow(ctx, `
 		SELECT `+labDeviceCols+`
 		FROM hour_lab_devices d
 		LEFT JOIN hour_sessions s ON s.id = d.current_session_id
 		LEFT JOIN hour_clients c ON c.id = s.client_id
 		WHERE d.id = $1::uuid`, id))
+	if err != nil || d == nil {
+		return d, err
+	}
+	// Mesmo tratamento da listagem: o dashboard substitui o item da lista pelo
+	// que volta daqui, e sem isto os ícones sumiriam do card até o próximo poll.
+	one := []LabDevice{*d}
+	if err := s.resolveOpenAppIcons(ctx, one); err != nil {
+		return nil, err
+	}
+	return &one[0], nil
 }
 
 // requestLabDeviceUnpair pede pro PC voltar sozinho pra tela de colar link no
@@ -501,12 +532,9 @@ func encodeOpenApps(apps []string) []byte {
 	}
 	clean := make([]string, 0, len(apps))
 	for _, a := range apps {
-		name := appDisplayName(sanitizeInventoryField(a))
+		name := cleanOpenAppName(a)
 		if name == "" {
 			continue
-		}
-		if len([]rune(name)) > maxOpenAppNameLength {
-			name = truncRunes(name, maxOpenAppNameLength)
 		}
 		clean = append(clean, name)
 		if len(clean) >= maxOpenApps {
@@ -518,6 +546,16 @@ func encodeOpenApps(apps []string) []byte {
 		return nil
 	}
 	return out
+}
+
+// cleanOpenAppName é a normalização de um nome de app aberto — a mesma pra
+// lista e pras chaves do mapa de ícones, senão as duas não batem.
+func cleanOpenAppName(raw string) string {
+	name := appDisplayName(sanitizeInventoryField(raw))
+	if len([]rune(name)) > maxOpenAppNameLength {
+		name = truncRunes(name, maxOpenAppNameLength)
+	}
+	return name
 }
 
 // appDisplayName resolve o nome que vai pra tela. Programa comum devolve o nome

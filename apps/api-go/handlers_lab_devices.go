@@ -42,7 +42,8 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		// antigo na nova identidade em vez de deixar o mesmo PC duplicado.
 		PreviousDeviceID string `json:"previousDeviceId"`
 		// Nomes dos aplicativos abertos agora (0.1.9+). Ausente = app antigo, e
-		// aí a última lista conhecida é mantida em vez de apagada.
+		// aí a última lista conhecida é mantida em vez de apagada. O primeiro é
+		// o da janela em foco — o "em uso agora" que o dashboard destaca.
 		OpenApps []string `json:"openApps"`
 		// SSHPublicKey: chave pública gerada localmente pelo autounattend.xml da
 		// imagem Windows, mandada só no primeiro heartbeat da máquina — string
