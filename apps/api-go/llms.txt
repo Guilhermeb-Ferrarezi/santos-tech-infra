@@ -84,6 +84,10 @@
 - `GET /auth/me` — `{user}`: id, email, username, name, role, customRoleId,
   permissions, avatarUrl, mfaEnabled, mfaMethod, mfaTotp, mfaEmail,
   emailVerified, suspendedAt, createdAt, preferences (JSONB livre de UI)
+- `GET /auth/mailboxes/institutional` — `{emails}` (lista de string): emails com
+  `login_disabled=true` (caixas institucionais). Sessão qualquer papel (não
+  precisa admin, mesmo nível de `/auth/me`). Consumido pelo serviço `email`
+  (mails.santos-tech.com) pra validar concessões de acesso a caixa compartilhada.
 - `PATCH /auth/me/preferences {…}` — merge no JSONB de preferências
 - `GET /auth/google[?return_to=/caminho]` · `GET /auth/google/callback` — OAuth
   (respeita MFA; `return_to` preservado no cookie de state e devolvido no redirect)
@@ -1168,9 +1172,18 @@ auth central (cookie/Bearer); `POST /send` usa `X-Api-Key` (chave própria).
   `DELETE /mailbox/shared/messages/{uid}` (move para Trash; 503 shared_mailbox_disabled quando desligada)
 - Comunicados (admin): `POST /broadcast {audience: "all"|{role:1|2}|{userIds:[...]}, subject, html|text}`
   → `{total,sent,failed[]}`; audience resolvida em GET /auth/admin/users; suspensos não recebem; teto 500
-- Caixa (IMAP, admin): `GET /mailbox/{email}/messages[/{uid}]|quota|export` ·
-  `DELETE /mailbox/{email}/messages/{uid}` (move para Trash; 400 invalid_email|invalid_uid) ·
+- Caixa institucional por email (admin OU colaborador com grant explícito —
+  ver linha de baixo; export/purge continuam admin/sudo-only):
+  `GET /mailbox/{email}/messages[/{uid}]|quota` ·
+  `POST /mailbox/{email}/messages/{uid}/seen {seen}` ·
+  `POST /mailbox/{email}/send {to,subject,html|text,inReplyTo?}` ·
+  `DELETE /mailbox/{email}/messages/{uid}` (move para Trash; 400 invalid_email|invalid_uid;
+  403 mailbox_access_denied sem grant) · `GET /mailbox/{email}/export` (**admin**) ·
   `DELETE /mailbox/{email}` (**exige sudo**)
+- Acesso a caixa institucional (admin-only): `GET|POST /mailbox/{email}/access {userEmail}` ·
+  `DELETE /mailbox/{email}/access/{userEmail}` (400 not_institutional_mailbox se o alvo não
+  tiver `login_disabled=true`) · `GET /mailbox/granted` (qualquer role — lista as caixas
+  institucionais concedidas ao usuário da sessão, `{mailboxes:[{mailboxEmail,grantedAt}]}`)
 - IA (proxy pro Claude Agent): `POST /ai/generate|rewrite|subjects|spam-check|`
   `insights|command|image` · `GET /ai/logs`
 - Público: `GET /unsubscribe` (HTML; token HMAC) · `GET /t/open` · `GET /t/click`
