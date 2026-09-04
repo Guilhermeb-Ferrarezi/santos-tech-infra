@@ -393,6 +393,30 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
               example: { code: ACCOUNT_SUSPENDED, message: "Conta suspensa" }
 
+  /auth/mailboxes/institutional:
+    get:
+      tags: [Auth]
+      summary: Listar caixas institucionais (login_disabled)
+      description: |
+        Retorna os emails de `users` com `login_disabled = true` (caixas
+        compartilhadas institucionais, sem login por nenhum caminho). Exige
+        apenas sessão válida — qualquer papel autenticado (student/teacher/
+        admin), mesmo nível de proteção de `/auth/me`.
+      responses:
+        "200":
+          description: Lista de emails institucionais
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  emails:
+                    type: array
+                    items: { type: string, format: email }
+                required: [emails]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /auth/refresh:
     post:
       tags: [Auth]

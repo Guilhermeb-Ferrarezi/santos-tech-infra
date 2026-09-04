@@ -14,6 +14,7 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /auth/logout", s.handleLogoutGet)
 	mux.HandleFunc("GET /auth/me", s.handleMe)
+	mux.HandleFunc("GET /auth/mailboxes/institutional", s.authGuard(s.handleListInstitutionalMailboxes))
 	mux.HandleFunc("POST /auth/refresh", s.rateLimit(20, min, s.handleRefresh))
 
 	// Preferências de UI do usuário (merge no JSONB users.preferences — precisa de sessão)

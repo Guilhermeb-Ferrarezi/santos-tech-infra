@@ -1066,6 +1066,26 @@ func (s *Server) listUsersByDomain(ctx context.Context, domain string) ([]User, 
 	return collectUsers(rows)
 }
 
+// listInstitutionalMailboxes devolve os emails das caixas institucionais
+// (login_disabled=true), em ordem alfabética. Consumido pelo serviço `email`
+// (mails.santos-tech.com) pra saber quais caixas um grant pode cobrir.
+func (s *Server) listInstitutionalMailboxes(ctx context.Context) ([]string, error) {
+	rows, err := s.db.Query(ctx, `SELECT email FROM users WHERE login_disabled = true ORDER BY email`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, err
+		}
+		out = append(out, email)
+	}
+	return out, rows.Err()
+}
+
 // listAllUsers devolve todos os usuários (qualquer domínio), do mais recente
 // para o mais antigo.
 func (s *Server) listAllUsers(ctx context.Context) ([]User, error) {
