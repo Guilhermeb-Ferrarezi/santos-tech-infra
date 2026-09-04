@@ -152,6 +152,12 @@ type shellControl struct {
 // primeira mensagem, mesmo padrão do heartbeat), mas exige o segredo já
 // adotado — não faz sentido um PC nunca visto abrir sessão de shell.
 func (s *Server) handleLabDeviceShellAgent(w http.ResponseWriter, r *http.Request) {
+	// no-transform: pede pra qualquer proxy no meio (Traefik/Cloudflare) NAO
+	// comprimir a resposta -- confirmado ao vivo que frames chegavam
+	// comprimidos (RSV1) no agente .NET mesmo com CompressionMode zero-value
+	// (= CompressionDisabled) neste servidor, indicando que a compressao
+	// esta sendo aplicada por um proxy no meio do caminho, nao por aqui.
+	w.Header().Set("Cache-Control", "no-transform")
 	c, err := websocket.Accept(hijackWriter{w}, r, s.wsOriginOpts())
 	if err != nil {
 		return
@@ -247,6 +253,7 @@ func (s *Server) handleLabDeviceShellWS(w http.ResponseWriter, r *http.Request) 
 		agent.mu.Unlock()
 	}()
 
+	w.Header().Set("Cache-Control", "no-transform")
 	adminConn, err := websocket.Accept(hijackWriter{w}, r, s.wsOriginOpts())
 	if err != nil {
 		return
