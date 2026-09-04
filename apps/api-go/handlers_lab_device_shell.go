@@ -266,6 +266,34 @@ func (s *Server) handleLabDeviceShellWS(w http.ResponseWriter, r *http.Request) 
 	ctx, cancelRelay := context.WithCancel(r.Context())
 	defer cancelRelay()
 
+	// 04/09/2026: sem isto, uma conexão do ADMIN que cai sem fechar
+	// direito (rede de celular trocando de torre, tela apagando) deixava
+	// `agent.busy` travado em true pra sempre -- confirmado ao vivo
+	// (SHELL_BUSY numa tentativa seguinte, sem ninguém realmente usando o
+	// PC). r.Context() só cancela quando o HTTP normal percebe a conexão
+	// caiu, o que NÃO acontece de forma confiável depois de um Hijack --
+	// o socket vira responsabilidade só do coder/websocket a partir daqui.
+	// Ping periódico com timeout curto é o jeito de detectar isso sem
+	// depender do keepalive de TCP do SO (que por padrão é de horas).
+	go func() {
+		t := time.NewTicker(20 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				pingCtx, pingCancel := context.WithTimeout(ctx, 10*time.Second)
+				err := adminConn.Ping(pingCtx)
+				pingCancel()
+				if err != nil {
+					cancelRelay()
+					return
+				}
+			}
+		}
+	}()
+
 	// Dois goroutines, um por direção — cada Conn só é LIDA por uma goroutine
 	// (coder/websocket não permite leitura concorrente na mesma conn); Write
 	// é seguro mesmo se algo mais escrever na mesma conn em paralelo (aqui
