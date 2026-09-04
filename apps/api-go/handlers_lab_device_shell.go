@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -13,6 +15,24 @@ import (
 	"github.com/coder/websocket/wsjson"
 	"github.com/jackc/pgx/v5"
 )
+
+// hijackWriter existe porque coder/websocket procura Hijack() percorrendo a
+// cadeia de ResponseWriters à mão (ver hijacker() na lib) checando, a cada
+// camada, se ELA MESMA implementa http.Hijacker antes de seguir pelo
+// Unwrap() -- confirmado ao vivo em produção que essa busca falha através
+// da cadeia de middlewares deste servidor (RequestLogger→securityHeaders→
+// metricsMiddleware→mux), mesmo cada camada implementando Unwrap()
+// corretamente: request nunca chegava a virar WS, servidor respondia 501
+// "Not Implemented" na hora (log confirmou: é o PRÓPRIO servidor gerando
+// isso, não Cloudflare/Traefik). http.ResponseController (mecanismo oficial
+// do Go 1.20+, mais robusto que a busca manual da lib) resolve isso —
+// encapsular e delegar pra ele evita depender da lib achar o Hijacker
+// sozinha através de N camadas.
+type hijackWriter struct{ http.ResponseWriter }
+
+func (h hijackWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(h.ResponseWriter).Hijack()
+}
 
 // Shell remoto interativo pra um PC de laboratório: o AGENTE (script no PC,
 // serviço separado do watchdog de 60s) mantém uma conexão WebSocket sempre
@@ -132,7 +152,7 @@ type shellControl struct {
 // primeira mensagem, mesmo padrão do heartbeat), mas exige o segredo já
 // adotado — não faz sentido um PC nunca visto abrir sessão de shell.
 func (s *Server) handleLabDeviceShellAgent(w http.ResponseWriter, r *http.Request) {
-	c, err := websocket.Accept(w, r, s.wsOriginOpts())
+	c, err := websocket.Accept(hijackWriter{w}, r, s.wsOriginOpts())
 	if err != nil {
 		return
 	}
@@ -227,7 +247,7 @@ func (s *Server) handleLabDeviceShellWS(w http.ResponseWriter, r *http.Request) 
 		agent.mu.Unlock()
 	}()
 
-	adminConn, err := websocket.Accept(w, r, s.wsOriginOpts())
+	adminConn, err := websocket.Accept(hijackWriter{w}, r, s.wsOriginOpts())
 	if err != nil {
 		return
 	}
