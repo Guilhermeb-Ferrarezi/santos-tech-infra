@@ -444,6 +444,7 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	// recente, ver handlers_sudo.go). Sem rate limit próprio: é um WS de
 	// longa duração, não uma rajada de requests.
 	mux.HandleFunc("GET /hour-lab-devices/{id}/shell", s.adminGuard(s.sudoGuard(s.handleLabDeviceShellWS)))
+	mux.HandleFunc("GET /hour-lab-devices/{id}/shell-check", s.rateLimit(30, min, s.adminGuard(s.sudoGuard(s.handleLabDeviceShellCheck))))
 	// Captura de tela sob demanda: pedir é admin, a imagem chega pelo próprio
 	// PC (rota pública abaixo) e o histórico fica com quem pediu registrado.
 	mux.HandleFunc("POST /hour-lab-devices/{id}/screenshot", s.rateLimit(30, min, s.adminGuard(s.handleRequestLabDeviceScreenshot)))

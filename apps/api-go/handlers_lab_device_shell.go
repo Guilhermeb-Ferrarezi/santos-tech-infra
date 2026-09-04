@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"sync"
@@ -161,6 +162,34 @@ func (s *Server) handleLabDeviceShellAgent(w http.ResponseWriter, r *http.Reques
 	// protocolo WS cobre isso via CloseRead).
 	ctx2 := c.CloseRead(r.Context())
 	<-ctx2.Done()
+}
+
+// GET /hour-lab-devices/{id}/shell-check — checagem REST antes de abrir o WS.
+// Existe só por uma limitação do navegador: um handshake de WebSocket que
+// falha não deixa o JS ler o status HTTP nem o corpo da resposta (por
+// design, contra vazamento de info entre origens) — então o 403
+// SUDO_REQUIRED que o sudoGuard devolveria não dá pra distinguir de
+// "servidor fora do ar" no lado do cliente, e o account-kit não tem como
+// interceptar e mandar pro /confirm. Uma chamada REST comum ANTES do WS
+// (mesmo sudoGuard, mesma janela de elevação) resolve: se isto passar, o WS
+// também vai passar. De quebra, já informa se o agente do PC está
+// conectado — sem isso, uma tentativa de WS contra um PC sem agente falharia
+// do mesmo jeito silencioso (erro genérico, sem "PC não está com o agente
+// rodando" pra mostrar).
+func (s *Server) handleLabDeviceShellCheck(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errLabDeviceNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	deviceUUID, err := s.lookupDeviceUUID(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	agentOnline := s.labShellHub.get(deviceUUID) != nil
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"agentOnline": agentOnline})
 }
 
 // GET /hour-lab-devices/{id}/shell — o ADMIN conecta aqui pra abrir uma

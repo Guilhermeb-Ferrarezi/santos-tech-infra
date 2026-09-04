@@ -457,6 +457,11 @@ Admin:
   o resultado chega depois via `POST /public/lab-devices/command-result` e
   aparece em `commandResult`/`commandResultAt` no `LabDevice` da listagem;
   mandar um comando novo zera o resultado do anterior
+- `GET /hour-lab-devices/{id}/shell-check` → `{agentOnline}` · rate limit
+  30/min — mesmo admin+sudo do `/shell` abaixo; existe pra rodar ANTES do WS
+  (um handshake de WS que falha não deixa o JS ler o motivo — nem status
+  nem corpo — então o front não tem como distinguir SUDO_REQUIRED de
+  qualquer outro erro sem essa checagem REST comum antes).
 - `GET /hour-lab-devices/{id}/shell` — **WebSocket**, exige admin + sudo
   (`SUDO_REQUIRED` 403 sem elevação recente, ver `/auth/sudo/verify`). Shell
   interativo de verdade (não é "dispara e espera heartbeat" como os comandos
