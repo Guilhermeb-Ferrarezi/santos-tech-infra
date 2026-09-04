@@ -439,6 +439,11 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /hour-lab-devices/{id}/shutdown", s.rateLimit(30, min, s.adminGuard(s.handleShutdownLabDevice)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/command", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceCommand)))
 	mux.HandleFunc("GET /hour-lab-devices/{id}/programs", s.adminGuard(s.handleGetLabDevicePrograms))
+	// Shell interativo: bem mais sensível que os "dispara e esquece" acima —
+	// admin sozinho não basta, exige sudo (re-confirmação de identidade
+	// recente, ver handlers_sudo.go). Sem rate limit próprio: é um WS de
+	// longa duração, não uma rajada de requests.
+	mux.HandleFunc("GET /hour-lab-devices/{id}/shell", s.adminGuard(s.sudoGuard(s.handleLabDeviceShellWS)))
 	// Captura de tela sob demanda: pedir é admin, a imagem chega pelo próprio
 	// PC (rota pública abaixo) e o histórico fica com quem pediu registrado.
 	mux.HandleFunc("POST /hour-lab-devices/{id}/screenshot", s.rateLimit(30, min, s.adminGuard(s.handleRequestLabDeviceScreenshot)))
@@ -468,6 +473,11 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /public/lab-devices/screenshot", s.rateLimit(10, min, s.handleLabDeviceScreenshot))
 	// Resultado do comando livre — o PC manda quando termina de rodar.
 	mux.HandleFunc("POST /public/lab-devices/command-result", s.rateLimit(30, min, s.handleLabDeviceCommandResult))
+	// Agente de shell interativo: o PC conecta e fica parado esperando (ver
+	// handlers_lab_device_shell.go) — autenticado pelo segredo de
+	// dispositivo na primeira mensagem, não por query string/header (rota é
+	// WS de longa duração, sem sentido aplicar rate limit por-request aqui).
+	mux.HandleFunc("GET /public/lab-devices/shell-agent", s.handleLabDeviceShellAgent)
 }
 
 // registerDownloadsRoutes: catálogo de downloads do Santos Hub. Cadastro/edição/

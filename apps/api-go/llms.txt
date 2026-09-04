@@ -457,6 +457,14 @@ Admin:
   o resultado chega depois via `POST /public/lab-devices/command-result` e
   aparece em `commandResult`/`commandResultAt` no `LabDevice` da listagem;
   mandar um comando novo zera o resultado do anterior
+- `GET /hour-lab-devices/{id}/shell` — **WebSocket**, exige admin + sudo
+  (`SUDO_REQUIRED` 403 sem elevação recente, ver `/auth/sudo/verify`). Shell
+  interativo de verdade (não é "dispara e espera heartbeat" como os comandos
+  acima) — o backend faz relay bruto de bytes entre este WS e o agente do PC
+  (`GET /public/lab-devices/shell-agent`, ver abaixo), que só existe se o
+  agente estiver conectado (`503 SHELL_AGENT_OFFLINE` se não) e livre (`409
+  SHELL_BUSY` se já tem sessão aberta). Frames binários = stdin/stdout/stderr
+  puros; o backend não interpreta o conteúdo.
 
 Público (sem auth — `deviceId` é a identidade):
 - `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?, previousDeviceId?, sshPublicKey?, hostname?, cpuPercent?, ramPercent?, gpuPercent?, gpuName?, gpuPowerWatts?, cs2BuildId?}` →
@@ -472,6 +480,14 @@ Público (sem auth — `deviceId` é a identidade):
   `commandId` precisa bater com o comando pendente ATUAL (`result` até 8000
   caracteres); um resultado atrasado de um comando já substituído é
   descartado em silêncio (204 do mesmo jeito).
+- `GET /public/lab-devices/shell-agent` — **WebSocket**, o agente de shell do
+  PC (`wnsh-shell-agent.exe`, serviço separado do watchdog de 60s — precisa
+  de I/O assíncrono de verdade, que o loop PowerShell não tem) conecta aqui e
+  fica parado esperando. Autentica na PRIMEIRA mensagem, `{deviceId,
+  deviceSecret}` (mesmo segredo do heartbeat) — sem isso, ou com segredo
+  errado, a conexão fecha. Depois disso só recebe frames de controle
+  (`{"type":"start"}` / `{"type":"stop"}`, decide quando nascer/matar o
+  `powershell.exe` real) e frames binários (stdin ↔ stdout/stderr puros).
 
   `previousDeviceId` (0.1.10+) é a identidade ANTERIOR do PC, mandada quando o
   app passa a derivar o id do MachineGuid do Windows: o servidor MOVE o registro

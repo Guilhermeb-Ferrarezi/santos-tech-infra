@@ -46,10 +46,13 @@ type Server struct {
 	vault     *Vault           // cifra as chaves do roteador de APIs; nil = feature desabilitada (endpoints respondem 503)
 	// feriadosNacionais: cliente da BrasilAPI (feriados nacionais, cache 24h) — ver agenda_feriados.go.
 	feriadosNacionais *feriadosNacionaisClient
+	// labShellHub: conexões WS dos agentes de shell dos PCs de laboratório
+	// (ver handlers_lab_device_shell.go), indexadas por device_uuid.
+	labShellHub *shellHub
 }
 
 func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), posthog: newPostHogClient(cfg.PostHogHost, cfg.PostHogProjectID, cfg.PostHogAPIKey), instagram: newInstagramClient(cfg), facebook: newFacebookClient(cfg), vault: newVault(cfg.VaultSecret, cfg.VaultSalt), feriadosNacionais: newFeriadosNacionaisClient()}
+	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), posthog: newPostHogClient(cfg.PostHogHost, cfg.PostHogProjectID, cfg.PostHogAPIKey), instagram: newInstagramClient(cfg), facebook: newFacebookClient(cfg), vault: newVault(cfg.VaultSecret, cfg.VaultSalt), feriadosNacionais: newFeriadosNacionaisClient(), labShellHub: newShellHub()}
 	if s.portalDB == nil {
 		s.portalDB = authDB
 	}
