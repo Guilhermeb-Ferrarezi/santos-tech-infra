@@ -338,19 +338,15 @@ func (s *Server) canAuthorizeOAuthClient(ctx context.Context, u *User, clientID 
 	if u.Role != RoleCustom || u.CustomRoleID == nil {
 		return false
 	}
-	var raw []byte
-	if err := s.db.QueryRow(ctx,
-		`SELECT permissions FROM custom_roles WHERE id=$1`, *u.CustomRoleID,
-	).Scan(&raw); err != nil || len(raw) == 0 {
+	// cachedCustomRole (não uma query direta): esta checagem roda em todo
+	// POST /oauth/authorize/confirm de um custom role, e o cargo já tem um
+	// cache dedicado de 2min (cache.go), invalidado em update/delete — reler
+	// direto do Postgres aqui não ganhava consistência nenhuma, só custo.
+	cr, err := s.cachedCustomRole(ctx, *u.CustomRoleID)
+	if err != nil || cr == nil {
 		return false
 	}
-	var perms struct {
-		OAuthClients []string `json:"oauth_clients"`
-	}
-	if err := json.Unmarshal(raw, &perms); err != nil {
-		return false
-	}
-	for _, c := range perms.OAuthClients {
+	for _, c := range cr.Permissions["oauth_clients"] {
 		if c == "*" || c == clientID {
 			return true
 		}
