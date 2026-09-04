@@ -1180,7 +1180,8 @@ auth central (cookie/Bearer); `POST /send` usa `X-Api-Key` (chave própria).
   `DELETE /mailbox/{email}/messages/{uid}` (move para Trash; 400 invalid_email|invalid_uid;
   403 mailbox_access_denied sem grant) · `GET /mailbox/{email}/export` (**admin**) ·
   `DELETE /mailbox/{email}` (**exige sudo**)
-- Acesso a caixa institucional (admin-only): `GET|POST /mailbox/{email}/access {userEmail}` ·
+- Acesso a caixa institucional (admin-only): `GET /mailbox/access` (TODAS as
+  concessões de uma vez, pra grade do painel) · `GET|POST /mailbox/{email}/access {userEmail}` ·
   `DELETE /mailbox/{email}/access/{userEmail}` (400 not_institutional_mailbox se o alvo não
   tiver `login_disabled=true`) · `GET /mailbox/granted` (qualquer role — lista as caixas
   institucionais concedidas ao usuário da sessão, `{mailboxes:[{mailboxEmail,grantedAt}]}`)
