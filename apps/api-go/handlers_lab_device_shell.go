@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -29,6 +30,27 @@ import (
 // do Go 1.20+, mais robusto que a busca manual da lib) resolve isso —
 // encapsular e delegar pra ele evita depender da lib achar o Hijacker
 // sozinha através de N camadas.
+// describeWriterChain é diagnóstico temporário (04/09/2026): coder/websocket
+// e http.ResponseController estavam devolvendo "feature not supported" pro
+// Hijack mesmo com metricsResponseWriter/securityHeadersWriter/
+// logResponseWriter aparentemente implementando Unwrap()/Hijack() certinho
+// -- isto imprime o tipo real em cada nível da cadeia + se implementa
+// Hijacker diretamente, pra achar onde a suposição está errada em vez de
+// continuar adivinhando.
+func describeWriterChain(w http.ResponseWriter) string {
+	desc := ""
+	for i := 0; i < 10; i++ {
+		_, isHijacker := w.(http.Hijacker)
+		desc += fmt.Sprintf("[%T hijacker=%v] ", w, isHijacker)
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		w = u.Unwrap()
+	}
+	return desc
+}
+
 type hijackWriter struct{ http.ResponseWriter }
 
 func (h hijackWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
@@ -153,6 +175,7 @@ type shellControl struct {
 // primeira mensagem, mesmo padrão do heartbeat), mas exige o segredo já
 // adotado — não faz sentido um PC nunca visto abrir sessão de shell.
 func (s *Server) handleLabDeviceShellAgent(w http.ResponseWriter, r *http.Request) {
+	slog.Error("shell-agent: DEBUG cadeia de tipos", "chain", describeWriterChain(w))
 	// no-transform: pede pra qualquer proxy no meio (Traefik/Cloudflare) NAO
 	// comprimir a resposta -- confirmado ao vivo que frames chegavam
 	// comprimidos (RSV1) no agente .NET mesmo com CompressionMode zero-value
