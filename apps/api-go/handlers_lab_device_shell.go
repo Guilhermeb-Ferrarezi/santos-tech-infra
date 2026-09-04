@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
@@ -160,6 +161,14 @@ func (s *Server) handleLabDeviceShellAgent(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Cache-Control", "no-transform")
 	c, err := websocket.Accept(hijackWriter{w}, r, s.wsOriginOpts())
 	if err != nil {
+		// Accept() falhando aqui (depois do WriteHeader(101) ja ter sido
+		// mandado -- confirmado ao vivo: log mostrava status=101 com
+		// resp_body="Internal Server Error", ou seja, falha ESPECIFICAMENTE
+		// no Hijack em si, nao antes) precisa aparecer no log: sem isto o
+		// erro real do hijack ficava mudo, so o texto generico do
+		// coder/websocket ("failed to hijack connection: ...") chegava ao
+		// cliente via http.Error, sem detalhe nenhum aqui.
+		slog.Error("shell-agent: falha no accept do websocket", "err", err)
 		return
 	}
 	defer c.CloseNow()
@@ -256,6 +265,7 @@ func (s *Server) handleLabDeviceShellWS(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Cache-Control", "no-transform")
 	adminConn, err := websocket.Accept(hijackWriter{w}, r, s.wsOriginOpts())
 	if err != nil {
+		slog.Error("shell-ws: falha no accept do websocket", "err", err)
 		return
 	}
 	defer adminConn.CloseNow()
