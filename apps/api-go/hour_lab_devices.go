@@ -70,8 +70,17 @@ type LabDevice struct {
 	// GPUPowerWatts: consumo da GPU em watts (nvidia-smi power.draw). Não tem
 	// equivalente pra CPU/RAM por software — precisaria de medidor físico na
 	// tomada — mas numa rig de mineração é a GPU que domina o consumo mesmo.
-	GPUPowerWatts *float64   `json:"gpuPowerWatts"`
-	MetricsAt     *time.Time `json:"metricsAt"`
+	GPUPowerWatts *float64 `json:"gpuPowerWatts"`
+	// CS2BuildID: build id instalado do Counter-Strike 2 (lido do
+	// appmanifest_730.acf da Steam) — jogos da Steam não aparecem no
+	// inventário de programas (registro Uninstall), só o launcher Steam em
+	// si, então isso é o único jeito de saber se o CS2 está instalado e qual
+	// versão. nil = script antigo, nunca checou. String vazia = checou e o
+	// CS2 NÃO está instalado. O dashboard decide "desatualizado" comparando
+	// contra o maior build id visto entre os PCs da frota (não existe API
+	// pública confiável pro build id "oficial" mais recente da Valve).
+	CS2BuildID *string    `json:"cs2BuildId"`
+	MetricsAt  *time.Time `json:"metricsAt"`
 	// LockRequestedAt/RestartRequestedAt/ShutdownRequestedAt: não-nil enquanto o
 	// pedido não foi entregue no heartbeat (ver labDeviceHeartbeatClearSQL) —
 	// o dashboard usa só pra saber que ainda está "em voo", a ação em si não
@@ -115,6 +124,7 @@ type labHeartbeat struct {
 	RAMPercent    *float64
 	GPUPercent    *float64
 	GPUPowerWatts *float64
+	CS2BuildID    *string
 }
 
 // HasMetrics diz se este heartbeat trouxe alguma métrica — é o que decide se
@@ -242,11 +252,11 @@ func sessionIDText(id *string) string {
 const labDeviceHeartbeatUpsertSQL = `
 	INSERT INTO hour_lab_devices (device_uuid, last_seen_at, last_ip, app_version, current_session_id,
 		open_apps, open_apps_at, ssh_public_key, diagnostic_note, hostname,
-		cpu_percent, ram_percent, gpu_percent, gpu_name, metrics_at, gpu_power_watts)
+		cpu_percent, ram_percent, gpu_percent, gpu_name, metrics_at, gpu_power_watts, cs2_build_id)
 	VALUES ($1, now(), $2, $3, $4::uuid, $5::jsonb, CASE WHEN $5::jsonb IS NULL THEN NULL ELSE now() END,
 		NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''),
 		$9, $10, $11, NULLIF($12, ''),
-		CASE WHEN $13 THEN now() ELSE NULL END, $14)
+		CASE WHEN $13 THEN now() ELSE NULL END, $14, $15)
 	ON CONFLICT (device_uuid) DO UPDATE SET
 		last_seen_at = now(), last_ip = $2, app_version = $3, current_session_id = $4::uuid,
 		-- App antigo não manda a lista: manter a última conhecida é melhor que
@@ -266,6 +276,9 @@ const labDeviceHeartbeatUpsertSQL = `
 		gpu_percent = coalesce($11, hour_lab_devices.gpu_percent),
 		gpu_name = CASE WHEN $12 = '' THEN hour_lab_devices.gpu_name ELSE $12 END,
 		gpu_power_watts = coalesce($14, hour_lab_devices.gpu_power_watts),
+		-- $15 nil = script antigo, mantem o ultimo build id conhecido; string
+		-- vazia é um valor de verdade (checou e nao achou CS2 instalado).
+		cs2_build_id = coalesce($15, hour_lab_devices.cs2_build_id),
 		-- Só avança quando veio métrica de verdade, senão um PC que parou de
 		-- reportar pareceria estar mandando uso novo a cada 60s.
 		metrics_at = CASE WHEN $13 THEN now() ELSE hour_lab_devices.metrics_at END
@@ -479,7 +492,7 @@ func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, hb lab
 		// mantém o anterior" — só deixou de rodar a cada 60s.
 		if err := tx.QueryRow(ctx, labDeviceHeartbeatUpsertSQL, hb.DeviceUUID, hb.IP, hb.AppVersion, hb.SessionID,
 			hb.OpenApps, hb.SSHPublicKey, hb.DiagnosticNote, hb.Hostname,
-			hb.CPUPercent, hb.RAMPercent, hb.GPUPercent, hb.GPUName, hb.HasMetrics(), hb.GPUPowerWatts).
+			hb.CPUPercent, hb.RAMPercent, hb.GPUPercent, hb.GPUName, hb.HasMetrics(), hb.GPUPowerWatts, hb.CS2BuildID).
 			Scan(&res.Name, &res.UnpairRequested, &res.MessageID, &res.MessageText, &res.PairToken,
 				&res.ScreenshotRequested, &res.LockRequested, &res.RestartRequested, &res.ShutdownRequested,
 				&res.CommandID, &res.CommandText); err != nil {
@@ -539,7 +552,7 @@ const labDeviceCols = `d.id::text, d.device_uuid, d.name, d.last_seen_at, d.last
 	coalesce(d.open_apps, '[]'::jsonb), d.open_apps_at, d.ssh_public_key, d.diagnostic_note,
 	d.hostname, d.cpu_percent, d.ram_percent, d.gpu_percent, d.gpu_name, d.metrics_at,
 	d.lock_requested_at, d.restart_requested_at, d.shutdown_requested_at,
-	d.command_text, d.command_sent_at, d.command_result, d.command_result_at, d.gpu_power_watts`
+	d.command_text, d.command_sent_at, d.command_result, d.command_result_at, d.gpu_power_watts, d.cs2_build_id`
 
 func scanLabDevice(row pgx.Row) (*LabDevice, error) {
 	var d LabDevice
@@ -548,7 +561,7 @@ func scanLabDevice(row pgx.Row) (*LabDevice, error) {
 		&d.OpenApps, &d.OpenAppsAt, &d.SSHPublicKey, &d.DiagnosticNote,
 		&d.Hostname, &d.CPUPercent, &d.RAMPercent, &d.GPUPercent, &d.GPUName, &d.MetricsAt,
 		&d.LockRequestedAt, &d.RestartRequestedAt, &d.ShutdownRequestedAt,
-		&d.CommandText, &d.CommandSentAt, &d.CommandResult, &d.CommandResultAt, &d.GPUPowerWatts)
+		&d.CommandText, &d.CommandSentAt, &d.CommandResult, &d.CommandResultAt, &d.GPUPowerWatts, &d.CS2BuildID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

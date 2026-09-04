@@ -960,6 +960,13 @@ ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS command_result_at TIMESTAM
 -- confiável e portátil por software (precisaria de medidor físico na
 -- tomada), mas a GPU é de longe o maior consumidor mesmo.
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS gpu_power_watts DOUBLE PRECISION;
+
+-- Build id instalado do CS2 (lido do appmanifest_730.acf da Steam pelo
+-- watchdog) -- jogos da Steam não registram entrada própria no Uninstall do
+-- Windows, só o launcher Steam em si, então o inventário de programas normal
+-- não pega isso. NULL = nunca checou (script antigo); string vazia = checou
+-- e o CS2 não está instalado.
+ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS cs2_build_id TEXT;
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

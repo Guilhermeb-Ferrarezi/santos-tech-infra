@@ -5081,6 +5081,15 @@ paths:
                     cpuPercent (ausente/null mantém a última leitura). Sem equivalente pra
                     CPU/RAM por software — precisaria de medidor físico na tomada — mas numa
                     rig de mineração é a GPU que domina o consumo mesmo.
+                cs2BuildId:
+                  type: string
+                  pattern: "^[0-9]{0,20}$"
+                  nullable: true
+                  description: >
+                    Build id instalado do Counter-Strike 2, lido do appmanifest_730.acf da
+                    Steam (jogos da Steam não aparecem no inventário normal de programas).
+                    Ausente/null = script antigo, nunca checou (mantém o último conhecido).
+                    String vazia = checou e o CS2 não está instalado.
                 sshPublicKey:
                   type: string
                   maxLength: 2048
@@ -7169,6 +7178,7 @@ components:
         gpuPercent: { type: number, nullable: true, description: "Uso de GPU; null também em máquina sem GPU NVIDIA." }
         gpuName: { type: string, nullable: true, description: "Modelo da GPU reportado pelo nvidia-smi." }
         gpuPowerWatts: { type: number, nullable: true, description: "Consumo da GPU em watts (nvidia-smi power.draw); mesma semântica de gpuPercent." }
+        cs2BuildId: { type: string, nullable: true, description: "Build id instalado do CS2 (appmanifest_730.acf da Steam). null = nunca checou; string vazia = checou, não instalado." }
         metricsAt:
           type: string
           format: date-time

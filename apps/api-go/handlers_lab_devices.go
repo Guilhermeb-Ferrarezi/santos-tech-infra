@@ -79,6 +79,10 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		// ausência das outras métricas; sem equivalente pra CPU/RAM (precisaria
 		// de medidor físico).
 		GPUPowerWatts *float64 `json:"gpuPowerWatts"`
+		// Build id instalado do CS2 (appmanifest_730.acf da Steam). Ausente/null =
+		// não checou (script antigo); string vazia = checou e não achou CS2
+		// instalado.
+		CS2BuildID *string `json:"cs2BuildId"`
 	}
 	// Erro de decode separado do deviceId inválido: juntar os dois fazia um
 	// corpo grande demais ser reportado como "deviceId inválido", mandando quem
@@ -151,6 +155,7 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 		RAMPercent:     validPercent(in.RAMPercent),
 		GPUPercent:     validPercent(in.GPUPercent),
 		GPUPowerWatts:  validWatts(in.GPUPowerWatts),
+		CS2BuildID:     validCS2BuildID(in.CS2BuildID),
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -512,6 +517,22 @@ const maxPlausibleGPUWatts = 1000
 // faixa plausível vira nil, mantém a leitura anterior".
 func validWatts(v *float64) *float64 {
 	if v == nil || math.IsNaN(*v) || math.IsInf(*v, 0) || *v < 0 || *v > maxPlausibleGPUWatts {
+		return nil
+	}
+	return v
+}
+
+// cs2BuildIDRe: build id da Steam é sempre só dígitos (ex. "18248278").
+// String vazia também é válida — é o valor de verdade "checou, não achou
+// CS2 instalado" (ver comentário do campo no struct de entrada).
+var cs2BuildIDRe = regexp.MustCompile(`^[0-9]{0,20}$`)
+
+// validCS2BuildID: nil passa direto (script antigo, não checou — SQL mantém
+// o último conhecido). Não-nil que não bate no formato esperado também vira
+// nil, mesma regra das outras métricas: dado ruim não sobrescreve o que já
+// tinha (rota pública, sem auth de verdade).
+func validCS2BuildID(v *string) *string {
+	if v == nil || !cs2BuildIDRe.MatchString(*v) {
 		return nil
 	}
 	return v

@@ -459,7 +459,7 @@ Admin:
   mandar um comando novo zera o resultado do anterior
 
 Público (sem auth — `deviceId` é a identidade):
-- `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?, previousDeviceId?, sshPublicKey?, hostname?, cpuPercent?, ramPercent?, gpuPercent?, gpuName?, gpuPowerWatts?}` →
+- `POST /public/lab-devices/heartbeat {deviceId, deviceSecret, token?, appVersion?, openApps?, previousDeviceId?, sshPublicKey?, hostname?, cpuPercent?, ramPercent?, gpuPercent?, gpuName?, gpuPowerWatts?, cs2BuildId?}` →
   `{name, unpairRequested, message?, pairToken?, lockRequested?, restartRequested?, shutdownRequested?, command?}` ·
   rate limit 120/min. `token` é o token da sessão de horas pareada localmente,
   se houver (resolve pra `currentSessionId`/`currentClientName` na listagem
@@ -552,6 +552,15 @@ Público (sem auth — `deviceId` é a identidade):
   é descartado, nunca gravado como 0: 0% na tela é indistinguível de "máquina
   parada" e mandaria o admin investigar o problema errado. Voltam no `LabDevice`
   da listagem admin.
+
+  `cs2BuildId` é o build id instalado do Counter-Strike 2 (lido do
+  `appmanifest_730.acf` da Steam pelo mesmo watchdog) — jogos da Steam não
+  registram entrada própria no Uninstall do Windows, só o launcher Steam em
+  si, então esse é o único jeito de saber se o CS2 está instalado e qual
+  versão. `null` = script antigo, nunca checou (mantém o último conhecido);
+  string vazia = checou e o CS2 não está instalado. Não existe API pública
+  confiável pro "build id oficial mais recente" da Valve — comparar contra o
+  maior valor visto entre os PCs da frota é o critério de "desatualizado".
 
   `sshPublicKey` é a chave pública SSH gerada localmente pela máquina (ex.: pela
   imagem Windows via autounattend.xml) e mandada só no primeiro heartbeat —
