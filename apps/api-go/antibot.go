@@ -189,13 +189,25 @@ func isBadUA(ua string) bool {
 }
 
 // statusCapture captura o status HTTP escrito pelo handler, só pra decidir se
-// conta como 404 na heurística de burst. Sem passthrough de Flusher/Hijacker:
-// api-go não tem rota SSE/WebSocket (diferente do agent-go/mcp-go).
+// conta como 404 na heurística de burst. 04/09/2026: o comentário antigo
+// aqui dizia que api-go não tinha rota WebSocket e por isso dispensava
+// Unwrap() -- não é mais verdade (shell remoto dos PCs de laboratório,
+// handlers_lab_device_shell.go) e a ausência de Unwrap() aqui quebrava
+// silenciosamente TODO Hijack que passasse por este middleware (antiBotCheck
+// envolve toda rota exceto /health,/ready,/metrics), tanto pelo mecanismo
+// manual do coder/websocket quanto pelo http.ResponseController do Go —
+// confirmado ao vivo com um log temporário que imprimia a cadeia de tipos:
+// parava exatamente aqui, "*main.statusCapture", sem seguir adiante.
 type statusCapture struct {
 	http.ResponseWriter
 	status int
 	wrote  bool
 }
+
+// Unwrap permite que http.ResponseController (e o hijacker() manual do
+// coder/websocket, que segue o mesmo padrão) alcance o writer original —
+// mesmo padrão de metricsResponseWriter/securityHeadersWriter.
+func (w *statusCapture) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *statusCapture) WriteHeader(code int) {
 	if !w.wrote {

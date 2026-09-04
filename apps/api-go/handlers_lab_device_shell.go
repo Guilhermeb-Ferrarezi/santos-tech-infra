@@ -1,14 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -17,45 +14,6 @@ import (
 	"github.com/coder/websocket/wsjson"
 	"github.com/jackc/pgx/v5"
 )
-
-// hijackWriter existe porque coder/websocket procura Hijack() percorrendo a
-// cadeia de ResponseWriters à mão (ver hijacker() na lib) checando, a cada
-// camada, se ELA MESMA implementa http.Hijacker antes de seguir pelo
-// Unwrap() -- confirmado ao vivo em produção que essa busca falha através
-// da cadeia de middlewares deste servidor (RequestLogger→securityHeaders→
-// metricsMiddleware→mux), mesmo cada camada implementando Unwrap()
-// corretamente: request nunca chegava a virar WS, servidor respondia 501
-// "Not Implemented" na hora (log confirmou: é o PRÓPRIO servidor gerando
-// isso, não Cloudflare/Traefik). http.ResponseController (mecanismo oficial
-// do Go 1.20+, mais robusto que a busca manual da lib) resolve isso —
-// encapsular e delegar pra ele evita depender da lib achar o Hijacker
-// sozinha através de N camadas.
-// describeWriterChain é diagnóstico temporário (04/09/2026): coder/websocket
-// e http.ResponseController estavam devolvendo "feature not supported" pro
-// Hijack mesmo com metricsResponseWriter/securityHeadersWriter/
-// logResponseWriter aparentemente implementando Unwrap()/Hijack() certinho
-// -- isto imprime o tipo real em cada nível da cadeia + se implementa
-// Hijacker diretamente, pra achar onde a suposição está errada em vez de
-// continuar adivinhando.
-func describeWriterChain(w http.ResponseWriter) string {
-	desc := ""
-	for i := 0; i < 10; i++ {
-		_, isHijacker := w.(http.Hijacker)
-		desc += fmt.Sprintf("[%T hijacker=%v] ", w, isHijacker)
-		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
-		if !ok {
-			break
-		}
-		w = u.Unwrap()
-	}
-	return desc
-}
-
-type hijackWriter struct{ http.ResponseWriter }
-
-func (h hijackWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	return http.NewResponseController(h.ResponseWriter).Hijack()
-}
 
 // Shell remoto interativo pra um PC de laboratório: o AGENTE (script no PC,
 // serviço separado do watchdog de 60s) mantém uma conexão WebSocket sempre
@@ -175,14 +133,13 @@ type shellControl struct {
 // primeira mensagem, mesmo padrão do heartbeat), mas exige o segredo já
 // adotado — não faz sentido um PC nunca visto abrir sessão de shell.
 func (s *Server) handleLabDeviceShellAgent(w http.ResponseWriter, r *http.Request) {
-	slog.Error("shell-agent: DEBUG cadeia de tipos", "chain", describeWriterChain(w))
 	// no-transform: pede pra qualquer proxy no meio (Traefik/Cloudflare) NAO
 	// comprimir a resposta -- confirmado ao vivo que frames chegavam
 	// comprimidos (RSV1) no agente .NET mesmo com CompressionMode zero-value
 	// (= CompressionDisabled) neste servidor, indicando que a compressao
 	// esta sendo aplicada por um proxy no meio do caminho, nao por aqui.
 	w.Header().Set("Cache-Control", "no-transform")
-	c, err := websocket.Accept(hijackWriter{w}, r, s.wsOriginOpts())
+	c, err := websocket.Accept(w, r, s.wsOriginOpts())
 	if err != nil {
 		// Accept() falhando aqui (depois do WriteHeader(101) ja ter sido
 		// mandado -- confirmado ao vivo: log mostrava status=101 com
@@ -286,7 +243,7 @@ func (s *Server) handleLabDeviceShellWS(w http.ResponseWriter, r *http.Request) 
 	}()
 
 	w.Header().Set("Cache-Control", "no-transform")
-	adminConn, err := websocket.Accept(hijackWriter{w}, r, s.wsOriginOpts())
+	adminConn, err := websocket.Accept(w, r, s.wsOriginOpts())
 	if err != nil {
 		slog.Error("shell-ws: falha no accept do websocket", "err", err)
 		return
