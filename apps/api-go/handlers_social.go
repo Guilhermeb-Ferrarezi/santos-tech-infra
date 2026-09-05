@@ -25,8 +25,8 @@ func socialPostIDFrom(r *http.Request) (string, error) {
 
 func validateSocialPostInput(in *SocialPostInput) error {
 	in.Title = strings.TrimSpace(in.Title)
-	if in.Title == "" {
-		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Título obrigatório")
+	if in.Title == "" || len(in.Title) > 200 {
+		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Título obrigatório (até 200 caracteres)")
 	}
 	if !validSocialPlatforms[in.Platform] {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Plataforma inválida")
@@ -405,8 +405,8 @@ func (s *Server) handleAddSocialPostNote(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	in.Content = strings.TrimSpace(in.Content)
-	if in.Content == "" {
-		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Conteúdo obrigatório"))
+	if in.Content == "" || len(in.Content) > 4000 {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Conteúdo obrigatório (até 4000 caracteres)"))
 		return
 	}
 	note, err := s.insertSocialPostNote(r.Context(), id, userIDFrom(r), in.Content)

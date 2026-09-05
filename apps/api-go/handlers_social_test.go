@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -73,6 +74,7 @@ func TestHandleCreateSocialPostValidation(t *testing.T) {
 	}{
 		{"corpo inválido", "xxx"},
 		{"título vazio", `{"title":"","platform":"instagram","pilar":"educacional","status":"ideia"}`},
+		{"título longo demais", fmt.Sprintf(`{"title":"%s","platform":"instagram","pilar":"educacional","status":"ideia"}`, strings.Repeat("a", 201))},
 		{"plataforma inválida", `{"title":"T","platform":"snapchat","pilar":"educacional","status":"ideia"}`},
 		{"pilar inválido", `{"title":"T","platform":"instagram","pilar":"fofoca","status":"ideia"}`},
 		{"status inválido", `{"title":"T","platform":"instagram","pilar":"educacional","status":"deletado"}`},
@@ -115,6 +117,13 @@ func TestHandleAddSocialPostNoteValidation(t *testing.T) {
 	s.handleAddSocialPostNote(w, socialReq("POST", validUUID, `{"content":"   "}`, 1))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("conteúdo vazio: code=%d", w.Code)
+	}
+
+	w2 := httptest.NewRecorder()
+	longContent := fmt.Sprintf(`{"content":"%s"}`, strings.Repeat("a", 4001))
+	s.handleAddSocialPostNote(w2, socialReq("POST", validUUID, longContent, 1))
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("conteúdo longo demais: code=%d", w2.Code)
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,6 +50,7 @@ func TestHandleCreateTaskValidation(t *testing.T) {
 	}{
 		{"corpo inválido", "xxx"},
 		{"título vazio", `{"title":"","status":"a_fazer","priority":"media"}`},
+		{"título longo demais", fmt.Sprintf(`{"title":"%s","status":"a_fazer","priority":"media"}`, strings.Repeat("a", 201))},
 		{"status inválido", `{"title":"T","status":"voando","priority":"media"}`},
 		{"prioridade inválida", `{"title":"T","status":"a_fazer","priority":"urgentissima"}`},
 	}
@@ -74,6 +76,13 @@ func TestHandleAddTaskNoteValidation(t *testing.T) {
 	// real e vai panicar aqui — é o sinal de alerta que protege essa ordem.
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("conteúdo vazio: code=%d", w.Code)
+	}
+
+	w2 := httptest.NewRecorder()
+	longContent := fmt.Sprintf(`{"content":"%s"}`, strings.Repeat("a", 4001))
+	s.handleAddTaskNote(w2, taskReq("POST", validUUID, longContent, 1))
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("conteúdo longo demais: code=%d", w2.Code)
 	}
 }
 
