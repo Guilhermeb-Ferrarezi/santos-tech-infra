@@ -254,6 +254,15 @@ func LoadConfig() Config {
 		slog.Error("JWT_SECRET e JWT_REFRESH_SECRET não podem ser iguais")
 		os.Exit(1)
 	}
+	// allowedOrigin (server.go) é fail-closed por design: allowlist vazia
+	// bloqueia toda origem em rotas com credencial. Sem essa checagem no boot,
+	// esquecer CORS_ORIGIN/AUTH_WEB_ORIGIN sobe o processo normalmente e só
+	// aparece em produção como login/cookie quebrado pra todo mundo — silencioso
+	// até alguém notar. Falha aqui, como os demais campos obrigatórios.
+	if len(c.CORSOrigins) == 0 && c.AuthWebOrigin == "" {
+		slog.Error("nenhuma origem CORS configurada — defina CORS_ORIGIN e/ou AUTH_WEB_ORIGIN")
+		os.Exit(1)
+	}
 	return c
 }
 
