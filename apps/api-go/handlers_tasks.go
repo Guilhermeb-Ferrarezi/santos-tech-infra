@@ -18,8 +18,8 @@ func taskIDFrom(r *http.Request) (string, error) {
 
 func validateTaskInput(in *TaskInput) error {
 	in.Title = strings.TrimSpace(in.Title)
-	if in.Title == "" {
-		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Título obrigatório")
+	if in.Title == "" || len(in.Title) > 200 {
+		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Título obrigatório (até 200 caracteres)")
 	}
 	if !validTaskStatuses[in.Status] {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Status inválido")
@@ -293,8 +293,8 @@ func (s *Server) handleAddTaskNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Content = strings.TrimSpace(in.Content)
-	if in.Content == "" {
-		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Conteúdo obrigatório"))
+	if in.Content == "" || len(in.Content) > 4000 {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Conteúdo obrigatório (até 4000 caracteres)"))
 		return
 	}
 	task, err := s.getTask(r.Context(), id)
