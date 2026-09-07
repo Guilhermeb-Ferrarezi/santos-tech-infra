@@ -4,6 +4,7 @@ import { load, type Store } from "@tauri-apps/plugin-store";
 import { getVersion } from "@tauri-apps/api/app";
 import { syncInventory } from "./inventory";
 import { captureAndSend } from "./screenshot";
+import { runCommandAndSend } from "./remoteCommands";
 
 const STORE_FILE = "config.json";
 const DEVICE_ID_KEY = "deviceId";
@@ -12,6 +13,11 @@ const DEVICE_ID_KEY = "deviceId";
 const PREVIOUS_DEVICE_ID_KEY = "previousDeviceId";
 const DEVICE_SECRET_KEY = "deviceSecret";
 const LAST_MESSAGE_ID_KEY = "lastMessageId";
+// Comando livre: igual ao message, o servidor sempre reenvia (não só na
+// entrega), e é o app quem deduplica localmente pelo id — sem isso, o mesmo
+// comando rodaria de novo a cada heartbeat (~30s) enquanto ninguém mandar um
+// novo por cima.
+const LAST_COMMAND_ID_KEY = "lastCommandId";
 const TOAST_MESSAGE_KEY = "toastMessage";
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const API_ORIGIN = "https://api.santos-tech.com";
@@ -39,6 +45,18 @@ interface HeartbeatResponse {
   deviceSecret?: string;
   /** Não sobrou nada a migrar do previousDeviceId — pode esquecê-lo. */
   previousDeviceResolved?: boolean;
+  /** Comandos remotos "dispara e esquece" (ver Comandos remotos no dashboard,
+   *  admin/horas/dispositivos). Executados AQUI MESMO — este processo já
+   *  roda na sessão interativa do usuário logado (app de bandeja, nunca
+   *  serviço SYSTEM), então travar tela e abrir programa (via comando livre)
+   *  acontecem na tela de quem está sentado no PC, não numa sessão isolada. */
+  lockRequested?: boolean;
+  restartRequested?: boolean;
+  shutdownRequested?: boolean;
+  /** Comando livre (PowerShell) — sempre volta enquanto houver um (igual ao
+   *  message), deduplica pelo id. Resultado reportado em
+   *  POST /public/lab-devices/command-result. */
+  command?: { id: string; text: string };
 }
 
 // Identifica este PC pro admin (device_uuid gerado uma vez, persistido em
@@ -159,6 +177,33 @@ export function useDeviceHeartbeat(token: string | null, onUnpairRequested: () =
       // manda. Sob demanda e uma vez por pedido — nunca em laço.
       if (data.screenshotRequested) {
         void captureAndSend(store, API_ORIGIN, deviceId, data.deviceSecret ?? deviceSecret);
+      }
+
+      // Comandos remotos "dispara e esquece" — falha aqui não pode derrubar o
+      // heartbeat, que é a função principal do app.
+      if (data.lockRequested) {
+        invoke("lock_workstation").catch(() => {});
+      }
+      if (data.restartRequested) {
+        invoke("restart_machine").catch(() => {});
+      }
+      if (data.shutdownRequested) {
+        invoke("shutdown_machine").catch(() => {});
+      }
+      // Comando livre: sempre volta no heartbeat enquanto houver um pendente
+      // de resposta — dedupe local pelo id, senão rodaria de novo a cada ~30s.
+      if (data.command) {
+        const lastCommandId = await store.get<string>(LAST_COMMAND_ID_KEY);
+        if (data.command.id !== lastCommandId) {
+          await store.set(LAST_COMMAND_ID_KEY, data.command.id);
+          void runCommandAndSend(
+            API_ORIGIN,
+            deviceId,
+            data.deviceSecret ?? deviceSecret,
+            data.command.id,
+            data.command.text,
+          );
+        }
       }
 
       // Instala a(s) chave(s) do admin no authorized_keys — é isso que

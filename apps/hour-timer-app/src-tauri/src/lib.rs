@@ -659,6 +659,142 @@ fn list_installed_programs() -> Vec<InstalledProgram> {
     Vec::new()
 }
 
+// ── comandos remotos (travar/reiniciar/desligar/comando livre) ──────────────
+//
+// Rodam DENTRO deste processo, que já está na sessão interativa do usuário
+// logado (app de bandeja, autostart por Tarefa Agendada — nunca um serviço
+// SYSTEM). É isso que faz o comando livre poder abrir um programa de verdade:
+// `Start-Process` executado por um serviço Windows (Session 0) cria a janela
+// numa sessão isolada, invisível pra quem está sentado no PC; aqui, herda a
+// mesma sessão/desktop de quem estiver logado. (O shell interativo do
+// dashboard, ao contrário, fala com um agente separado que roda como
+// serviço — por isso `whoami` lá dá SYSTEM; aqui não.)
+
+// CREATE_NO_WINDOW: sem isto, `Command` spawnado por um app sem console (caso
+// deste app GUI) abre uma janela de terminal preta por uma fração de segundo
+// a cada chamada — mesmo problema que o watchdog (ver watchdog/src/main.rs)
+// evita com windows_subsystem = "windows".
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+// Trava a tela — mesmo efeito de Win+L. Não precisa de admin; qualquer sessão
+// interativa pode travar a própria estação de trabalho.
+#[cfg(windows)]
+#[tauri::command]
+fn lock_workstation() -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    Command::new("rundll32.exe")
+        .args(["user32.dll,LockWorkStation"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|e| format!("travar tela: {e}"))?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn lock_workstation() -> Result<(), String> {
+    Err("travar tela só no Windows".to_string())
+}
+
+// Reinicia/desliga a máquina. /f força o fechamento de programas com alterações
+// não salvas — sem isso, um app travado numa caixa de diálogo "salvar?" pode
+// segurar o comando indefinidamente, e o PC nunca reinicia. /t 0: imediato,
+// sem contagem regressiva (o admin já confirmou com sudo do lado do dashboard).
+#[cfg(windows)]
+fn run_shutdown(args: &[&str]) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    let status = Command::new("shutdown.exe")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|e| format!("executar shutdown.exe: {e}"))?;
+    if !status.success() {
+        return Err(format!("shutdown.exe saiu com {status}"));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn restart_machine() -> Result<(), String> {
+    run_shutdown(&["/r", "/t", "0", "/f"])
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn shutdown_machine() -> Result<(), String> {
+    run_shutdown(&["/s", "/t", "0", "/f"])
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn restart_machine() -> Result<(), String> {
+    Err("reiniciar só no Windows".to_string())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn shutdown_machine() -> Result<(), String> {
+    Err("desligar só no Windows".to_string())
+}
+
+// Teto da saída devolvida — espelha maxCommandResultLength no servidor
+// (api-go/hour_lab_devices.go). Cortar aqui também evita mandar um corpo
+// gigante à toa quando o comando produz muita saída.
+#[cfg(windows)]
+const MAX_COMMAND_RESULT_CHARS: usize = 8000;
+
+#[cfg(windows)]
+fn truncate_output(s: String) -> String {
+    if s.chars().count() <= MAX_COMMAND_RESULT_CHARS {
+        return s;
+    }
+    let mut out: String = s.chars().take(MAX_COMMAND_RESULT_CHARS).collect();
+    out.push_str("\n… (saída cortada)");
+    out
+}
+
+// Comando livre (PowerShell), o mais poderoso dos comandos remotos: roda
+// exatamente o texto que o admin mandou, na sessão do usuário logado. stdout e
+// stderr voltam juntos (ordem intercalada aproximada) — é diagnóstico rápido
+// pro admin, não um pipe estruturado.
+#[cfg(windows)]
+#[tauri::command]
+fn run_powershell_command(text: String) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", text.as_str()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| format!("executar powershell.exe: {e}"))?;
+
+    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.is_empty() {
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
+        combined.push_str(&stderr);
+    }
+    if combined.trim().is_empty() {
+        combined = format!("(sem saída; código de saída {})", output.status);
+    }
+    Ok(truncate_output(combined))
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn run_powershell_command(_text: String) -> Result<String, String> {
+    Err("comando livre só no Windows".to_string())
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
@@ -795,7 +931,11 @@ pub fn run() {
             list_open_apps,
             stable_device_id,
             ensure_ssh_public_key,
-            sync_authorized_keys
+            sync_authorized_keys,
+            lock_workstation,
+            restart_machine,
+            shutdown_machine,
+            run_powershell_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
