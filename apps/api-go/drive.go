@@ -64,6 +64,23 @@ type DriveClient struct {
 	// resulta no já conhecido 403 storageQuotaExceeded — ver comentário em
 	// Config.GoogleDriveOAuthClientID.
 	uploadStream *http.Client
+	// uploadStreams: contas de upload NOMEADAS, escolhidas por pasta (coluna
+	// drive_folders.upload_account). Existe porque quem sobe o arquivo vira
+	// dono dele no Drive, e só o dono recupera da lixeira — separar a conta
+	// isola os contratos de um acidente na conta principal. Entrada nil ou
+	// ausente = cai em uploadStream, ou seja, o comportamento de sempre.
+	uploadStreams map[string]*http.Client
+}
+
+// Contas de upload nomeadas. A string vazia é a conta padrão (uploadStream) e
+// nunca aparece aqui — é o default de quem não escolheu nada.
+const driveAccountContratos = "contratos"
+
+// driveAccountsValidos: o que o admin pode escolher no cadastro da pasta.
+// Fail-closed: valor fora desta lista é recusado na validação do payload.
+var driveAccountsValidos = map[string]bool{
+	"":                    true, // conta padrão
+	driveAccountContratos: true,
 }
 
 const (
@@ -142,16 +159,22 @@ func newDriveClient(cfg Config) *DriveClient {
 	return &DriveClient{
 		http:         &http.Client{Transport: oauthTransport, Timeout: driveAPITimeout},
 		stream:       &http.Client{Transport: oauthTransport},
-		uploadStream: newDriveUploadOAuthClient(cfg),
+		uploadStream: newDriveUploadOAuthClient(cfg, cfg.GoogleDriveOAuthRefreshToken),
+		uploadStreams: map[string]*http.Client{
+			driveAccountContratos: newDriveUploadOAuthClient(cfg, cfg.GoogleDriveOAuthRefreshTokenContratos),
+		},
 	}
 }
 
 // newDriveUploadOAuthClient monta o client autenticado como usuário real (ver
-// comentário em Config.GoogleDriveOAuthClientID) — nil se as 3 credenciais
-// não estiverem todas presentes, e UploadFile cai de volta pra service
-// account nesse caso.
-func newDriveUploadOAuthClient(cfg Config) *http.Client {
-	if cfg.GoogleDriveOAuthClientID == "" || cfg.GoogleDriveOAuthClientSecret == "" || cfg.GoogleDriveOAuthRefreshToken == "" {
+// comentário em Config.GoogleDriveOAuthClientID) — nil se o ClientID/Secret ou
+// o refresh token não estiverem presentes, e o upload cai de volta pra conta
+// padrão (ou pra service account) nesse caso.
+//
+// O refresh token vem por parâmetro porque é ele que identifica a CONTA: o
+// ClientID/Secret são do mesmo aplicativo OAuth para todas elas.
+func newDriveUploadOAuthClient(cfg Config, refreshToken string) *http.Client {
+	if cfg.GoogleDriveOAuthClientID == "" || cfg.GoogleDriveOAuthClientSecret == "" || refreshToken == "" {
 		return nil
 	}
 	oauthCfg := &oauth2.Config{
@@ -160,8 +183,25 @@ func newDriveUploadOAuthClient(cfg Config) *http.Client {
 		Endpoint:     google.Endpoint,
 		Scopes:       []string{driveScope},
 	}
-	token := &oauth2.Token{RefreshToken: cfg.GoogleDriveOAuthRefreshToken}
+	token := &oauth2.Token{RefreshToken: refreshToken}
 	return oauthCfg.Client(context.Background(), token)
+}
+
+// uploadClient resolve qual conta sobe o arquivo, em cascata: a conta pedida
+// pela pasta → a conta padrão → a service account. Nunca devolve nil.
+//
+// A cascata importa: uma pasta marcada como "contratos" num ambiente onde o
+// token dessa conta ainda não foi configurado continua funcionando pela conta
+// padrão, em vez de quebrar o upload. O preço é o arquivo nascer com o dono
+// "errado" — visível, corrigível, e melhor que uma falha silenciosa.
+func (d *DriveClient) uploadClient(account string) *http.Client {
+	if c := d.uploadStreams[account]; c != nil {
+		return c
+	}
+	if d.uploadStream != nil {
+		return d.uploadStream
+	}
+	return d.stream
 }
 
 // DriveFile é o que expomos pro frontend — só o essencial da resposta do Drive.
@@ -630,11 +670,20 @@ func (d *DriveClient) StreamDownload(ctx context.Context, fileID, rangeHeader st
 	return resp.Body, meta.Name, meta.MimeType, resp.StatusCode, headers, nil
 }
 
-// UploadFile envia um arquivo pra dentro de driveFolderID via multipart
+// UploadFile envia pela conta padrão. Atalho para UploadFileAs — mantido para
+// os chamadores que não escolhem conta.
+func (d *DriveClient) UploadFile(ctx context.Context, driveFolderID, filename, contentType string, r io.Reader) (DriveFile, error) {
+	return d.UploadFileAs(ctx, "", driveFolderID, filename, contentType, r)
+}
+
+// UploadFileAs envia um arquivo pra dentro de driveFolderID via multipart
 // (metadata JSON + conteúdo). O corpo é streamado direto de r pro Google via
 // io.Pipe — não bufferiza o arquivo inteiro em memória (o chamador já limita
 // o tamanho antes de chegar aqui, ver handleUploadDriveFile).
-func (d *DriveClient) UploadFile(ctx context.Context, driveFolderID, filename, contentType string, r io.Reader) (DriveFile, error) {
+//
+// `account` escolhe a conta Google que faz o upload — e portanto quem fica
+// DONO do arquivo no Drive. Vazio = conta padrão. Ver uploadClient.
+func (d *DriveClient) UploadFileAs(ctx context.Context, account, driveFolderID, filename, contentType string, r io.Reader) (DriveFile, error) {
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
 	boundary := mw.Boundary()
@@ -684,16 +733,12 @@ func (d *DriveClient) UploadFile(ctx context.Context, driveFolderID, filename, c
 	}
 	req.Header.Set("Content-Type", "multipart/related; boundary="+boundary)
 
-	// Prefere uploadStream (usuário real, tem cota) — stream (service
-	// account) é só o fallback quando o OAuth não está configurado, e
-	// resulta no 403 storageQuotaExceeded conhecido. Sem GetBody o pipe não
-	// é replayável, então d.do faz uma tentativa só — correto: reenviar
-	// metade de um upload seria pior que falhar.
-	client := d.uploadStream
-	if client == nil {
-		client = d.stream
-	}
-	resp, err := d.do(client, req)
+	// A conta vem da pasta (ver uploadClient): conta pedida → conta padrão →
+	// service account. A service account é o último recurso e resulta no 403
+	// storageQuotaExceeded conhecido, porque ela não tem cota própria. Sem
+	// GetBody o pipe não é replayável, então d.do faz uma tentativa só —
+	// correto: reenviar metade de um upload seria pior que falhar.
+	resp, err := d.do(d.uploadClient(account), req)
 	if err != nil {
 		return DriveFile{}, err
 	}

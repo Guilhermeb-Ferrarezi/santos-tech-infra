@@ -372,6 +372,9 @@ CREATE TABLE IF NOT EXISTS drive_folders (
   name            TEXT NOT NULL,
   description     TEXT,
   drive_folder_id TEXT NOT NULL,
+  -- Conta Google que sobe os arquivos desta pasta (e fica dona deles no Drive,
+  -- o que define de quem é a lixeira que os recupera). '' = conta padrão.
+  upload_account  TEXT NOT NULL DEFAULT '',
   created_by      INTEGER NOT NULL REFERENCES users(id),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()

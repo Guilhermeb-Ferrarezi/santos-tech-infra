@@ -16,9 +16,12 @@ import (
 )
 
 type DriveFolder struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Description   string    `json:"description"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// UploadAccount: conta Google que sobe os arquivos desta pasta — e que
+	// portanto fica dona deles no Drive. Vazio = conta padrão.
+	UploadAccount string    `json:"uploadAccount"`
 	DriveFolderID string    `json:"driveFolderId"`
 	CreatedBy     int64     `json:"createdBy"`
 	CreatedAt     time.Time `json:"createdAt"`
@@ -62,7 +65,7 @@ type DriveFolderMemberAccess struct {
 
 func (s *Server) listDriveFolders(ctx context.Context) ([]DriveFolder, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id::text, name, COALESCE(description, ''), drive_folder_id, created_by, created_at, updated_at
+		SELECT id::text, name, COALESCE(description, ''), upload_account, drive_folder_id, created_by, created_at, updated_at
 		FROM drive_folders ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -71,7 +74,7 @@ func (s *Server) listDriveFolders(ctx context.Context) ([]DriveFolder, error) {
 	out := []DriveFolder{}
 	for rows.Next() {
 		var f DriveFolder
-		if err := rows.Scan(&f.ID, &f.Name, &f.Description, &f.DriveFolderID, &f.CreatedBy, &f.CreatedAt, &f.UpdatedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.Name, &f.Description, &f.UploadAccount, &f.DriveFolderID, &f.CreatedBy, &f.CreatedAt, &f.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -82,9 +85,9 @@ func (s *Server) listDriveFolders(ctx context.Context) ([]DriveFolder, error) {
 func (s *Server) getDriveFolder(ctx context.Context, id string) (*DriveFolder, error) {
 	var f DriveFolder
 	err := s.db.QueryRow(ctx, `
-		SELECT id::text, name, COALESCE(description, ''), drive_folder_id, created_by, created_at, updated_at
+		SELECT id::text, name, COALESCE(description, ''), upload_account, drive_folder_id, created_by, created_at, updated_at
 		FROM drive_folders WHERE id = $1::uuid`, id).
-		Scan(&f.ID, &f.Name, &f.Description, &f.DriveFolderID, &f.CreatedBy, &f.CreatedAt, &f.UpdatedAt)
+		Scan(&f.ID, &f.Name, &f.Description, &f.UploadAccount, &f.DriveFolderID, &f.CreatedBy, &f.CreatedAt, &f.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -94,14 +97,14 @@ func (s *Server) getDriveFolder(ctx context.Context, id string) (*DriveFolder, e
 	return &f, nil
 }
 
-func (s *Server) insertDriveFolder(ctx context.Context, name, description, driveFolderID string, createdBy int64) (*DriveFolder, error) {
+func (s *Server) insertDriveFolder(ctx context.Context, name, description, driveFolderID, uploadAccount string, createdBy int64) (*DriveFolder, error) {
 	var f DriveFolder
 	err := s.db.QueryRow(ctx, `
-		INSERT INTO drive_folders (name, description, drive_folder_id, created_by)
-		VALUES ($1, NULLIF($2, ''), $3, $4)
-		RETURNING id::text, name, COALESCE(description, ''), drive_folder_id, created_by, created_at, updated_at`,
-		name, description, driveFolderID, createdBy).
-		Scan(&f.ID, &f.Name, &f.Description, &f.DriveFolderID, &f.CreatedBy, &f.CreatedAt, &f.UpdatedAt)
+		INSERT INTO drive_folders (name, description, drive_folder_id, created_by, upload_account)
+		VALUES ($1, NULLIF($2, ''), $3, $4, $5)
+		RETURNING id::text, name, COALESCE(description, ''), upload_account, drive_folder_id, created_by, created_at, updated_at`,
+		name, description, driveFolderID, createdBy, uploadAccount).
+		Scan(&f.ID, &f.Name, &f.Description, &f.UploadAccount, &f.DriveFolderID, &f.CreatedBy, &f.CreatedAt, &f.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -109,14 +112,14 @@ func (s *Server) insertDriveFolder(ctx context.Context, name, description, drive
 }
 
 // updateDriveFolderRow devolve nil (sem erro) se a pasta não existir.
-func (s *Server) updateDriveFolderRow(ctx context.Context, id, name, description, driveFolderID string) (*DriveFolder, error) {
+func (s *Server) updateDriveFolderRow(ctx context.Context, id, name, description, driveFolderID, uploadAccount string) (*DriveFolder, error) {
 	var f DriveFolder
 	err := s.db.QueryRow(ctx, `
-		UPDATE drive_folders SET name = $2, description = NULLIF($3, ''), drive_folder_id = $4, updated_at = now()
+		UPDATE drive_folders SET name = $2, description = NULLIF($3, ''), drive_folder_id = $4, upload_account = $5, updated_at = now()
 		WHERE id = $1::uuid
-		RETURNING id::text, name, COALESCE(description, ''), drive_folder_id, created_by, created_at, updated_at`,
-		id, name, description, driveFolderID).
-		Scan(&f.ID, &f.Name, &f.Description, &f.DriveFolderID, &f.CreatedBy, &f.CreatedAt, &f.UpdatedAt)
+		RETURNING id::text, name, COALESCE(description, ''), upload_account, drive_folder_id, created_by, created_at, updated_at`,
+		id, name, description, driveFolderID, uploadAccount).
+		Scan(&f.ID, &f.Name, &f.Description, &f.UploadAccount, &f.DriveFolderID, &f.CreatedBy, &f.CreatedAt, &f.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

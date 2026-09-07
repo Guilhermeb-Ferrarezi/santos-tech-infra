@@ -967,6 +967,13 @@ ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS gpu_power_watts DOUBLE PRE
 -- não pega isso. NULL = nunca checou (script antigo); string vazia = checou
 -- e o CS2 não está instalado.
 ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS cs2_build_id TEXT;
+
+-- Conta Google que faz o UPLOAD dos arquivos desta pasta. Importa porque quem
+-- sobe o arquivo vira dono dele no Drive, e só o dono recupera da lixeira:
+-- separando a conta, um acidente na conta principal não leva junto os
+-- contratos (que carregam CPF, endereço e nome de menor). String vazia = conta
+-- padrão, ou seja, o comportamento de antes desta coluna existir.
+ALTER TABLE drive_folders ADD COLUMN IF NOT EXISTS upload_account TEXT NOT NULL DEFAULT '';
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
