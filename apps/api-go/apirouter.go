@@ -309,13 +309,13 @@ func (s *Server) executeAPIRouterRequest(ctx context.Context, provider db.ApiRou
 
 		switch outcome {
 		case apiRouterOutcomeUnauthorized:
-			_ = s.q.RecordAPIRouterKeyFailure(ctx, db.RecordAPIRouterKeyFailureParams{ID: key.ID, Status: "unauthorized", LastErrorCode: validInt4(resp.StatusCode)})
+			s.recordAPIRouterKeyFailure(ctx, key.ID, "unauthorized", resp.StatusCode)
 			continue
 		case apiRouterOutcomeNoCredits:
-			_ = s.q.RecordAPIRouterKeyFailure(ctx, db.RecordAPIRouterKeyFailureParams{ID: key.ID, Status: "no_credits", LastErrorCode: validInt4(resp.StatusCode)})
+			s.recordAPIRouterKeyFailure(ctx, key.ID, "no_credits", resp.StatusCode)
 			continue
 		default:
-			_ = s.q.RecordAPIRouterKeySuccess(ctx, key.ID)
+			s.recordAPIRouterKeySuccess(ctx, key.ID)
 			return &apiRouterOutcome{StatusCode: resp.StatusCode, Body: respBody, KeyID: key.ID, KeyLabel: key.Label, Attempts: attempts}, nil
 		}
 	}
@@ -350,11 +350,11 @@ func (s *Server) executeAPIRouterRequestOnce(ctx context.Context, provider db.Ap
 	outcome := classifyAPIRouterStatus(provider.UnauthorizedCodes, provider.NoCreditCodes, resp.StatusCode)
 	switch outcome {
 	case apiRouterOutcomeUnauthorized:
-		_ = s.q.RecordAPIRouterKeyFailure(ctx, db.RecordAPIRouterKeyFailureParams{ID: key.ID, Status: "unauthorized", LastErrorCode: validInt4(resp.StatusCode)})
+		s.recordAPIRouterKeyFailure(ctx, key.ID, "unauthorized", resp.StatusCode)
 	case apiRouterOutcomeNoCredits:
-		_ = s.q.RecordAPIRouterKeyFailure(ctx, db.RecordAPIRouterKeyFailureParams{ID: key.ID, Status: "no_credits", LastErrorCode: validInt4(resp.StatusCode)})
+		s.recordAPIRouterKeyFailure(ctx, key.ID, "no_credits", resp.StatusCode)
 	default:
-		_ = s.q.RecordAPIRouterKeySuccess(ctx, key.ID)
+		s.recordAPIRouterKeySuccess(ctx, key.ID)
 	}
 	return &apiRouterOutcome{StatusCode: resp.StatusCode, Body: respBody, KeyID: key.ID, KeyLabel: key.Label}, nil
 }
@@ -398,13 +398,34 @@ func (s *Server) testAPIRouterKey(ctx context.Context, provider db.ApiRouterProv
 	outcome := classifyAPIRouterStatus(provider.UnauthorizedCodes, provider.NoCreditCodes, resp.StatusCode)
 	switch outcome {
 	case apiRouterOutcomeUnauthorized:
-		_ = s.q.RecordAPIRouterKeyFailure(ctx, db.RecordAPIRouterKeyFailureParams{ID: key.ID, Status: "unauthorized", LastErrorCode: validInt4(resp.StatusCode)})
+		s.recordAPIRouterKeyFailure(ctx, key.ID, "unauthorized", resp.StatusCode)
 	case apiRouterOutcomeNoCredits:
-		_ = s.q.RecordAPIRouterKeyFailure(ctx, db.RecordAPIRouterKeyFailureParams{ID: key.ID, Status: "no_credits", LastErrorCode: validInt4(resp.StatusCode)})
+		s.recordAPIRouterKeyFailure(ctx, key.ID, "no_credits", resp.StatusCode)
 	default:
-		_ = s.q.RecordAPIRouterKeySuccess(ctx, key.ID)
+		s.recordAPIRouterKeySuccess(ctx, key.ID)
 	}
 	return apiRouterTestResult{StatusCode: resp.StatusCode, Outcome: outcome}, nil
+}
+
+// recordAPIRouterKeyFailure grava o desfecho negativo de uma chave (usada para
+// pular chaves mortas na próxima rotação). Best-effort: um erro aqui não deve
+// derrubar a resposta ao cliente (a chamada à API externa já terminou), mas
+// silenciá-lo sem log deixava o status de saúde da chave dessincronizar do
+// banco sem qualquer rastro — um erro transiente do Postgres podia manter uma
+// chave morta marcada como "active" (e sendo retentada sem parar) ou uma
+// chave saudável marcada como falha.
+func (s *Server) recordAPIRouterKeyFailure(ctx context.Context, keyID int64, status string, statusCode int) {
+	if err := s.q.RecordAPIRouterKeyFailure(ctx, db.RecordAPIRouterKeyFailureParams{ID: keyID, Status: status, LastErrorCode: validInt4(statusCode)}); err != nil {
+		slog.Error("apirouter: falha ao gravar falha da chave", "key_id", keyID, "status", status, "err", err)
+	}
+}
+
+// recordAPIRouterKeySuccess grava o desfecho positivo de uma chave. Mesmo
+// racional de best-effort + log do recordAPIRouterKeyFailure acima.
+func (s *Server) recordAPIRouterKeySuccess(ctx context.Context, keyID int64) {
+	if err := s.q.RecordAPIRouterKeySuccess(ctx, keyID); err != nil {
+		slog.Error("apirouter: falha ao gravar sucesso da chave", "key_id", keyID, "err", err)
+	}
 }
 
 func validInt4(n int) pgtype.Int4 {

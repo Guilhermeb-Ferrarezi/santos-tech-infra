@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -239,7 +240,12 @@ func (s *Server) callGateway(ctx context.Context, method, path string, body any)
 		TotalRows  *int64          `json:"TotalRows"`
 		TotalLow   *int64          `json:"totalRows"`
 	}
-	_ = json.NewDecoder(res.Body).Decode(&payload)
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		// Resposta não é o JSON esperado (ex.: página de erro de um proxy
+		// intermediário) — segue com o payload zerado (Success=false, fail-closed),
+		// mas loga para não confundir esse caso com uma falha real do gateway.
+		slog.Warn("callGateway: resposta do gateway de notificações não é JSON válido", "method", method, "path", path, "status", res.StatusCode, "err", err)
+	}
 
 	gr := &gatewayResponse{}
 	gr.Success = (payload.Success != nil && *payload.Success) || (payload.SuccessLow != nil && *payload.SuccessLow)
