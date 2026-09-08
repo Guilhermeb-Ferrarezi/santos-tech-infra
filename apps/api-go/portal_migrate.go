@@ -70,6 +70,39 @@ ALTER TABLE class ADD COLUMN IF NOT EXISTS notion_key TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_class_notion_key ON class(notion_key) WHERE notion_key IS NOT NULL;
 ALTER TABLE class_schedule ADD COLUMN IF NOT EXISTS notion_page_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_class_schedule_notion ON class_schedule(notion_page_id) WHERE notion_page_id IS NOT NULL;
+
+-- Chamada. class_schedule é a GRADE (toda terça 14h); class_session é a aula
+-- que de fato aconteceu numa DATA (terça, 28/07, 14h). Precisa ser material e
+-- não calculada na hora porque a falta é registrada contra uma aula
+-- específica, e porque a grade muda com o tempo sem reescrever o passado.
+CREATE TABLE IF NOT EXISTS class_session (
+    id SERIAL PRIMARY KEY,
+    class_id INTEGER NOT NULL,
+    date DATE NOT NULL,
+    start_time TIME,
+    end_time TIME,
+    canceled BOOLEAN NOT NULL DEFAULT false,
+    note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_class_session_unica ON class_session(class_id, date, start_time);
+CREATE INDEX IF NOT EXISTS idx_class_session_class ON class_session(class_id, date);
+
+-- attendance: uma linha por (aula, aluno). Sem linha = ainda não foi feita a
+-- chamada daquele aluno — diferente de presente. Por isso não há default:
+-- "não sei" e "estava presente" são coisas distintas num controle de falta.
+CREATE TABLE IF NOT EXISTS attendance (
+    id SERIAL PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES class_session(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('presente','falta','justificada')),
+    note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unica ON attendance(session_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_attendance_user ON attendance(user_id);
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal

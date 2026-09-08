@@ -1701,6 +1701,27 @@ com 2 casas; resposta inclui `{txid,pixCopiaECola,location}`. Chave Pix:
 `EFI_PIX_KEY`. Reconciliação por `txid`.
 
 
+### Chamada / faltas — `/portal/classes/{id}/sessions` e `/portal/sessions/{id}/attendance`
+
+Duas camadas distintas, de propósito:
+- `class_schedule` é a **grade** ("toda terça 14h").
+- `class_session` é a **aula numa data** ("terça, 28/07, 14h"). Materializada,
+  não calculada: a falta é registrada contra uma aula específica, e mudar a
+  grade não pode reescrever o passado.
+
+- `POST /portal/classes/{classId}/sessions {from?, to?}` → `{criadas, de, ate}`.
+  Gera as aulas a partir da grade. `from` ausente = data de início da turma;
+  `to` ausente = hoje. Idempotente (ON CONFLICT em class_id+date+start_time):
+  rodar de novo não duplica nem apaga chamada já feita. Turma sem grade → 400
+  `SEM_GRADE`. Intervalo > 1 ano → 400.
+- `GET /portal/classes/{classId}/sessions` → `{items:[{id,date,startTime,endTime,
+  canceled,note,presencas:[{userId,userName,userEmail,status,note}]}]}`.
+  **`status` vazio = chamada não feita** — é diferente de falta. `attendance`
+  não tem DEFAULT justamente pra "não sei" não virar "presente".
+- `PUT /portal/sessions/{sessionId}/attendance {userId,status,note?}` → 204.
+  `status` ∈ `presente|falta|justificada`. Recusa aluno não matriculado na
+  turma daquela aula (400 `NAO_MATRICULADO`).
+
 ### Sync com o Notion — `POST /portal/notion/sync` (admin-only, 6/min)
 
 `GET /portal/classes?individual=true|false` filtra por formato: `true` = aula

@@ -55,6 +55,10 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	// Importa turmas/horários da base "Agenda de Aulas" do Notion. Admin-only e
 	// com teto baixo: cada chamada bate no Notion e varre o banco do portal.
 	mux.HandleFunc("POST /portal/notion/sync", s.rateLimit(6, min, s.adminGuard(s.handlePortalNotionSync)))
+	// Chamada: aulas materializadas da grade + presença por aluno.
+	mux.HandleFunc("GET /portal/classes/{classId}/sessions", s.portalRead("portal_turmas", s.handlePortalListSessions))
+	mux.HandleFunc("POST /portal/classes/{classId}/sessions", s.rateLimit(20, min, s.portalWrite("portal_turmas", s.handlePortalGenerateSessions)))
+	mux.HandleFunc("PUT /portal/sessions/{sessionId}/attendance", s.rateLimit(120, min, s.portalWrite("portal_turmas", s.handlePortalSetAttendance)))
 	mux.HandleFunc("GET /portal/classes/{classId}/schedule", s.portalRead("portal_turmas", s.handlePortalListClassSchedule))
 	mux.HandleFunc("POST /portal/classes/{classId}/schedule", s.rateLimit(20, min, s.portalWrite("portal_turmas", s.handlePortalAddClassSchedule)))
 	mux.HandleFunc("DELETE /portal/classes/{classId}/schedule/{scheduleId}", s.adminGuard(s.handlePortalRemoveClassSchedule))
