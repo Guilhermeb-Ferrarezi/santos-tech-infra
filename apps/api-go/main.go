@@ -71,6 +71,8 @@ func main() {
 	srv := NewServer(cfg, db, portalDB, rdb)
 	srv.queue = queueClient
 	srv.syncBansToRedis(ctx)
+	// Materializa as aulas da chamada sozinha (ver portal_chamada_worker.go).
+	srv.startChamadaWorker(ctx)
 
 	// asynq.Server embutido: processa a fila de emails. Roda numa goroutine com
 	// recover() e é parado no graceful shutdown (Stop deixa de puxar tasks novas,

@@ -1722,9 +1722,9 @@ Duas camadas distintas, de propósito:
   `status` ∈ `presente|falta|justificada`. Recusa aluno não matriculado na
   turma daquela aula (400 `NAO_MATRICULADO`).
 - `POST /portal/internal/gerar-aulas` (admin/PAT) → `{turmasComGrade, aulasCriadas}`.
-  Alvo do **cron diário** (`portal.gerar-aulas` no catálogo do cron-go): gera as
-  aulas dos últimos 7 dias de toda turma com grade, pra a chamada existir sem
-  ninguém clicar. Janela curta de propósito — custo diário constante e tolera
+  Gatilho MANUAL da mesma rotina que já roda sozinha dentro do api-go a cada 6h
+  (portal_chamada_worker.go, com trava no Redis pra uma réplica só executar).
+  Gera as aulas dos últimos 7 dias de toda turma com grade. Janela curta de propósito — custo diário constante e tolera
   cron que falhou ontem. Backfill de histórico continua sendo o botão manual.
   Nunca gera aula anterior ao início da turma.
 

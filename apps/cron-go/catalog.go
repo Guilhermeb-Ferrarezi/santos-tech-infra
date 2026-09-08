@@ -13,13 +13,6 @@ type CatalogAction struct {
 
 // Catalog é o registro curado. Ampliar aqui ao expor uma nova ação agendável.
 var Catalog = map[string]CatalogAction{
-	"portal.gerar-aulas": {
-		ID: "portal.gerar-aulas", Label: "Gerar aulas da semana (chamada)",
-		// Materializa as aulas das turmas a partir da grade semanal, pra a
-		// chamada existir sem ninguém clicar. Idempotente: roda todo dia e só
-		// cria o que falta.
-		Method: "POST", Host: "api.santos-tech.com", Path: "/portal/internal/gerar-aulas",
-	},
 	"payments.gerar-cobrancas-mes": {
 		ID: "payments.gerar-cobrancas-mes", Label: "Gerar cobranças do mês",
 		// Traefik roteia api.santos-tech.com/payments → payments-go (stripando /payments),
