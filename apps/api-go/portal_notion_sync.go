@@ -102,14 +102,18 @@ func (s *Server) portalNotionSync(ctx context.Context, dryRun bool) (*notionSync
 		}
 
 		// ── professor ─────────────────────────────────────────────────────
-		if it.Professor != "" && turmaID > 0 {
+		// A BUSCA roda sempre, inclusive em dry-run: era o contrário antes, e
+		// o dry-run escondia justamente o aviso de "professor não existe" —
+		// quem simulasse só descobriria o problema depois de gravar. Só o
+		// VÍNCULO é que depende de a turma já ter id.
+		if it.Professor != "" {
 			profID, err := s.portalFindTeacherByName(ctx, it.Professor)
 			if err != nil {
 				return nil, fmt.Errorf("professor %q: %w", it.Professor, err)
 			}
 			if profID == 0 {
 				aviso(fmt.Sprintf("professor %q não existe como usuário no sistema — turmas dele ficaram sem professor atribuído", it.Professor))
-			} else if !dryRun {
+			} else if !dryRun && turmaID > 0 {
 				if err := s.portalAddClassTeacher(ctx, turmaID, profID); err != nil {
 					return nil, fmt.Errorf("vincular professor %q: %w", it.Professor, err)
 				}
