@@ -239,6 +239,13 @@ func (s *Server) portalCreateCourse(ctx context.Context, in portalCourseInput) (
 	if in.Price != nil && strings.TrimSpace(*in.Price) != "" {
 		price = *in.Price
 	}
+	// duration_hours também é NOT NULL. A coluna tem default 0, mas passar NULL
+	// explícito no INSERT anula o default — então quem cria curso sem informar
+	// carga (a tela sempre informa; o sync do Notion não) tomava 500.
+	duracao := 0
+	if in.DurationHours != nil {
+		duracao = *in.DurationHours
+	}
 	tx, err := s.portalDB.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -248,7 +255,7 @@ func (s *Server) portalCreateCourse(ctx context.Context, in portalCourseInput) (
 	var id int64
 	if err := tx.QueryRow(ctx, `INSERT INTO course (name, description, is_paid, duration_hours, level_difficulty, paid_focus, price, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7::numeric,NOW(),NOW()) RETURNING id`,
-		in.Name, in.Description, isPaid, in.DurationHours, in.Level, in.Focus, price).Scan(&id); err != nil {
+		in.Name, in.Description, isPaid, duracao, in.Level, in.Focus, price).Scan(&id); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO module (course_id, name, description, index_order, created_at, updated_at)
