@@ -252,18 +252,23 @@ type portalTeacherInput struct {
 // da turma — uma turma de grupo pode ter um aluno marcado como particular
 // dentro dela.
 type portalStudentOverviewDTO struct {
-	StudentID       string     `json:"studentId"`
-	StudentName     string     `json:"studentName"`
-	StudentEmail    string     `json:"studentEmail"`
-	ClassID         string     `json:"classId"`
-	ClassName       string     `json:"className"`
-	CourseID        string     `json:"courseId"`
-	CourseName      string     `json:"courseName"`
-	TotalPhases     int        `json:"totalPhases"`
-	CompletedPhases int        `json:"completedPhases"`
-	TeacherName     *string    `json:"teacherName"`
-	Individual      bool       `json:"individual"`
-	NextClassAt     *time.Time `json:"nextClassAt"`
+	StudentID       string  `json:"studentId"`
+	StudentName     string  `json:"studentName"`
+	StudentEmail    string  `json:"studentEmail"`
+	ClassID         string  `json:"classId"`
+	ClassName       string  `json:"className"`
+	CourseID        string  `json:"courseId"`
+	CourseName      string  `json:"courseName"`
+	TotalPhases     int     `json:"totalPhases"`
+	CompletedPhases int     `json:"completedPhases"`
+	TeacherName     *string `json:"teacherName"`
+	Individual      bool    `json:"individual"`
+	// AulasDadas: aulas que JÁ aconteceram (class_session até hoje), diferente
+	// de TotalPhases, que é o currículo previsto do curso. O aluno pergunta
+	// "quantas aulas eu já tive", não "quantas fases o curso tem".
+	AulasDadas  int        `json:"aulasDadas"`
+	Faltas      int        `json:"faltas"`
+	NextClassAt *time.Time `json:"nextClassAt"`
 }
 
 // portalStudentIndividualInput é o corpo do PATCH que marca/desmarca uma

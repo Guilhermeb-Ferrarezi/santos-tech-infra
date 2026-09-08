@@ -222,6 +222,14 @@ func (s *Server) portalListPhases(ctx context.Context, moduleID int64, p portalP
 
 func portalNowUTC() time.Time { return time.Now().UTC() }
 
+// portalBRLocation: os horários de class_schedule são hora de PAREDE local
+// (a turma é "terça às 14h", não "14h UTC"). Montar o instante em UTC fazia
+// 14:00 virar 14:00Z, que o navegador exibia como 11h no Brasil — a "próxima
+// aula" aparecia 3h antes da real. FixedZone em vez de LoadLocation: a imagem
+// final é distroless e não carrega tzdata. Sem horário de verão no Brasil
+// desde 2019, então o offset fixo está correto.
+var portalBRLocation = time.FixedZone("BRT", -3*60*60)
+
 // ── Catálogo: mutações ───────────────────────────────────────────────────────
 
 // portalCreateCourse cria o curso e já nasce com 1 módulo padrão ("Módulo 1")
@@ -627,6 +635,11 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		          JOIN phase ph ON ph.id = psp.phase_id
 		          JOIN module m ON m.id = ph.module_id
 		        WHERE m.course_id = c.id AND psp.user_id = u.id AND psp.completed_at IS NOT NULL),
+		       (SELECT COUNT(*) FROM class_session cs
+		        WHERE cs.class_id = cl.id AND NOT cs.canceled AND cs.date <= CURRENT_DATE),
+		       (SELECT COUNT(*) FROM attendance a
+		          JOIN class_session cs ON cs.id = a.session_id
+		        WHERE cs.class_id = cl.id AND a.user_id = u.id AND a.status = 'falta'),
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
 		          JOIN "user" t ON t.id = ct.user_id
 		        WHERE ct.class_id = cl.id),
@@ -647,7 +660,7 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		var dto portalStudentOverviewDTO
 		if err := rows.Scan(&dto.StudentID, &dto.StudentName, &dto.StudentEmail,
 			&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
-			&dto.TotalPhases, &dto.CompletedPhases, &dto.TeacherName, &dto.Individual); err != nil {
+			&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual); err != nil {
 			return nil, 0, err
 		}
 		if dto.ClassName == "" {
@@ -679,6 +692,11 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 		          JOIN phase ph ON ph.id = psp.phase_id
 		          JOIN module m ON m.id = ph.module_id
 		        WHERE m.course_id = c.id AND psp.user_id = u.id AND psp.completed_at IS NOT NULL),
+		       (SELECT COUNT(*) FROM class_session cs
+		        WHERE cs.class_id = cl.id AND NOT cs.canceled AND cs.date <= CURRENT_DATE),
+		       (SELECT COUNT(*) FROM attendance a
+		          JOIN class_session cs ON cs.id = a.session_id
+		        WHERE cs.class_id = cl.id AND a.user_id = u.id AND a.status = 'falta'),
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
 		          JOIN "user" t ON t.id = ct.user_id
 		        WHERE ct.class_id = cl.id),
@@ -697,7 +715,7 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 		var dto portalStudentOverviewDTO
 		if err := rows.Scan(&dto.StudentID, &dto.StudentName, &dto.StudentEmail,
 			&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
-			&dto.TotalPhases, &dto.CompletedPhases, &dto.TeacherName, &dto.Individual); err != nil {
+			&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual); err != nil {
 			return nil, err
 		}
 		if dto.ClassName == "" {
@@ -878,7 +896,10 @@ func (s *Server) portalNextClassAt(ctx context.Context, classIDs []int64) (map[s
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	now := portalNowUTC()
+	// Tudo no fuso do Brasil: o dia da semana e a hora da grade são locais.
+	// Em UTC, uma aula de terça 14h vira quarta 00h30 pra quem estiver perto da
+	// virada, além de exibir a hora errada.
+	now := time.Now().In(portalBRLocation)
 	for classID, slots := range slotsByClass {
 		window := windowByClass[classID]
 		var best *time.Time
@@ -889,7 +910,7 @@ func (s *Server) portalNextClassAt(ctx context.Context, classIDs []int64) (map[s
 				if sl.dow != dow {
 					continue
 				}
-				cand := time.Date(day.Year(), day.Month(), day.Day(), sl.hour, sl.min, 0, 0, day.Location())
+				cand := time.Date(day.Year(), day.Month(), day.Day(), sl.hour, sl.min, 0, 0, portalBRLocation)
 				if cand.Before(now) || cand.Before(window[0]) || cand.After(window[1]) {
 					continue
 				}
