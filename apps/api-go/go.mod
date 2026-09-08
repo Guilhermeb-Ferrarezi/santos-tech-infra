@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/alexedwards/argon2id v1.0.0
-	github.com/alicebob/miniredis/v2 v2.38.0
+	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/coder/websocket v1.8.15
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/hibiken/asynq v0.26.0
