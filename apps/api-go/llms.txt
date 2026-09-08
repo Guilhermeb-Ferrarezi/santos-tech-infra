@@ -723,10 +723,18 @@ Admin-only (cria pasta e define quem tem acesso; professor não administra):
   rate limit 30/min · alimenta o seletor de pasta na tela de criar/editar
   (evita colar ID/URL na mão)
 - `GET /auth/admin/drive-folders` — `{folders:[DriveFolder]}`
-- `POST /auth/admin/drive-folders {name, description?, driveFolderId}` → 201
+- `POST /auth/admin/drive-folders {name, description?, uploadAccount?, driveFolderId}` → 201
   `{folder}` · rate limit 20/min · `driveFolderId` aceita a URL colada
   (`.../drive/folders/<id>?...`), o backend extrai o ID
-- `PUT /auth/admin/drive-folders/{id} {name, description?, driveFolderId}` → `{folder}` · rate limit 30/min
+- `PUT /auth/admin/drive-folders/{id} {name, description?, uploadAccount?, driveFolderId}` → `{folder}` · rate limit 30/min
+  · atenção: é substituição total — omitir `uploadAccount` devolve a pasta pra conta padrão
+- `uploadAccount` (`""` | `"contratos"`) escolhe QUAL conta Google sobe os arquivos
+  daquela pasta. Importa porque quem sobe vira DONO do arquivo no Drive, e só o
+  dono recupera da lixeira: as pastas de contrato e lista de presença usam uma
+  conta separada (`GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN_CONTRATOS`) pra isolar dado
+  sensível. Vazio = conta padrão. Token da conta não configurado = cai na conta
+  padrão em vez de falhar. Só o UPLOAD muda de identidade; listagem, download,
+  rename e lixeira continuam todos na service account.
 - `DELETE /auth/admin/drive-folders/{id}` → 204 · admin + sudo mode (só apaga o registro, não mexe no Drive)
 - `GET /auth/admin/drive-folders/{id}/access` — `{roles:[DriveFolderRoleAccess], members:[DriveFolderMemberAccess]}`
 - `PUT /auth/admin/drive-folders/{id}/access {roles:[{roleKind,roleValue,access}], members:[{userId,access}]}`

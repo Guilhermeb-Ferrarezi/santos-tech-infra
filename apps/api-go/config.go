@@ -102,6 +102,17 @@ type Config struct {
 	GoogleDriveOAuthClientSecret string
 	GoogleDriveOAuthRefreshToken string
 
+	// Segunda conta de upload, para pastas com dado sensível (contratos e
+	// listas de presença, que levam CPF, endereço e nome de menor). Motivo de
+	// existir: quem sobe o arquivo vira DONO dele no Drive, e só o dono
+	// recupera da lixeira. Separando a conta, um acidente na conta principal
+	// não leva junto os contratos — e vice-versa.
+	//
+	// É só o refresh token: o ClientID/Secret acima são do mesmo aplicativo
+	// OAuth, e as duas contas autorizam o mesmo app. Vazio = as pastas
+	// marcadas caem na conta padrão, ou seja, o comportamento de hoje.
+	GoogleDriveOAuthRefreshTokenContratos string
+
 	// Automação de resposta a comentário do Instagram (private reply via
 	// Graph API — substitui o ManyChat). Vazio (AppSecret ou AccessToken) =
 	// webhook desabilitado (responde 503 em vez de processar sem validar
@@ -206,6 +217,8 @@ func LoadConfig() Config {
 		GoogleDriveOAuthClientID:     getEnv("GOOGLE_DRIVE_OAUTH_CLIENT_ID", ""),
 		GoogleDriveOAuthClientSecret: getEnv("GOOGLE_DRIVE_OAUTH_CLIENT_SECRET", ""),
 		GoogleDriveOAuthRefreshToken: getEnv("GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN", ""),
+
+		GoogleDriveOAuthRefreshTokenContratos: getEnv("GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN_CONTRATOS", ""),
 
 		InstagramAppSecret:          getEnv("INSTAGRAM_APP_SECRET", ""),
 		InstagramAccessToken:        getEnv("INSTAGRAM_ACCESS_TOKEN", ""),
