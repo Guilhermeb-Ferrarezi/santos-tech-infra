@@ -73,6 +73,8 @@ func main() {
 	srv.syncBansToRedis(ctx)
 	// Materializa as aulas da chamada sozinha (ver portal_chamada_worker.go).
 	srv.startChamadaWorker(ctx)
+	// Publica sozinho o post do calendário social cujo horário chegou.
+	srv.startAgendadorSocial(ctx)
 
 	// asynq.Server embutido: processa a fila de emails. Roda numa goroutine com
 	// recover() e é parado no graceful shutdown (Stop deixa de puxar tasks novas,

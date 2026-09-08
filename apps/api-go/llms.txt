@@ -806,6 +806,21 @@ Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por pe
 
 ## Social — Calendário Editorial — `api.santos-tech.com/social`
 
+**Publicação automática do agendado** (social_agendador.go, roda dentro do
+api-go a cada 1min, sem HTTP e sem credencial): post com `status='agendado'` e
+`scheduledAt` vencido é publicado sozinho pelo MESMO caminho do botão manual
+(preparePublish + runPublish), pra os dois não divergirem.
+
+- Garantia de **no máximo uma vez** é durável, no banco: `social_posts.auto_published_at`
+  é reivindicado com `UPDATE ... WHERE auto_published_at IS NULL` ANTES de publicar.
+  Restart ou segunda réplica não geram post duplicado — no Instagram não há desfazer.
+- Post incompleto (sem mídia, carrossel com 1 item) é **pulado com nota** no
+  histórico, e a marca é devolvida: depois de corrigido, publica sozinho.
+- Janela de 7 dias: post agendado no passado distante não "acorda" e vai ao ar
+  de surpresa se o serviço for religado depois.
+- Autor das notas/confirmações automáticas é o id 0 (sistema), pra separar no
+  histórico o que saiu sozinho do que alguém publicou.
+
 Auth: admin (3) ou role 4 com permissão `social` (read/write/execute) — `write` cria/edita
 posts (`POST`/`PUT`), `execute` atualiza status, publica e comenta. `DELETE` e
 `PUT /social/platform-owners`/`PUT /social/settings` continuam admin-only.

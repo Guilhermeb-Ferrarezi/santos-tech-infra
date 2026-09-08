@@ -155,6 +155,15 @@ CREATE TABLE IF NOT EXISTS social_post_status_history (
   changed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_social_post_status_history_post ON social_post_status_history(post_id);
+-- Publicação automática de post agendado (social_agendador.go). Marca DURÁVEL,
+-- não trava em memória nem no Redis: publicar é irreversível, então a garantia
+-- de "no máximo uma vez" precisa sobreviver a restart e a réplica concorrente.
+-- O agendador reivindica o post com UPDATE ... WHERE auto_published_at IS NULL,
+-- e só quem ganhou a linha publica.
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS auto_published_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_social_posts_agendados
+  ON social_posts (scheduled_at) WHERE auto_published_at IS NULL;
+
 -- Migração: normalizar valores antigos de plataforma/pilar para os corretos
 UPDATE social_posts SET pilar='institucional' WHERE pilar='produto';
 UPDATE social_posts SET pilar='educacional'   WHERE pilar='engajamento';
