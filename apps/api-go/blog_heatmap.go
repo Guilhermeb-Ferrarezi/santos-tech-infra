@@ -104,11 +104,22 @@ func (s *Server) insertHeatmapBatch(ctx context.Context, in BlogHeatmapBatch) er
 	}
 	defer tx.Rollback(ctx)
 
-	for _, c := range in.Clicks {
+	// Um INSERT em lote (unnest) no lugar de um round-trip por clique — mesmo
+	// padrão já usado em portal_content_store.go/social.go/task.go. Rota
+	// pública de alta frequência (1 beacon por pageview, até
+	// heatmapMaxClicksPerBatch=200 cliques cada): o loop anterior fazia até
+	// 200 INSERTs sequenciais na mesma transação por request.
+	if len(in.Clicks) > 0 {
+		xs := make([]float32, len(in.Clicks))
+		ys := make([]float32, len(in.Clicks))
+		for i, c := range in.Clicks {
+			xs[i] = float32(c.XPct)
+			ys[i] = float32(c.YPct)
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO blog_heatmap_clicks (post_slug, viewport, x_pct, y_pct, session_id)
-			VALUES ($1,$2,$3,$4,$5)`,
-			in.PostSlug, in.Viewport, c.XPct, c.YPct, in.SessionID); err != nil {
+			SELECT $1, $2, t.xp, t.yp, $5 FROM unnest($3::real[], $4::real[]) AS t(xp, yp)`,
+			in.PostSlug, in.Viewport, xs, ys, in.SessionID); err != nil {
 			return err
 		}
 	}

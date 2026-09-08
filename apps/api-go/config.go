@@ -109,6 +109,17 @@ type Config struct {
 	GoogleDriveOAuthClientSecret string
 	GoogleDriveOAuthRefreshToken string
 
+	// Segunda conta de upload, para pastas com dado sensível (contratos e
+	// listas de presença, que levam CPF, endereço e nome de menor). Motivo de
+	// existir: quem sobe o arquivo vira DONO dele no Drive, e só o dono
+	// recupera da lixeira. Separando a conta, um acidente na conta principal
+	// não leva junto os contratos — e vice-versa.
+	//
+	// É só o refresh token: o ClientID/Secret acima são do mesmo aplicativo
+	// OAuth, e as duas contas autorizam o mesmo app. Vazio = as pastas
+	// marcadas caem na conta padrão, ou seja, o comportamento de hoje.
+	GoogleDriveOAuthRefreshTokenContratos string
+
 	// Automação de resposta a comentário do Instagram (private reply via
 	// Graph API — substitui o ManyChat). Vazio (AppSecret ou AccessToken) =
 	// webhook desabilitado (responde 503 em vez de processar sem validar
@@ -217,6 +228,8 @@ func LoadConfig() Config {
 		GoogleDriveOAuthClientSecret: getEnv("GOOGLE_DRIVE_OAUTH_CLIENT_SECRET", ""),
 		GoogleDriveOAuthRefreshToken: getEnv("GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN", ""),
 
+		GoogleDriveOAuthRefreshTokenContratos: getEnv("GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN_CONTRATOS", ""),
+
 		InstagramAppSecret:          getEnv("INSTAGRAM_APP_SECRET", ""),
 		InstagramAccessToken:        getEnv("INSTAGRAM_ACCESS_TOKEN", ""),
 		InstagramUserID:             getEnv("INSTAGRAM_USER_ID", ""),
@@ -262,6 +275,15 @@ func LoadConfig() Config {
 	// de vez, mesmo que o risco prático hoje seja residual.
 	if c.JWTSecret == c.JWTRefreshSecret {
 		slog.Error("JWT_SECRET e JWT_REFRESH_SECRET não podem ser iguais")
+		os.Exit(1)
+	}
+	// allowedOrigin (server.go) é fail-closed por design: allowlist vazia
+	// bloqueia toda origem em rotas com credencial. Sem essa checagem no boot,
+	// esquecer CORS_ORIGIN/AUTH_WEB_ORIGIN sobe o processo normalmente e só
+	// aparece em produção como login/cookie quebrado pra todo mundo — silencioso
+	// até alguém notar. Falha aqui, como os demais campos obrigatórios.
+	if len(c.CORSOrigins) == 0 && c.AuthWebOrigin == "" {
+		slog.Error("nenhuma origem CORS configurada — defina CORS_ORIGIN e/ou AUTH_WEB_ORIGIN")
 		os.Exit(1)
 	}
 	return c

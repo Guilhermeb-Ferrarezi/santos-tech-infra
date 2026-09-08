@@ -61,11 +61,8 @@ function DialogDescription({
 }
 
 export {
-  // eslint-disable-next-line react-refresh/only-export-components
   Dialog,
-  // eslint-disable-next-line react-refresh/only-export-components
   DialogTrigger,
-  // eslint-disable-next-line react-refresh/only-export-components
   DialogClose,
   DialogContent,
   DialogHeader,

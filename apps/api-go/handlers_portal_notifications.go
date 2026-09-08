@@ -74,14 +74,14 @@ type portalTemplateInput struct {
 }
 
 func (in *portalTemplateInput) validate() error {
-	if in.Nome == "" {
-		return validationErr("nome interno obrigatório")
+	if in.Nome == "" || len(in.Nome) > 200 {
+		return validationErr("nome interno obrigatório (até 200 caracteres)")
 	}
-	if in.TituloTemplate == "" {
-		return validationErr("título obrigatório")
+	if in.TituloTemplate == "" || len(in.TituloTemplate) > 200 {
+		return validationErr("título obrigatório (até 200 caracteres)")
 	}
-	if in.MensagemTemplate == "" {
-		return validationErr("mensagem obrigatória")
+	if in.MensagemTemplate == "" || len(in.MensagemTemplate) > 4000 {
+		return validationErr("mensagem obrigatória (até 4000 caracteres)")
 	}
 	return nil
 }

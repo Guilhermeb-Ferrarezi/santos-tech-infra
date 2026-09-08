@@ -5693,6 +5693,16 @@ paths:
               properties:
                 name: { type: string, maxLength: 120 }
                 description: { type: string, maxLength: 500, nullable: true }
+                uploadAccount:
+                  type: string
+                  enum: ["", contratos]
+                  default: ""
+                  description: >
+                    Conta Google que sobe os arquivos desta pasta — e que fica DONA deles
+                    no Drive, o que define de quem é a lixeira capaz de recuperá-los.
+                    Vazio = conta padrão. `contratos` usa a conta separada de dados
+                    sensíveis (GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN_CONTRATOS); se esse token
+                    não estiver configurado, o upload cai na conta padrão em vez de falhar.
                 driveFolderId: { type: string, description: "ID ou URL da pasta no Google Drive." }
               required: [name, driveFolderId]
       responses:
@@ -5729,6 +5739,13 @@ paths:
               properties:
                 name: { type: string, maxLength: 120 }
                 description: { type: string, maxLength: 500, nullable: true }
+                uploadAccount:
+                  type: string
+                  enum: ["", contratos]
+                  default: ""
+                  description: >
+                    Conta de upload da pasta (ver POST). Atenção: o PUT é substituição
+                    total — omitir o campo volta a pasta para a conta padrão.
                 driveFolderId: { type: string }
               required: [name, driveFolderId]
       responses:
@@ -7243,11 +7260,12 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         description: { type: string }
+        uploadAccount: { type: string, enum: ["", contratos], description: "Conta Google que sobe (e fica dona) dos arquivos desta pasta. Vazio = conta padrão." }
         driveFolderId: { type: string, description: "ID da pasta no Google Drive (já extraído de URL, se colada)." }
         createdBy: { type: integer }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
-      required: [id, name, description, driveFolderId, createdBy, createdAt, updatedAt]
+      required: [id, name, description, uploadAccount, driveFolderId, createdBy, createdAt, updatedAt]
 
     MyDriveFolder:
       type: object

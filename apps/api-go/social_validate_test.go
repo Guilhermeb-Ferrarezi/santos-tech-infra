@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -57,6 +58,14 @@ func TestValidateSocialPostInput_PlataformaDestinoInvalida(t *testing.T) {
 	in.PlataformasDestino = []string{"instagram", "orkut"}
 	if err := validateSocialPostInput(&in); err == nil {
 		t.Fatal("esperava erro de plataforma-destino inválida")
+	}
+}
+
+func TestValidateSocialPostInput_TituloLongoDemais(t *testing.T) {
+	in := baseValidInput()
+	in.Title = strings.Repeat("a", 201)
+	if err := validateSocialPostInput(&in); err == nil {
+		t.Fatal("esperava erro de título longo demais (>200 caracteres)")
 	}
 }
 

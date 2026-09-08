@@ -87,8 +87,11 @@ func isInlineSafeContentType(ct string) bool {
 }
 
 type driveFolderInput struct {
-	Name          string `json:"name"`
-	Description   string `json:"description"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// UploadAccount: conta Google que sobe os arquivos desta pasta. Ausente ou
+	// vazio = conta padrão, que é o comportamento de antes deste campo existir.
+	UploadAccount string `json:"uploadAccount"`
 	DriveFolderID string `json:"driveFolderId"`
 }
 
@@ -99,6 +102,11 @@ func (in driveFolderInput) validate() error {
 	}
 	if len(in.Description) > driveFolderDescriptionMax {
 		return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "descrição deve ter no máximo 500 caracteres")
+	}
+	// Fail-closed: conta desconhecida é recusada em vez de virar string solta
+	// no banco, que depois cairia na conta padrão sem ninguém perceber.
+	if !driveAccountsValidos[strings.TrimSpace(in.UploadAccount)] {
+		return appErr(http.StatusBadRequest, "VALIDATION_ERROR", "conta de upload inválida")
 	}
 	id := extractDriveFolderID(in.DriveFolderID)
 	if id == "" || len(id) > driveFolderIDMax {
@@ -212,7 +220,8 @@ func (s *Server) handleCreateDriveFolder(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	folder, err := s.insertDriveFolder(r.Context(),
-		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description), driveID, userIDFrom(r))
+		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description), driveID,
+		strings.TrimSpace(in.UploadAccount), userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -243,7 +252,8 @@ func (s *Server) handleUpdateDriveFolder(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	folder, err := s.updateDriveFolderRow(r.Context(), id,
-		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description), driveID)
+		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description), driveID,
+		strings.TrimSpace(in.UploadAccount))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -889,7 +899,9 @@ func (s *Server) handleUploadDriveFile(w http.ResponseWriter, r *http.Request) {
 			reader = io.MultiReader(bytes.NewReader(peek), part)
 		}
 
-		f, uploadErr := s.drive.UploadFile(r.Context(), target, filename, contentType, reader)
+		// A conta de upload é propriedade da PASTA: define quem fica dono do
+		// arquivo no Drive e, portanto, de quem é a lixeira que o recupera.
+		f, uploadErr := s.drive.UploadFileAs(r.Context(), folder.UploadAccount, target, filename, contentType, reader)
 		part.Close()
 		if uploadErr != nil {
 			slog.Error("falha no upload pro Drive", "folder", folder.ID, "err", uploadErr)

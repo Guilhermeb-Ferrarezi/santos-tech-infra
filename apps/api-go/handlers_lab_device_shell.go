@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -203,8 +202,7 @@ func (s *Server) handleLabDeviceShellCheck(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	agentOnline := s.labShellHub.get(deviceUUID) != nil
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]bool{"agentOnline": agentOnline})
+	writeJSON(w, http.StatusOK, map[string]bool{"agentOnline": agentOnline})
 }
 
 // GET /hour-lab-devices/{id}/shell — o ADMIN conecta aqui pra abrir uma
