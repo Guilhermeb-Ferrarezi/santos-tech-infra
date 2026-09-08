@@ -1721,6 +1721,12 @@ Duas camadas distintas, de propósito:
 - `PUT /portal/sessions/{sessionId}/attendance {userId,status,note?}` → 204.
   `status` ∈ `presente|falta|justificada`. Recusa aluno não matriculado na
   turma daquela aula (400 `NAO_MATRICULADO`).
+- `POST /portal/internal/gerar-aulas` (admin/PAT) → `{turmasComGrade, aulasCriadas}`.
+  Alvo do **cron diário** (`portal.gerar-aulas` no catálogo do cron-go): gera as
+  aulas dos últimos 7 dias de toda turma com grade, pra a chamada existir sem
+  ninguém clicar. Janela curta de propósito — custo diário constante e tolera
+  cron que falhou ontem. Backfill de histórico continua sendo o botão manual.
+  Nunca gera aula anterior ao início da turma.
 
 ### Sync com o Notion — `POST /portal/notion/sync` (admin-only, 6/min)
 

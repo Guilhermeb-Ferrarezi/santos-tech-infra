@@ -103,3 +103,15 @@ func (s *Server) handlePortalSetAttendance(w http.ResponseWriter, r *http.Reques
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// handlePortalGerarAulasCron (POST /portal/internal/gerar-aulas) é o alvo do
+// cron diário: materializa as aulas recentes de todas as turmas com grade.
+// Idempotente — rodar duas vezes no mesmo dia não duplica nada.
+func (s *Server) handlePortalGerarAulasCron(w http.ResponseWriter, r *http.Request) {
+	turmas, criadas, err := s.portalGerarAulasDeTodasAsTurmas(r.Context(), 7)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"turmasComGrade": turmas, "aulasCriadas": criadas})
+}

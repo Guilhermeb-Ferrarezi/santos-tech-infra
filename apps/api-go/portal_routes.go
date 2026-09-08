@@ -56,6 +56,9 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	// com teto baixo: cada chamada bate no Notion e varre o banco do portal.
 	mux.HandleFunc("POST /portal/notion/sync", s.rateLimit(6, min, s.adminGuard(s.handlePortalNotionSync)))
 	// Chamada: aulas materializadas da grade + presença por aluno.
+	// Alvo do cron diário (catálogo do cron-go: portal.gerar-aulas). Admin-only
+	// — o cron chama com o PAT da conta de serviço.
+	mux.HandleFunc("POST /portal/internal/gerar-aulas", s.rateLimit(10, min, s.adminGuard(s.handlePortalGerarAulasCron)))
 	mux.HandleFunc("GET /portal/classes/{classId}/sessions", s.portalRead("portal_turmas", s.handlePortalListSessions))
 	mux.HandleFunc("POST /portal/classes/{classId}/sessions", s.rateLimit(20, min, s.portalWrite("portal_turmas", s.handlePortalGenerateSessions)))
 	mux.HandleFunc("PUT /portal/sessions/{sessionId}/attendance", s.rateLimit(120, min, s.portalWrite("portal_turmas", s.handlePortalSetAttendance)))

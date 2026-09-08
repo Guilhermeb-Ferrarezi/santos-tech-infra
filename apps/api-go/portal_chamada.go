@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -172,4 +173,61 @@ func (s *Server) portalFaltasDoAluno(ctx context.Context, classID, userID int64)
 		 LEFT JOIN attendance a ON a.session_id = cs.id AND a.user_id = $2
 		 WHERE cs.class_id = $1 AND NOT cs.canceled`, classID, userID).Scan(&faltas, &total)
 	return
+}
+
+// portalGerarAulasDeTodasAsTurmas materializa as aulas recentes de TODA turma
+// que tenha grade semanal. É o que o cron chama diariamente pra a chamada
+// aparecer sozinha, sem ninguém clicar em "Gerar aulas".
+//
+// Janela curta (últimos dias, não desde o início da turma) por dois motivos:
+// o custo diário fica constante em vez de crescer com a idade da turma, e uns
+// dias de folga cobrem um cron que falhou ontem sem precisar de estado. Puxar
+// histórico antigo continua sendo trabalho do botão manual, que é onde alguém
+// escolhe conscientemente a data de início.
+func (s *Server) portalGerarAulasDeTodasAsTurmas(ctx context.Context, diasParaTras int) (turmas, criadas int, err error) {
+	rows, err := s.portalDB.Query(ctx,
+		`SELECT DISTINCT c.id, c.start_date FROM class c
+		 JOIN class_schedule cs ON cs.class_id = c.id`)
+	if err != nil {
+		return 0, 0, err
+	}
+	type alvo struct {
+		id     int64
+		inicio time.Time
+	}
+	var alvos []alvo
+	for rows.Next() {
+		var a alvo
+		if err := rows.Scan(&a.id, &a.inicio); err != nil {
+			rows.Close()
+			return 0, 0, err
+		}
+		alvos = append(alvos, a)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+
+	hoje := time.Now()
+	de := hoje.AddDate(0, 0, -diasParaTras)
+	for _, a := range alvos {
+		// Nunca antes do início da turma: gerar aula de antes de a turma
+		// existir criaria falta de um período em que o aluno nem estudava.
+		inicio := de
+		if a.inicio.After(inicio) {
+			inicio = a.inicio
+		}
+		if inicio.After(hoje) {
+			continue // turma que ainda vai começar
+		}
+		n, err := s.portalGenerateSessions(ctx, a.id, inicio, hoje)
+		if err != nil {
+			// Uma turma com problema não pode impedir as outras de rodar.
+			slog.Error("chamada: falha ao gerar aulas da turma", "class", a.id, "err", err)
+			continue
+		}
+		criadas += n
+	}
+	return len(alvos), criadas, nil
 }
