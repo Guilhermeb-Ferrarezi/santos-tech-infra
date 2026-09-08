@@ -68,6 +68,7 @@ type couponStore interface {
 // por sua vez precisa de store + provider.
 type checkoutStore interface {
 	GetProductByID(ctx context.Context, id int64) (*Product, error)
+	GetProductsByIDs(ctx context.Context, ids []int64) (map[int64]*Product, error)
 	UpsertCustomer(ctx context.Context, userID int64, taxID, phone, name, email string) (*Customer, error)
 	InsertChargeItems(ctx context.Context, chargeID int64, items []ChargeItem) error
 }

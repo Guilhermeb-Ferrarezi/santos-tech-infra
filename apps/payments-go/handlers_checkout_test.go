@@ -46,6 +46,17 @@ func (f *fakeCheckoutStore) GetProductByID(_ context.Context, id int64) (*Produc
 	return &cp, nil
 }
 
+func (f *fakeCheckoutStore) GetProductsByIDs(_ context.Context, ids []int64) (map[int64]*Product, error) {
+	out := map[int64]*Product{}
+	for _, id := range ids {
+		if p, ok := f.products[id]; ok {
+			cp := *p
+			out[id] = &cp
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeCheckoutStore) UpsertCustomer(_ context.Context, userID int64, _, _, _, _ string) (*Customer, error) {
 	f.nextCustID++
 	c := &Customer{ID: f.nextCustID, UserID: userID}
@@ -196,6 +207,35 @@ func TestHandleCheckout_CouponInvalid_Exhausted(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &out)
 	if out["code"] != "invalid_coupon" {
 		t.Fatalf("code esperado invalid_coupon, veio %q", out["code"])
+	}
+}
+
+func TestHandleCheckout_SkipsMissingProductInBatch(t *testing.T) {
+	// Carrinho com 1 produto válido + 1 id de produto inexistente (removido/inativo
+	// entre o add e o checkout): a busca em lote (GetProductsByIDs) não devolve
+	// entrada pra esse id, e o item precisa ser pulado sem quebrar o total dos
+	// demais itens válidos — cobre o `if p, ok := products[...]; !ok { continue }`.
+	prod := &Product{ID: 1, Name: "Produto Válido", PriceCents: 10000, Recurring: false}
+	chSt := newFakeCheckoutStore(prod)
+	cart := newTestCartWithItems(t, 1,
+		CartItem{ProductID: 1, Quantity: 1},
+		CartItem{ProductID: 999, Quantity: 1}, // sem produto correspondente no fake store
+	)
+	cSt := newFakeCouponStore()
+	s := &Server{checkoutSt: chSt, coupons: cSt, cart: cart}
+
+	// Cupom inválido só pra parar ANTES de createAndPersistCharge (sem provider
+	// mockado) e ainda assim confirmar que o total do item válido chegou ali
+	// (senão o carrinho cairia em empty_cart, não invalid_coupon).
+	w := checkoutReqWith(s, strings.NewReplacer("%s", "NAOEXI").Replace(validCheckoutBody))
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("esperado 400, veio %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]string
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out["code"] != "invalid_coupon" {
+		t.Fatalf("code esperado invalid_coupon (item válido deveria ter passado do empty_cart), veio %q", out["code"])
 	}
 }
 

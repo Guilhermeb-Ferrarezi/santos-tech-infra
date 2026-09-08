@@ -111,10 +111,18 @@ func (s *Server) handleGetCart(w http.ResponseWriter, r *http.Request) {
 		Product  PublicProduct `json:"product"`
 		Quantity int           `json:"quantity"`
 	}
+	ids := make([]int64, len(items))
+	for i, it := range items {
+		ids[i] = it.ProductID
+	}
+	products, err := s.store.GetProductsByIDs(r.Context(), ids)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao consultar produtos")
+		return
+	}
 	out := []cartLine{}
 	for _, it := range items {
-		p, err := s.store.GetProductByID(r.Context(), it.ProductID)
-		if err == nil {
+		if p, ok := products[it.ProductID]; ok {
 			out = append(out, cartLine{Product: publicProduct(*p), Quantity: it.Quantity})
 		}
 	}
@@ -215,12 +223,22 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "empty_cart", "Carrinho vazio")
 		return
 	}
-	// monta itens + total a partir do catálogo (preço sempre do servidor)
+	// monta itens + total a partir do catálogo (preço sempre do servidor). Busca em
+	// lote (1 round-trip pro carrinho inteiro) em vez de 1 SELECT por item.
+	cartIDs := make([]int64, len(items))
+	for i, it := range items {
+		cartIDs[i] = it.ProductID
+	}
+	products, err := cst.GetProductsByIDs(r.Context(), cartIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", "Falha ao consultar produtos")
+		return
+	}
 	var total int64
 	chargeItems := []ChargeItem{}
 	for _, it := range items {
-		p, err := cst.GetProductByID(r.Context(), it.ProductID)
-		if err != nil {
+		p, ok := products[it.ProductID]
+		if !ok {
 			continue
 		}
 		// Se o produto virou recorrente DEPOIS de entrar no carrinho (admin marcou como
