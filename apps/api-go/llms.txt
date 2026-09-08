@@ -1691,3 +1691,24 @@ Efí (API Pix): autenticação OAuth2 client_credentials (`EFI_CLIENT_ID` /
 `{calendario,devedor,valor,chave,solicitacaoPagador}` — `valor.original` em REAIS
 com 2 casas; resposta inclui `{txid,pixCopiaECola,location}`. Chave Pix:
 `EFI_PIX_KEY`. Reconciliação por `txid`.
+
+
+### Sync com o Notion — `POST /portal/notion/sync` (admin-only, 6/min)
+
+Importa a base "Agenda de Aulas" do Notion como turmas + horário semanal do
+Portal. Corpo `{dryRun?: bool}` — **dryRun é true por padrão**: devolve o plano
+sem gravar nada. Resposta: `{itens[], turmasCriadas[], turmasExistentes[],
+cursosCriados[], horariosCriados, horariosJaTinham, ignorados, avisos[], dryRun}`.
+
+- **Aditivo por princípio**: cria o que falta, nunca altera nem apaga o que já
+  existe. Correção feita no painel sobrevive ao próximo sync.
+- **Idempotente** por `class.notion_key` e `class_schedule.notion_page_id`.
+  Turma criada à mão tem `notion_key` NULL e o sync nunca a toca.
+- **Não cria alunos nem matrículas**: a base do Notion não tem e-mail, que é a
+  chave de conta no auth central. Turmas saem sem aluno; a matrícula é manual.
+- Professor é vinculado só se já existir usuário role=2 com o mesmo nome; se
+  não existir, entra em `avisos[]` e a turma fica sem professor.
+- Linhas ignoradas (cada uma com `motivo`): sem dia/horário, aula experimental,
+  sem `Conteúdo` (sem curso não dá pra criar turma), dia ou horário ilegível.
+- Env: `NOTION_TOKEN` (mesma integração do bot-go) e `NOTION_AGENDA_AULAS_DS_ID`.
+  Sem token → 503 `NOTION_DISABLED`.

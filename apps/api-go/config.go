@@ -98,6 +98,13 @@ type Config struct {
 	// refresh token. Vazio = upload cai no client da service account mesmo
 	// (mantém o 403 de antes); leitura/listagem/download não são afetados,
 	// eles não consomem cota.
+	// Sincronização da base "Agenda de Aulas" do Notion para turmas/horários do
+	// Portal (ver portal_notion_plan.go). Mesmo token de integração já usado pelo
+	// bot-go — a integração precisa ter a base compartilhada com ela. Vazio =
+	// rota de sync responde 503, nada mais é afetado.
+	NotionToken      string
+	NotionAgendaDSID string
+
 	GoogleDriveOAuthClientID     string
 	GoogleDriveOAuthClientSecret string
 	GoogleDriveOAuthRefreshToken string
@@ -202,6 +209,9 @@ func LoadConfig() Config {
 		FleetAdminSSHPublicKeys: splitCSV(getEnv("FLEET_ADMIN_SSH_PUBLIC_KEYS", "")),
 
 		GoogleDriveSAJSONB64: getEnv("GOOGLE_DRIVE_SA_JSON_B64", ""),
+
+		NotionToken:      getEnv("NOTION_TOKEN", ""),
+		NotionAgendaDSID: getEnv("NOTION_AGENDA_AULAS_DS_ID", "fcbd4d0c-5173-462a-96a5-c8d05340ed14"),
 
 		GoogleDriveOAuthClientID:     getEnv("GOOGLE_DRIVE_OAUTH_CLIENT_ID", ""),
 		GoogleDriveOAuthClientSecret: getEnv("GOOGLE_DRIVE_OAUTH_CLIENT_SECRET", ""),

@@ -60,6 +60,16 @@ CREATE TABLE IF NOT EXISTS class_schedule (
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_class_schedule_class ON class_schedule(class_id);
+
+-- Sincronização com a base "Agenda de Aulas" do Notion (portal_notion_plan.go).
+-- As chaves abaixo tornam o sync idempotente: ele encontra o que já criou em
+-- vez de duplicar, e continua achando a turma mesmo se alguém a renomear pelo
+-- painel. Só o sync escreve nelas; turma criada à mão fica com NULL e é
+-- ignorada pelo sync (nunca é sobrescrita).
+ALTER TABLE class ADD COLUMN IF NOT EXISTS notion_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_class_notion_key ON class(notion_key) WHERE notion_key IS NOT NULL;
+ALTER TABLE class_schedule ADD COLUMN IF NOT EXISTS notion_page_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_class_schedule_notion ON class_schedule(notion_page_id) WHERE notion_page_id IS NOT NULL;
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal

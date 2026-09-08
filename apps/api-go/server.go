@@ -32,6 +32,7 @@ type Server struct {
 	// auth/guards/users seguem no `db`. Se não houver banco separado, é o mesmo
 	// pool de `db` (ver wiring no main).
 	portalDB  *pgxpool.Pool
+	notion    *notionAgendaClient
 	rdb       *redis.Client
 	email     *emailClient
 	google    *oauth2.Config
@@ -52,7 +53,7 @@ type Server struct {
 }
 
 func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
-	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), posthog: newPostHogClient(cfg.PostHogHost, cfg.PostHogProjectID, cfg.PostHogAPIKey), instagram: newInstagramClient(cfg), facebook: newFacebookClient(cfg), vault: newVault(cfg.VaultSecret, cfg.VaultSalt), feriadosNacionais: newFeriadosNacionaisClient(), labShellHub: newShellHub()}
+	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), notion: newNotionAgendaClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), posthog: newPostHogClient(cfg.PostHogHost, cfg.PostHogProjectID, cfg.PostHogAPIKey), instagram: newInstagramClient(cfg), facebook: newFacebookClient(cfg), vault: newVault(cfg.VaultSecret, cfg.VaultSalt), feriadosNacionais: newFeriadosNacionaisClient(), labShellHub: newShellHub()}
 	if s.portalDB == nil {
 		s.portalDB = authDB
 	}
