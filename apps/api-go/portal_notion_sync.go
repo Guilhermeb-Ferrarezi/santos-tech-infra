@@ -18,15 +18,16 @@ import (
 // do mesmo dado (Notion e Portal).
 
 type notionSyncResult struct {
-	Itens            []notionPlanItem `json:"itens"`
-	TurmasCriadas    []string         `json:"turmasCriadas"`
-	TurmasExistentes []string         `json:"turmasExistentes"`
-	CursosCriados    []string         `json:"cursosCriados"`
-	HorariosCriados  int              `json:"horariosCriados"`
-	HorariosJaTinham int              `json:"horariosJaTinham"`
-	Ignorados        int              `json:"ignorados"`
-	Avisos           []string         `json:"avisos"`
-	DryRun           bool             `json:"dryRun"`
+	Itens               []notionPlanItem `json:"itens"`
+	TurmasCriadas       []string         `json:"turmasCriadas"`
+	ParticularesCriadas []string         `json:"particularesCriadas"`
+	TurmasExistentes    []string         `json:"turmasExistentes"`
+	CursosCriados       []string         `json:"cursosCriados"`
+	HorariosCriados     int              `json:"horariosCriados"`
+	HorariosJaTinham    int              `json:"horariosJaTinham"`
+	Ignorados           int              `json:"ignorados"`
+	Avisos              []string         `json:"avisos"`
+	DryRun              bool             `json:"dryRun"`
 }
 
 // portalNotionSync lê o Notion, monta o plano e — se dryRun for falso —
@@ -77,11 +78,13 @@ func (s *Server) portalNotionSync(ctx context.Context, dryRun bool) (*notionSync
 		// ── turma ─────────────────────────────────────────────────────────
 		turmaID, ok := turmas[it.TurmaKey]
 		if !ok {
-			id, criada, err := s.portalFindOrCreateClassByNotionKey(ctx, it.TurmaKey, it.Turma, cursoID, dryRun)
+			id, criada, err := s.portalFindOrCreateClassByNotionKey(ctx, it.TurmaKey, it.Turma, cursoID, it.Individual, dryRun)
 			if err != nil {
 				return nil, fmt.Errorf("turma %q: %w", it.Turma, err)
 			}
-			if criada {
+			if criada && it.Individual {
+				res.ParticularesCriadas = append(res.ParticularesCriadas, it.Turma)
+			} else if criada {
 				res.TurmasCriadas = append(res.TurmasCriadas, it.Turma)
 			} else {
 				res.TurmasExistentes = append(res.TurmasExistentes, it.Turma)
@@ -155,7 +158,7 @@ func (s *Server) portalFindOrCreateCourse(ctx context.Context, nome string, dryR
 	return novoID, true, nil
 }
 
-func (s *Server) portalFindOrCreateClassByNotionKey(ctx context.Context, key, nome string, courseID int64, dryRun bool) (int64, bool, error) {
+func (s *Server) portalFindOrCreateClassByNotionKey(ctx context.Context, key, nome string, courseID int64, individual, dryRun bool) (int64, bool, error) {
 	var id int64
 	err := s.portalDB.QueryRow(ctx, `SELECT id FROM class WHERE notion_key = $1 LIMIT 1`, key).Scan(&id)
 	if err == nil {
@@ -177,9 +180,9 @@ func (s *Server) portalFindOrCreateClassByNotionKey(ctx context.Context, key, no
 	// e as duas colunas são NOT NULL, então precisam de algum valor.
 	inicio := time.Now()
 	err = s.portalDB.QueryRow(ctx,
-		`INSERT INTO class (name, course_id, current_module_id, start_date, end_date, notion_key, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,NOW(),NOW()) RETURNING id`,
-		nome, courseID, moduloID, inicio, inicio.AddDate(0, 6, 0), key).Scan(&id)
+		`INSERT INTO class (name, course_id, current_module_id, start_date, end_date, individual_class, notion_key, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),NOW()) RETURNING id`,
+		nome, courseID, moduloID, inicio, inicio.AddDate(0, 6, 0), individual, key).Scan(&id)
 	if err != nil {
 		return 0, false, err
 	}

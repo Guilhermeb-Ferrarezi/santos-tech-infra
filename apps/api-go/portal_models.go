@@ -206,6 +206,12 @@ type portalClassDTO struct {
 	CurrentModuleID string    `json:"currentModuleId"`
 	StartDate       time.Time `json:"startDate"`
 	EndDate         time.Time `json:"endDate"`
+	// IndividualClass separa AULA PARTICULAR (1:1) de TURMA (grupo). É outra
+	// pergunta que enrollment.individual: aqui é o formato da aula, lá é a
+	// condição da matrícula do aluno. As duas convivem — e a turma precisa da
+	// sua, porque uma turma pode existir antes de ter qualquer matrícula (é o
+	// caso de tudo que veio do sync do Notion).
+	IndividualClass bool      `json:"individualClass"`
 	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
 }
@@ -304,6 +310,7 @@ type portalClassInput struct {
 	CurrentModuleID int64  `json:"currentModuleId"`
 	StartDate       string `json:"startDate"`
 	DurationWeeks   int    `json:"durationWeeks"`
+	IndividualClass *bool  `json:"individualClass"`
 }
 
 func (in *portalClassInput) validateCreate() error {

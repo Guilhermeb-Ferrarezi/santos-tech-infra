@@ -113,3 +113,29 @@ func TestPlanNotionAgenda(t *testing.T) {
 		t.Errorf("Renata: turma=%q action=%q", por["p-renata"].Turma, por["p-renata"].Action)
 	}
 }
+
+// A classificação decide em qual tela a linha vai aparecer (Aulas particulares
+// x Turmas), então precisa estar travada — inclusive nos casos que a heurística
+// de separar nomes erra sozinha.
+func TestPlanNotionClassificaParticular(t *testing.T) {
+	rows := []notionAulaRow{
+		// 1 aluno → aula particular
+		{PageID: "a", Aula: "Igor", Aluno: []string{"Igor (pai: Hamilton)"}, Dia: "Segunda", Horario: "19:00–20:00", Conteudo: "Roblox"},
+		{PageID: "b", Aula: "Renata", Dia: "Terça", Horario: "10:00 ~ 12:00", Conteudo: "Excel"}, // nome no título
+		{PageID: "c", Aula: "Leonardo", Aluno: []string{"Leo - Particular - Informática Básica"}, Dia: "Sábado", Horario: "15h00-16h00", Conteudo: "Excel"},
+		// vários alunos → turma
+		{PageID: "d", Aula: "Turma Programação", Aluno: []string{"Ana Nicolas e Ruan - Html Css e Javascript"}, Dia: "Sábado", Horario: "13h00-15h00", Conteudo: "HTML"},
+		{PageID: "e", Aula: "Turma Informática", Aluno: []string{"Paloma Felipe José e João - Informática Básica"}, Dia: "Terça", Horario: "19h30-21h30", Conteudo: "Info"},
+		// título "Turma" com tag de nome único: o título explícito vence a heurística
+		{PageID: "f", Aula: "Turma Excel", Aluno: []string{"Fulano"}, Dia: "Quarta", Horario: "10:00–11:00", Conteudo: "Excel"},
+	}
+	quer := map[string]bool{"a": true, "b": true, "c": true, "d": false, "e": false, "f": false}
+	for _, p := range planNotionAgenda(rows) {
+		if p.Action != notionPlanCriar {
+			t.Fatalf("%s deveria ser criada, veio %q (%s)", p.NotionPageID, p.Action, p.Motivo)
+		}
+		if p.Individual != quer[p.NotionPageID] {
+			t.Errorf("%s (%s): individual=%v, queria %v", p.NotionPageID, p.Turma, p.Individual, quer[p.NotionPageID])
+		}
+	}
+}

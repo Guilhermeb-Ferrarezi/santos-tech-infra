@@ -30,6 +30,7 @@ type notionPlanItem struct {
 	StartTime    string           `json:"startTime"`
 	EndTime      string           `json:"endTime"`
 	Professor    string           `json:"professor"`
+	Individual   bool             `json:"individual"` // aula 1:1, não turma de grupo
 	Action       notionPlanAction `json:"action"`
 	Motivo       string           `json:"motivo,omitempty"`
 }
@@ -124,6 +125,10 @@ func planNotionAgenda(rows []notionAulaRow) []notionPlanItem {
 			item.Alunos = []string{titulo}
 		}
 		item.Curso = strings.TrimSpace(r.Conteudo)
+		// Aula particular = um aluno só. O título que começa com "Turma"
+		// prevalece: é declaração explícita de grupo, e vale mais do que a
+		// heurística de separar nomes por " e " / vírgula.
+		item.Individual = len(item.Alunos) <= 1 && !strings.HasPrefix(strings.ToLower(titulo), "turma")
 
 		switch {
 		case titulo == "" || (r.Dia == "" && r.Horario == ""):

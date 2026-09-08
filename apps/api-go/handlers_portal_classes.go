@@ -10,7 +10,19 @@ import (
 
 func (s *Server) handlePortalListClasses(w http.ResponseWriter, r *http.Request) {
 	p := portalPaginationFrom(r)
-	items, total, err := s.portalListClasses(r.Context(), p)
+	// ?individual=true lista só aula particular (1:1), =false só turma de
+	// grupo, ausente lista as duas. Valor inválido é tratado como ausente:
+	// filtro de listagem não é lugar de derrubar a tela com 400.
+	var individual *bool
+	switch r.URL.Query().Get("individual") {
+	case "true", "1":
+		v := true
+		individual = &v
+	case "false", "0":
+		v := false
+		individual = &v
+	}
+	items, total, err := s.portalListClasses(r.Context(), p, individual)
 	if err != nil {
 		writeErr(w, err)
 		return

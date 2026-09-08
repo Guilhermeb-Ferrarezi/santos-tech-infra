@@ -1703,6 +1703,16 @@ com 2 casas; resposta inclui `{txid,pixCopiaECola,location}`. Chave Pix:
 
 ### Sync com o Notion — `POST /portal/notion/sync` (admin-only, 6/min)
 
+`GET /portal/classes?individual=true|false` filtra por formato: `true` = aula
+particular (1:1), `false` = turma de grupo, ausente = as duas. O campo
+`individualClass` está no DTO da turma e é aceito no POST/PUT.
+
+**Duas noções de "particular", de propósito:** `class.individual_class` é o
+FORMATO da aula (1:1 ou grupo) e existe mesmo sem matrícula nenhuma — é o que
+o sync do Notion preenche. `enrollment.individual` é a CONDIÇÃO da matrícula
+de um aluno específico. Uma turma de grupo pode ter um aluno particular dentro.
+
+
 Importa a base "Agenda de Aulas" do Notion como turmas + horário semanal do
 Portal. Corpo `{dryRun?: bool}` — **dryRun é true por padrão**: devolve o plano
 sem gravar nada. Resposta: `{itens[], turmasCriadas[], turmasExistentes[],
