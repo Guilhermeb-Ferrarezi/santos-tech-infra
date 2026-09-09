@@ -255,3 +255,46 @@ func TestDiagramTools(t *testing.T) {
 		t.Error("prompt deveria citar os conectores liberados")
 	}
 }
+
+// A saída do CLI no caminho de erro era descartada, então toda falha virava um
+// "exit status 1" mudo. Estes testes prendem o comportamento novo: dizer o que o
+// CLI escreveu, sem vazar credencial e sem despejar log gigante.
+func TestClaudeFailureDetail(t *testing.T) {
+	casos := []struct {
+		nome, stdout, stderr, quer string
+	}{
+		{"sem saída nenhuma", "", "", "(o CLI não escreveu nada)"},
+		{"só stdout", `{"is_error":true,"result":"Not logged in"}`, "", `{"is_error":true,"result":"Not logged in"}`},
+		{"só stderr", "", "Failed to authenticate", "Failed to authenticate"},
+		{"junta os dois", "envelope", "aviso", "envelope aviso"},
+		{"ignora espaço em branco", "  \n ", "  ", "(o CLI não escreveu nada)"},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			if got := claudeFailureDetail(c.stdout, c.stderr); got != c.quer {
+				t.Fatalf("claudeFailureDetail(%q,%q) = %q; quer %q", c.stdout, c.stderr, got, c.quer)
+			}
+		})
+	}
+}
+
+func TestClaudeFailureDetailRedigeCredencial(t *testing.T) {
+	tok := "sk-ant-oat01-" + strings.Repeat("A", 40)
+	got := claudeFailureDetail("falhou com "+tok, "e de novo "+tok)
+	if strings.Contains(got, tok) {
+		t.Fatalf("credencial vazou no detalhe do erro: %q", got)
+	}
+	if want := 2; strings.Count(got, "sk-ant-***") != want {
+		t.Fatalf("esperava %d ocorrências redigidas, veio %q", want, got)
+	}
+}
+
+func TestClaudeFailureDetailTrunca(t *testing.T) {
+	got := claudeFailureDetail(strings.Repeat("x", 5000), "")
+	if len([]rune(got)) > 601 {
+		t.Fatalf("detalhe longo demais: %d runas", len([]rune(got)))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("esperava marca de truncamento no fim, veio %q", got[len(got)-20:])
+	}
+}
