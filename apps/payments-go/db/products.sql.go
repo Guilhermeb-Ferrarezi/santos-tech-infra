@@ -131,6 +131,60 @@ func (q *Queries) GetProductByID(ctx context.Context, id int64) (GetProductByIDR
 	return i, err
 }
 
+const getProductsByIDs = `-- name: GetProductsByIDs :many
+SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe, COALESCE(image_url, '') AS image_url, COALESCE(file_url, '') AS file_url
+FROM pay_products
+WHERE id = ANY($1::bigint[]) AND active = true
+`
+
+type GetProductsByIDsRow struct {
+	ID                int64
+	Slug              string
+	Name              string
+	Description       string
+	PriceCents        int64
+	Active            bool
+	Recurring         bool
+	Periodicity       *string
+	DueDay            *int32
+	ChargeOnSubscribe bool
+	ImageUrl          string
+	FileUrl           string
+}
+
+func (q *Queries) GetProductsByIDs(ctx context.Context, dollar_1 []int64) ([]GetProductsByIDsRow, error) {
+	rows, err := q.db.Query(ctx, getProductsByIDs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetProductsByIDsRow{}
+	for rows.Next() {
+		var i GetProductsByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Description,
+			&i.PriceCents,
+			&i.Active,
+			&i.Recurring,
+			&i.Periodicity,
+			&i.DueDay,
+			&i.ChargeOnSubscribe,
+			&i.ImageUrl,
+			&i.FileUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getProductBySlug = `-- name: GetProductBySlug :one
 SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe, COALESCE(image_url, '') AS image_url, COALESCE(file_url, '') AS file_url
 FROM pay_products

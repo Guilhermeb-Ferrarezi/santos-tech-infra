@@ -898,6 +898,38 @@ func (s *Store) GetProductByID(ctx context.Context, id int64) (*Product, error) 
 	}, nil
 }
 
+// GetProductsByIDs busca vários produtos de uma vez (carrinho/checkout), evitando
+// 1 round-trip ao Postgres por item. IDs sem produto ativo correspondente
+// simplesmente não aparecem no mapa — o chamador decide o que fazer (ex.: pular
+// o item do carrinho, como já fazia com o erro do lookup individual).
+func (s *Store) GetProductsByIDs(ctx context.Context, ids []int64) (map[int64]*Product, error) {
+	out := map[int64]*Product{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.q.GetProductsByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.ID] = &Product{
+			ID:                r.ID,
+			Slug:              r.Slug,
+			Name:              r.Name,
+			Description:       r.Description,
+			PriceCents:        r.PriceCents,
+			Active:            r.Active,
+			Recurring:         r.Recurring,
+			Periodicity:       strPtrToStr(r.Periodicity),
+			DueDay:            intPtrFromInt32(r.DueDay),
+			ChargeOnSubscribe: r.ChargeOnSubscribe,
+			ImageURL:          r.ImageUrl,
+			FileURL:           r.FileUrl,
+		}
+	}
+	return out, nil
+}
+
 func (s *Store) DeleteProduct(ctx context.Context, id int64) error {
 	n, err := s.q.DeleteProduct(ctx, id)
 	if err != nil {

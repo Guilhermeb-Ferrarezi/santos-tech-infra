@@ -18,6 +18,12 @@ SELECT id, slug, name, description, price_cents, active, recurring, periodicity,
 FROM pay_products
 WHERE id = $1 AND active = true;
 
+-- name: GetProductsByIDs :many
+-- Busca em lote (carrinho/checkout): evita 1 round-trip ao Postgres por item.
+SELECT id, slug, name, description, price_cents, active, recurring, periodicity, due_day, charge_on_subscribe, COALESCE(image_url, '') AS image_url, COALESCE(file_url, '') AS file_url
+FROM pay_products
+WHERE id = ANY($1::bigint[]) AND active = true;
+
 -- name: UpdateProduct :execrows
 UPDATE pay_products
 SET name = $2, description = $3, price_cents = $4, active = $5, recurring = $6, periodicity = $7, due_day = $8, charge_on_subscribe = $9, image_url = $10, file_url = $11
