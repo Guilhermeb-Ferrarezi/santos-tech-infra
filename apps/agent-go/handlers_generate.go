@@ -7,13 +7,36 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// oatRe casa credenciais do Claude para redigi-las antes de qualquer log.
+var oatRe = regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{10,}`)
+
+// claudeFailureDetail resume o que o CLI escreveu antes de morrer.
+//
+// Em modo `-p`, o CLI reporta falha de autenticação, limite de uso e modelo
+// indisponível como envelope JSON no STDOUT — não no stderr. Como o stdout era
+// descartado no caminho de erro, todo defeito virava um "exit status 1" mudo e o
+// diagnóstico só era possível reproduzindo o comando na mão dentro do container.
+func claudeFailureDetail(stdout, stderr string) string {
+	detail := strings.TrimSpace(strings.TrimSpace(stdout) + " " + strings.TrimSpace(stderr))
+	if detail == "" {
+		return "(o CLI não escreveu nada)"
+	}
+	detail = oatRe.ReplaceAllString(detail, "sk-ant-***")
+	if len(detail) > 600 {
+		detail = detail[:600] + "…"
+	}
+	return detail
+}
 
 const maxImageBytes = 8 << 20 // 8 MB
 
@@ -226,11 +249,11 @@ func (s *Server) generateOnce(ctx context.Context, task, prompt, imageB64, image
 	// infra para dentro do processo Claude (exfiltráveis via prompt injection).
 	cmd.Env = s.claudeEnv(ctx, nil)
 
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = os.Stderr // logs do CLI vão pro stderr do serviço
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr) // logs do CLI vão pro stderr do serviço
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("claude falhou: %w", err)
+		return "", fmt.Errorf("claude falhou: %w — saída: %s", err, claudeFailureDetail(stdout.String(), stderr.String()))
 	}
 
 	// --output-format json: um envelope com o texto final em .result e o custo em
@@ -286,11 +309,11 @@ func (s *Server) generateOnceWithTrace(ctx context.Context, task, prompt, model 
 	// de infra). Ver claudeEnv em session.go.
 	cmd.Env = s.claudeEnv(ctx, nil)
 
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
 	if err := cmd.Run(); err != nil {
-		return "", nil, fmt.Errorf("claude falhou: %w", err)
+		return "", nil, fmt.Errorf("claude falhou: %w — saída: %s", err, claudeFailureDetail(stdout.String(), stderr.String()))
 	}
 
 	var finalText string
