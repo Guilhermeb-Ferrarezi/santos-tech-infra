@@ -381,3 +381,17 @@ func (s *Server) portalUpdateSession(ctx context.Context, sessionID int64, in po
 	s.invalidatePortalOverview()
 	return nil
 }
+
+// portalDeleteSession remove uma aula gerada errada. attendance associada cai
+// junto via ON DELETE CASCADE (ver DDL de attendance em portal_migrate.go).
+func (s *Server) portalDeleteSession(ctx context.Context, sessionID int64) error {
+	tag, err := s.portalDB.Exec(ctx, `DELETE FROM class_session WHERE id=$1`, sessionID)
+	if err != nil {
+		return portalDBErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return notFoundErr("Aula")
+	}
+	s.invalidatePortalOverview()
+	return nil
+}
