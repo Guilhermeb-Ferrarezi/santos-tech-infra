@@ -271,10 +271,24 @@ type portalStudentOverviewDTO struct {
 	NextClassAt *time.Time `json:"nextClassAt"`
 }
 
-// portalStudentIndividualInput é o corpo do PATCH que marca/desmarca uma
-// matrícula como particular.
+// portalStudentIndividualInput é o corpo do PATCH que atualiza uma matrícula:
+// marca/desmarca como particular e/ou define o pacote de aulas contratadas.
+// Individual é sempre obrigatório no payload (todo PATCH reenvia o valor atual,
+// mesmo quando só ContractedLessons mudou) — o zero-value de bool ausente no
+// JSON é `false`, que resetaria sem querer o toggle "particular" se fosse opcional.
 type portalStudentIndividualInput struct {
 	Individual bool `json:"individual"`
+	// ContractedLessons: pacote de aulas contratado (relevante sobretudo pra
+	// matrícula particular). nil = não veio no payload, mantém o valor salvo —
+	// não dá pra "limpar" com null explícito nesse desenho simples (ver spec).
+	ContractedLessons *int `json:"contractedLessons,omitempty"`
+}
+
+func (in portalStudentIndividualInput) validate() error {
+	if in.ContractedLessons != nil && *in.ContractedLessons < 1 {
+		return validationErr("contractedLessons deve ser maior que zero")
+	}
+	return nil
 }
 
 // portalScheduleDTO é um horário fixo semanal da turma (class_schedule) —

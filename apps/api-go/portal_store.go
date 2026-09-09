@@ -591,11 +591,17 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p p
 	return items, total, rows.Err()
 }
 
-// portalSetStudentIndividual marca/desmarca a matrícula de um aluno numa
-// turma como particular (ver portalStudentDTO.Individual) — não mexe na
-// turma em si, só na linha de enrollment desse aluno.
-func (s *Server) portalSetStudentIndividual(ctx context.Context, classID, studentID int64, individual bool) error {
-	tag, err := s.portalDB.Exec(ctx, `UPDATE enrollment SET individual=$3 WHERE class_id=$1 AND user_id=$2`, classID, studentID, individual)
+// portalSetStudentIndividual atualiza o toggle "particular" e, opcionalmente, o
+// pacote de aulas contratadas de uma matrícula. contractedLessons só entra na
+// cláusula SET quando veio no payload (ponteiro não-nil) — update parcial.
+func (s *Server) portalSetStudentIndividual(ctx context.Context, classID, studentID int64, individual bool, contractedLessons *int) error {
+	query := `UPDATE enrollment SET individual=$3 WHERE class_id=$1 AND user_id=$2`
+	args := []any{classID, studentID, individual}
+	if contractedLessons != nil {
+		query = `UPDATE enrollment SET individual=$3, contracted_lessons=$4 WHERE class_id=$1 AND user_id=$2`
+		args = append(args, *contractedLessons)
+	}
+	tag, err := s.portalDB.Exec(ctx, query, args...)
 	if err != nil {
 		return portalDBErr(err)
 	}

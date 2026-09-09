@@ -212,3 +212,16 @@ func TestPortalUpdateClassDurationCapBeforeDB(t *testing.T) {
 		t.Fatalf("durationWeeks fora do range code=%d", w.Code)
 	}
 }
+
+func TestPortalSetStudentIndividualValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+
+	r := httptest.NewRequest("PATCH", "/portal/classes/1/students/1", strings.NewReader(`{"individual":true,"contractedLessons":-1}`))
+	r.SetPathValue("classId", "1")
+	r.SetPathValue("studentId", "1")
+	w := httptest.NewRecorder()
+	s.handlePortalSetStudentIndividual(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("contractedLessons negativo: code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}
