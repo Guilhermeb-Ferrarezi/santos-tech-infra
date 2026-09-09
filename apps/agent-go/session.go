@@ -374,8 +374,24 @@ func (s *Server) claudeEnv(ctx context.Context, conv *Conversation) []string {
 			env = append(env, key+"="+v)
 		}
 	}
-	if tok, err := s.oauthToken(ctx); err == nil && tok != "" {
+	// Credencial da assinatura. Precedência: variável de ambiente do serviço >
+	// token cifrado no banco. A env var existe para o operador trocar a credencial
+	// pelo painel de deploy sem depender do POST /claude/auth/login — que aceita
+	// qualquer string, grava status='logged_in' e não testa nada, então um token
+	// inválido ali passa despercebido.
+	//
+	// O erro de leitura do banco era DESCARTADO aqui (`err == nil && tok != ""`).
+	// Sem token injetado o CLI cai na credencial do volume e morre com "OAuth
+	// session expired" — que ia pro stdout descartado. Silêncio em cima de
+	// silêncio: o bot ficou mudo em produção sem uma linha de log explicando.
+	if tok := strings.TrimSpace(os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")); tok != "" {
 		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
+	} else if tok, err := s.oauthToken(ctx); err != nil {
+		slog.Error("credencial do Claude ilegível no banco; o CLI vai rodar sem token", "err", err)
+	} else if tok != "" {
+		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
+	} else {
+		slog.Error("nenhuma credencial do Claude configurada (banco vazio e CLAUDE_CODE_OAUTH_TOKEN ausente)")
 	}
 	// GITHUB_TOKEN só quando há repo clonado nesta conversa (git push/pull legítimo).
 	// Sem repo, não há motivo para o token estar no env — não o injetamos.
