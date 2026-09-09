@@ -16,14 +16,19 @@ import (
 // presença/falta por aluno em cada uma.
 
 type portalSessionDTO struct {
-	ID        string                `json:"id"`
-	ClassID   string                `json:"classId"`
-	Date      string                `json:"date"` // AAAA-MM-DD
-	StartTime string                `json:"startTime,omitempty"`
-	EndTime   string                `json:"endTime,omitempty"`
-	Canceled  bool                  `json:"canceled"`
-	Note      string                `json:"note,omitempty"`
-	Presencas []portalAttendanceDTO `json:"presencas"`
+	ID        string `json:"id"`
+	ClassID   string `json:"classId"`
+	Date      string `json:"date"` // AAAA-MM-DD
+	StartTime string `json:"startTime,omitempty"`
+	EndTime   string `json:"endTime,omitempty"`
+	Canceled  bool   `json:"canceled"`
+	Note      string `json:"note,omitempty"`
+	// TeacherID: professor específico desta aula (nulo = usa o fixo da turma).
+	// TeacherName: já resolvido (o da aula se setado, senão o(s) fixo(s) da
+	// turma) — o front não precisa saber calcular o fallback.
+	TeacherID   *string               `json:"teacherId"`
+	TeacherName *string               `json:"teacherName"`
+	Presencas   []portalAttendanceDTO `json:"presencas"`
 }
 
 type portalAttendanceDTO struct {
@@ -126,10 +131,15 @@ func (s *Server) portalGenerateSessions(ctx context.Context, classID int64, de, 
 // diferença entre "faltou" e "ninguém fez a chamada ainda".
 func (s *Server) portalListSessions(ctx context.Context, classID int64) ([]portalSessionDTO, error) {
 	rows, err := s.portalDB.Query(ctx,
-		`SELECT id::text, class_id::text, to_char(date,'YYYY-MM-DD'),
-		        COALESCE(to_char(start_time,'HH24:MI'),''), COALESCE(to_char(end_time,'HH24:MI'),''),
-		        canceled, COALESCE(note,'')
-		 FROM class_session WHERE class_id=$1 ORDER BY date DESC, start_time`, classID)
+		`SELECT cs.id::text, cs.class_id::text, to_char(cs.date,'YYYY-MM-DD'),
+		        COALESCE(to_char(cs.start_time,'HH24:MI'),''), COALESCE(to_char(cs.end_time,'HH24:MI'),''),
+		        cs.canceled, COALESCE(cs.note,''), cs.teacher_id::text,
+		        COALESCE(
+		          (SELECT name FROM "user" WHERE id = cs.teacher_id),
+		          (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
+		             JOIN "user" t ON t.id = ct.user_id WHERE ct.class_id = cs.class_id)
+		        )
+		 FROM class_session cs WHERE cs.class_id=$1 ORDER BY cs.date DESC, cs.start_time`, classID)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +148,7 @@ func (s *Server) portalListSessions(ctx context.Context, classID int64) ([]porta
 	idx := map[string]int{}
 	for rows.Next() {
 		var d portalSessionDTO
-		if err := rows.Scan(&d.ID, &d.ClassID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Note); err != nil {
+		if err := rows.Scan(&d.ID, &d.ClassID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Note, &d.TeacherID, &d.TeacherName); err != nil {
 			return nil, err
 		}
 		d.Presencas = []portalAttendanceDTO{}
