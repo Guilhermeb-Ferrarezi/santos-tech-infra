@@ -115,6 +115,13 @@ ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS contracted_lessons INTEGER;
 -- Existe pra cobrir reposição/troca pontual (ex.: professor da aula 8 diferente
 -- do professor fixo da turma), não pra ser preenchido em toda aula.
 ALTER TABLE class_session ADD COLUMN IF NOT EXISTS teacher_id INTEGER;
+
+-- aula_count: quantas "aulas" (unidade de 1h, convenção da escola) esse
+-- horário/sessão representa. Padrão 1 preserva 100% do comportamento atual
+-- (turma de grupo, 1 encontro = 1 aula, mesmo com duração != 1h). Só aula
+-- particular de encontro mais longo (ex.: 2h) precisa setar 2.
+ALTER TABLE class_schedule ADD COLUMN IF NOT EXISTS aula_count INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE class_session ADD COLUMN IF NOT EXISTS aula_count INTEGER NOT NULL DEFAULT 1;
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal
