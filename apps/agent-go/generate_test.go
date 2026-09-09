@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -301,5 +303,28 @@ func TestClaudeFailureDetailPreservaOFim(t *testing.T) {
 	}
 	if n := len([]rune(got)); n > 801 {
 		t.Fatalf("detalhe longo demais: %d runas", n)
+	}
+}
+
+// O motivo da falha tem que CHEGAR em quem chamou. Antes virava 500 genérico
+// ("Erro interno do servidor") e o chamador ficava sem nenhuma pista.
+func TestClaudeFailedCarregaOMotivo(t *testing.T) {
+	ae := claudeFailed(errors.New("exit status 1"), `{"is_error":true,"result":"Not logged in"}`, "")
+	if ae.Status != http.StatusBadGateway {
+		t.Fatalf("status = %d; quer %d (falha é de dependência externa, não do serviço)", ae.Status, http.StatusBadGateway)
+	}
+	if ae.Code != "CLAUDE_FAILED" {
+		t.Fatalf("code = %q; quer CLAUDE_FAILED", ae.Code)
+	}
+	if !strings.Contains(ae.Message, "Not logged in") {
+		t.Fatalf("mensagem não carrega o motivo real: %q", ae.Message)
+	}
+}
+
+func TestClaudeFailedRedigeCredencial(t *testing.T) {
+	tok := "sk-ant-oat01-" + strings.Repeat("A", 40)
+	ae := claudeFailed(errors.New("exit status 1"), "falhou com "+tok, "")
+	if strings.Contains(ae.Message, tok) {
+		t.Fatalf("credencial vazou na resposta ao chamador: %q", ae.Message)
 	}
 }
