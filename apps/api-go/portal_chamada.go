@@ -252,14 +252,23 @@ func (s *Server) portalGerarAulasDeTodasAsTurmas(ctx context.Context, diasParaTr
 // (não aceita studentId do cliente — só classId, e valida contra o userID da
 // sessão). Sem isso, qualquer usuário logado poderia ler o histórico de
 // qualquer turma só sabendo o classId.
-func (s *Server) portalMySessions(ctx context.Context, classID, userID int64) ([]portalMySessionDTO, error) {
-	var matriculado bool
-	if err := s.portalDB.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM enrollment WHERE class_id=$1 AND user_id=$2)`, classID, userID).Scan(&matriculado); err != nil {
-		return nil, err
-	}
-	if !matriculado {
+// portalMySessions recebe o e-mail da sessão (auth central), não um userID —
+// o id do auth central e o id do usuário no Portal NÃO são o mesmo número (a
+// ponte entre os dois sistemas é feita por e-mail, mesmo padrão de
+// portalMyOverview/portalSyncUserFromAuth). Resolver por ID direto aqui foi
+// justamente o bug que fazia todo self-service devolver NAO_MATRICULADO mesmo
+// pra aluno matriculado de verdade.
+func (s *Server) portalMySessions(ctx context.Context, classID int64, email string) ([]portalMySessionDTO, error) {
+	var userID int64
+	err := s.portalDB.QueryRow(ctx,
+		`SELECT u.id FROM "user" u
+		 JOIN enrollment e ON e.user_id = u.id AND e.class_id = $1
+		 WHERE u.email = $2`, classID, strings.ToLower(email)).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, appErr(http.StatusForbidden, "NAO_MATRICULADO", "Você não está matriculado nesta turma")
+	}
+	if err != nil {
+		return nil, err
 	}
 	rows, err := s.portalDB.Query(ctx,
 		`SELECT cs.id::text, to_char(cs.date,'YYYY-MM-DD'),

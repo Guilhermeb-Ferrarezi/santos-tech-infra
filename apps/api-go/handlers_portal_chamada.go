@@ -96,7 +96,7 @@ func (s *Server) handlePortalMySessions(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado"))
 		return
 	}
-	itens, err := s.portalMySessions(r.Context(), classID, u.ID)
+	itens, err := s.portalMySessions(r.Context(), classID, u.Email)
 	if err != nil {
 		writeErr(w, err)
 		return
