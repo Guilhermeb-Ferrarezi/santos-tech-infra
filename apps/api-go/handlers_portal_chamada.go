@@ -106,6 +106,23 @@ func (s *Server) handlePortalUpdateSession(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handlePortalDeleteSession (DELETE /portal/sessions/{sessionId}) — remove uma
+// aula gerada errada (data duplicada, "Gerar aulas" rodado com intervalo
+// errado etc.). attendance dessa aula cai junto (ON DELETE CASCADE na FK).
+func (s *Server) handlePortalDeleteSession(w http.ResponseWriter, r *http.Request) {
+	sessionID, err := portalPathID(r, "sessionId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalDeleteSession(r.Context(), sessionID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.portalLogActivity(r, "session_delete", "session", fmt.Sprint(sessionID), nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handlePortalMySessions (GET /portal/me/sessions?classId=) — histórico de
 // aulas do próprio aluno logado, autosserviço como GET /portal/me/overview: só
 // authGuard, sem permissão de portal — o escopo já é a própria pessoa. Nunca

@@ -290,3 +290,14 @@ func TestPortalUpdateSessionBadIDBeforeDB(t *testing.T) {
 		t.Fatalf("code=%d want %d", w.Code, http.StatusBadRequest)
 	}
 }
+
+func TestPortalDeleteSessionBadIDBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("DELETE", "/portal/sessions/x", nil)
+	r.SetPathValue("sessionId", "x")
+	w := httptest.NewRecorder()
+	s.handlePortalDeleteSession(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}
