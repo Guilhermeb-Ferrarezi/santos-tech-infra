@@ -28,6 +28,7 @@ type portalSessionDTO struct {
 	// turma) — o front não precisa saber calcular o fallback.
 	TeacherID   *string               `json:"teacherId"`
 	TeacherName *string               `json:"teacherName"`
+	AulaCount   int                   `json:"aulaCount"`
 	Presencas   []portalAttendanceDTO `json:"presencas"`
 }
 
@@ -50,6 +51,7 @@ type portalMySessionDTO struct {
 	Canceled  bool   `json:"canceled"`
 	Status    string `json:"status,omitempty"` // vazio = chamada não feita
 	Note      string `json:"note,omitempty"`
+	AulaCount int    `json:"aulaCount"`
 }
 
 // portalSessionUpdateInput é o corpo do PATCH que edita uma aula já gerada —
@@ -61,6 +63,7 @@ type portalSessionUpdateInput struct {
 	StartTime *string `json:"startTime,omitempty"`
 	EndTime   *string `json:"endTime,omitempty"`
 	TeacherID *int64  `json:"teacherId,omitempty"`
+	AulaCount *int    `json:"aulaCount,omitempty"`
 }
 
 func (in portalSessionUpdateInput) validate() error {
@@ -81,6 +84,9 @@ func (in portalSessionUpdateInput) validate() error {
 	}
 	if in.StartTime != nil && in.EndTime != nil && *in.EndTime <= *in.StartTime {
 		return validationErr("o horário de fim precisa ser depois do início")
+	}
+	if in.AulaCount != nil && *in.AulaCount < 1 {
+		return validationErr("aulaCount deve ser maior que zero")
 	}
 	return nil
 }
@@ -138,7 +144,8 @@ func (s *Server) portalListSessions(ctx context.Context, classID int64) ([]porta
 		          (SELECT name FROM "user" WHERE id = cs.teacher_id),
 		          (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
 		             JOIN "user" t ON t.id = ct.user_id WHERE ct.class_id = cs.class_id)
-		        )
+		        ),
+		        cs.aula_count
 		 FROM class_session cs WHERE cs.class_id=$1 ORDER BY cs.date DESC, cs.start_time`, classID)
 	if err != nil {
 		return nil, err
@@ -148,7 +155,7 @@ func (s *Server) portalListSessions(ctx context.Context, classID int64) ([]porta
 	idx := map[string]int{}
 	for rows.Next() {
 		var d portalSessionDTO
-		if err := rows.Scan(&d.ID, &d.ClassID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Note, &d.TeacherID, &d.TeacherName); err != nil {
+		if err := rows.Scan(&d.ID, &d.ClassID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Note, &d.TeacherID, &d.TeacherName, &d.AulaCount); err != nil {
 			return nil, err
 		}
 		d.Presencas = []portalAttendanceDTO{}
@@ -317,7 +324,7 @@ func (s *Server) portalMySessions(ctx context.Context, classID int64, email stri
 	rows, err := s.portalDB.Query(ctx,
 		`SELECT cs.id::text, to_char(cs.date,'YYYY-MM-DD'),
 		        COALESCE(to_char(cs.start_time,'HH24:MI'),''), COALESCE(to_char(cs.end_time,'HH24:MI'),''),
-		        cs.canceled, COALESCE(a.status,''), COALESCE(a.note,'')
+		        cs.canceled, COALESCE(a.status,''), COALESCE(a.note,''), cs.aula_count
 		 FROM class_session cs
 		 LEFT JOIN attendance a ON a.session_id = cs.id AND a.user_id = $2
 		 WHERE cs.class_id = $1
@@ -329,7 +336,7 @@ func (s *Server) portalMySessions(ctx context.Context, classID int64, email stri
 	itens := []portalMySessionDTO{}
 	for rows.Next() {
 		var d portalMySessionDTO
-		if err := rows.Scan(&d.ID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Status, &d.Note); err != nil {
+		if err := rows.Scan(&d.ID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Status, &d.Note, &d.AulaCount); err != nil {
 			return nil, err
 		}
 		itens = append(itens, d)
@@ -363,6 +370,11 @@ func (s *Server) portalUpdateSession(ctx context.Context, sessionID int64, in po
 	if in.TeacherID != nil {
 		sets = append(sets, fmt.Sprintf("teacher_id=$%d", n))
 		args = append(args, *in.TeacherID)
+		n++
+	}
+	if in.AulaCount != nil {
+		sets = append(sets, fmt.Sprintf("aula_count=$%d", n))
+		args = append(args, *in.AulaCount)
 		n++
 	}
 	if len(sets) == 0 {

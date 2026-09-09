@@ -291,6 +291,17 @@ func TestPortalUpdateSessionBadIDBeforeDB(t *testing.T) {
 	}
 }
 
+func TestPortalUpdateSessionAulaCountValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("PATCH", "/portal/sessions/1", strings.NewReader(`{"aulaCount":0}`))
+	r.SetPathValue("sessionId", "1")
+	w := httptest.NewRecorder()
+	s.handlePortalUpdateSession(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("aulaCount zero: code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
 func TestPortalDeleteSessionBadIDBeforeDB(t *testing.T) {
 	s := testServer(Config{})
 	r := httptest.NewRequest("DELETE", "/portal/sessions/x", nil)
