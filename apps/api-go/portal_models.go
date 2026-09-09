@@ -320,12 +320,18 @@ type portalScheduleDTO struct {
 	DayOfWeek int16  `json:"dayOfWeek"` // 0=domingo .. 6=sábado (bate com time.Weekday do Go)
 	StartTime string `json:"startTime"`
 	EndTime   string `json:"endTime"`
+	AulaCount int    `json:"aulaCount"`
 }
 
 type portalScheduleInput struct {
 	DayOfWeek int16  `json:"dayOfWeek"`
 	StartTime string `json:"startTime"`
 	EndTime   string `json:"endTime"`
+	// AulaCount: quantas "aulas" (unidade de 1h) esse horário representa,
+	// herdado por toda sessão gerada automaticamente a partir dele. Default 1
+	// (turma de grupo, 1 encontro = 1 aula) — só aula particular de encontro
+	// mais longo (ex.: 2h) precisa setar 2. validate() garante >= 1.
+	AulaCount int `json:"aulaCount"`
 }
 
 var portalTimeRe = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
@@ -339,6 +345,9 @@ func (in *portalScheduleInput) validate() error {
 	}
 	if in.StartTime >= in.EndTime {
 		return validationErr("startTime deve ser antes de endTime")
+	}
+	if in.AulaCount <= 0 {
+		in.AulaCount = 1
 	}
 	return nil
 }

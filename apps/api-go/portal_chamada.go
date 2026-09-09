@@ -113,10 +113,10 @@ func (s *Server) portalGenerateSessions(ctx context.Context, classID int64, de, 
 				continue
 			}
 			tag, err := s.portalDB.Exec(ctx,
-				`INSERT INTO class_session (class_id, date, start_time, end_time, created_at, updated_at)
-				 VALUES ($1,$2,$3::time,$4::time,NOW(),NOW())
+				`INSERT INTO class_session (class_id, date, start_time, end_time, aula_count, created_at, updated_at)
+				 VALUES ($1,$2,$3::time,$4::time,$5,NOW(),NOW())
 				 ON CONFLICT (class_id, date, start_time) DO NOTHING`,
-				classID, dia.Format("2006-01-02"), h.StartTime, h.EndTime)
+				classID, dia.Format("2006-01-02"), h.StartTime, h.EndTime, h.AulaCount)
 			if err != nil {
 				return criadas, err
 			}
