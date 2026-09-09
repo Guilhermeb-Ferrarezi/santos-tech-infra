@@ -109,6 +109,12 @@ CREATE INDEX IF NOT EXISTS idx_attendance_user ON attendance(user_id);
 -- preenchido, turma de grupo normalmente fica assim; o front usa TotalPhases (o
 -- currículo do curso) como denominador do progresso nesse caso.
 ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS contracted_lessons INTEGER;
+
+-- class_session.teacher_id: override do professor pra UMA aula específica —
+-- nulo (padrão) usa o professor fixo da turma (class_teacher), como sempre foi.
+-- Existe pra cobrir reposição/troca pontual (ex.: professor da aula 8 diferente
+-- do professor fixo da turma), não pra ser preenchido em toda aula.
+ALTER TABLE class_session ADD COLUMN IF NOT EXISTS teacher_id INTEGER;
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal

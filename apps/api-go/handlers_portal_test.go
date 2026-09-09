@@ -254,3 +254,39 @@ func TestPortalMySessionsMissingClassIdBeforeDB(t *testing.T) {
 		t.Fatalf("classId ausente: code=%d want %d", w.Code, http.StatusBadRequest)
 	}
 }
+
+func TestPortalUpdateSessionValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"data inválida", `{"date":"09/09/2026"}`},
+		{"startTime inválido", `{"startTime":"19h30"}`},
+		{"endTime inválido", `{"endTime":"vinte e uma"}`},
+		{"fim antes do início", `{"startTime":"21:00","endTime":"19:30"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("PATCH", "/portal/sessions/1", strings.NewReader(tc.body))
+			r.SetPathValue("sessionId", "1")
+			w := httptest.NewRecorder()
+			s.handlePortalUpdateSession(w, reqAs(r, 1))
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("%s: code=%d want %d", tc.name, w.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestPortalUpdateSessionBadIDBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("PATCH", "/portal/sessions/x", strings.NewReader(`{"date":"2026-09-10"}`))
+	r.SetPathValue("sessionId", "x")
+	w := httptest.NewRecorder()
+	s.handlePortalUpdateSession(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}

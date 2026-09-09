@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -75,6 +76,34 @@ func (s *Server) handlePortalListSessions(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": itens})
+}
+
+// handlePortalUpdateSession (PATCH /portal/sessions/{sessionId}) — edita
+// data/horário/professor de uma aula já gerada. Update parcial: campo ausente
+// no payload não muda.
+func (s *Server) handlePortalUpdateSession(w http.ResponseWriter, r *http.Request) {
+	sessionID, err := portalPathID(r, "sessionId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in portalSessionUpdateInput
+	if err := portalBodyJSON(w, r, &in); err != nil {
+		writeErr(w, validationErr("corpo inválido"))
+		return
+	}
+	if err := in.validate(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalUpdateSession(r.Context(), sessionID, in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.portalLogActivity(r, "session_update", "session", fmt.Sprint(sessionID), map[string]any{
+		"date": in.Date, "startTime": in.StartTime, "endTime": in.EndTime, "teacherId": in.TeacherID,
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handlePortalMySessions (GET /portal/me/sessions?classId=) — histórico de

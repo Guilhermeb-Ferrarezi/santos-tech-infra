@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -15,14 +16,19 @@ import (
 // presença/falta por aluno em cada uma.
 
 type portalSessionDTO struct {
-	ID        string                `json:"id"`
-	ClassID   string                `json:"classId"`
-	Date      string                `json:"date"` // AAAA-MM-DD
-	StartTime string                `json:"startTime,omitempty"`
-	EndTime   string                `json:"endTime,omitempty"`
-	Canceled  bool                  `json:"canceled"`
-	Note      string                `json:"note,omitempty"`
-	Presencas []portalAttendanceDTO `json:"presencas"`
+	ID        string `json:"id"`
+	ClassID   string `json:"classId"`
+	Date      string `json:"date"` // AAAA-MM-DD
+	StartTime string `json:"startTime,omitempty"`
+	EndTime   string `json:"endTime,omitempty"`
+	Canceled  bool   `json:"canceled"`
+	Note      string `json:"note,omitempty"`
+	// TeacherID: professor específico desta aula (nulo = usa o fixo da turma).
+	// TeacherName: já resolvido (o da aula se setado, senão o(s) fixo(s) da
+	// turma) — o front não precisa saber calcular o fallback.
+	TeacherID   *string               `json:"teacherId"`
+	TeacherName *string               `json:"teacherName"`
+	Presencas   []portalAttendanceDTO `json:"presencas"`
 }
 
 type portalAttendanceDTO struct {
@@ -44,6 +50,39 @@ type portalMySessionDTO struct {
 	Canceled  bool   `json:"canceled"`
 	Status    string `json:"status,omitempty"` // vazio = chamada não feita
 	Note      string `json:"note,omitempty"`
+}
+
+// portalSessionUpdateInput é o corpo do PATCH que edita uma aula já gerada —
+// update parcial: só os campos presentes no payload mudam. Sem suporte a
+// "limpar" teacherId com null explícito (mesma limitação de *int do PATCH de
+// matrícula — ver spec) — só dá pra trocar por outro professor.
+type portalSessionUpdateInput struct {
+	Date      *string `json:"date,omitempty"`
+	StartTime *string `json:"startTime,omitempty"`
+	EndTime   *string `json:"endTime,omitempty"`
+	TeacherID *int64  `json:"teacherId,omitempty"`
+}
+
+func (in portalSessionUpdateInput) validate() error {
+	if in.Date != nil {
+		if _, err := time.Parse("2006-01-02", *in.Date); err != nil {
+			return validationErr("date inválida (use YYYY-MM-DD)")
+		}
+	}
+	if in.StartTime != nil {
+		if _, err := time.Parse("15:04", *in.StartTime); err != nil {
+			return validationErr("startTime inválido (use HH:MM)")
+		}
+	}
+	if in.EndTime != nil {
+		if _, err := time.Parse("15:04", *in.EndTime); err != nil {
+			return validationErr("endTime inválido (use HH:MM)")
+		}
+	}
+	if in.StartTime != nil && in.EndTime != nil && *in.EndTime <= *in.StartTime {
+		return validationErr("o horário de fim precisa ser depois do início")
+	}
+	return nil
 }
 
 var portalStatusChamada = map[string]bool{"presente": true, "falta": true, "justificada": true}
@@ -92,10 +131,15 @@ func (s *Server) portalGenerateSessions(ctx context.Context, classID int64, de, 
 // diferença entre "faltou" e "ninguém fez a chamada ainda".
 func (s *Server) portalListSessions(ctx context.Context, classID int64) ([]portalSessionDTO, error) {
 	rows, err := s.portalDB.Query(ctx,
-		`SELECT id::text, class_id::text, to_char(date,'YYYY-MM-DD'),
-		        COALESCE(to_char(start_time,'HH24:MI'),''), COALESCE(to_char(end_time,'HH24:MI'),''),
-		        canceled, COALESCE(note,'')
-		 FROM class_session WHERE class_id=$1 ORDER BY date DESC, start_time`, classID)
+		`SELECT cs.id::text, cs.class_id::text, to_char(cs.date,'YYYY-MM-DD'),
+		        COALESCE(to_char(cs.start_time,'HH24:MI'),''), COALESCE(to_char(cs.end_time,'HH24:MI'),''),
+		        cs.canceled, COALESCE(cs.note,''), cs.teacher_id::text,
+		        COALESCE(
+		          (SELECT name FROM "user" WHERE id = cs.teacher_id),
+		          (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
+		             JOIN "user" t ON t.id = ct.user_id WHERE ct.class_id = cs.class_id)
+		        )
+		 FROM class_session cs WHERE cs.class_id=$1 ORDER BY cs.date DESC, cs.start_time`, classID)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +148,7 @@ func (s *Server) portalListSessions(ctx context.Context, classID int64) ([]porta
 	idx := map[string]int{}
 	for rows.Next() {
 		var d portalSessionDTO
-		if err := rows.Scan(&d.ID, &d.ClassID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Note); err != nil {
+		if err := rows.Scan(&d.ID, &d.ClassID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Note, &d.TeacherID, &d.TeacherName); err != nil {
 			return nil, err
 		}
 		d.Presencas = []portalAttendanceDTO{}
@@ -291,4 +335,49 @@ func (s *Server) portalMySessions(ctx context.Context, classID int64, email stri
 		itens = append(itens, d)
 	}
 	return itens, rows.Err()
+}
+
+// portalUpdateSession edita uma aula já gerada — update parcial, só os campos
+// presentes em `in` entram no SET. Colisão com outra aula da mesma turma (UNIQUE
+// class_id+date+start_time) volta como 409 amigável via portalDBErr, sem
+// tratamento especial aqui.
+func (s *Server) portalUpdateSession(ctx context.Context, sessionID int64, in portalSessionUpdateInput) error {
+	sets := []string{}
+	args := []any{}
+	n := 1
+	if in.Date != nil {
+		sets = append(sets, fmt.Sprintf("date=$%d", n))
+		args = append(args, *in.Date)
+		n++
+	}
+	if in.StartTime != nil {
+		sets = append(sets, fmt.Sprintf("start_time=$%d::time", n))
+		args = append(args, *in.StartTime)
+		n++
+	}
+	if in.EndTime != nil {
+		sets = append(sets, fmt.Sprintf("end_time=$%d::time", n))
+		args = append(args, *in.EndTime)
+		n++
+	}
+	if in.TeacherID != nil {
+		sets = append(sets, fmt.Sprintf("teacher_id=$%d", n))
+		args = append(args, *in.TeacherID)
+		n++
+	}
+	if len(sets) == 0 {
+		return validationErr("nada pra atualizar")
+	}
+	sets = append(sets, "updated_at=NOW()")
+	args = append(args, sessionID)
+	query := fmt.Sprintf("UPDATE class_session SET %s WHERE id=$%d", strings.Join(sets, ", "), n)
+	tag, err := s.portalDB.Exec(ctx, query, args...)
+	if err != nil {
+		return portalDBErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return notFoundErr("Aula")
+	}
+	s.invalidatePortalOverview()
+	return nil
 }
