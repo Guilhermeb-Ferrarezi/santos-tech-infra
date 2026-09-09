@@ -77,6 +77,33 @@ func (s *Server) handlePortalListSessions(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"items": itens})
 }
 
+// handlePortalMySessions (GET /portal/me/sessions?classId=) — histórico de
+// aulas do próprio aluno logado, autosserviço como GET /portal/me/overview: só
+// authGuard, sem permissão de portal — o escopo já é a própria pessoa. Nunca
+// aceita studentId do cliente.
+func (s *Server) handlePortalMySessions(w http.ResponseWriter, r *http.Request) {
+	classID, err := portalQueryID(r, "classId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	u, err := s.cachedUserByID(r.Context(), userIDFrom(r))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if u == nil {
+		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado"))
+		return
+	}
+	itens, err := s.portalMySessions(r.Context(), classID, u.ID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": itens})
+}
+
 // handlePortalSetAttendance (PUT /portal/sessions/{sessionId}/attendance)
 func (s *Server) handlePortalSetAttendance(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := portalPathID(r, "sessionId")

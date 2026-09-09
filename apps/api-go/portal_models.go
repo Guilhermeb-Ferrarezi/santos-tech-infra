@@ -63,6 +63,17 @@ func portalPathID(r *http.Request, name string) (int64, error) {
 	return id, nil
 }
 
+// portalQueryID lê um id inteiro positivo de um parâmetro de query string —
+// mesmo contrato de erro que portalPathID (path param), pra rotas tipo
+// GET /portal/me/sessions?classId=123 que não têm o id no path.
+func portalQueryID(r *http.Request, name string) (int64, error) {
+	id, err := strconv.ParseInt(r.URL.Query().Get(name), 10, 64)
+	if err != nil || id <= 0 {
+		return 0, appErr(http.StatusBadRequest, "VALIDATION_ERROR", name+" inválido")
+	}
+	return id, nil
+}
+
 func decodePortalJSON(body io.Reader, v any) error {
 	dec := json.NewDecoder(body)
 	dec.DisallowUnknownFields()

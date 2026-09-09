@@ -225,3 +225,32 @@ func TestPortalSetStudentIndividualValidationBeforeDB(t *testing.T) {
 		t.Fatalf("contractedLessons negativo: code=%d want %d", w.Code, http.StatusBadRequest)
 	}
 }
+
+func TestPortalMySessionsRequiresAuthBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	s.authGuard(s.handlePortalMySessions)(w, httptest.NewRequest("GET", "/portal/me/sessions?classId=1", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("code=%d want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestPortalMySessionsBadClassIdBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("GET", "/portal/me/sessions?classId=x", nil)
+	w := httptest.NewRecorder()
+	s.handlePortalMySessions(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("classId inválido: code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestPortalMySessionsMissingClassIdBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("GET", "/portal/me/sessions", nil)
+	w := httptest.NewRecorder()
+	s.handlePortalMySessions(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("classId ausente: code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}
