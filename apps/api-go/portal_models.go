@@ -225,6 +225,10 @@ type portalStudentDTO struct {
 	Name       string `json:"name"`
 	Role       int16  `json:"role"`
 	Individual bool   `json:"individual"`
+	// ContractedLessons: mesmo campo de portalStudentOverviewDTO — aqui é o
+	// valor ATUAL da matrícula, pro admin ver o que já está salvo antes de
+	// editar (ver AlunosSection no dashboard/web).
+	ContractedLessons *int `json:"contractedLessons"`
 }
 
 // portalTeacherDTO é um professor vinculado a uma turma (class_teacher) —
@@ -263,6 +267,11 @@ type portalStudentOverviewDTO struct {
 	CompletedPhases int     `json:"completedPhases"`
 	TeacherName     *string `json:"teacherName"`
 	Individual      bool    `json:"individual"`
+	// ContractedLessons: pacote de aulas contratado pelo aluno (nil = não
+	// preenchido — turma de grupo normalmente fica assim). Quando preenchido,
+	// o front (dashboard/web) usa como denominador do progresso em vez de
+	// TotalPhases (currículo do curso inteiro).
+	ContractedLessons *int `json:"contractedLessons"`
 	// AulasDadas: aulas que JÁ aconteceram (class_session até hoje), diferente
 	// de TotalPhases, que é o currículo previsto do curso. O aluno pergunta
 	// "quantas aulas eu já tive", não "quantas fases o curso tem".

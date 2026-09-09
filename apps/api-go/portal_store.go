@@ -572,7 +572,7 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p p
 	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM enrollment WHERE class_id=$1`, classID).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role, e.individual
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role, e.individual, e.contracted_lessons
 		FROM enrollment e JOIN "user" u ON u.id = e.user_id
 		WHERE e.class_id=$1 ORDER BY COALESCE(u.name,'') ASC, u.id ASC
 		LIMIT $2 OFFSET $3`, classID, p.Limit, p.Offset)
@@ -583,7 +583,7 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p p
 	items := []portalStudentDTO{}
 	for rows.Next() {
 		var dto portalStudentDTO
-		if err := rows.Scan(&dto.ID, &dto.Email, &dto.Name, &dto.Role, &dto.Individual); err != nil {
+		if err := rows.Scan(&dto.ID, &dto.Email, &dto.Name, &dto.Role, &dto.Individual, &dto.ContractedLessons); err != nil {
 			return nil, 0, err
 		}
 		items = append(items, dto)
@@ -649,7 +649,7 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
 		          JOIN "user" t ON t.id = ct.user_id
 		        WHERE ct.class_id = cl.id),
-		       e.individual
+		       e.individual, e.contracted_lessons
 		FROM enrollment e
 		JOIN "user" u ON u.id = e.user_id AND u.role = %d %s
 		JOIN class cl ON cl.id = e.class_id
@@ -666,7 +666,7 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		var dto portalStudentOverviewDTO
 		if err := rows.Scan(&dto.StudentID, &dto.StudentName, &dto.StudentEmail,
 			&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
-			&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual); err != nil {
+			&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual, &dto.ContractedLessons); err != nil {
 			return nil, 0, err
 		}
 		if dto.ClassName == "" {
@@ -706,7 +706,7 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
 		          JOIN "user" t ON t.id = ct.user_id
 		        WHERE ct.class_id = cl.id),
-		       e.individual
+		       e.individual, e.contracted_lessons
 		FROM enrollment e
 		JOIN "user" u ON u.id = e.user_id AND u.email = $1
 		JOIN class cl ON cl.id = e.class_id
@@ -721,7 +721,7 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 		var dto portalStudentOverviewDTO
 		if err := rows.Scan(&dto.StudentID, &dto.StudentName, &dto.StudentEmail,
 			&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
-			&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual); err != nil {
+			&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual, &dto.ContractedLessons); err != nil {
 			return nil, err
 		}
 		if dto.ClassName == "" {
