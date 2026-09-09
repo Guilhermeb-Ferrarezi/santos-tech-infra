@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -28,6 +29,19 @@ type portalAttendanceDTO struct {
 	UserID    string `json:"userId"`
 	UserName  string `json:"userName"`
 	UserEmail string `json:"userEmail"`
+	Status    string `json:"status,omitempty"` // vazio = chamada não feita
+	Note      string `json:"note,omitempty"`
+}
+
+// portalMySessionDTO é uma linha do histórico self-service do próprio aluno —
+// mais enxuto que portalSessionDTO (não traz Presencas de outros alunos, só o
+// status da PRÓPRIA pessoa logada).
+type portalMySessionDTO struct {
+	ID        string `json:"id"`
+	Date      string `json:"date"`
+	StartTime string `json:"startTime,omitempty"`
+	EndTime   string `json:"endTime,omitempty"`
+	Canceled  bool   `json:"canceled"`
 	Status    string `json:"status,omitempty"` // vazio = chamada não feita
 	Note      string `json:"note,omitempty"`
 }
@@ -230,4 +244,42 @@ func (s *Server) portalGerarAulasDeTodasAsTurmas(ctx context.Context, diasParaTr
 		criadas += n
 	}
 	return len(alvos), criadas, nil
+}
+
+// portalMySessions é o histórico self-service de aulas do PRÓPRIO aluno numa
+// turma — diferente de portalListSessions (staff, todos os alunos da turma):
+// aqui é só a chamada da pessoa logada, e exige matrícula própria na turma
+// (não aceita studentId do cliente — só classId, e valida contra o userID da
+// sessão). Sem isso, qualquer usuário logado poderia ler o histórico de
+// qualquer turma só sabendo o classId.
+func (s *Server) portalMySessions(ctx context.Context, classID, userID int64) ([]portalMySessionDTO, error) {
+	var matriculado bool
+	if err := s.portalDB.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM enrollment WHERE class_id=$1 AND user_id=$2)`, classID, userID).Scan(&matriculado); err != nil {
+		return nil, err
+	}
+	if !matriculado {
+		return nil, appErr(http.StatusForbidden, "NAO_MATRICULADO", "Você não está matriculado nesta turma")
+	}
+	rows, err := s.portalDB.Query(ctx,
+		`SELECT cs.id::text, to_char(cs.date,'YYYY-MM-DD'),
+		        COALESCE(to_char(cs.start_time,'HH24:MI'),''), COALESCE(to_char(cs.end_time,'HH24:MI'),''),
+		        cs.canceled, COALESCE(a.status,''), COALESCE(a.note,'')
+		 FROM class_session cs
+		 LEFT JOIN attendance a ON a.session_id = cs.id AND a.user_id = $2
+		 WHERE cs.class_id = $1
+		 ORDER BY cs.date DESC, cs.start_time DESC`, classID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	itens := []portalMySessionDTO{}
+	for rows.Next() {
+		var d portalMySessionDTO
+		if err := rows.Scan(&d.ID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Status, &d.Note); err != nil {
+			return nil, err
+		}
+		itens = append(itens, d)
+	}
+	return itens, rows.Err()
 }

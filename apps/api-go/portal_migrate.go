@@ -103,6 +103,12 @@ CREATE TABLE IF NOT EXISTS attendance (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unica ON attendance(session_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_user ON attendance(user_id);
+
+-- enrollment.contracted_lessons: pacote de aulas contratado pelo aluno (relevante
+-- sobretudo pra matrícula particular — enrollment.individual=true). NULL = não
+-- preenchido, turma de grupo normalmente fica assim; o front usa TotalPhases (o
+-- currículo do curso) como denominador do progresso nesse caso.
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS contracted_lessons INTEGER;
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal

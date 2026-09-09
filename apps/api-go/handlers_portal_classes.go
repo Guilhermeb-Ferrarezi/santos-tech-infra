@@ -207,11 +207,17 @@ func (s *Server) handlePortalSetStudentIndividual(w http.ResponseWriter, r *http
 		writeErr(w, validationErr("corpo inválido"))
 		return
 	}
-	if err := s.portalSetStudentIndividual(r.Context(), classID, studentID, in.Individual); err != nil {
+	if err := in.validate(); err != nil {
 		writeErr(w, err)
 		return
 	}
-	s.portalLogActivity(r, "class_student_individual", "class", fmt.Sprint(classID), map[string]any{"studentId": fmt.Sprint(studentID), "individual": in.Individual})
+	if err := s.portalSetStudentIndividual(r.Context(), classID, studentID, in.Individual, in.ContractedLessons); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.portalLogActivity(r, "class_student_individual", "class", fmt.Sprint(classID), map[string]any{
+		"studentId": fmt.Sprint(studentID), "individual": in.Individual, "contractedLessons": in.ContractedLessons,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
