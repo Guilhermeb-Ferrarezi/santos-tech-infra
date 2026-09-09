@@ -32,8 +32,12 @@ func claudeFailureDetail(stdout, stderr string) string {
 		return "(o CLI não escreveu nada)"
 	}
 	detail = oatRe.ReplaceAllString(detail, "sk-ant-***")
-	if len(detail) > 600 {
-		detail = detail[:600] + "…"
+	// Corta pelo FIM, não pelo começo: o CLI abre com um envelope "init" enorme
+	// (lista de ferramentas, comandos, modelo) e só diz o que deu errado na última
+	// linha. Cortando pelo começo, o log gastava todo o espaço no cabeçalho e
+	// escondia justamente a causa.
+	if r := []rune(detail); len(r) > 800 {
+		detail = "…" + string(r[len(r)-800:])
 	}
 	return detail
 }

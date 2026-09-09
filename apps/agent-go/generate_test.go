@@ -289,12 +289,17 @@ func TestClaudeFailureDetailRedigeCredencial(t *testing.T) {
 	}
 }
 
-func TestClaudeFailureDetailTrunca(t *testing.T) {
-	got := claudeFailureDetail(strings.Repeat("x", 5000), "")
-	if len([]rune(got)) > 601 {
-		t.Fatalf("detalhe longo demais: %d runas", len([]rune(got)))
+func TestClaudeFailureDetailPreservaOFim(t *testing.T) {
+	// O motivo da falha é a ÚLTIMA coisa que o CLI escreve; o começo é só o
+	// envelope de init. Truncar tem que descartar o cabeçalho, nunca a causa.
+	got := claudeFailureDetail(strings.Repeat("x", 5000)+"CAUSA_REAL", "")
+	if !strings.HasSuffix(got, "CAUSA_REAL") {
+		t.Fatalf("truncou o fim e perdeu a causa; veio %q", got)
 	}
-	if !strings.HasSuffix(got, "…") {
-		t.Fatalf("esperava marca de truncamento no fim, veio %q", got[len(got)-20:])
+	if !strings.HasPrefix(got, "…") {
+		t.Fatalf("esperava marca de truncamento no começo, veio %q", got[:20])
+	}
+	if n := len([]rune(got)); n > 801 {
+		t.Fatalf("detalhe longo demais: %d runas", n)
 	}
 }
