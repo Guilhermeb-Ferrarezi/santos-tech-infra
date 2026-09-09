@@ -641,9 +641,9 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		          JOIN phase ph ON ph.id = psp.phase_id
 		          JOIN module m ON m.id = ph.module_id
 		        WHERE m.course_id = c.id AND psp.user_id = u.id AND psp.completed_at IS NOT NULL),
-		       (SELECT COUNT(*) FROM class_session cs
+		       (SELECT COALESCE(SUM(cs.aula_count), 0) FROM class_session cs
 		        WHERE cs.class_id = cl.id AND NOT cs.canceled AND cs.date <= CURRENT_DATE),
-		       (SELECT COUNT(*) FROM attendance a
+		       (SELECT COALESCE(SUM(cs.aula_count), 0) FROM attendance a
 		          JOIN class_session cs ON cs.id = a.session_id
 		        WHERE cs.class_id = cl.id AND a.user_id = u.id AND a.status = 'falta'),
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
@@ -698,9 +698,9 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 		          JOIN phase ph ON ph.id = psp.phase_id
 		          JOIN module m ON m.id = ph.module_id
 		        WHERE m.course_id = c.id AND psp.user_id = u.id AND psp.completed_at IS NOT NULL),
-		       (SELECT COUNT(*) FROM class_session cs
+		       (SELECT COALESCE(SUM(cs.aula_count), 0) FROM class_session cs
 		        WHERE cs.class_id = cl.id AND NOT cs.canceled AND cs.date <= CURRENT_DATE),
-		       (SELECT COUNT(*) FROM attendance a
+		       (SELECT COALESCE(SUM(cs.aula_count), 0) FROM attendance a
 		          JOIN class_session cs ON cs.id = a.session_id
 		        WHERE cs.class_id = cl.id AND a.user_id = u.id AND a.status = 'falta'),
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
