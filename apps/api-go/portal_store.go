@@ -641,9 +641,9 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		          JOIN phase ph ON ph.id = psp.phase_id
 		          JOIN module m ON m.id = ph.module_id
 		        WHERE m.course_id = c.id AND psp.user_id = u.id AND psp.completed_at IS NOT NULL),
-		       (SELECT COUNT(*) FROM class_session cs
+		       (SELECT COALESCE(SUM(cs.aula_count), 0) FROM class_session cs
 		        WHERE cs.class_id = cl.id AND NOT cs.canceled AND cs.date <= CURRENT_DATE),
-		       (SELECT COUNT(*) FROM attendance a
+		       (SELECT COALESCE(SUM(cs.aula_count), 0) FROM attendance a
 		          JOIN class_session cs ON cs.id = a.session_id
 		        WHERE cs.class_id = cl.id AND a.user_id = u.id AND a.status = 'falta'),
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
@@ -698,9 +698,9 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 		          JOIN phase ph ON ph.id = psp.phase_id
 		          JOIN module m ON m.id = ph.module_id
 		        WHERE m.course_id = c.id AND psp.user_id = u.id AND psp.completed_at IS NOT NULL),
-		       (SELECT COUNT(*) FROM class_session cs
+		       (SELECT COALESCE(SUM(cs.aula_count), 0) FROM class_session cs
 		        WHERE cs.class_id = cl.id AND NOT cs.canceled AND cs.date <= CURRENT_DATE),
-		       (SELECT COUNT(*) FROM attendance a
+		       (SELECT COALESCE(SUM(cs.aula_count), 0) FROM attendance a
 		          JOIN class_session cs ON cs.id = a.session_id
 		        WHERE cs.class_id = cl.id AND a.user_id = u.id AND a.status = 'falta'),
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
@@ -821,7 +821,7 @@ func (s *Server) portalRemoveClassTeacher(ctx context.Context, classID, teacherI
 
 func (s *Server) portalListClassSchedule(ctx context.Context, classID int64) ([]portalScheduleDTO, error) {
 	rows, err := s.portalDB.Query(ctx, `SELECT id::text, class_id::text, day_of_week,
-		to_char(start_time,'HH24:MI'), to_char(end_time,'HH24:MI')
+		to_char(start_time,'HH24:MI'), to_char(end_time,'HH24:MI'), aula_count
 		FROM class_schedule WHERE class_id=$1 ORDER BY day_of_week ASC, start_time ASC`, classID)
 	if err != nil {
 		return nil, err
@@ -830,7 +830,7 @@ func (s *Server) portalListClassSchedule(ctx context.Context, classID int64) ([]
 	items := []portalScheduleDTO{}
 	for rows.Next() {
 		var dto portalScheduleDTO
-		if err := rows.Scan(&dto.ID, &dto.ClassID, &dto.DayOfWeek, &dto.StartTime, &dto.EndTime); err != nil {
+		if err := rows.Scan(&dto.ID, &dto.ClassID, &dto.DayOfWeek, &dto.StartTime, &dto.EndTime, &dto.AulaCount); err != nil {
 			return nil, err
 		}
 		items = append(items, dto)
@@ -840,10 +840,10 @@ func (s *Server) portalListClassSchedule(ctx context.Context, classID int64) ([]
 
 func (s *Server) portalAddClassSchedule(ctx context.Context, classID int64, in portalScheduleInput) (*portalScheduleDTO, error) {
 	var dto portalScheduleDTO
-	err := s.portalDB.QueryRow(ctx, `INSERT INTO class_schedule (class_id, day_of_week, start_time, end_time, created_at, updated_at)
-		VALUES ($1,$2,$3::time,$4::time,NOW(),NOW())
-		RETURNING id::text, class_id::text, day_of_week, to_char(start_time,'HH24:MI'), to_char(end_time,'HH24:MI')`,
-		classID, in.DayOfWeek, in.StartTime, in.EndTime).Scan(&dto.ID, &dto.ClassID, &dto.DayOfWeek, &dto.StartTime, &dto.EndTime)
+	err := s.portalDB.QueryRow(ctx, `INSERT INTO class_schedule (class_id, day_of_week, start_time, end_time, aula_count, created_at, updated_at)
+		VALUES ($1,$2,$3::time,$4::time,$5,NOW(),NOW())
+		RETURNING id::text, class_id::text, day_of_week, to_char(start_time,'HH24:MI'), to_char(end_time,'HH24:MI'), aula_count`,
+		classID, in.DayOfWeek, in.StartTime, in.EndTime, in.AulaCount).Scan(&dto.ID, &dto.ClassID, &dto.DayOfWeek, &dto.StartTime, &dto.EndTime, &dto.AulaCount)
 	if err != nil {
 		return nil, portalDBErr(err)
 	}
