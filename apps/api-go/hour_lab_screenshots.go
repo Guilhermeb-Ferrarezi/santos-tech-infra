@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -133,7 +134,9 @@ func (s *Server) storeLabDeviceScreenshot(ctx context.Context, deviceUUID, devic
 	uploaded := true
 	defer func() {
 		if uploaded {
-			_ = s.r2.Delete(context.WithoutCancel(ctx), key)
+			if err := s.r2.Delete(context.WithoutCancel(ctx), key); err != nil {
+				slog.Warn("lab_screenshot: falha ao limpar upload órfão após rollback", "key", key, "err", err)
+			}
 		}
 	}()
 
@@ -188,7 +191,9 @@ func (s *Server) storeLabDeviceScreenshot(ctx context.Context, deviceUUID, devic
 	// Best-effort depois do commit: se um destes falhar, sobra um arquivo sem
 	// registro — nada que dependa dele quebra, e a captura já está gravada.
 	for _, k := range pruned {
-		_ = s.r2.Delete(context.WithoutCancel(ctx), k)
+		if err := s.r2.Delete(context.WithoutCancel(ctx), k); err != nil {
+			slog.Warn("lab_screenshot: falha ao podar arquivo antigo do bucket", "key", k, "err", err)
+		}
 	}
 
 	shot.URL = s.r2.PresignGet(key, screenshotURLTTL)

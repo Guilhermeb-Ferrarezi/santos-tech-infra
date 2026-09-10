@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/hex"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -252,7 +253,9 @@ func (s *Server) handlePauseHourSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Pausa manual do admin também limpa um eventual pedido de pausa pendente.
-	_ = s.denyHourSessionPauseRequest(r.Context(), id)
+	if err := s.denyHourSessionPauseRequest(r.Context(), id); err != nil {
+		slog.Warn("pause_hour_session: falha ao limpar pedido de pausa pendente", "id", id, "err", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"session": h})
 }
 
