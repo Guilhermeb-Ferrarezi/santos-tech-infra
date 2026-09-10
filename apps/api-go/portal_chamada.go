@@ -112,24 +112,37 @@ func (s *Server) portalGenerateSessions(ctx context.Context, classID int64, de, 
 		return 0, validationErr("intervalo maior que um ano")
 	}
 
-	criadas := 0
+	// Monta as colunas em memória e insere tudo num único round-trip via
+	// unnest (mesmo padrão de blog_heatmap.go/portal_content_store.go), em vez
+	// de um INSERT por dia×horário — um intervalo de 1 ano com poucos horários
+	// semanais já passava de 300 idas ao Postgres nesta função só, chamada por
+	// TURMA a cada tique do worker de chamada (portal_chamada_worker.go).
+	var dates, starts, ends []string
+	var aulaCounts []int
 	for dia := de; !dia.After(ate); dia = dia.AddDate(0, 0, 1) {
 		for _, h := range grade {
 			if int16(dia.Weekday()) != h.DayOfWeek {
 				continue
 			}
-			tag, err := s.portalDB.Exec(ctx,
-				`INSERT INTO class_session (class_id, date, start_time, end_time, aula_count, created_at, updated_at)
-				 VALUES ($1,$2,$3::time,$4::time,$5,NOW(),NOW())
-				 ON CONFLICT (class_id, date, start_time) DO NOTHING`,
-				classID, dia.Format("2006-01-02"), h.StartTime, h.EndTime, h.AulaCount)
-			if err != nil {
-				return criadas, err
-			}
-			criadas += int(tag.RowsAffected())
+			dates = append(dates, dia.Format("2006-01-02"))
+			starts = append(starts, h.StartTime)
+			ends = append(ends, h.EndTime)
+			aulaCounts = append(aulaCounts, h.AulaCount)
 		}
 	}
-	return criadas, nil
+	if len(dates) == 0 {
+		return 0, nil
+	}
+	tag, err := s.portalDB.Exec(ctx,
+		`INSERT INTO class_session (class_id, date, start_time, end_time, aula_count, created_at, updated_at)
+		 SELECT $1, t.d, t.st, t.et, t.ac, NOW(), NOW()
+		 FROM unnest($2::date[], $3::time[], $4::time[], $5::int[]) AS t(d, st, et, ac)
+		 ON CONFLICT (class_id, date, start_time) DO NOTHING`,
+		classID, dates, starts, ends, aulaCounts)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 // portalListSessions traz as aulas da turma com a chamada de cada aluno
