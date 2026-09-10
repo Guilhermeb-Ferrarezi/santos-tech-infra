@@ -120,6 +120,15 @@ type Config struct {
 	// marcadas caem na conta padrão, ou seja, o comportamento de hoje.
 	GoogleDriveOAuthRefreshTokenContratos string
 
+	// Senha inicial de TODA conta de aluno criada pelo painel
+	// (POST /auth/admin/students). Fica aqui, e não no dashboard, porque o
+	// dashboard é JavaScript servido publicamente: qualquer pessoa que abrisse
+	// o arquivo leria a senha inicial de todos os alunos.
+	//
+	// Vazia = cadastro de aluno desabilitado (503). É deliberado: melhor não
+	// cadastrar do que cadastrar com uma senha fraca de emergência.
+	StudentDefaultPassword string
+
 	// Automação de resposta a comentário do Instagram (private reply via
 	// Graph API — substitui o ManyChat). Vazio (AppSecret ou AccessToken) =
 	// webhook desabilitado (responde 503 em vez de processar sem validar
@@ -229,6 +238,7 @@ func LoadConfig() Config {
 		GoogleDriveOAuthRefreshToken: getEnv("GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN", ""),
 
 		GoogleDriveOAuthRefreshTokenContratos: getEnv("GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN_CONTRATOS", ""),
+		StudentDefaultPassword:                getEnv("STUDENT_DEFAULT_PASSWORD", ""),
 
 		InstagramAppSecret:          getEnv("INSTAGRAM_APP_SECRET", ""),
 		InstagramAccessToken:        getEnv("INSTAGRAM_ACCESS_TOKEN", ""),

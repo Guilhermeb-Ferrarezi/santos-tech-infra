@@ -1273,3 +1273,11 @@ func (s *Server) portalIniciarFases(ctx context.Context, classID int64, studentI
 	}
 	return &phase, len(valid), nil
 }
+
+// portalUserIDByEmail devolve o id do aluno NO BANCO DO PORTAL, que não é o
+// mesmo do auth central. É esse id que `enrollment.user_id` referencia.
+func (s *Server) portalUserIDByEmail(ctx context.Context, email string) (int64, error) {
+	var id int64
+	err := s.portalDB.QueryRow(ctx, `SELECT id FROM "user" WHERE email = $1`, email).Scan(&id)
+	return id, err
+}
