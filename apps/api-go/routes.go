@@ -52,6 +52,10 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Gestão admin de usuários @santos-tech.com (exige role=Admin)
 	mux.HandleFunc("GET /auth/admin/users", s.adminGuard(s.handleListAdminUsers))
 	mux.HandleFunc("POST /auth/admin/users", s.rateLimit(10, min, s.adminGuard(s.handleCreateAdminUser)))
+
+	// Cadastro de aluno: e-mail derivado do nome e senha padrão do servidor,
+	// sem convite (ver handlers_students.go). Só admin — é criação de conta.
+	mux.HandleFunc("POST /auth/admin/students", s.rateLimit(20, min, s.adminGuard(s.handleCreateStudent)))
 	mux.HandleFunc("PATCH /auth/admin/users/{id}", s.rateLimit(20, min, s.adminGuard(s.handleUpdateAdminUser)))
 	mux.HandleFunc("POST /auth/admin/users/{id}/invite", s.rateLimit(5, min, s.adminGuard(s.handleInviteAdminUser)))
 	mux.HandleFunc("POST /auth/admin/users/{id}/send-reset", s.rateLimit(5, min, s.adminGuard(s.handleSendResetAdminUser)))
