@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -289,12 +291,40 @@ func TestClaudeFailureDetailRedigeCredencial(t *testing.T) {
 	}
 }
 
-func TestClaudeFailureDetailTrunca(t *testing.T) {
-	got := claudeFailureDetail(strings.Repeat("x", 5000), "")
-	if len([]rune(got)) > 601 {
-		t.Fatalf("detalhe longo demais: %d runas", len([]rune(got)))
+func TestClaudeFailureDetailPreservaOFim(t *testing.T) {
+	// O motivo da falha é a ÚLTIMA coisa que o CLI escreve; o começo é só o
+	// envelope de init. Truncar tem que descartar o cabeçalho, nunca a causa.
+	got := claudeFailureDetail(strings.Repeat("x", 5000)+"CAUSA_REAL", "")
+	if !strings.HasSuffix(got, "CAUSA_REAL") {
+		t.Fatalf("truncou o fim e perdeu a causa; veio %q", got)
 	}
-	if !strings.HasSuffix(got, "…") {
-		t.Fatalf("esperava marca de truncamento no fim, veio %q", got[len(got)-20:])
+	if !strings.HasPrefix(got, "…") {
+		t.Fatalf("esperava marca de truncamento no começo, veio %q", got[:20])
+	}
+	if n := len([]rune(got)); n > 801 {
+		t.Fatalf("detalhe longo demais: %d runas", n)
+	}
+}
+
+// O motivo da falha tem que CHEGAR em quem chamou. Antes virava 500 genérico
+// ("Erro interno do servidor") e o chamador ficava sem nenhuma pista.
+func TestClaudeFailedCarregaOMotivo(t *testing.T) {
+	ae := claudeFailed(errors.New("exit status 1"), `{"is_error":true,"result":"Not logged in"}`, "")
+	if ae.Status != http.StatusBadGateway {
+		t.Fatalf("status = %d; quer %d (falha é de dependência externa, não do serviço)", ae.Status, http.StatusBadGateway)
+	}
+	if ae.Code != "CLAUDE_FAILED" {
+		t.Fatalf("code = %q; quer CLAUDE_FAILED", ae.Code)
+	}
+	if !strings.Contains(ae.Message, "Not logged in") {
+		t.Fatalf("mensagem não carrega o motivo real: %q", ae.Message)
+	}
+}
+
+func TestClaudeFailedRedigeCredencial(t *testing.T) {
+	tok := "sk-ant-oat01-" + strings.Repeat("A", 40)
+	ae := claudeFailed(errors.New("exit status 1"), "falhou com "+tok, "")
+	if strings.Contains(ae.Message, tok) {
+		t.Fatalf("credencial vazou na resposta ao chamador: %q", ae.Message)
 	}
 }

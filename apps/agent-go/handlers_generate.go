@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -32,10 +33,24 @@ func claudeFailureDetail(stdout, stderr string) string {
 		return "(o CLI não escreveu nada)"
 	}
 	detail = oatRe.ReplaceAllString(detail, "sk-ant-***")
-	if len(detail) > 600 {
-		detail = detail[:600] + "…"
+	// Corta pelo FIM, não pelo começo: o CLI abre com um envelope "init" enorme
+	// (lista de ferramentas, comandos, modelo) e só diz o que deu errado na última
+	// linha. Cortando pelo começo, o log gastava todo o espaço no cabeçalho e
+	// escondia justamente a causa.
+	if r := []rune(detail); len(r) > 800 {
+		detail = "…" + string(r[len(r)-800:])
 	}
 	return detail
+}
+
+// claudeFailed monta o erro de falha do CLI: registra o contexto completo no
+// servidor E devolve o motivo a quem chamou. Antes isto era um fmt.Errorf comum,
+// que o writeErr transformava num 500 "Erro interno do servidor" — quem chamava
+// (bot do WhatsApp, painel, MCP) nunca descobria o que tinha acontecido.
+func claudeFailed(err error, stdout, stderr string) *AppError {
+	detail := claudeFailureDetail(stdout, stderr)
+	slog.Error("claude falhou", "err", err, "saida", detail)
+	return appErr(http.StatusBadGateway, "CLAUDE_FAILED", "o CLI do Claude falhou: "+detail)
 }
 
 const maxImageBytes = 8 << 20 // 8 MB
@@ -253,7 +268,7 @@ func (s *Server) generateOnce(ctx context.Context, task, prompt, imageB64, image
 	cmd.Stdout = &stdout
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr) // logs do CLI vão pro stderr do serviço
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("claude falhou: %w — saída: %s", err, claudeFailureDetail(stdout.String(), stderr.String()))
+		return "", claudeFailed(err, stdout.String(), stderr.String())
 	}
 
 	// --output-format json: um envelope com o texto final em .result e o custo em
@@ -313,7 +328,7 @@ func (s *Server) generateOnceWithTrace(ctx context.Context, task, prompt, model 
 	cmd.Stdout = &stdout
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
 	if err := cmd.Run(); err != nil {
-		return "", nil, fmt.Errorf("claude falhou: %w — saída: %s", err, claudeFailureDetail(stdout.String(), stderr.String()))
+		return "", nil, claudeFailed(err, stdout.String(), stderr.String())
 	}
 
 	var finalText string

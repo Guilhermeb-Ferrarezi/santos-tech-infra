@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -14,14 +16,20 @@ import (
 // presença/falta por aluno em cada uma.
 
 type portalSessionDTO struct {
-	ID        string                `json:"id"`
-	ClassID   string                `json:"classId"`
-	Date      string                `json:"date"` // AAAA-MM-DD
-	StartTime string                `json:"startTime,omitempty"`
-	EndTime   string                `json:"endTime,omitempty"`
-	Canceled  bool                  `json:"canceled"`
-	Note      string                `json:"note,omitempty"`
-	Presencas []portalAttendanceDTO `json:"presencas"`
+	ID        string `json:"id"`
+	ClassID   string `json:"classId"`
+	Date      string `json:"date"` // AAAA-MM-DD
+	StartTime string `json:"startTime,omitempty"`
+	EndTime   string `json:"endTime,omitempty"`
+	Canceled  bool   `json:"canceled"`
+	Note      string `json:"note,omitempty"`
+	// TeacherID: professor específico desta aula (nulo = usa o fixo da turma).
+	// TeacherName: já resolvido (o da aula se setado, senão o(s) fixo(s) da
+	// turma) — o front não precisa saber calcular o fallback.
+	TeacherID   *string               `json:"teacherId"`
+	TeacherName *string               `json:"teacherName"`
+	AulaCount   int                   `json:"aulaCount"`
+	Presencas   []portalAttendanceDTO `json:"presencas"`
 }
 
 type portalAttendanceDTO struct {
@@ -30,6 +38,57 @@ type portalAttendanceDTO struct {
 	UserEmail string `json:"userEmail"`
 	Status    string `json:"status,omitempty"` // vazio = chamada não feita
 	Note      string `json:"note,omitempty"`
+}
+
+// portalMySessionDTO é uma linha do histórico self-service do próprio aluno —
+// mais enxuto que portalSessionDTO (não traz Presencas de outros alunos, só o
+// status da PRÓPRIA pessoa logada).
+type portalMySessionDTO struct {
+	ID        string `json:"id"`
+	Date      string `json:"date"`
+	StartTime string `json:"startTime,omitempty"`
+	EndTime   string `json:"endTime,omitempty"`
+	Canceled  bool   `json:"canceled"`
+	Status    string `json:"status,omitempty"` // vazio = chamada não feita
+	Note      string `json:"note,omitempty"`
+	AulaCount int    `json:"aulaCount"`
+}
+
+// portalSessionUpdateInput é o corpo do PATCH que edita uma aula já gerada —
+// update parcial: só os campos presentes no payload mudam. Sem suporte a
+// "limpar" teacherId com null explícito (mesma limitação de *int do PATCH de
+// matrícula — ver spec) — só dá pra trocar por outro professor.
+type portalSessionUpdateInput struct {
+	Date      *string `json:"date,omitempty"`
+	StartTime *string `json:"startTime,omitempty"`
+	EndTime   *string `json:"endTime,omitempty"`
+	TeacherID *int64  `json:"teacherId,omitempty"`
+	AulaCount *int    `json:"aulaCount,omitempty"`
+}
+
+func (in portalSessionUpdateInput) validate() error {
+	if in.Date != nil {
+		if _, err := time.Parse("2006-01-02", *in.Date); err != nil {
+			return validationErr("date inválida (use YYYY-MM-DD)")
+		}
+	}
+	if in.StartTime != nil {
+		if _, err := time.Parse("15:04", *in.StartTime); err != nil {
+			return validationErr("startTime inválido (use HH:MM)")
+		}
+	}
+	if in.EndTime != nil {
+		if _, err := time.Parse("15:04", *in.EndTime); err != nil {
+			return validationErr("endTime inválido (use HH:MM)")
+		}
+	}
+	if in.StartTime != nil && in.EndTime != nil && *in.EndTime <= *in.StartTime {
+		return validationErr("o horário de fim precisa ser depois do início")
+	}
+	if in.AulaCount != nil && *in.AulaCount < 1 {
+		return validationErr("aulaCount deve ser maior que zero")
+	}
+	return nil
 }
 
 var portalStatusChamada = map[string]bool{"presente": true, "falta": true, "justificada": true}
@@ -53,12 +112,13 @@ func (s *Server) portalGenerateSessions(ctx context.Context, classID int64, de, 
 		return 0, validationErr("intervalo maior que um ano")
 	}
 
-	// Monta as 3 colunas em memória e insere tudo num único round-trip via
+	// Monta as colunas em memória e insere tudo num único round-trip via
 	// unnest (mesmo padrão de blog_heatmap.go/portal_content_store.go), em vez
 	// de um INSERT por dia×horário — um intervalo de 1 ano com poucos horários
 	// semanais já passava de 300 idas ao Postgres nesta função só, chamada por
 	// TURMA a cada tique do worker de chamada (portal_chamada_worker.go).
 	var dates, starts, ends []string
+	var aulaCounts []int
 	for dia := de; !dia.After(ate); dia = dia.AddDate(0, 0, 1) {
 		for _, h := range grade {
 			if int16(dia.Weekday()) != h.DayOfWeek {
@@ -67,17 +127,18 @@ func (s *Server) portalGenerateSessions(ctx context.Context, classID int64, de, 
 			dates = append(dates, dia.Format("2006-01-02"))
 			starts = append(starts, h.StartTime)
 			ends = append(ends, h.EndTime)
+			aulaCounts = append(aulaCounts, h.AulaCount)
 		}
 	}
 	if len(dates) == 0 {
 		return 0, nil
 	}
 	tag, err := s.portalDB.Exec(ctx,
-		`INSERT INTO class_session (class_id, date, start_time, end_time, created_at, updated_at)
-		 SELECT $1, t.d, t.st, t.et, NOW(), NOW()
-		 FROM unnest($2::date[], $3::time[], $4::time[]) AS t(d, st, et)
+		`INSERT INTO class_session (class_id, date, start_time, end_time, aula_count, created_at, updated_at)
+		 SELECT $1, t.d, t.st, t.et, t.ac, NOW(), NOW()
+		 FROM unnest($2::date[], $3::time[], $4::time[], $5::int[]) AS t(d, st, et, ac)
 		 ON CONFLICT (class_id, date, start_time) DO NOTHING`,
-		classID, dates, starts, ends)
+		classID, dates, starts, ends, aulaCounts)
 	if err != nil {
 		return 0, err
 	}
@@ -89,10 +150,16 @@ func (s *Server) portalGenerateSessions(ctx context.Context, classID int64, de, 
 // diferença entre "faltou" e "ninguém fez a chamada ainda".
 func (s *Server) portalListSessions(ctx context.Context, classID int64) ([]portalSessionDTO, error) {
 	rows, err := s.portalDB.Query(ctx,
-		`SELECT id::text, class_id::text, to_char(date,'YYYY-MM-DD'),
-		        COALESCE(to_char(start_time,'HH24:MI'),''), COALESCE(to_char(end_time,'HH24:MI'),''),
-		        canceled, COALESCE(note,'')
-		 FROM class_session WHERE class_id=$1 ORDER BY date DESC, start_time`, classID)
+		`SELECT cs.id::text, cs.class_id::text, to_char(cs.date,'YYYY-MM-DD'),
+		        COALESCE(to_char(cs.start_time,'HH24:MI'),''), COALESCE(to_char(cs.end_time,'HH24:MI'),''),
+		        cs.canceled, COALESCE(cs.note,''), cs.teacher_id::text,
+		        COALESCE(
+		          (SELECT name FROM "user" WHERE id = cs.teacher_id),
+		          (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
+		             JOIN "user" t ON t.id = ct.user_id WHERE ct.class_id = cs.class_id)
+		        ),
+		        cs.aula_count
+		 FROM class_session cs WHERE cs.class_id=$1 ORDER BY cs.date DESC, cs.start_time`, classID)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +168,7 @@ func (s *Server) portalListSessions(ctx context.Context, classID int64) ([]porta
 	idx := map[string]int{}
 	for rows.Next() {
 		var d portalSessionDTO
-		if err := rows.Scan(&d.ID, &d.ClassID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Note); err != nil {
+		if err := rows.Scan(&d.ID, &d.ClassID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Note, &d.TeacherID, &d.TeacherName, &d.AulaCount); err != nil {
 			return nil, err
 		}
 		d.Presencas = []portalAttendanceDTO{}
@@ -241,4 +308,115 @@ func (s *Server) portalGerarAulasDeTodasAsTurmas(ctx context.Context, diasParaTr
 		criadas += n
 	}
 	return len(alvos), criadas, nil
+}
+
+// portalMySessions é o histórico self-service de aulas do PRÓPRIO aluno numa
+// turma — diferente de portalListSessions (staff, todos os alunos da turma):
+// aqui é só a chamada da pessoa logada, e exige matrícula própria na turma
+// (não aceita studentId do cliente — só classId, e valida contra o userID da
+// sessão). Sem isso, qualquer usuário logado poderia ler o histórico de
+// qualquer turma só sabendo o classId.
+// portalMySessions recebe o e-mail da sessão (auth central), não um userID —
+// o id do auth central e o id do usuário no Portal NÃO são o mesmo número (a
+// ponte entre os dois sistemas é feita por e-mail, mesmo padrão de
+// portalMyOverview/portalSyncUserFromAuth). Resolver por ID direto aqui foi
+// justamente o bug que fazia todo self-service devolver NAO_MATRICULADO mesmo
+// pra aluno matriculado de verdade.
+func (s *Server) portalMySessions(ctx context.Context, classID int64, email string) ([]portalMySessionDTO, error) {
+	var userID int64
+	err := s.portalDB.QueryRow(ctx,
+		`SELECT u.id FROM "user" u
+		 JOIN enrollment e ON e.user_id = u.id AND e.class_id = $1
+		 WHERE u.email = $2`, classID, strings.ToLower(email)).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, appErr(http.StatusForbidden, "NAO_MATRICULADO", "Você não está matriculado nesta turma")
+	}
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.portalDB.Query(ctx,
+		`SELECT cs.id::text, to_char(cs.date,'YYYY-MM-DD'),
+		        COALESCE(to_char(cs.start_time,'HH24:MI'),''), COALESCE(to_char(cs.end_time,'HH24:MI'),''),
+		        cs.canceled, COALESCE(a.status,''), COALESCE(a.note,''), cs.aula_count
+		 FROM class_session cs
+		 LEFT JOIN attendance a ON a.session_id = cs.id AND a.user_id = $2
+		 WHERE cs.class_id = $1
+		 ORDER BY cs.date DESC, cs.start_time DESC`, classID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	itens := []portalMySessionDTO{}
+	for rows.Next() {
+		var d portalMySessionDTO
+		if err := rows.Scan(&d.ID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Status, &d.Note, &d.AulaCount); err != nil {
+			return nil, err
+		}
+		itens = append(itens, d)
+	}
+	return itens, rows.Err()
+}
+
+// portalUpdateSession edita uma aula já gerada — update parcial, só os campos
+// presentes em `in` entram no SET. Colisão com outra aula da mesma turma (UNIQUE
+// class_id+date+start_time) volta como 409 amigável via portalDBErr, sem
+// tratamento especial aqui.
+func (s *Server) portalUpdateSession(ctx context.Context, sessionID int64, in portalSessionUpdateInput) error {
+	sets := []string{}
+	args := []any{}
+	n := 1
+	if in.Date != nil {
+		sets = append(sets, fmt.Sprintf("date=$%d", n))
+		args = append(args, *in.Date)
+		n++
+	}
+	if in.StartTime != nil {
+		sets = append(sets, fmt.Sprintf("start_time=$%d::time", n))
+		args = append(args, *in.StartTime)
+		n++
+	}
+	if in.EndTime != nil {
+		sets = append(sets, fmt.Sprintf("end_time=$%d::time", n))
+		args = append(args, *in.EndTime)
+		n++
+	}
+	if in.TeacherID != nil {
+		sets = append(sets, fmt.Sprintf("teacher_id=$%d", n))
+		args = append(args, *in.TeacherID)
+		n++
+	}
+	if in.AulaCount != nil {
+		sets = append(sets, fmt.Sprintf("aula_count=$%d", n))
+		args = append(args, *in.AulaCount)
+		n++
+	}
+	if len(sets) == 0 {
+		return validationErr("nada pra atualizar")
+	}
+	sets = append(sets, "updated_at=NOW()")
+	args = append(args, sessionID)
+	query := fmt.Sprintf("UPDATE class_session SET %s WHERE id=$%d", strings.Join(sets, ", "), n)
+	tag, err := s.portalDB.Exec(ctx, query, args...)
+	if err != nil {
+		return portalDBErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return notFoundErr("Aula")
+	}
+	s.invalidatePortalOverview()
+	return nil
+}
+
+// portalDeleteSession remove uma aula gerada errada. attendance associada cai
+// junto via ON DELETE CASCADE (ver DDL de attendance em portal_migrate.go).
+func (s *Server) portalDeleteSession(ctx context.Context, sessionID int64) error {
+	tag, err := s.portalDB.Exec(ctx, `DELETE FROM class_session WHERE id=$1`, sessionID)
+	if err != nil {
+		return portalDBErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return notFoundErr("Aula")
+	}
+	s.invalidatePortalOverview()
+	return nil
 }

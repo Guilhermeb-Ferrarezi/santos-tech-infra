@@ -103,6 +103,25 @@ CREATE TABLE IF NOT EXISTS attendance (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unica ON attendance(session_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_user ON attendance(user_id);
+
+-- enrollment.contracted_lessons: pacote de aulas contratado pelo aluno (relevante
+-- sobretudo pra matrícula particular — enrollment.individual=true). NULL = não
+-- preenchido, turma de grupo normalmente fica assim; o front usa TotalPhases (o
+-- currículo do curso) como denominador do progresso nesse caso.
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS contracted_lessons INTEGER;
+
+-- class_session.teacher_id: override do professor pra UMA aula específica —
+-- nulo (padrão) usa o professor fixo da turma (class_teacher), como sempre foi.
+-- Existe pra cobrir reposição/troca pontual (ex.: professor da aula 8 diferente
+-- do professor fixo da turma), não pra ser preenchido em toda aula.
+ALTER TABLE class_session ADD COLUMN IF NOT EXISTS teacher_id INTEGER;
+
+-- aula_count: quantas "aulas" (unidade de 1h, convenção da escola) esse
+-- horário/sessão representa. Padrão 1 preserva 100% do comportamento atual
+-- (turma de grupo, 1 encontro = 1 aula, mesmo com duração != 1h). Só aula
+-- particular de encontro mais longo (ex.: 2h) precisa setar 2.
+ALTER TABLE class_schedule ADD COLUMN IF NOT EXISTS aula_count INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE class_session ADD COLUMN IF NOT EXISTS aula_count INTEGER NOT NULL DEFAULT 1;
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal

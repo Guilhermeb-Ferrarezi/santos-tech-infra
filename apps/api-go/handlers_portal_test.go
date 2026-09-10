@@ -212,3 +212,103 @@ func TestPortalUpdateClassDurationCapBeforeDB(t *testing.T) {
 		t.Fatalf("durationWeeks fora do range code=%d", w.Code)
 	}
 }
+
+func TestPortalSetStudentIndividualValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+
+	r := httptest.NewRequest("PATCH", "/portal/classes/1/students/1", strings.NewReader(`{"individual":true,"contractedLessons":-1}`))
+	r.SetPathValue("classId", "1")
+	r.SetPathValue("studentId", "1")
+	w := httptest.NewRecorder()
+	s.handlePortalSetStudentIndividual(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("contractedLessons negativo: code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestPortalMySessionsRequiresAuthBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	s.authGuard(s.handlePortalMySessions)(w, httptest.NewRequest("GET", "/portal/me/sessions?classId=1", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("code=%d want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestPortalMySessionsBadClassIdBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("GET", "/portal/me/sessions?classId=x", nil)
+	w := httptest.NewRecorder()
+	s.handlePortalMySessions(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("classId inválido: code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestPortalMySessionsMissingClassIdBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("GET", "/portal/me/sessions", nil)
+	w := httptest.NewRecorder()
+	s.handlePortalMySessions(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("classId ausente: code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestPortalUpdateSessionValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"data inválida", `{"date":"09/09/2026"}`},
+		{"startTime inválido", `{"startTime":"19h30"}`},
+		{"endTime inválido", `{"endTime":"vinte e uma"}`},
+		{"fim antes do início", `{"startTime":"21:00","endTime":"19:30"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("PATCH", "/portal/sessions/1", strings.NewReader(tc.body))
+			r.SetPathValue("sessionId", "1")
+			w := httptest.NewRecorder()
+			s.handlePortalUpdateSession(w, reqAs(r, 1))
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("%s: code=%d want %d", tc.name, w.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestPortalUpdateSessionBadIDBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("PATCH", "/portal/sessions/x", strings.NewReader(`{"date":"2026-09-10"}`))
+	r.SetPathValue("sessionId", "x")
+	w := httptest.NewRecorder()
+	s.handlePortalUpdateSession(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestPortalUpdateSessionAulaCountValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("PATCH", "/portal/sessions/1", strings.NewReader(`{"aulaCount":0}`))
+	r.SetPathValue("sessionId", "1")
+	w := httptest.NewRecorder()
+	s.handlePortalUpdateSession(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("aulaCount zero: code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestPortalDeleteSessionBadIDBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("DELETE", "/portal/sessions/x", nil)
+	r.SetPathValue("sessionId", "x")
+	w := httptest.NewRecorder()
+	s.handlePortalDeleteSession(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}

@@ -63,6 +63,17 @@ func portalPathID(r *http.Request, name string) (int64, error) {
 	return id, nil
 }
 
+// portalQueryID lê um id inteiro positivo de um parâmetro de query string —
+// mesmo contrato de erro que portalPathID (path param), pra rotas tipo
+// GET /portal/me/sessions?classId=123 que não têm o id no path.
+func portalQueryID(r *http.Request, name string) (int64, error) {
+	id, err := strconv.ParseInt(r.URL.Query().Get(name), 10, 64)
+	if err != nil || id <= 0 {
+		return 0, appErr(http.StatusBadRequest, "VALIDATION_ERROR", name+" inválido")
+	}
+	return id, nil
+}
+
 func decodePortalJSON(body io.Reader, v any) error {
 	dec := json.NewDecoder(body)
 	dec.DisallowUnknownFields()
@@ -225,6 +236,10 @@ type portalStudentDTO struct {
 	Name       string `json:"name"`
 	Role       int16  `json:"role"`
 	Individual bool   `json:"individual"`
+	// ContractedLessons: mesmo campo de portalStudentOverviewDTO — aqui é o
+	// valor ATUAL da matrícula, pro admin ver o que já está salvo antes de
+	// editar (ver AlunosSection no dashboard/web).
+	ContractedLessons *int `json:"contractedLessons"`
 }
 
 // portalTeacherDTO é um professor vinculado a uma turma (class_teacher) —
@@ -263,6 +278,11 @@ type portalStudentOverviewDTO struct {
 	CompletedPhases int     `json:"completedPhases"`
 	TeacherName     *string `json:"teacherName"`
 	Individual      bool    `json:"individual"`
+	// ContractedLessons: pacote de aulas contratado pelo aluno (nil = não
+	// preenchido — turma de grupo normalmente fica assim). Quando preenchido,
+	// o front (dashboard/web) usa como denominador do progresso em vez de
+	// TotalPhases (currículo do curso inteiro).
+	ContractedLessons *int `json:"contractedLessons"`
 	// AulasDadas: aulas que JÁ aconteceram (class_session até hoje), diferente
 	// de TotalPhases, que é o currículo previsto do curso. O aluno pergunta
 	// "quantas aulas eu já tive", não "quantas fases o curso tem".
@@ -271,10 +291,24 @@ type portalStudentOverviewDTO struct {
 	NextClassAt *time.Time `json:"nextClassAt"`
 }
 
-// portalStudentIndividualInput é o corpo do PATCH que marca/desmarca uma
-// matrícula como particular.
+// portalStudentIndividualInput é o corpo do PATCH que atualiza uma matrícula:
+// marca/desmarca como particular e/ou define o pacote de aulas contratadas.
+// Individual é sempre obrigatório no payload (todo PATCH reenvia o valor atual,
+// mesmo quando só ContractedLessons mudou) — o zero-value de bool ausente no
+// JSON é `false`, que resetaria sem querer o toggle "particular" se fosse opcional.
 type portalStudentIndividualInput struct {
 	Individual bool `json:"individual"`
+	// ContractedLessons: pacote de aulas contratado (relevante sobretudo pra
+	// matrícula particular). nil = não veio no payload, mantém o valor salvo —
+	// não dá pra "limpar" com null explícito nesse desenho simples (ver spec).
+	ContractedLessons *int `json:"contractedLessons,omitempty"`
+}
+
+func (in portalStudentIndividualInput) validate() error {
+	if in.ContractedLessons != nil && *in.ContractedLessons < 1 {
+		return validationErr("contractedLessons deve ser maior que zero")
+	}
+	return nil
 }
 
 // portalScheduleDTO é um horário fixo semanal da turma (class_schedule) —
@@ -286,12 +320,18 @@ type portalScheduleDTO struct {
 	DayOfWeek int16  `json:"dayOfWeek"` // 0=domingo .. 6=sábado (bate com time.Weekday do Go)
 	StartTime string `json:"startTime"`
 	EndTime   string `json:"endTime"`
+	AulaCount int    `json:"aulaCount"`
 }
 
 type portalScheduleInput struct {
 	DayOfWeek int16  `json:"dayOfWeek"`
 	StartTime string `json:"startTime"`
 	EndTime   string `json:"endTime"`
+	// AulaCount: quantas "aulas" (unidade de 1h) esse horário representa,
+	// herdado por toda sessão gerada automaticamente a partir dele. Default 1
+	// (turma de grupo, 1 encontro = 1 aula) — só aula particular de encontro
+	// mais longo (ex.: 2h) precisa setar 2. validate() garante >= 1.
+	AulaCount int `json:"aulaCount"`
 }
 
 var portalTimeRe = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
@@ -305,6 +345,9 @@ func (in *portalScheduleInput) validate() error {
 	}
 	if in.StartTime >= in.EndTime {
 		return validationErr("startTime deve ser antes de endTime")
+	}
+	if in.AulaCount <= 0 {
+		in.AulaCount = 1
 	}
 	return nil
 }
