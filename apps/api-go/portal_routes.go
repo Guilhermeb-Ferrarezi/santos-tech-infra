@@ -18,6 +18,8 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /portal/overview", s.portalAnyRead(s.handlePortalOverview))
 	mux.HandleFunc("GET /portal/students-overview", s.portalAnyRead(s.handlePortalStudentsOverview))
+	// Destrutivo de verdade (leva matrículas, presença e o login junto): admin + sudo.
+	mux.HandleFunc("DELETE /portal/students/{studentId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteStudent)))
 	mux.HandleFunc("GET /portal/me/overview", s.authGuard(s.handlePortalMyOverview))
 	mux.HandleFunc("GET /portal/me/sessions", s.authGuard(s.handlePortalMySessions))
 
