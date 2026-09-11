@@ -772,7 +772,7 @@ Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por pe
   miniatura (frontend cai pro ícone genérico, resultado cacheado 1h no Redis
   também) · mesma validação de ancestralidade de `fileId` do download
 - `POST /drive-folders/{id}/files[?parent=<driveFileId>]` — exige `write` na
-  raiz `{id}`; `multipart/form-data` campo `file` (máx. 25MB, streamado sem
+  raiz `{id}`; `multipart/form-data` campo `file` (máx. 500MB, streamado sem
   bufferizar inteiro em memória) → 201 `{file}` · rate limit 10/min ·
   `parent` envia pra uma subpasta (mesma validação de ancestralidade do GET).
   Segurança: se o `Content-Type` declarado no multipart cair na allowlist
@@ -1391,7 +1391,7 @@ PATCH  /portal/classes/{classId}
 DELETE /portal/classes/{classId}
 GET    /portal/classes/{classId}/students
 POST   /portal/classes/{classId}/students
-PATCH  /portal/classes/{classId}/students/{studentId}  body {individual, contractedLessons?, contratoDriveFileId?}
+PATCH  /portal/classes/{classId}/students/{studentId}  body {individual, contractedLessons?, contratoDriveFileId?, contractedContent?}
 DELETE /portal/students/{studentId}                    admin + sudo — apaga o ALUNO inteiro
 DELETE /portal/classes/{classId}/students/{studentId}
 GET    /portal/classes/{classId}/cronograma      fases do módulo atual por semana
@@ -1416,8 +1416,15 @@ ausente vira `false` no unmarshal e desmarcaria "particular" sem querer, então
 todo cliente reenvia o valor atual. `contractedLessons` (pacote de aulas) e
 `contratoDriveFileId` (id do ARQUIVO do contrato na pasta "Contratos" do Drive,
 não da pasta) só entram no UPDATE quando vêm no corpo — não há como limpar
-nenhum dos dois por aqui. O corpo é decodificado com `DisallowUnknownFields`:
-campo desconhecido devolve 400, não é ignorado.
+nenhum dos dois por aqui. `contractedContent` (o "conteúdo das aulas" do
+contrato, texto livre até 20.000 caracteres — antes só existia dentro do PDF
+gerado pelo dashboard) segue a mesma regra de "ausente = mantém", mas string
+VAZIA limpa (grava NULL): é texto que a pessoa apaga de propósito. O valor
+volta como `contractedContent: string|null` no aluno da turma
+(`GET /portal/classes/{id}/students`, `GET /portal/classes/{id}`) e em
+`GET /portal/students-overview` / `GET /portal/me/overview`. O corpo é
+decodificado com `DisallowUnknownFields`: campo desconhecido devolve 400, não
+é ignorado.
 
 ## Portal — conteúdo (Fase 2): exercícios, containers, materiais, vídeos
 
@@ -1748,9 +1755,16 @@ Duas camadas distintas, de propósito:
   rodar de novo não duplica nem apaga chamada já feita. Turma sem grade → 400
   `SEM_GRADE`. Intervalo > 1 ano → 400.
 - `GET /portal/classes/{classId}/sessions` → `{items:[{id,date,startTime,endTime,
-  canceled,note,presencas:[{userId,userName,userEmail,status,note}]}]}`.
+  canceled,note,hasDiary,presencas:[{userId,userName,userEmail,status,note}]}]}`.
   **`status` vazio = chamada não feita** — é diferente de falta. `attendance`
-  não tem DEFAULT justamente pra "não sei" não virar "presente".
+  não tem DEFAULT justamente pra "não sei" não virar "presente". `hasDiary`
+  diz se o professor já registrou o diário daquela aula (seção "Diário de
+  aula" abaixo) — só o flag, o conteúdo vem por rota própria.
+- `GET /portal/me/sessions?classId=` (aluno, só authGuard) → `{items:[{id,date,
+  startTime,endTime,canceled,status,note,aulaCount,diary}]}` — o histórico do
+  PRÓPRIO aluno na turma (403 `NAO_MATRICULADO` se não for dele; casa por
+  e-mail, não por id). `diary` é `{summary,attachments,videoUrl,videoDriveFileId}`
+  ou `null` enquanto o professor não registrou — versão do aluno, sem autor.
 - `PUT /portal/sessions/{sessionId}/attendance {userId,status,note?}` → 204.
   `status` ∈ `presente|falta|justificada`. Recusa aluno não matriculado na
   turma daquela aula (400 `NAO_MATRICULADO`).
@@ -1760,6 +1774,56 @@ Duas camadas distintas, de propósito:
   Gera as aulas dos últimos 7 dias de toda turma com grade. Janela curta de propósito — custo diário constante e tolera
   cron que falhou ontem. Backfill de histórico continua sendo o botão manual.
   Nunca gera aula anterior ao início da turma.
+
+### Diário de aula — `/portal/sessions/{id}/diary`, `/portal/diary/pending`, `/portal/me/diary/files/{fileId}`
+
+O registro que o professor faz de cada aula PARTICULAR dada: resumo (ditado
+ou digitado), arquivos e vídeo. Uma linha por `class_session` (tabela
+`session_diary`, UNIQUE em `session_id`, cai junto com a aula): salvar de novo
+SOBRESCREVE — sem aprovação, sem revisão, sem versão. O aluno vê em "Minhas
+aulas" (`diary` em `GET /portal/me/sessions`). Vocabulário: "Diário de aula"
+(professor) e "Minhas aulas" (aluno) — nunca "Tarefas", que é o kanban.
+
+Guard `portal_diario` (recurso de cargo `portal_diario:read|write`). É a
+exceção do portal: **professor (role 2) lê E escreve** sem cargo nenhum —
+registrar a aula que acabou de dar é obrigação dele. Admin sempre.
+
+- `GET /portal/sessions/{sessionId}/diary` → `{diary}`. `diary` é `null` com
+  200 quando a aula existe mas ninguém registrou; 404 só se a aula não existe.
+  `diary = {sessionId, summary, attachments:[{driveFileId,name,mimeType,size}],
+  videoUrl, videoDriveFileId, authorEmail, authorName, createdAt, updatedAt}`.
+- `PUT /portal/sessions/{sessionId}/diary` body `{summary, attachments,
+  videoUrl?, videoDriveFileId?}` → 200 `{diary}`. Upsert (INSERT … ON CONFLICT),
+  rate limit 60/min, `DisallowUnknownFields`. O corpo é o diário INTEIRO (não
+  é update parcial). Autor = e-mail/nome da sessão, nunca do corpo. Limites:
+  `summary` ≤ 20.000 caracteres; `attachments` ≤ 50, cada um com `driveFileId`
+  e `name` não vazios; `videoUrl` ≤ 2.000 caracteres e só `http(s)://`
+  (`javascript:`/`data:` → 400 — o aluno abre o link direto). `videoUrl`/
+  `videoDriveFileId` ausentes ou vazios = sem vídeo (NULL). Teto do corpo:
+  256 KiB (não os 64 KiB padrão do portal). Aceita qualquer aula, de turma ou
+  particular — só a fila abaixo filtra. Auditoria: `diario_registrado`.
+- `GET /portal/diary/pending?days=30` (1..365, ausente = 30, fora do
+  intervalo é ajustado, não numérico → 400) → `{sessions:[{sessionId, classId,
+  className, studentName, date, startTime?, endTime?, hasDiary}]}`. A fila do
+  professor: aulas de turmas com `individual_class=true`, já dadas
+  (`date <= hoje`), dentro da janela, não canceladas, mais recente primeiro.
+  Vem com E sem diário — `hasDiary` separa feito de pendente. `studentName` é
+  o(s) aluno(s) matriculado(s) na turma (particular tem um só); turma ainda
+  sem matrícula cai no nome da turma.
+- `GET /portal/me/diary/files/{fileId}[?download=1]` (aluno, só authGuard,
+  60/min) — streaming do arquivo do Drive. A ÚNICA autorização é a matrícula:
+  `fileId` tem que ser um `attachments[].driveFileId` ou o `video_drive_file_id`
+  de um diário de uma aula de turma em que o e-mail da sessão está matriculado;
+  qualquer outra coisa é 404 (não confirma se o id existe). A pasta "Diário de
+  aulas" NÃO precisa estar cadastrada em `/drive-folders` — a validação aqui
+  não é por pasta. Mesmo streaming do download de `/drive-folders`: repassa
+  `Range` (206), `Content-Type`/`Content-Length`, `nosniff`, allowlist de
+  inline (imagem/vídeo/áudio/PDF; o resto é sempre `attachment`);
+  `?download=1` força `attachment`. 503 `DRIVE_DISABLED` sem service account.
+
+Os arquivos em si sobem pelo dashboard via `POST /drive-folders/{id}/files`
+(500MB por arquivo) na pasta "Diário de aulas", subpasta `<aluno>/<aaaa-mm-dd>`
+— a API central só guarda a referência (`driveFileId`).
 
 ### Sync com o Notion — `POST /portal/notion/sync` (admin-only, 6/min)
 
