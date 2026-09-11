@@ -83,14 +83,15 @@ func TestGenericVerifier_RejectsGarbageKeys(t *testing.T) {
 
 			checked, active, _ := v.CheckKey(ctx, c.family, c.key)
 			if !checked {
-				// api.telegram.org costuma ser inalcançável do runner do GitHub
-				// (timeout/erro de rede) — nesses casos o teste não tem como
-				// confirmar a leitura de 401, então pula em vez de quebrar o CI.
-				// Quando o endpoint responde, a checagem continua valendo.
-				if c.family == "telegram" {
-					t.Skipf("api.telegram.org não respondeu do runner (rede bloqueada) — pulando %s", c.family)
-				}
-				t.Fatalf("esperava checked=true (API respondeu), mas deu erro de rede/timeout pra %s", c.family)
+				// checked=false é documentado em CheckKey (verifiers.go) como "erro
+				// de rede, timeout, ou resposta ambígua — NUNCA deve ser lido como
+				// chave inválida". O runner do GitHub Actions não tem alcance
+				// garantido a todo endpoint de terceiro (já visto com
+				// api.telegram.org; agora também com a Figma) — nesses casos o
+				// teste não tem como confirmar a leitura de 401, então pula em vez
+				// de quebrar o CI. Quando o endpoint responde, a checagem continua
+				// valendo pra todo provedor.
+				t.Skipf("%s não respondeu do runner (rede bloqueada/timeout) — pulando", c.family)
 			}
 			if active {
 				t.Fatalf("esperava active=false pra chave inventada, mas %s disse que é válida", c.family)

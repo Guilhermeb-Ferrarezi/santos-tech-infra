@@ -32,12 +32,21 @@ func blogCategoryIDFrom(r *http.Request) (string, error) {
 	return id, nil
 }
 
+// blogMaxPage — teto de página, mesmo motivo do portalMaxPage (portal_models.go):
+// sem ele, ?page=9000000000000000 faz (page-1)*pageSize estourar o int, o
+// offset vira negativo e o Postgres devolve erro de sintaxe → 500 em vez de
+// uma página vazia.
+const blogMaxPage = 100000
+
 // blogListParams lê page/pageSize/category/q/status da querystring com defaults
 // e teto sensatos (evita paginação absurda: pageSize máximo 50).
 func blogListParams(r *http.Request) BlogListFilter {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
+	}
+	if page > blogMaxPage {
+		page = blogMaxPage
 	}
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
 	if pageSize < 1 {

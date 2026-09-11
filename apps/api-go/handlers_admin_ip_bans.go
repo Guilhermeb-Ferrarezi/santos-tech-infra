@@ -43,6 +43,10 @@ func (s *Server) handleCreateIPBan(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_IP", "endereço IP inválido"))
 		return
 	}
+	if len(body.Reason) > 500 {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_REASON", "motivo muito longo (máx. 500 caracteres)"))
+		return
+	}
 
 	var expiresAt pgtype.Timestamptz
 	if body.ExpiresAt != nil && *body.ExpiresAt != "" {
