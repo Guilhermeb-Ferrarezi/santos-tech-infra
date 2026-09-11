@@ -129,6 +129,32 @@ ALTER TABLE class_session ADD COLUMN IF NOT EXISTS aula_count INTEGER NOT NULL D
 -- Quem sobe o arquivo é o dashboard (gerador de contratos ou "Vincular
 -- contrato" na tela da turma); aqui só guardamos a referência.
 ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS contrato_drive_file_id TEXT;
+
+-- session_diary: o "Diário de aula" — o que o professor registra de cada aula
+-- dada (resumo, arquivos e vídeo no Drive). Uma linha por class_session
+-- (UNIQUE em session_id): registrar de novo SOBRESCREVE, não versiona — o
+-- registro tem de caber em dois minutos, então "editar" é só salvar de novo.
+-- attachments é JSONB [{driveFileId,name,mimeType,size}]: os arquivos moram
+-- no Drive da diretoria (pasta "Diário de aulas"), aqui fica só a referência.
+-- Cai junto com a aula (ON DELETE CASCADE), como attendance.
+CREATE TABLE IF NOT EXISTS session_diary (
+    id SERIAL PRIMARY KEY,
+    session_id INTEGER NOT NULL UNIQUE REFERENCES class_session(id) ON DELETE CASCADE,
+    author_email TEXT NOT NULL,
+    author_name TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    attachments JSONB NOT NULL DEFAULT '[]',
+    video_url TEXT,
+    video_drive_file_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- enrollment.contracted_content: o "conteúdo das aulas" combinado no contrato
+-- do aluno — até aqui esse texto só existia dentro do PDF gerado pelo
+-- dashboard. Guardado na matrícula pra o professor ver, na hora de registrar o
+-- diário, o que foi prometido pra aquele aluno. NULL = não preenchido.
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS contracted_content TEXT;
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal

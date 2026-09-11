@@ -566,6 +566,16 @@ func (s *Server) handleDownloadDriveFile(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	s.streamDriveFile(w, r, fileID)
+}
+
+// streamDriveFile é o miolo do download: baixa pela service account e
+// repassa pro navegador com Range (206), Content-Type/Length, disposition e a
+// allowlist de inline. NÃO autoriza nada — quem chama já decidiu que o usuário
+// pode ver esse fileID (por ancestralidade em drive_folders, ou por matrícula
+// no diário de aula — ver handlePortalMyDiaryFile). Separado do handler pra
+// as duas autorizações não duplicarem a parte de segurança dos headers.
+func (s *Server) streamDriveFile(w http.ResponseWriter, r *http.Request, fileID string) {
 	body, filename, contentType, status, rangeHeaders, err := s.drive.StreamDownload(r.Context(), fileID, r.Header.Get("Range"))
 	if err != nil {
 		slog.Error("falha ao baixar arquivo do Drive", "fileId", fileID, "err", err)

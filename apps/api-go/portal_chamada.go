@@ -26,10 +26,13 @@ type portalSessionDTO struct {
 	// TeacherID: professor específico desta aula (nulo = usa o fixo da turma).
 	// TeacherName: já resolvido (o da aula se setado, senão o(s) fixo(s) da
 	// turma) — o front não precisa saber calcular o fallback.
-	TeacherID   *string               `json:"teacherId"`
-	TeacherName *string               `json:"teacherName"`
-	AulaCount   int                   `json:"aulaCount"`
-	Presencas   []portalAttendanceDTO `json:"presencas"`
+	TeacherID   *string `json:"teacherId"`
+	TeacherName *string `json:"teacherName"`
+	AulaCount   int     `json:"aulaCount"`
+	// HasDiary: o professor já registrou o diário desta aula (session_diary).
+	// Só o flag — o conteúdo vem por GET /portal/sessions/{id}/diary.
+	HasDiary  bool                  `json:"hasDiary"`
+	Presencas []portalAttendanceDTO `json:"presencas"`
 }
 
 type portalAttendanceDTO struct {
@@ -52,6 +55,10 @@ type portalMySessionDTO struct {
 	Status    string `json:"status,omitempty"` // vazio = chamada não feita
 	Note      string `json:"note,omitempty"`
 	AulaCount int    `json:"aulaCount"`
+	// Diary: o que o professor registrou desta aula (resumo, arquivos, vídeo)
+	// — null enquanto não registrou. É a versão do ALUNO (sem autor), ver
+	// portalMyDiaryDTO em portal_diario.go.
+	Diary *portalMyDiaryDTO `json:"diary"`
 }
 
 // portalSessionUpdateInput é o corpo do PATCH que edita uma aula já gerada —
@@ -158,7 +165,8 @@ func (s *Server) portalListSessions(ctx context.Context, classID int64) ([]porta
 		          (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
 		             JOIN "user" t ON t.id = ct.user_id WHERE ct.class_id = cs.class_id)
 		        ),
-		        cs.aula_count
+		        cs.aula_count,
+		        EXISTS(SELECT 1 FROM session_diary sd WHERE sd.session_id = cs.id)
 		 FROM class_session cs WHERE cs.class_id=$1 ORDER BY cs.date DESC, cs.start_time`, classID)
 	if err != nil {
 		return nil, err
@@ -168,7 +176,7 @@ func (s *Server) portalListSessions(ctx context.Context, classID int64) ([]porta
 	idx := map[string]int{}
 	for rows.Next() {
 		var d portalSessionDTO
-		if err := rows.Scan(&d.ID, &d.ClassID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Note, &d.TeacherID, &d.TeacherName, &d.AulaCount); err != nil {
+		if err := rows.Scan(&d.ID, &d.ClassID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Note, &d.TeacherID, &d.TeacherName, &d.AulaCount, &d.HasDiary); err != nil {
 			return nil, err
 		}
 		d.Presencas = []portalAttendanceDTO{}
@@ -334,12 +342,17 @@ func (s *Server) portalMySessions(ctx context.Context, classID int64, email stri
 	if err != nil {
 		return nil, err
 	}
+	// O diário entra no mesmo SELECT (LEFT JOIN): a matrícula já foi conferida
+	// acima, então tudo que está em session_diary dessa turma é do aluno ver.
+	// summary NULL (sem linha no JOIN) é o sinal de "sem diário" → Diary nil.
 	rows, err := s.portalDB.Query(ctx,
 		`SELECT cs.id::text, to_char(cs.date,'YYYY-MM-DD'),
 		        COALESCE(to_char(cs.start_time,'HH24:MI'),''), COALESCE(to_char(cs.end_time,'HH24:MI'),''),
-		        cs.canceled, COALESCE(a.status,''), COALESCE(a.note,''), cs.aula_count
+		        cs.canceled, COALESCE(a.status,''), COALESCE(a.note,''), cs.aula_count,
+		        sd.summary, sd.attachments::text, sd.video_url, sd.video_drive_file_id
 		 FROM class_session cs
 		 LEFT JOIN attendance a ON a.session_id = cs.id AND a.user_id = $2
+		 LEFT JOIN session_diary sd ON sd.session_id = cs.id
 		 WHERE cs.class_id = $1
 		 ORDER BY cs.date DESC, cs.start_time DESC`, classID, userID)
 	if err != nil {
@@ -349,8 +362,22 @@ func (s *Server) portalMySessions(ctx context.Context, classID int64, email stri
 	itens := []portalMySessionDTO{}
 	for rows.Next() {
 		var d portalMySessionDTO
-		if err := rows.Scan(&d.ID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Status, &d.Note, &d.AulaCount); err != nil {
+		var summary, attachments, videoURL, videoDriveFileID *string
+		if err := rows.Scan(&d.ID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Status, &d.Note, &d.AulaCount,
+			&summary, &attachments, &videoURL, &videoDriveFileID); err != nil {
 			return nil, err
+		}
+		if summary != nil {
+			raw := ""
+			if attachments != nil {
+				raw = *attachments
+			}
+			d.Diary = &portalMyDiaryDTO{
+				Summary:          *summary,
+				Attachments:      portalDiaryParseAttachments(raw),
+				VideoURL:         videoURL,
+				VideoDriveFileID: videoDriveFileID,
+			}
 		}
 		itens = append(itens, d)
 	}

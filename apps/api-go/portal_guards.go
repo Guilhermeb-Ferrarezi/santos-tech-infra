@@ -113,6 +113,14 @@ func (s *Server) portalWrite(resource string, next http.HandlerFunc) http.Handle
 	return s.permGuard(resource, "write", false, next)
 }
 
+// portalDiario: diário de aula — admin/professor OU cargo com
+// portal_diario:read|write. É a exceção à regra "professor não escreve":
+// registrar a aula que acabou de dar é obrigação do PRÓPRIO professor (ver
+// portal_diario.go), então allowTeacher vale pras duas ações.
+func (s *Server) portalDiario(action string, next http.HandlerFunc) http.HandlerFunc {
+	return s.permGuard("portal_diario", action, true, next)
+}
+
 // portalCorrigir: correção de respostas — admin/professor OU cargo com
 // portal_correcao:corrigir (professor corrige, por isso allowTeacher).
 func (s *Server) portalCorrigir(next http.HandlerFunc) http.HandlerFunc {

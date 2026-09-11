@@ -12,6 +12,8 @@ import (
 //     (professor NÃO escreve, igual ao adminGuard anterior).
 //   - Exclusão (DELETE): permanece admin-only (adminGuard, +sudoGuard quando destrutivo).
 //   - Correção de respostas: portalCorrigir (admin/professor OU cargo com portal_correcao:corrigir).
+//   - Diário de aula: portalDiario (admin/professor OU cargo com portal_diario:read|write —
+//     professor escreve aqui, é a exceção; ver portal_guards.go).
 //   - Transversais (overview, busca de usuários): portalAnyRead (qualquer portal_*:read).
 func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	const min = time.Minute
@@ -67,6 +69,16 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /portal/sessions/{sessionId}/attendance", s.rateLimit(120, min, s.portalWrite("portal_turmas", s.handlePortalSetAttendance)))
 	mux.HandleFunc("PATCH /portal/sessions/{sessionId}", s.rateLimit(60, min, s.portalWrite("portal_turmas", s.handlePortalUpdateSession)))
 	mux.HandleFunc("DELETE /portal/sessions/{sessionId}", s.adminGuard(s.handlePortalDeleteSession))
+	// Diário de aula → portal_diario. Professor lê E escreve (é ele quem
+	// registra a aula que deu — ver portalDiario em portal_guards.go). O
+	// arquivo do aluno é autosserviço (authGuard): a matrícula é a autorização.
+	// 60/min no download: um <video> com seek dispara vários Range por minuto.
+	mux.HandleFunc("GET /portal/diary/pending", s.portalDiario("read", s.handlePortalDiaryPending))
+	mux.HandleFunc("GET /portal/sessions/{sessionId}/diary", s.portalDiario("read", s.handlePortalGetDiary))
+	mux.HandleFunc("PUT /portal/sessions/{sessionId}/diary", s.rateLimit(60, min, s.portalDiario("write", s.handlePortalPutDiary)))
+	// 600/min por IP, não 60: "Minhas aulas" lista todas as aulas com vídeo e
+	// anexos numa página só, e um laboratório inteiro divide o mesmo IP.
+	mux.HandleFunc("GET /portal/me/diary/files/{fileId}", s.rateLimit(600, min, s.authGuard(s.handlePortalMyDiaryFile)))
 	mux.HandleFunc("GET /portal/classes/{classId}/schedule", s.portalRead("portal_turmas", s.handlePortalListClassSchedule))
 	mux.HandleFunc("POST /portal/classes/{classId}/schedule", s.rateLimit(20, min, s.portalWrite("portal_turmas", s.handlePortalAddClassSchedule)))
 	mux.HandleFunc("DELETE /portal/classes/{classId}/schedule/{scheduleId}", s.adminGuard(s.handlePortalRemoveClassSchedule))

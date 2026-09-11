@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ── Paginação e parsers ──────────────────────────────────────────────────────
@@ -245,6 +246,10 @@ type portalStudentDTO struct {
 	// NOME ("Contratos"); aqui só guardamos o id do arquivo dentro dela. Ver
 	// "Ver contrato"/"Vincular contrato" em TurmaDetalhe.tsx.
 	ContratoDriveFileID *string `json:"contratoDriveFileId"`
+	// ContractedContent: o "conteúdo das aulas" combinado no contrato deste
+	// aluno (enrollment.contracted_content) — o professor lê isso na hora de
+	// registrar o diário. nil = não preenchido.
+	ContractedContent *string `json:"contractedContent"`
 }
 
 // portalTeacherDTO é um professor vinculado a uma turma (class_teacher) —
@@ -300,6 +305,9 @@ type portalStudentOverviewDTO struct {
 	AulasDadas          int        `json:"aulasDadas"`
 	Faltas              int        `json:"faltas"`
 	NextClassAt         *time.Time `json:"nextClassAt"`
+	// ContractedContent: mesmo campo de portalStudentDTO — o conteúdo das
+	// aulas do contrato, pra "Todos os alunos" e pro diário sem outra ida à API.
+	ContractedContent *string `json:"contractedContent"`
 }
 
 // portalStudentIndividualInput é o corpo do PATCH que atualiza uma matrícula:
@@ -318,7 +326,16 @@ type portalStudentIndividualInput struct {
 	// no payload, mantém o valor salvo. Setado pelo gerador de contratos
 	// (matrícula nova) ou por "Vincular contrato" (aluno que já existia).
 	ContratoDriveFileID *string `json:"contratoDriveFileId,omitempty"`
+	// ContractedContent: o "conteúdo das aulas" do contrato (texto livre, até
+	// portalContractedContentMax caracteres). nil = não veio, mantém o salvo.
+	// Diferente dos dois acima, string VAZIA limpa o campo (vira NULL): é
+	// texto que a pessoa pode apagar de propósito, não um vínculo.
+	ContractedContent *string `json:"contractedContent,omitempty"`
 }
+
+// portalContractedContentMax: mesmo teto do resumo do diário — é o trecho do
+// contrato que descreve as aulas, nunca o contrato inteiro.
+const portalContractedContentMax = 20_000
 
 func (in portalStudentIndividualInput) validate() error {
 	if in.ContractedLessons != nil && *in.ContractedLessons < 1 {
@@ -326,6 +343,9 @@ func (in portalStudentIndividualInput) validate() error {
 	}
 	if in.ContratoDriveFileID != nil && strings.TrimSpace(*in.ContratoDriveFileID) == "" {
 		return validationErr("contratoDriveFileId não pode ser vazio")
+	}
+	if in.ContractedContent != nil && utf8.RuneCountInString(*in.ContractedContent) > portalContractedContentMax {
+		return validationErr(fmt.Sprintf("contractedContent deve ter no máximo %d caracteres", portalContractedContentMax))
 	}
 	return nil
 }

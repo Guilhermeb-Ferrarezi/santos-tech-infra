@@ -211,13 +211,17 @@ func (s *Server) handlePortalSetStudentIndividual(w http.ResponseWriter, r *http
 		writeErr(w, err)
 		return
 	}
-	if err := s.portalSetStudentIndividual(r.Context(), classID, studentID, in.Individual, in.ContractedLessons, in.ContratoDriveFileID); err != nil {
+	if err := s.portalSetStudentIndividual(r.Context(), classID, studentID, in.Individual, in.ContractedLessons, in.ContratoDriveFileID, in.ContractedContent); err != nil {
 		writeErr(w, err)
 		return
 	}
+	// contractedContent não vai pro log inteiro (pode ter 20 mil caracteres —
+	// o "Message" de logs é cortado em 8000 e engoliria o resto do payload);
+	// só registra que mudou.
 	s.portalLogActivity(r, "class_student_individual", "class", fmt.Sprint(classID), map[string]any{
 		"studentId": fmt.Sprint(studentID), "individual": in.Individual,
 		"contractedLessons": in.ContractedLessons, "contratoDriveFileId": in.ContratoDriveFileID,
+		"contractedContentChanged": in.ContractedContent != nil,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
