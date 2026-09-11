@@ -1392,6 +1392,7 @@ DELETE /portal/classes/{classId}
 GET    /portal/classes/{classId}/students
 POST   /portal/classes/{classId}/students
 PATCH  /portal/classes/{classId}/students/{studentId}  body {individual, contractedLessons?, contratoDriveFileId?}
+DELETE /portal/students/{studentId}                    admin + sudo — apaga o ALUNO inteiro
 DELETE /portal/classes/{classId}/students/{studentId}
 GET    /portal/classes/{classId}/cronograma      fases do módulo atual por semana
 POST   /portal/classes/{classId}/iniciar-fases   body {studentIds:[...]}
@@ -1401,6 +1402,14 @@ PATCH  /portal/rooms/{roomId}
 PATCH  /portal/rooms/{roomId}/status
 DELETE /portal/rooms/{roomId}
 ```
+
+`DELETE /portal/students/{studentId}` é outra coisa, e bem mais grave, que
+desmatricular: varre toda tabela do Portal que tenha `user_id` (o schema é
+legado do .NET e não há lista confiável escrita à mão), apaga a linha em
+`"user"` e depois remove o login no auth central, casando por email. Numa
+transação só, e recusa quem não é aluno (role 1) — professor tem vínculo de
+turma e histórico de aula pendurados. Desmatricular continua sendo
+`DELETE /portal/classes/{classId}/students/{studentId}`.
 
 O PATCH da matrícula é PARCIAL nos opcionais e OBRIGATÓRIO em `individual`:
 ausente vira `false` no unmarshal e desmarcaria "particular" sem querer, então

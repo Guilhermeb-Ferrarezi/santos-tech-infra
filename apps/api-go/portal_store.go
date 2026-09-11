@@ -655,7 +655,7 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
 		          JOIN "user" t ON t.id = ct.user_id
 		        WHERE ct.class_id = cl.id),
-		       e.individual, e.contracted_lessons
+		       e.individual, e.contracted_lessons, e.contrato_drive_file_id, cl.individual_class
 		FROM enrollment e
 		JOIN "user" u ON u.id = e.user_id AND u.role = %d %s
 		JOIN class cl ON cl.id = e.class_id
@@ -672,7 +672,8 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		var dto portalStudentOverviewDTO
 		if err := rows.Scan(&dto.StudentID, &dto.StudentName, &dto.StudentEmail,
 			&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
-			&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual, &dto.ContractedLessons); err != nil {
+			&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual, &dto.ContractedLessons,
+			&dto.ContratoDriveFileID, &dto.IndividualClass); err != nil {
 			return nil, 0, err
 		}
 		if dto.ClassName == "" {
@@ -712,7 +713,7 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
 		          JOIN "user" t ON t.id = ct.user_id
 		        WHERE ct.class_id = cl.id),
-		       e.individual, e.contracted_lessons
+		       e.individual, e.contracted_lessons, e.contrato_drive_file_id, cl.individual_class
 		FROM enrollment e
 		JOIN "user" u ON u.id = e.user_id AND u.email = $1
 		JOIN class cl ON cl.id = e.class_id
@@ -727,7 +728,8 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 		var dto portalStudentOverviewDTO
 		if err := rows.Scan(&dto.StudentID, &dto.StudentName, &dto.StudentEmail,
 			&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
-			&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual, &dto.ContractedLessons); err != nil {
+			&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual, &dto.ContractedLessons,
+			&dto.ContratoDriveFileID, &dto.IndividualClass); err != nil {
 			return nil, err
 		}
 		if dto.ClassName == "" {
@@ -754,9 +756,14 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 // SELECT DISTINCT, text no WHERE), e a query falha sempre com 500, mesmo
 // sendo válida — reproduzido e confirmado via psql direto em produção.
 func (s *Server) portalAddClassStudents(ctx context.Context, classID int64, ids []int64) (int, error) {
-	tag, err := s.portalDB.Exec(ctx, `INSERT INTO enrollment (user_id, class_id, created_at)
-		SELECT DISTINCT u.id, $2::bigint, NOW()
+	// individual sai da PRÓPRIA turma: matricular numa Aula Particular é o que
+	// torna o aluno particular. Antes era sempre false e alguém tinha que
+	// lembrar de marcar no botão — que marcava a matrícula sem mais nada
+	// acontecer, e por isso saiu da tela.
+	tag, err := s.portalDB.Exec(ctx, `INSERT INTO enrollment (user_id, class_id, created_at, individual)
+		SELECT DISTINCT u.id, $2::bigint, NOW(), COALESCE(cl.individual_class, false)
 		FROM unnest($1::bigint[]) AS u(id)
+		JOIN class cl ON cl.id = $2::bigint
 		WHERE NOT EXISTS (
 			SELECT 1 FROM enrollment e WHERE e.user_id = u.id AND e.class_id = $2::bigint
 		)`, ids, classID)
@@ -1286,4 +1293,73 @@ func (s *Server) portalUserIDByEmail(ctx context.Context, email string) (int64, 
 	var id int64
 	err := s.portalDB.QueryRow(ctx, `SELECT id FROM "user" WHERE email = $1`, email).Scan(&id)
 	return id, err
+}
+
+// portalDeleteStudent apaga um ALUNO do Portal inteiro: as matrículas, a
+// presença, as respostas, os pontos — e por fim a linha dele em "user".
+//
+// As tabelas dependentes não são uma lista escrita à mão de propósito: o schema
+// do Portal é legado do sistema .NET e ninguém tem o mapa completo dele, então
+// uma lista fixa envelheceria e deixaria órfão. Aqui a varredura é pelo próprio
+// catálogo do Postgres — toda tabela que tem coluna `user_id` entra. Roda numa
+// transação só: ou some tudo, ou não some nada.
+//
+// Recusa quem não é aluno (role 1). Apagar professor ou admin por esta porta
+// levaria junto o vínculo de turma e o histórico de quem dá aula.
+func (s *Server) portalDeleteStudent(ctx context.Context, studentID int64) (string, error) {
+	var email string
+	var role int16
+	err := s.portalDB.QueryRow(ctx,
+		`SELECT COALESCE(email,''), COALESCE(role,1) FROM "user" WHERE id=$1`, studentID).Scan(&email, &role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", notFoundErr("Aluno")
+	}
+	if err != nil {
+		return "", err
+	}
+	if role != 1 {
+		return "", validationErr("só aluno pode ser excluído por aqui")
+	}
+
+	tx, err := s.portalDB.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `SELECT table_name FROM information_schema.columns
+		WHERE table_schema='public' AND column_name='user_id'`)
+	if err != nil {
+		return "", err
+	}
+	tabelas := []string{}
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			rows.Close()
+			return "", err
+		}
+		tabelas = append(tabelas, t)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+
+	for _, t := range tabelas {
+		// Identifier.Sanitize: o nome vem do catálogo, mas montar SQL com
+		// string concatenada sem citar é como se aprende a errar.
+		q := fmt.Sprintf(`DELETE FROM %s WHERE user_id=$1`, pgx.Identifier{t}.Sanitize())
+		if _, err := tx.Exec(ctx, q, studentID); err != nil {
+			return "", err
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM "user" WHERE id=$1`, studentID); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	s.invalidatePortalOverview()
+	return email, nil
 }

@@ -291,9 +291,15 @@ type portalStudentOverviewDTO struct {
 	// AulasDadas: aulas que JÁ aconteceram (class_session até hoje), diferente
 	// de TotalPhases, que é o currículo previsto do curso. O aluno pergunta
 	// "quantas aulas eu já tive", não "quantas fases o curso tem".
-	AulasDadas  int        `json:"aulasDadas"`
-	Faltas      int        `json:"faltas"`
-	NextClassAt *time.Time `json:"nextClassAt"`
+	// ContratoDriveFileID / IndividualClass: alimentam a aba "Todos os alunos"
+	// do dashboard — o contrato de cada aluno e a distinção entre aluno de
+	// TURMA e aluno PARTICULAR, que são modalidades diferentes (e há quem seja
+	// as duas coisas ao mesmo tempo, uma matrícula de cada tipo).
+	ContratoDriveFileID *string    `json:"contratoDriveFileId"`
+	IndividualClass     bool       `json:"individualClass"`
+	AulasDadas          int        `json:"aulasDadas"`
+	Faltas              int        `json:"faltas"`
+	NextClassAt         *time.Time `json:"nextClassAt"`
 }
 
 // portalStudentIndividualInput é o corpo do PATCH que atualiza uma matrícula:
