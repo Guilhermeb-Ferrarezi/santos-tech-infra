@@ -1391,6 +1391,7 @@ PATCH  /portal/classes/{classId}
 DELETE /portal/classes/{classId}
 GET    /portal/classes/{classId}/students
 POST   /portal/classes/{classId}/students
+PATCH  /portal/classes/{classId}/students/{studentId}  body {individual, contractedLessons?, contratoDriveFileId?}
 DELETE /portal/classes/{classId}/students/{studentId}
 GET    /portal/classes/{classId}/cronograma      fases do módulo atual por semana
 POST   /portal/classes/{classId}/iniciar-fases   body {studentIds:[...]}
@@ -1400,6 +1401,14 @@ PATCH  /portal/rooms/{roomId}
 PATCH  /portal/rooms/{roomId}/status
 DELETE /portal/rooms/{roomId}
 ```
+
+O PATCH da matrícula é PARCIAL nos opcionais e OBRIGATÓRIO em `individual`:
+ausente vira `false` no unmarshal e desmarcaria "particular" sem querer, então
+todo cliente reenvia o valor atual. `contractedLessons` (pacote de aulas) e
+`contratoDriveFileId` (id do ARQUIVO do contrato na pasta "Contratos" do Drive,
+não da pasta) só entram no UPDATE quando vêm no corpo — não há como limpar
+nenhum dos dois por aqui. O corpo é decodificado com `DisallowUnknownFields`:
+campo desconhecido devolve 400, não é ignorado.
 
 ## Portal — conteúdo (Fase 2): exercícios, containers, materiais, vídeos
 
