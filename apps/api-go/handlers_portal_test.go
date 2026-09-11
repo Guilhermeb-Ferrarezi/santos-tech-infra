@@ -226,6 +226,19 @@ func TestPortalSetStudentIndividualValidationBeforeDB(t *testing.T) {
 	}
 }
 
+func TestPortalSetStudentIndividualContratoDriveFileIdValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+
+	r := httptest.NewRequest("PATCH", "/portal/classes/1/students/1", strings.NewReader(`{"individual":false,"contratoDriveFileId":"  "}`))
+	r.SetPathValue("classId", "1")
+	r.SetPathValue("studentId", "1")
+	w := httptest.NewRecorder()
+	s.handlePortalSetStudentIndividual(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("contratoDriveFileId vazio: code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
 func TestPortalMySessionsRequiresAuthBeforeDB(t *testing.T) {
 	s := testServer(Config{})
 	w := httptest.NewRecorder()

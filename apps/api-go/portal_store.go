@@ -572,7 +572,7 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p p
 	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM enrollment WHERE class_id=$1`, classID).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role, e.individual, e.contracted_lessons
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role, e.individual, e.contracted_lessons, e.contrato_drive_file_id
 		FROM enrollment e JOIN "user" u ON u.id = e.user_id
 		WHERE e.class_id=$1 ORDER BY COALESCE(u.name,'') ASC, u.id ASC
 		LIMIT $2 OFFSET $3`, classID, p.Limit, p.Offset)
@@ -583,7 +583,7 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p p
 	items := []portalStudentDTO{}
 	for rows.Next() {
 		var dto portalStudentDTO
-		if err := rows.Scan(&dto.ID, &dto.Email, &dto.Name, &dto.Role, &dto.Individual, &dto.ContractedLessons); err != nil {
+		if err := rows.Scan(&dto.ID, &dto.Email, &dto.Name, &dto.Role, &dto.Individual, &dto.ContractedLessons, &dto.ContratoDriveFileID); err != nil {
 			return nil, 0, err
 		}
 		items = append(items, dto)
@@ -592,15 +592,21 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p p
 }
 
 // portalSetStudentIndividual atualiza o toggle "particular" e, opcionalmente, o
-// pacote de aulas contratadas de uma matrícula. contractedLessons só entra na
-// cláusula SET quando veio no payload (ponteiro não-nil) — update parcial.
-func (s *Server) portalSetStudentIndividual(ctx context.Context, classID, studentID int64, individual bool, contractedLessons *int) error {
-	query := `UPDATE enrollment SET individual=$3 WHERE class_id=$1 AND user_id=$2`
+// pacote de aulas contratadas e/ou o contrato vinculado de uma matrícula.
+// contractedLessons/contratoDriveFileID só entram na cláusula SET quando vêm
+// no payload (ponteiro não-nil) — update parcial, mesmo desenho dos dois campos.
+func (s *Server) portalSetStudentIndividual(ctx context.Context, classID, studentID int64, individual bool, contractedLessons *int, contratoDriveFileID *string) error {
+	sets := []string{"individual=$3"}
 	args := []any{classID, studentID, individual}
 	if contractedLessons != nil {
-		query = `UPDATE enrollment SET individual=$3, contracted_lessons=$4 WHERE class_id=$1 AND user_id=$2`
 		args = append(args, *contractedLessons)
+		sets = append(sets, fmt.Sprintf("contracted_lessons=$%d", len(args)))
 	}
+	if contratoDriveFileID != nil {
+		args = append(args, *contratoDriveFileID)
+		sets = append(sets, fmt.Sprintf("contrato_drive_file_id=$%d", len(args)))
+	}
+	query := fmt.Sprintf(`UPDATE enrollment SET %s WHERE class_id=$1 AND user_id=$2`, strings.Join(sets, ", "))
 	tag, err := s.portalDB.Exec(ctx, query, args...)
 	if err != nil {
 		return portalDBErr(err)

@@ -122,6 +122,13 @@ ALTER TABLE class_session ADD COLUMN IF NOT EXISTS teacher_id INTEGER;
 -- particular de encontro mais longo (ex.: 2h) precisa setar 2.
 ALTER TABLE class_schedule ADD COLUMN IF NOT EXISTS aula_count INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE class_session ADD COLUMN IF NOT EXISTS aula_count INTEGER NOT NULL DEFAULT 1;
+
+-- enrollment.contrato_drive_file_id: id do ARQUIVO (não da pasta) do contrato
+-- desse aluno na pasta "Contratos" do Drive. NULL = ainda não vinculado — nem
+-- todo aluno antigo tem o contrato original digitalizado/localizado ainda.
+-- Quem sobe o arquivo é o dashboard (gerador de contratos ou "Vincular
+-- contrato" na tela da turma); aqui só guardamos a referência.
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS contrato_drive_file_id TEXT;
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal

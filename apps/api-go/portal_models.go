@@ -240,6 +240,11 @@ type portalStudentDTO struct {
 	// valor ATUAL da matrícula, pro admin ver o que já está salvo antes de
 	// editar (ver AlunosSection no dashboard/web).
 	ContractedLessons *int `json:"contractedLessons"`
+	// ContratoDriveFileID: id do arquivo (não da pasta) na pasta "Contratos" do
+	// Drive — nil = ainda não vinculado. O dashboard resolve a pasta certa pelo
+	// NOME ("Contratos"); aqui só guardamos o id do arquivo dentro dela. Ver
+	// "Ver contrato"/"Vincular contrato" em TurmaDetalhe.tsx.
+	ContratoDriveFileID *string `json:"contratoDriveFileId"`
 }
 
 // portalTeacherDTO é um professor vinculado a uma turma (class_teacher) —
@@ -292,21 +297,29 @@ type portalStudentOverviewDTO struct {
 }
 
 // portalStudentIndividualInput é o corpo do PATCH que atualiza uma matrícula:
-// marca/desmarca como particular e/ou define o pacote de aulas contratadas.
-// Individual é sempre obrigatório no payload (todo PATCH reenvia o valor atual,
-// mesmo quando só ContractedLessons mudou) — o zero-value de bool ausente no
-// JSON é `false`, que resetaria sem querer o toggle "particular" se fosse opcional.
+// marca/desmarca como particular, define o pacote de aulas contratadas e/ou
+// vincula o contrato. Individual é sempre obrigatório no payload (todo PATCH
+// reenvia o valor atual, mesmo quando só outro campo mudou) — o zero-value de
+// bool ausente no JSON é `false`, que resetaria sem querer o toggle
+// "particular" se fosse opcional.
 type portalStudentIndividualInput struct {
 	Individual bool `json:"individual"`
 	// ContractedLessons: pacote de aulas contratado (relevante sobretudo pra
 	// matrícula particular). nil = não veio no payload, mantém o valor salvo —
 	// não dá pra "limpar" com null explícito nesse desenho simples (ver spec).
 	ContractedLessons *int `json:"contractedLessons,omitempty"`
+	// ContratoDriveFileID: mesmo desenho de ContractedLessons — nil = não veio
+	// no payload, mantém o valor salvo. Setado pelo gerador de contratos
+	// (matrícula nova) ou por "Vincular contrato" (aluno que já existia).
+	ContratoDriveFileID *string `json:"contratoDriveFileId,omitempty"`
 }
 
 func (in portalStudentIndividualInput) validate() error {
 	if in.ContractedLessons != nil && *in.ContractedLessons < 1 {
 		return validationErr("contractedLessons deve ser maior que zero")
+	}
+	if in.ContratoDriveFileID != nil && strings.TrimSpace(*in.ContratoDriveFileID) == "" {
+		return validationErr("contratoDriveFileId não pode ser vazio")
 	}
 	return nil
 }
