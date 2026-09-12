@@ -29,8 +29,14 @@ type Config struct {
 	EmailAPIURL        string // ex: https://mails.santos-tech.com/api
 	EmailAPIKey        string
 	AgentURL           string // base do claude agent (health em /claude/health)
-	SocialAlertEmail   string // email para notificar quando post vai para revisão
-	Production         bool
+	// AgentInternalSecret: Bearer do agent-go (o INTERNAL_SECRET de lá) pra
+	// este processo chamar POST /claude/generate server-side — é assim que o
+	// Pós-aula gera as práticas e corrige resposta aberta (ver agent_client.go,
+	// mesmo caminho que o bot-go usa). Vazio = a API sobe normal, mas toda
+	// geração termina em ai_status=failed com erro claro, nunca panic.
+	AgentInternalSecret string
+	SocialAlertEmail    string // email para notificar quando post vai para revisão
+	Production          bool
 
 	// OAuthAudEnforce (OAUTH_AUD_ENFORCE=1): recusa, nas rotas de sessão do
 	// painel (authGuard e derivados), access tokens emitidos pelo /oauth/token —
@@ -185,26 +191,27 @@ type Config struct {
 
 func LoadConfig() Config {
 	c := Config{
-		Port:               getEnv("PORT", "3333"),
-		DatabaseURL:        mustEnv("DATABASE_URL"),
-		PortalDatabaseURL:  getEnv("PORTAL_DATABASE_URL", os.Getenv("DATABASE_URL")),
-		RedisURL:           mustEnv("REDIS_URL"),
-		JWTSecret:          mustEnv("JWT_SECRET"),
-		JWTRefreshSecret:   mustEnv("JWT_REFRESH_SECRET"),
-		CookieDomain:       getEnv("COOKIE_DOMAIN", ""),
-		PublicOrigin:       strings.TrimRight(getEnv("PUBLIC_ORIGIN", "https://api.santos-tech.com"), "/"),
-		CORSOrigins:        splitCSV(getEnv("CORS_ORIGIN", "")),
-		AuthWebOrigin:      getEnv("AUTH_WEB_ORIGIN", ""),
-		DashboardWebOrigin: strings.TrimRight(getEnv("DASHBOARD_WEB_ORIGIN", "https://santos-tech.com/dashboard"), "/"),
-		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
-		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
-		GoogleCallbackURL:  getEnv("GOOGLE_CALLBACK_URL", ""),
-		EmailAPIURL:        strings.TrimRight(getEnv("EMAIL_API_URL", "https://mails.santos-tech.com/api"), "/"),
-		AgentURL:           strings.TrimRight(getEnv("AGENT_URL", "https://api.santos-tech.com"), "/"),
-		SocialAlertEmail:   getEnv("SOCIAL_ALERT_EMAIL", ""),
-		EmailAPIKey:        mustEnv("EMAIL_API_KEY"),
-		Production:         getEnv("NODE_ENV", "development") == "production",
-		OAuthAudEnforce:    getEnv("OAUTH_AUD_ENFORCE", "") == "1",
+		Port:                getEnv("PORT", "3333"),
+		DatabaseURL:         mustEnv("DATABASE_URL"),
+		PortalDatabaseURL:   getEnv("PORTAL_DATABASE_URL", os.Getenv("DATABASE_URL")),
+		RedisURL:            mustEnv("REDIS_URL"),
+		JWTSecret:           mustEnv("JWT_SECRET"),
+		JWTRefreshSecret:    mustEnv("JWT_REFRESH_SECRET"),
+		CookieDomain:        getEnv("COOKIE_DOMAIN", ""),
+		PublicOrigin:        strings.TrimRight(getEnv("PUBLIC_ORIGIN", "https://api.santos-tech.com"), "/"),
+		CORSOrigins:         splitCSV(getEnv("CORS_ORIGIN", "")),
+		AuthWebOrigin:       getEnv("AUTH_WEB_ORIGIN", ""),
+		DashboardWebOrigin:  strings.TrimRight(getEnv("DASHBOARD_WEB_ORIGIN", "https://santos-tech.com/dashboard"), "/"),
+		GoogleClientID:      getEnv("GOOGLE_CLIENT_ID", ""),
+		GoogleClientSecret:  getEnv("GOOGLE_CLIENT_SECRET", ""),
+		GoogleCallbackURL:   getEnv("GOOGLE_CALLBACK_URL", ""),
+		EmailAPIURL:         strings.TrimRight(getEnv("EMAIL_API_URL", "https://mails.santos-tech.com/api"), "/"),
+		AgentURL:            strings.TrimRight(getEnv("AGENT_URL", "https://api.santos-tech.com"), "/"),
+		AgentInternalSecret: getEnv("AGENT_INTERNAL_SECRET", ""),
+		SocialAlertEmail:    getEnv("SOCIAL_ALERT_EMAIL", ""),
+		EmailAPIKey:         mustEnv("EMAIL_API_KEY"),
+		Production:          getEnv("NODE_ENV", "development") == "production",
+		OAuthAudEnforce:     getEnv("OAUTH_AUD_ENFORCE", "") == "1",
 
 		NotificationsGatewayURL:   strings.TrimRight(getEnv("NOTIFICATIONS_PORTAL_API_URL", ""), "/"),
 		NotificationsSharedSecret: getEnv("NOTIFICATIONS_SHARED_SECRET", ""),

@@ -19,9 +19,15 @@ import (
 // TaskEmailSend é o tipo de task de envio de email.
 const TaskEmailSend = "email:send"
 
-// emailQueueConcurrency: poucos workers bastam — o gargalo é a API de email
-// (rede externa), não CPU. Mantém pressão baixa sobre o provedor.
+// emailQueueConcurrency: poucos workers bastam pra fila "default" (email e
+// push) — o gargalo é a API de email (rede externa), não CPU. Mantém
+// pressão baixa sobre o provedor.
 const emailQueueConcurrency = 5
+
+// posaulaQueueConcurrency: workers reservados à fila "posaula" (geração de
+// práticas e correção pelo Claude, tasks de minutos). 2 porque o agent-go
+// aceita 4 execuções concorrentes e a api-go divide o balde com o bot-go.
+const posaulaQueueConcurrency = 2
 
 // Opções por task de email: até 3 retentativas (a API de email pode estar
 // momentaneamente fora) e teto de execução por task acima do timeout do cliente
@@ -166,13 +172,31 @@ func (s *Server) dispatchPush(ctx context.Context, p pushPayloadTask) error {
 }
 
 // newEmailQueueServer monta o asynq.Server embutido que processa as filas de
-// email E push (mesmo Redis, mesmo processo — o nome ficou de quando só
-// existia email, mas o mux já cobre as duas). O caller liga (Run em goroutine)
-// e desliga (Stop/Shutdown) no graceful shutdown.
+// email, push E as do Pós-aula (mesmo Redis, mesmo processo — o nome ficou
+// de quando só existia email, mas o mux já cobre todas). O caller liga (Run
+// em goroutine) e desliga (Stop/Shutdown) no graceful shutdown.
+//
+// Duas filas: "default" (email/push, tasks de segundos) e "posaula"
+// (geração e correção pelo Claude, tasks de minutos). Os pesos em Queues
+// são a prioridade de retirada — 5:2 — pra um lote de gerações nunca deixar
+// o código de MFA ou o reset de senha esperando atrás de uma chamada ao
+// Claude. (O asynq não tem teto por fila: os pesos ordenam a retirada, e
+// com a "default" vazia os 7 workers podem pegar Pós-aula; assim que chega
+// um email ele é o próximo a sair.)
 func (s *Server) newEmailQueueServer(redisOpt asynq.RedisConnOpt) (*asynq.Server, *asynq.ServeMux) {
-	srv := asynq.NewServer(redisOpt, asynq.Config{Concurrency: emailQueueConcurrency})
+	srv := asynq.NewServer(redisOpt, asynq.Config{
+		Concurrency: emailQueueConcurrency + posaulaQueueConcurrency,
+		Queues: map[string]int{
+			"default":         emailQueueConcurrency,
+			posaulaAsynqQueue: posaulaQueueConcurrency,
+		},
+	})
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(TaskEmailSend, s.handleEmailSend)
 	mux.HandleFunc(TaskPushSend, s.handlePushSend)
+	// Pós-aula (posaula_gerar.go): geração das práticas e correção de
+	// resposta aberta pelo Claude — tasks longas (minutos), na fila própria.
+	mux.HandleFunc(TaskPosaulaGerar, s.handlePosaulaGerar)
+	mux.HandleFunc(TaskPosaulaCorrigir, s.handlePosaulaCorrigir)
 	return srv, mux
 }

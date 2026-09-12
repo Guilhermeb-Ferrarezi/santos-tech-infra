@@ -73,6 +73,8 @@ func main() {
 	srv.syncBansToRedis(ctx)
 	// Materializa as aulas da chamada sozinha (ver portal_chamada_worker.go).
 	srv.startChamadaWorker(ctx)
+	// Avisa o aluno quando a prática do Pós-aula libera (ver posaula_worker.go).
+	srv.startPosaulaWorker(ctx)
 	// Publica sozinho o post do calendário social cujo horário chegou.
 	srv.startAgendadorSocial(ctx)
 

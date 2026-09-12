@@ -155,6 +155,81 @@ CREATE TABLE IF NOT EXISTS session_diary (
 -- dashboard. Guardado na matrícula pra o professor ver, na hora de registrar o
 -- diário, o que foi prometido pra aquele aluno. NULL = não preenchido.
 ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS contracted_content TEXT;
+
+-- Pós-aula, fase 2: o Claude lê o diário e gera as práticas (posaula_*.go).
+-- session_diary ganha o estado da geração — fica NO diário, e não numa tabela
+-- de jobs, porque é a tela do diário que mostra "gerando…"/"falhou": um
+-- estado por aula, sobrescrito a cada geração, sem histórico (o histórico é
+-- ai_run). student_summary é o resumo AMIGÁVEL pro aluno (2ª pessoa), que é
+-- diferente do summary do professor (ditado, técnico, às vezes telegráfico).
+ALTER TABLE session_diary ADD COLUMN IF NOT EXISTS student_summary TEXT;
+ALTER TABLE session_diary ADD COLUMN IF NOT EXISTS ai_status TEXT;
+ALTER TABLE session_diary ADD COLUMN IF NOT EXISTS ai_error TEXT;
+ALTER TABLE session_diary ADD COLUMN IF NOT EXISTS ai_updated_at TIMESTAMPTZ;
+
+-- ai_run: uma linha por chamada ao Claude (geração de práticas ou correção de
+-- resposta aberta), com a saída CRUA guardada — quando uma prática sai
+-- estranha, dá pra ver exatamente o que o modelo devolveu em vez de adivinhar.
+-- idempotency_key (sha256 de sessão + versão do diário + versão do prompt)
+-- é o que impede uma task reprocessada pelo asynq de gerar duas vezes.
+CREATE TABLE IF NOT EXISTS ai_run (
+    id SERIAL PRIMARY KEY,
+    idempotency_key TEXT UNIQUE,
+    kind TEXT NOT NULL,
+    session_id INTEGER,
+    answer_id INTEGER,
+    model TEXT,
+    prompt_version TEXT,
+    input_chars INTEGER,
+    output_raw TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    duration_ms INTEGER,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- posaula_task: uma prática de UM aluno sobre UMA aula. É por aluno (e não
+-- por aula) de propósito: o exercício do portal é por fase do currículo e
+-- vazaria a prática de um aluno pro curso inteiro. user_id é o "user".id do
+-- Portal (o mesmo de enrollment). deleted_at = o professor tirou do ar (ou a
+-- regeneração substituiu) — nunca se apaga de verdade, o aluno pode já ter
+-- visto. Cai junto com a aula (ON DELETE CASCADE), como o diário.
+CREATE TABLE IF NOT EXISTS posaula_task (
+    id SERIAL PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES class_session(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    statement TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL CHECK (kind IN ('mc','aberta')),
+    options JSONB NOT NULL DEFAULT '[]',
+    answer_key TEXT NOT NULL DEFAULT '',
+    hint TEXT NOT NULL DEFAULT '',
+    difficulty TEXT NOT NULL DEFAULT 'media',
+    available_from TIMESTAMPTZ NOT NULL,
+    ai_run_id INTEGER,
+    notified_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_posaula_task_user ON posaula_task(user_id, available_from);
+CREATE INDEX IF NOT EXISTS idx_posaula_task_session ON posaula_task(session_id);
+
+-- posaula_answer: a resposta do aluno (uma por prática — UNIQUE em task_id;
+-- responder é definitivo, sem "tentar de novo"). Múltipla escolha já nasce
+-- corrigida (is_correct + feedback + corrected_at); aberta nasce com
+-- is_correct NULL e corrected_at NULL até o Claude devolver o feedback.
+CREATE TABLE IF NOT EXISTS posaula_answer (
+    id SERIAL PRIMARY KEY,
+    task_id INTEGER NOT NULL UNIQUE REFERENCES posaula_task(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL,
+    answer_text TEXT,
+    selected_option INTEGER,
+    is_correct BOOLEAN,
+    feedback TEXT,
+    ai_run_id INTEGER,
+    answered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    corrected_at TIMESTAMPTZ
+);
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal

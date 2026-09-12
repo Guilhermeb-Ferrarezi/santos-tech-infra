@@ -49,6 +49,11 @@ type portalDiaryDTO struct {
 	AuthorName       string    `json:"authorName"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
+	// AiStatus/AiError: estado da geração das práticas pelo Claude
+	// (Pós-aula, fase 2 — posaula_gerar.go): null (nunca pedida) | pending |
+	// running | ok | failed. AiError é a mensagem legível quando failed.
+	AiStatus *string `json:"aiStatus"`
+	AiError  *string `json:"aiError"`
 }
 
 // portalMyDiaryDTO é o que chega ao ALUNO de um diário: sem autor nem ids
@@ -58,6 +63,11 @@ type portalMyDiaryDTO struct {
 	Attachments      []portalDiaryAttachmentDTO `json:"attachments"`
 	VideoURL         *string                    `json:"videoUrl"`
 	VideoDriveFileID *string                    `json:"videoDriveFileId"`
+	// StudentSummary: o resumo AMIGÁVEL da aula escrito pelo Claude pro
+	// aluno (2ª pessoa) — null enquanto as práticas não foram geradas.
+	StudentSummary *string `json:"studentSummary"`
+	// TasksPending: práticas desta aula já liberadas e ainda sem resposta.
+	TasksPending int `json:"tasksPending"`
 }
 
 // portalDiarySessionDTO é uma aula na fila de trabalho do professor
@@ -72,6 +82,10 @@ type portalDiarySessionDTO struct {
 	StartTime   string `json:"startTime,omitempty"`
 	EndTime     string `json:"endTime,omitempty"`
 	HasDiary    bool   `json:"hasDiary"`
+	// AiStatus: estado da geração das práticas (ver portalDiaryDTO);
+	// TasksCount: práticas não excluídas desta aula (todos os alunos).
+	AiStatus   *string `json:"aiStatus"`
+	TasksCount int     `json:"tasksCount"`
 }
 
 // ── Input ────────────────────────────────────────────────────────────────────
@@ -208,12 +222,13 @@ func (s *Server) portalGetDiary(ctx context.Context, sessionID int64) (*portalDi
 	}
 	var d portalDiaryDTO
 	var attachments string
+	var aiUpdatedAt *time.Time
 	err := s.portalDB.QueryRow(ctx,
 		`SELECT session_id::text, summary, attachments::text, video_url, video_drive_file_id,
-		        author_email, author_name, created_at, updated_at
+		        author_email, author_name, created_at, updated_at, ai_status, ai_error, ai_updated_at
 		 FROM session_diary WHERE session_id=$1`, sessionID).
 		Scan(&d.SessionID, &d.Summary, &attachments, &d.VideoURL, &d.VideoDriveFileID,
-			&d.AuthorEmail, &d.AuthorName, &d.CreatedAt, &d.UpdatedAt)
+			&d.AuthorEmail, &d.AuthorName, &d.CreatedAt, &d.UpdatedAt, &d.AiStatus, &d.AiError, &aiUpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -221,6 +236,9 @@ func (s *Server) portalGetDiary(ctx context.Context, sessionID int64) (*portalDi
 		return nil, err
 	}
 	d.Attachments = portalDiaryParseAttachments(attachments)
+	// pending/running velho demais não tem task viva por trás — a tela vê
+	// failed com "a geração expirou" (posaula_store.go).
+	d.AiStatus, d.AiError = posaulaStatusEfetivo(d.AiStatus, d.AiError, aiUpdatedAt, time.Now())
 	return &d, nil
 }
 
@@ -245,11 +263,11 @@ func (s *Server) portalUpsertDiary(ctx context.Context, sessionID int64, in port
 		   video_url=EXCLUDED.video_url, video_drive_file_id=EXCLUDED.video_drive_file_id,
 		   updated_at=NOW()
 		 RETURNING session_id::text, summary, attachments::text, video_url, video_drive_file_id,
-		           author_email, author_name, created_at, updated_at`,
+		           author_email, author_name, created_at, updated_at, ai_status, ai_error`,
 		sessionID, strings.ToLower(strings.TrimSpace(authorEmail)), strings.TrimSpace(authorName),
 		in.Summary, string(raw), in.VideoURL, in.VideoDriveFileID).
 		Scan(&d.SessionID, &d.Summary, &attachments, &d.VideoURL, &d.VideoDriveFileID,
-			&d.AuthorEmail, &d.AuthorName, &d.CreatedAt, &d.UpdatedAt)
+			&d.AuthorEmail, &d.AuthorName, &d.CreatedAt, &d.UpdatedAt, &d.AiStatus, &d.AiError)
 	if err != nil {
 		return nil, portalDBErr(err)
 	}
@@ -284,7 +302,9 @@ func (s *Server) portalDiaryPending(ctx context.Context, days int) ([]portalDiar
 		        sd.id IS NOT NULL,
 		        COALESCE((SELECT string_agg(NULLIF(u.name,''), ', ' ORDER BY u.name)
 		                  FROM enrollment e JOIN "user" u ON u.id = e.user_id
-		                  WHERE e.class_id = cl.id), '')
+		                  WHERE e.class_id = cl.id), ''),
+		        sd.ai_status, sd.ai_error, sd.ai_updated_at,
+		        (SELECT COUNT(*) FROM posaula_task pt WHERE pt.session_id = cs.id AND pt.deleted_at IS NULL)
 		 FROM class_session cs
 		 JOIN class cl ON cl.id = cs.class_id
 		 LEFT JOIN session_diary sd ON sd.session_id = cs.id
@@ -300,11 +320,16 @@ func (s *Server) portalDiaryPending(ctx context.Context, days int) ([]portalDiar
 	}
 	defer rows.Close()
 	itens := []portalDiarySessionDTO{}
+	agora := time.Now()
 	for rows.Next() {
 		var d portalDiarySessionDTO
-		if err := rows.Scan(&d.SessionID, &d.ClassID, &d.ClassName, &d.Date, &d.StartTime, &d.EndTime, &d.HasDiary, &d.StudentName); err != nil {
+		var aiErr *string
+		var aiUpdatedAt *time.Time
+		if err := rows.Scan(&d.SessionID, &d.ClassID, &d.ClassName, &d.Date, &d.StartTime, &d.EndTime, &d.HasDiary, &d.StudentName, &d.AiStatus, &aiErr, &aiUpdatedAt, &d.TasksCount); err != nil {
 			return nil, err
 		}
+		// O DTO da fila só carrega o status; o erro fica pro GET do diário.
+		d.AiStatus, _ = posaulaStatusEfetivo(d.AiStatus, aiErr, aiUpdatedAt, agora)
 		if d.ClassName == "" {
 			d.ClassName = "Turma " + d.ClassID
 		}

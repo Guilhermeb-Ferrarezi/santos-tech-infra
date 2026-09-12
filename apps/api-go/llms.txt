@@ -1825,6 +1825,143 @@ Os arquivos em si sobem pelo dashboard via `POST /drive-folders/{id}/files`
 (500MB por arquivo) na pasta "Diário de aulas", subpasta `<aluno>/<aaaa-mm-dd>`
 — a API central só guarda a referência (`driveFileId`).
 
+Campos que o Pós-aula (abaixo) acrescenta às rotas do diário:
+- `GET/PUT /portal/sessions/{id}/diary`: `diary` ganha `aiStatus`
+  (`null|pending|running|ok|failed`) e `aiError` (mensagem legível quando
+  `failed`; durante o backoff entre retentativas do asynq é `pending` com
+  "Tentando de novo…"). O PUT já devolve `aiStatus: "pending"` — salvar o
+  diário enfileira a geração das práticas.
+- `GET /portal/diary/pending`: cada item ganha `aiStatus` e `tasksCount`
+  (práticas não excluídas da aula, todos os alunos).
+- **Estado efetivo:** nas três leituras (`GET …/diary`, `GET
+  /portal/diary/pending`, `GET …/sessions/{id}/tasks`), `pending`/`running`
+  com `ai_updated_at` mais velho que 20 min vem como `failed` com `aiError`
+  "A geração expirou. Clique em Gerar de novo." — não há task viva por trás
+  (o Timeout da task é 10 min). O cliente NÃO precisa desabilitar "Gerar de
+  novo" por causa de pending/running: a API deduplica pelo TaskID.
+- `GET /portal/me/sessions`: `diary` ganha `studentSummary` (resumo da aula
+  escrito pelo Claude PRO ALUNO, 2ª pessoa; `null` até gerar) e
+  `tasksPending` (práticas desta aula já liberadas e sem resposta do aluno).
+
+### Pós-aula — Prática — `/portal/me/tasks`, `/portal/sessions/{id}/tasks`, `/portal/tasks/{id}`
+
+Quando o professor salva o Diário de aula, o Claude gera 3 a 4 práticas
+sobre a aula pra CADA aluno matriculado na turma, mais um resumo amigável
+pro aluno, liberadas às **07:00 (America/Sao_Paulo) do dia seguinte** com
+aviso no sino/push ("Sua prática está pronta" → `/dashboard/pratica`, o
+mesmo formato de URL dos outros avisos do dashboard). **Nada passa
+por aprovação** (decisão do Rodrigo): o professor só pode excluir uma
+prática ruim ou pedir pra gerar de novo. Múltipla escolha corrige no
+servidor na hora; resposta aberta recebe feedback do Claude em seguida,
+automaticamente. Vocabulário: "Prática" (aluno), "práticas da aula"
+(professor) — nunca "Tarefas".
+
+Como funciona por dentro (api-go): `PUT …/diary` (ou `…/regenerate`)
+enfileira a task asynq `posaula:gerar` na fila própria **`posaula`** (2 dos
+7 workers do asynq.Server; a `default` fica com email/push, pra MFA e reset
+de senha nunca esperarem atrás de uma geração; MaxRetry 2, Timeout 10 min,
+cada chamada ao Claude com teto de 2 min e 1 retentativa interna em rede/
+5xx/429, respeitando `Retry-After` até 60 s) e marca
+`session_diary.ai_status=pending`. TaskID fixo por aula
+(`posaula:gerar:{sessionId}`): task pendente/agendada/em retry → o novo
+pedido é engolido (ela lê o diário atual quando rodar); task arquivada ou
+concluída → o id é solto e enfileira de novo; task ATIVA (já leu o diário)
+→ entra uma segunda task `posaula:gerar:{sessionId}:v{versão}` agendada pra
+30 s, que lê o diário atual — a edição feita durante uma geração nunca se
+perde. O handler monta um brief em
+português (identidade → curso/turma → conteúdo contratado da matrícula →
+os 3 diários anteriores da turma → práticas anteriores do aluno com
+acerto/erro → o diário desta aula → conteúdo dos anexos de TEXTO, `.py .js
+.ts .tsx .cs .lua .gd .html .css .json .sql .md .txt .csv`, ≤64 KB cada e
+≤30.000 caracteres no total, lidos do Drive pela conta de serviço) e chama
+`POST {AGENT_URL}/claude/generate {task:"raw", brief, model:"sonnet"}` com
+`Authorization: Bearer $AGENT_INTERNAL_SECRET` (o INTERNAL_SECRET do
+agent-go; **vazio = tudo termina em `ai_status=failed` com
+"AGENT_INTERNAL_SECRET não configurado"**, a API sobe normal). A resposta
+tem que ser JSON estrito `{resumo_aluno, praticas:[{titulo, enunciado,
+tipo:"mc"|"aberta", opcoes, gabarito, dica, dificuldade}]}` (3–4 itens, ≥1
+mc com 4 opções e gabarito "0".."3", ≥1 aberta); JSON cercado de texto ou
+crases é aceito; inválido ganha UMA retentativa com o erro no brief;
+inválido de novo → `failed`. Sucesso grava numa transação: as práticas
+antigas SEM resposta saem do ar (regenerar substitui só o que ninguém
+respondeu), entram as novas pra cada matriculado com `available_from` =
+próximo 07:00 — ou **agora**, quando a aula já tinha prática liberada (a
+regeneração de algo que o aluno já via não o deixa 24 h sem nada) —,
+`student_summary`, `ai_status=ok`, `ai_run` ok (chave de idempotência
+sha256(sessão|versão|versão do prompt), em que a versão é o `updated_at`
+do diário no PUT e **o instante do pedido no regenerate** — por isso
+"gerar de novo" sem editar o diário gera mesmo; task reentregue não gera
+duas vezes). Erro transitório do Claude (rede/5xx/429) com retentativa
+sobrando deixa o diário em `pending` + "Tentando de novo…" e volta pro
+asynq; só a última tentativa (ou erro definitivo: sem secret, 4xx, JSON
+inválido 2x) grava `failed`. Toda chamada ao Claude fica em `ai_run` (kind
+`praticas`|`correcao`, saída crua, erro, duração). Worker in-process a cada
+10 min (trava no Redis) avisa cada aluno das práticas que liberaram
+(`notified_at`, idempotente). Auditoria: `posaula_praticas_geradas` (autor
+= usuário do AUTH resolvido pelo e-mail do autor do diário; sem conta no
+auth não grava), `posaula_pratica_excluida`, `posaula_regenerar`.
+
+Aluno (só authGuard; casado por e-mail com o `"user"` do Portal, como
+`/portal/me/overview` — quem não existe no Portal recebe lista vazia):
+- `GET /portal/me/tasks?status=pending|done&classId=&limit=` →
+  `{tasks:[Pratica]}`. Rate 120/min. Só `available_from <= now()` e não
+  excluídas. `status` ausente = pending (sem resposta), `done` = com
+  resposta; outro valor → 400. `limit` default 50, máx 200 (fora da faixa é
+  ajustado; não numérico → 400) — vindo exatamente `limit` itens, pode haver
+  mais (a tela mostra "Mostrando as 50 mais recentes"). Ordem: `sessionDate`
+  desc, `id` desc. `Pratica = {id,
+  sessionId, sessionDate (aaaa-mm-dd), classId, className, title, statement
+  (markdown simples, pode ter bloco de código), kind "mc"|"aberta", options:
+  string[], hint, difficulty "facil"|"media"|"dificil", availableFrom (ISO),
+  answer: RespostaDePratica|null}`. **O gabarito nunca sai antes de
+  responder**; da aberta nunca sai (é critério de correção).
+  `RespostaDePratica = {answerText, selectedOption, isCorrect (bool|null —
+  null enquanto o Claude não corrigiu a aberta), feedback, correctOption
+  (índice, só depois de responder mc; null na aberta), answeredAt}`.
+- `POST /portal/me/tasks/{id}/answer` body `{selectedOption?: int,
+  answerText?: string (≤ 8.000 caracteres)}` → 200 `{answer}`. Rate 60/min.
+  mc exige `selectedOption` em `0..len(options)-1` e volta corrigida na hora
+  (`feedback` = "Correto!" ou "A resposta certa era …" + dica); aberta exige
+  `answerText` não vazio, grava e enfileira `posaula:corrigir` — o
+  `feedback` chega depois (o cliente refaz a busca enquanto `feedback` for
+  null); erro transitório do Claude é retentado pelo asynq (MaxRetry 2); se
+  a correção falhar de vez (ou na última tentativa), `feedback` vira "Não
+  consegui corrigir automaticamente — o professor vai olhar." e `isCorrect`
+  fica null. O texto do aluno entra no brief num bloco delimitado
+  (`<resposta_do_aluno>`) marcado como dado, não instrução. 400 campo
+  faltando/errado; 404 se a prática não é do aluno ou ainda
+  não liberou (não confirma que o id existe); 409 se já respondida
+  (responder é definitivo).
+
+Professor (guard `portal_diario`, o mesmo do diário: admin/professor OU
+cargo com `portal_diario:read|write`):
+- `GET /portal/sessions/{sessionId}/tasks` → `{tasks:[PraticaDoProfessor],
+  aiStatus, aiError}` (`PraticasDaAula`). Só não excluídas. `PraticaDoProfessor
+  = {id, studentId, studentName, title, statement, kind, options, answerKey,
+  hint, difficulty, availableFrom, answered: bool, isCorrect: bool|null,
+  answerText: string|null, feedback: string|null, correctedAt: ISO|null}`.
+  Os três últimos só têm valor depois que o aluno respondeu; `correctedAt`
+  preenchido com `isCorrect` null = a correção automática caiu no fallback,
+  aguardando o professor (a resposta está em `answerText`). `aiStatus`/
+  `aiError` são `null` quando a aula não tem diário (e passam pelo estado
+  efetivo acima); 404 se a aula não existe. A tela consulta a cada 5s
+  enquanto pending/running.
+- `DELETE /portal/tasks/{taskId}` (write, 60/min) → 204. Soft delete
+  (`deleted_at`): some pro aluno, fica no histórico. 404 se já excluída.
+- `POST /portal/sessions/{sessionId}/tasks/regenerate` (write, 10/min) →
+  202 `{queued:true}`. Exige diário (404 senão). Substitui só as práticas
+  sem resposta; se a aula já tinha prática liberada, as novas liberam na
+  hora. A versão da chave de idempotência é o instante do pedido; com uma
+  geração ativa vira a segunda task agendada (ver acima), ainda 202. 503
+  `QUEUE_UNAVAILABLE` se a fila (Redis/asynq) estiver fora.
+
+Tabelas (banco do Portal, criadas no boot por `portal_migrate.go`):
+`session_diary` +`student_summary, ai_status, ai_error, ai_updated_at`;
+`ai_run`; `posaula_task` (uma por aluno × prática × aula, `deleted_at`
+soft, índices `(user_id, available_from)` e `(session_id)`);
+`posaula_answer` (UNIQUE `task_id`). Envs: `AGENT_URL` (default
+`https://api.santos-tech.com`), `AGENT_INTERNAL_SECRET`.
+
 ### Sync com o Notion — `POST /portal/notion/sync` (admin-only, 6/min)
 
 `GET /portal/classes?individual=true|false` filtra por formato: `true` = aula
