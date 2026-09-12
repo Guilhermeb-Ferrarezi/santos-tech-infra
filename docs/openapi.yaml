@@ -776,6 +776,8 @@ paths:
 
         O campo `active` indica qual conta corresponde ao `refresh_token` atual.
         Não requer `access_token` — basta o cookie `accounts`.
+
+        Rate limit: **20 req/min por IP**.
       security: []
       responses:
         "200":
@@ -810,6 +812,8 @@ paths:
         Remove o `sessionId` do cookie `accounts` e revoga a sessão correspondente
         no banco. Se o `sessionId` não estiver na lista do cookie deste navegador,
         responde 404.
+
+        Rate limit: **20 req/min por IP**.
       security: []
       parameters:
         - name: sessionId
