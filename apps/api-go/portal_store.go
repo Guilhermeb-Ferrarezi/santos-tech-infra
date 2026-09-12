@@ -572,8 +572,10 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p p
 	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM enrollment WHERE class_id=$1`, classID).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role, e.individual, e.contracted_lessons, e.contrato_drive_file_id, e.contracted_content
+	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role, e.individual, e.contracted_lessons, e.contrato_drive_file_id, e.contracted_content,
+		       e.contract_date, cl.start_date::date, cl.individual_class
 		FROM enrollment e JOIN "user" u ON u.id = e.user_id
+		JOIN class cl ON cl.id = e.class_id
 		WHERE e.class_id=$1 ORDER BY COALESCE(u.name,'') ASC, u.id ASC
 		LIMIT $2 OFFSET $3`, classID, p.Limit, p.Offset)
 	if err != nil {
@@ -583,20 +585,28 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p p
 	items := []portalStudentDTO{}
 	for rows.Next() {
 		var dto portalStudentDTO
-		if err := rows.Scan(&dto.ID, &dto.Email, &dto.Name, &dto.Role, &dto.Individual, &dto.ContractedLessons, &dto.ContratoDriveFileID, &dto.ContractedContent); err != nil {
+		var contractDate, classStart *time.Time
+		var individualClass bool
+		if err := rows.Scan(&dto.ID, &dto.Email, &dto.Name, &dto.Role, &dto.Individual, &dto.ContractedLessons, &dto.ContratoDriveFileID, &dto.ContractedContent,
+			&contractDate, &classStart, &individualClass); err != nil {
 			return nil, 0, err
 		}
+		dto.ContractDate = dataISO(contractDate)
+		dto.PackageExpiresAt = pacoteVenceEm(individualClass, contractDate, classStart)
 		items = append(items, dto)
 	}
 	return items, total, rows.Err()
 }
 
 // portalSetStudentIndividual atualiza o toggle "particular" e, opcionalmente, o
-// pacote de aulas contratadas, o contrato vinculado e/ou o conteúdo das aulas
-// do contrato de uma matrícula. Os opcionais só entram na cláusula SET quando
-// vêm no payload (ponteiro não-nil) — update parcial, mesmo desenho pros três.
-// contractedContent vazio grava NULL (limpa) — ver portalStudentIndividualInput.
-func (s *Server) portalSetStudentIndividual(ctx context.Context, classID, studentID int64, individual bool, contractedLessons *int, contratoDriveFileID, contractedContent *string) error {
+// pacote de aulas contratadas, o contrato vinculado, o conteúdo das aulas do
+// contrato e/ou a data do contrato de uma matrícula. Os opcionais só entram
+// na cláusula SET quando vêm no payload (ponteiro não-nil) — update parcial,
+// mesmo desenho pros quatro. contractedContent e contractDate vazios gravam
+// NULL (limpam) — ver portalStudentIndividualInput. Data do contrato
+// DIFERENTE da salva zera os avisos de vencimento (é outro contrato); a
+// mesma data (o gerador reenvia a cada PATCH) não mexe neles.
+func (s *Server) portalSetStudentIndividual(ctx context.Context, classID, studentID int64, individual bool, contractedLessons *int, contratoDriveFileID, contractedContent, contractDate *string) error {
 	sets := []string{"individual=$3"}
 	args := []any{classID, studentID, individual}
 	if contractedLessons != nil {
@@ -610,6 +620,16 @@ func (s *Server) portalSetStudentIndividual(ctx context.Context, classID, studen
 	if contractedContent != nil {
 		args = append(args, strings.TrimSpace(*contractedContent))
 		sets = append(sets, fmt.Sprintf("contracted_content=NULLIF($%d,'')", len(args)))
+	}
+	if contractDate != nil {
+		args = append(args, strings.TrimSpace(*contractDate))
+		n := len(args)
+		// No SET, "contract_date" à direita ainda é o valor ANTIGO — é assim
+		// que o CASE compara a data nova com a salva.
+		sets = append(sets,
+			fmt.Sprintf("expiry_notice_60_at=CASE WHEN contract_date IS DISTINCT FROM NULLIF($%d,'')::date THEN NULL ELSE expiry_notice_60_at END", n),
+			fmt.Sprintf("expiry_notice_30_at=CASE WHEN contract_date IS DISTINCT FROM NULLIF($%d,'')::date THEN NULL ELSE expiry_notice_30_at END", n),
+			fmt.Sprintf("contract_date=NULLIF($%d,'')::date", n))
 	}
 	query := fmt.Sprintf(`UPDATE enrollment SET %s WHERE class_id=$1 AND user_id=$2`, strings.Join(sets, ", "))
 	tag, err := s.portalDB.Exec(ctx, query, args...)
@@ -660,7 +680,9 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
 		          JOIN "user" t ON t.id = ct.user_id
 		        WHERE ct.class_id = cl.id),
-		       e.individual, e.contracted_lessons, e.contrato_drive_file_id, cl.individual_class, e.contracted_content
+		       e.individual, e.contracted_lessons, e.contrato_drive_file_id, cl.individual_class, e.contracted_content,
+		       e.contract_date, cl.start_date::date,
+		       EXISTS(SELECT 1 FROM course_doc cd WHERE cd.course_id = c.id AND cd.version > 0)
 		FROM enrollment e
 		JOIN "user" u ON u.id = e.user_id AND u.role = %d %s
 		JOIN class cl ON cl.id = e.class_id
@@ -674,15 +696,9 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 	defer rows.Close()
 	items := []portalStudentOverviewDTO{}
 	for rows.Next() {
-		var dto portalStudentOverviewDTO
-		if err := rows.Scan(&dto.StudentID, &dto.StudentName, &dto.StudentEmail,
-			&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
-			&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual, &dto.ContractedLessons,
-			&dto.ContratoDriveFileID, &dto.IndividualClass, &dto.ContractedContent); err != nil {
+		dto, err := portalScanStudentOverview(rows)
+		if err != nil {
 			return nil, 0, err
-		}
-		if dto.ClassName == "" {
-			dto.ClassName = "Turma " + dto.ClassID
 		}
 		items = append(items, dto)
 	}
@@ -718,7 +734,9 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 		       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM class_teacher ct
 		          JOIN "user" t ON t.id = ct.user_id
 		        WHERE ct.class_id = cl.id),
-		       e.individual, e.contracted_lessons, e.contrato_drive_file_id, cl.individual_class, e.contracted_content
+		       e.individual, e.contracted_lessons, e.contrato_drive_file_id, cl.individual_class, e.contracted_content,
+		       e.contract_date, cl.start_date::date,
+		       EXISTS(SELECT 1 FROM course_doc cd WHERE cd.course_id = c.id AND cd.version > 0)
 		FROM enrollment e
 		JOIN "user" u ON u.id = e.user_id AND u.email = $1
 		JOIN class cl ON cl.id = e.class_id
@@ -730,15 +748,9 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 	defer rows.Close()
 	items := []portalStudentOverviewDTO{}
 	for rows.Next() {
-		var dto portalStudentOverviewDTO
-		if err := rows.Scan(&dto.StudentID, &dto.StudentName, &dto.StudentEmail,
-			&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
-			&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual, &dto.ContractedLessons,
-			&dto.ContratoDriveFileID, &dto.IndividualClass, &dto.ContractedContent); err != nil {
+		dto, err := portalScanStudentOverview(rows)
+		if err != nil {
 			return nil, err
-		}
-		if dto.ClassName == "" {
-			dto.ClassName = "Turma " + dto.ClassID
 		}
 		items = append(items, dto)
 	}
@@ -749,6 +761,27 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 		return nil, err
 	}
 	return items, nil
+}
+
+// portalScanStudentOverview lê uma linha das duas consultas de overview
+// (administrativa e self-service), que selecionam as mesmas colunas na mesma
+// ordem. contractDate/packageExpiresAt e hasCourseDoc são derivados aqui.
+func portalScanStudentOverview(rows pgx.Rows) (portalStudentOverviewDTO, error) {
+	var dto portalStudentOverviewDTO
+	var contractDate, classStart *time.Time
+	if err := rows.Scan(&dto.StudentID, &dto.StudentName, &dto.StudentEmail,
+		&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
+		&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual, &dto.ContractedLessons,
+		&dto.ContratoDriveFileID, &dto.IndividualClass, &dto.ContractedContent,
+		&contractDate, &classStart, &dto.HasCourseDoc); err != nil {
+		return dto, err
+	}
+	if dto.ClassName == "" {
+		dto.ClassName = "Turma " + dto.ClassID
+	}
+	dto.ContractDate = dataISO(contractDate)
+	dto.PackageExpiresAt = pacoteVenceEm(dto.IndividualClass, contractDate, classStart)
+	return dto, nil
 }
 
 // portalAddClassStudents matricula os usuários na turma, ignorando duplicatas.

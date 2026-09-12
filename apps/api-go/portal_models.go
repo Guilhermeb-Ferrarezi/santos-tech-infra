@@ -250,6 +250,12 @@ type portalStudentDTO struct {
 	// aluno (enrollment.contracted_content) — o professor lê isso na hora de
 	// registrar o diário. nil = não preenchido.
 	ContractedContent *string `json:"contractedContent"`
+	// ContractDate: data do contrato (aaaa-mm-dd; nil = não preenchida).
+	// PackageExpiresAt: vencimento do pacote (aaaa-mm-dd) — SÓ pra matrícula
+	// em turma de aula particular: (contractDate, senão início da turma) +
+	// 12 meses; nil em turma de grupo. Ver portal_expiracao_worker.go.
+	ContractDate     *string `json:"contractDate"`
+	PackageExpiresAt *string `json:"packageExpiresAt"`
 }
 
 // portalTeacherDTO é um professor vinculado a uma turma (class_teacher) —
@@ -308,6 +314,13 @@ type portalStudentOverviewDTO struct {
 	// ContractedContent: mesmo campo de portalStudentDTO — o conteúdo das
 	// aulas do contrato, pra "Todos os alunos" e pro diário sem outra ida à API.
 	ContractedContent *string `json:"contractedContent"`
+	// ContractDate / PackageExpiresAt: mesmos campos de portalStudentDTO
+	// (o card do aluno mostra "Pacote vence em dd/mm/aaaa").
+	ContractDate     *string `json:"contractDate"`
+	PackageExpiresAt *string `json:"packageExpiresAt"`
+	// HasCourseDoc: o curso desta matrícula já tem Material vivo pra ler
+	// (GET /portal/me/courses/{courseId}/doc) — o card mostra o link.
+	HasCourseDoc bool `json:"hasCourseDoc"`
 }
 
 // portalStudentIndividualInput é o corpo do PATCH que atualiza uma matrícula:
@@ -331,13 +344,19 @@ type portalStudentIndividualInput struct {
 	// Diferente dos dois acima, string VAZIA limpa o campo (vira NULL): é
 	// texto que a pessoa pode apagar de propósito, não um vínculo.
 	ContractedContent *string `json:"contractedContent,omitempty"`
+	// ContractDate: data do contrato (aaaa-mm-dd), que o gerador de contratos
+	// manda junto com contractedLessons/contractedContent. nil = não veio,
+	// mantém; string VAZIA limpa (NULL). Mudar a data zera os avisos de
+	// vencimento já dados (portal_expiracao_worker.go) — contrato novo,
+	// avisos novos.
+	ContractDate *string `json:"contractDate,omitempty"`
 }
 
 // portalContractedContentMax: mesmo teto do resumo do diário — é o trecho do
 // contrato que descreve as aulas, nunca o contrato inteiro.
 const portalContractedContentMax = 20_000
 
-func (in portalStudentIndividualInput) validate() error {
+func (in *portalStudentIndividualInput) validate() error {
 	if in.ContractedLessons != nil && *in.ContractedLessons < 1 {
 		return validationErr("contractedLessons deve ser maior que zero")
 	}
@@ -346,6 +365,15 @@ func (in portalStudentIndividualInput) validate() error {
 	}
 	if in.ContractedContent != nil && utf8.RuneCountInString(*in.ContractedContent) > portalContractedContentMax {
 		return validationErr(fmt.Sprintf("contractedContent deve ter no máximo %d caracteres", portalContractedContentMax))
+	}
+	if in.ContractDate != nil {
+		d := strings.TrimSpace(*in.ContractDate)
+		if d != "" {
+			if _, err := time.Parse("2006-01-02", d); err != nil {
+				return validationErr("contractDate inválido (use aaaa-mm-dd)")
+			}
+		}
+		in.ContractDate = &d
 	}
 	return nil
 }

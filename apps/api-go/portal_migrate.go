@@ -230,6 +230,49 @@ CREATE TABLE IF NOT EXISTS posaula_answer (
     answered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     corrected_at TIMESTAMPTZ
 );
+
+-- Pós-aula, fase 3: o "Material vivo" — UM documento em markdown por CURSO,
+-- escrito pelo Claude a partir da descrição do curso e do conteúdo contratado,
+-- e atualizado sozinho a cada aula registrada (posaula_material.go). course_doc
+-- é o estado ATUAL (o que o aluno lê); course_doc_revision guarda TODA versão
+-- que já existiu (semente, aula, edição manual, restauração), porque nada passa
+-- por aprovação humana (decisão do Rodrigo) — o histórico com "voltar pra esta
+-- versão" é o que substitui a aprovação. ai_status/ai_error seguem o mesmo
+-- desenho do diário (pending|running|ok|failed). A FK pra course entra em
+-- portalLegacyIndexes (o course é tabela legada, pode não existir no banco
+-- de dev); a de revision → doc é nossa, então fica aqui.
+CREATE TABLE IF NOT EXISTS course_doc (
+    course_id INTEGER PRIMARY KEY,
+    body_md TEXT NOT NULL DEFAULT '',
+    version INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ai_status TEXT,
+    ai_error TEXT,
+    ai_updated_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS course_doc_revision (
+    id SERIAL PRIMARY KEY,
+    course_id INTEGER NOT NULL REFERENCES course_doc(course_id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    body_md TEXT NOT NULL,
+    changelog TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL CHECK (source IN ('seed','aula','manual','restore')),
+    source_session_id INTEGER,
+    ai_run_id INTEGER,
+    author_email TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (course_id, version)
+);
+
+-- Avisos de expiração do pacote de aula particular (portal_expiracao_worker.go):
+-- contract_date é a data do contrato (o gerador de contratos do dashboard manda
+-- no PATCH da matrícula); o pacote vale 12 meses a partir dela (ou do início da
+-- turma, se ninguém preencheu). As duas colunas de aviso são o que torna o
+-- worker idempotente: NULL = ainda não avisou; preenchida = já avisou (ou o
+-- vencimento já tinha passado quando o worker olhou pela primeira vez).
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS contract_date DATE;
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS expiry_notice_60_at TIMESTAMPTZ;
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS expiry_notice_30_at TIMESTAMPTZ;
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal
@@ -253,6 +296,16 @@ var portalLegacyIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS idx_container_tasks_phase_exercise ON container_tasks(phase_id, exercise_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_container_tasks_exercise ON container_tasks(exercise_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_question_exercise ON question(exercise_id)`,
+	// course_doc → course (Material vivo): apagar o curso leva o material e o
+	// histórico junto. Aqui, e não no CREATE TABLE, porque course é legada: num
+	// banco sem ela (dev sem PORTAL_DATABASE_URL) a FK inline derrubaria o boot.
+	// ADD CONSTRAINT não tem IF NOT EXISTS — o DO confere o pg_constraint antes.
+	`DO $$ BEGIN
+		IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'course_doc_course_fk') THEN
+			ALTER TABLE course_doc ADD CONSTRAINT course_doc_course_fk
+				FOREIGN KEY (course_id) REFERENCES course(id) ON DELETE CASCADE;
+		END IF;
+	END $$`,
 }
 
 func migratePortal(ctx context.Context, pool *pgxpool.Pool) error {
@@ -268,9 +321,10 @@ func migratePortal(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-// createPortalLegacyIndex roda um CREATE INDEX na própria transação, com
-// lock_timeout curto. Tabela inexistente (42P01) é ignorada em silêncio — o
-// banco simplesmente não tem esse pedaço do schema do portal.
+// createPortalLegacyIndex roda um statement (CREATE INDEX, ou a FK pra tabela
+// legada) na própria transação, com lock_timeout curto. Tabela inexistente
+// (42P01) é ignorada em silêncio — o banco simplesmente não tem esse pedaço
+// do schema do portal.
 func createPortalLegacyIndex(ctx context.Context, pool *pgxpool.Pool, stmt string) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {

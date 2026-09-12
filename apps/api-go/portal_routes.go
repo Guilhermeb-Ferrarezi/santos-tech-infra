@@ -31,6 +31,16 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /portal/courses/{courseId}", s.portalRead("portal_cursos", s.handlePortalGetCourse))
 	mux.HandleFunc("PATCH /portal/courses/{courseId}", s.rateLimit(30, min, s.portalWrite("portal_cursos", s.handlePortalUpdateCourse)))
 	mux.HandleFunc("DELETE /portal/courses/{courseId}", s.adminGuard(s.sudoGuard(s.handlePortalDeleteCourse)))
+	// Material vivo do curso (posaula_material.go): professor lê, admin/cargo
+	// escreve, semeia e restaura. 10/min no seed: cada pedido é uma chamada ao
+	// Claude (opus, minutos). O aluno lê o do curso da matrícula (authGuard).
+	mux.HandleFunc("GET /portal/courses/{courseId}/doc", s.portalRead("portal_cursos", s.handlePortalGetCourseDoc))
+	mux.HandleFunc("PUT /portal/courses/{courseId}/doc", s.rateLimit(30, min, s.portalWrite("portal_cursos", s.handlePortalPutCourseDoc)))
+	mux.HandleFunc("POST /portal/courses/{courseId}/doc/seed", s.rateLimit(10, min, s.portalWrite("portal_cursos", s.handlePortalSeedCourseDoc)))
+	mux.HandleFunc("GET /portal/courses/{courseId}/doc/revisions", s.portalRead("portal_cursos", s.handlePortalCourseDocRevisions))
+	mux.HandleFunc("GET /portal/courses/{courseId}/doc/revisions/{version}", s.portalRead("portal_cursos", s.handlePortalCourseDocRevision))
+	mux.HandleFunc("POST /portal/courses/{courseId}/doc/revisions/{version}/restore", s.rateLimit(30, min, s.portalWrite("portal_cursos", s.handlePortalRestoreCourseDoc)))
+	mux.HandleFunc("GET /portal/me/courses/{courseId}/doc", s.rateLimit(120, min, s.authGuard(s.handlePortalMyCourseDoc)))
 
 	mux.HandleFunc("GET /portal/courses/{courseId}/modules", s.portalRead("portal_cursos", s.handlePortalListModules))
 	mux.HandleFunc("POST /portal/courses/{courseId}/modules", s.rateLimit(20, min, s.portalWrite("portal_cursos", s.handlePortalCreateModule)))
