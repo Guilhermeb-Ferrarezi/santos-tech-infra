@@ -79,6 +79,18 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	// 600/min por IP, não 60: "Minhas aulas" lista todas as aulas com vídeo e
 	// anexos numa página só, e um laboratório inteiro divide o mesmo IP.
 	mux.HandleFunc("GET /portal/me/diary/files/{fileId}", s.rateLimit(600, min, s.authGuard(s.handlePortalMyDiaryFile)))
+	// Pós-aula: as práticas que o Claude gera do diário (posaula_*.go). O
+	// aluno lista e responde as próprias (authGuard, escopo = e-mail da
+	// sessão). O professor vê/exclui/pede de novo com o MESMO guard do
+	// diário — a prática é consequência da aula que ele registrou.
+	// 120/min: a tela do aluno refaz a busca a cada 5 s enquanto uma aberta
+	// espera correção, e um laboratório inteiro divide o mesmo IP.
+	mux.HandleFunc("GET /portal/me/tasks", s.rateLimit(120, min, s.authGuard(s.handlePortalMyTasks)))
+	mux.HandleFunc("POST /portal/me/tasks/{taskId}/answer", s.rateLimit(60, min, s.authGuard(s.handlePortalAnswerTask)))
+	mux.HandleFunc("GET /portal/sessions/{sessionId}/tasks", s.portalDiario("read", s.handlePortalSessionTasks))
+	// 10/min: cada pedido é uma chamada ao Claude (rate limit de 10/min lá também).
+	mux.HandleFunc("POST /portal/sessions/{sessionId}/tasks/regenerate", s.rateLimit(10, min, s.portalDiario("write", s.handlePortalRegenerateTasks)))
+	mux.HandleFunc("DELETE /portal/tasks/{taskId}", s.rateLimit(60, min, s.portalDiario("write", s.handlePortalDeleteTask)))
 	mux.HandleFunc("GET /portal/classes/{classId}/schedule", s.portalRead("portal_turmas", s.handlePortalListClassSchedule))
 	mux.HandleFunc("POST /portal/classes/{classId}/schedule", s.rateLimit(20, min, s.portalWrite("portal_turmas", s.handlePortalAddClassSchedule)))
 	mux.HandleFunc("DELETE /portal/classes/{classId}/schedule/{scheduleId}", s.adminGuard(s.handlePortalRemoveClassSchedule))

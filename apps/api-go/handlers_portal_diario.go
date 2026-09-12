@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -70,6 +71,16 @@ func (s *Server) handlePortalPutDiary(w http.ResponseWriter, r *http.Request) {
 	s.portalLogActivity(r, "diario_registrado", "session", fmt.Sprint(sessionID), map[string]any{
 		"attachments": len(diary.Attachments), "hasVideo": diary.VideoURL != nil || diary.VideoDriveFileID != nil,
 	})
+	// Pós-aula: todo save do diário dispara a geração das práticas pelo
+	// Claude (posaula_gerar.go). É colateral — o diário já está salvo, então
+	// fila fora do ar não derruba a request; o professor vê o estado no
+	// aiStatus e pode pedir de novo pela rota de regenerate.
+	if err := s.enqueuePosaulaGerar(r.Context(), sessionID, diary.UpdatedAt); err != nil {
+		slog.Warn("posaula: não consegui enfileirar a geração após salvar o diário", "session", sessionID, "err", err)
+	} else {
+		pending := "pending"
+		diary.AiStatus, diary.AiError = &pending, nil
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"diary": diary})
 }
 

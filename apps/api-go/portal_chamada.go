@@ -345,11 +345,18 @@ func (s *Server) portalMySessions(ctx context.Context, classID int64, email stri
 	// O diário entra no mesmo SELECT (LEFT JOIN): a matrícula já foi conferida
 	// acima, então tudo que está em session_diary dessa turma é do aluno ver.
 	// summary NULL (sem linha no JOIN) é o sinal de "sem diário" → Diary nil.
+	// tasksPending: práticas do Pós-aula desta aula já liberadas (07:00 do
+	// dia seguinte) e sem resposta DESTE aluno — é o que a linha do tempo
+	// usa pra puxar o aluno pra tela de Prática.
 	rows, err := s.portalDB.Query(ctx,
 		`SELECT cs.id::text, to_char(cs.date,'YYYY-MM-DD'),
 		        COALESCE(to_char(cs.start_time,'HH24:MI'),''), COALESCE(to_char(cs.end_time,'HH24:MI'),''),
 		        cs.canceled, COALESCE(a.status,''), COALESCE(a.note,''), cs.aula_count,
-		        sd.summary, sd.attachments::text, sd.video_url, sd.video_drive_file_id
+		        sd.summary, sd.attachments::text, sd.video_url, sd.video_drive_file_id, sd.student_summary,
+		        (SELECT COUNT(*) FROM posaula_task pt
+		           LEFT JOIN posaula_answer pa ON pa.task_id = pt.id
+		         WHERE pt.session_id = cs.id AND pt.user_id = $2 AND pt.deleted_at IS NULL
+		           AND pt.available_from <= now() AND pa.id IS NULL)
 		 FROM class_session cs
 		 LEFT JOIN attendance a ON a.session_id = cs.id AND a.user_id = $2
 		 LEFT JOIN session_diary sd ON sd.session_id = cs.id
@@ -362,9 +369,10 @@ func (s *Server) portalMySessions(ctx context.Context, classID int64, email stri
 	itens := []portalMySessionDTO{}
 	for rows.Next() {
 		var d portalMySessionDTO
-		var summary, attachments, videoURL, videoDriveFileID *string
+		var summary, attachments, videoURL, videoDriveFileID, studentSummary *string
+		var tasksPending int
 		if err := rows.Scan(&d.ID, &d.Date, &d.StartTime, &d.EndTime, &d.Canceled, &d.Status, &d.Note, &d.AulaCount,
-			&summary, &attachments, &videoURL, &videoDriveFileID); err != nil {
+			&summary, &attachments, &videoURL, &videoDriveFileID, &studentSummary, &tasksPending); err != nil {
 			return nil, err
 		}
 		if summary != nil {
@@ -377,6 +385,8 @@ func (s *Server) portalMySessions(ctx context.Context, classID int64, email stri
 				Attachments:      portalDiaryParseAttachments(raw),
 				VideoURL:         videoURL,
 				VideoDriveFileID: videoDriveFileID,
+				StudentSummary:   studentSummary,
+				TasksPending:     tasksPending,
 			}
 		}
 		itens = append(itens, d)
