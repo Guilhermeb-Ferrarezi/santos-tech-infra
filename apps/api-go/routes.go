@@ -143,9 +143,11 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Sudo mode — confirma a identidade pra ações sensíveis (eleva por 15min)
 	mux.HandleFunc("POST /auth/sudo/verify", s.rateLimit(10, min, s.authGuard(s.handleSudoVerify)))
 
-	// Multi-conta no navegador (cookie assinado "accounts" — chooser estilo Google)
-	mux.HandleFunc("GET /auth/accounts", s.handleAccountsList)
-	mux.HandleFunc("DELETE /auth/accounts/{sessionId}", s.handleAccountDelete)
+	// Multi-conta no navegador (cookie assinado "accounts" — chooser estilo Google).
+	// Todas tocam o Postgres (sessionByHash/deleteSession) — rate-limit por IP em
+	// todas, igual ao resto da tabela, mesmo com o cookie assinado protegendo o acesso.
+	mux.HandleFunc("GET /auth/accounts", s.rateLimit(20, min, s.handleAccountsList))
+	mux.HandleFunc("DELETE /auth/accounts/{sessionId}", s.rateLimit(20, min, s.handleAccountDelete))
 	mux.HandleFunc("POST /auth/accounts/{sessionId}/activate", s.rateLimit(20, min, s.handleAccountActivate))
 
 	// Logs do ecossistema (Loki) — admin-only. Responde 503 se LOKI_URL não configurado.
