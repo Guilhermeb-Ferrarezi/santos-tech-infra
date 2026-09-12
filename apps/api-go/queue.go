@@ -198,5 +198,8 @@ func (s *Server) newEmailQueueServer(redisOpt asynq.RedisConnOpt) (*asynq.Server
 	// resposta aberta pelo Claude — tasks longas (minutos), na fila própria.
 	mux.HandleFunc(TaskPosaulaGerar, s.handlePosaulaGerar)
 	mux.HandleFunc(TaskPosaulaCorrigir, s.handlePosaulaCorrigir)
+	// Material vivo (posaula_material.go): semente do material do curso e
+	// patch por aula — mesma fila "posaula".
+	mux.HandleFunc(TaskPosaulaMaterial, s.handlePosaulaMaterial)
 	return srv, mux
 }

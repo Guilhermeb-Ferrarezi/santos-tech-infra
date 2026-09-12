@@ -75,11 +75,23 @@ type claudeGenerateResponse struct {
 // Sem secret configurado falha na hora, com erro claro (nunca panic, nunca
 // chamada sem auth). Nunca loga o secret nem o brief — só o tamanho.
 func (s *Server) claudeRaw(ctx context.Context, brief, model string) (string, error) {
+	return s.claudeRawCom(ctx, brief, model, claudeRawTimeout)
+}
+
+// claudeRawCom é o claudeRaw com teto de tempo próprio por chamada — a
+// semente do Material vivo (posaula_material.go) pede 12 mil caracteres ao
+// opus, que não cabem nos 2 min do padrão. O cliente extra compartilha o
+// transporte (pool de conexões) do padrão; só o Timeout muda.
+func (s *Server) claudeRawCom(ctx context.Context, brief, model string, timeout time.Duration) (string, error) {
 	if strings.TrimSpace(s.cfg.AgentInternalSecret) == "" {
 		return "", errAgentSecretMissing
 	}
 	if model == "" {
 		model = "sonnet"
+	}
+	client := agentHTTPClient
+	if timeout > 0 && timeout != claudeRawTimeout {
+		client = &http.Client{Timeout: timeout, Transport: agentHTTPClient.Transport}
 	}
 	payload, err := json.Marshal(claudeGenerateRequest{Task: "raw", Brief: brief, Model: model})
 	if err != nil {
@@ -97,7 +109,7 @@ func (s *Server) claudeRaw(ctx context.Context, brief, model string) (string, er
 			case <-time.After(espera):
 			}
 		}
-		text, retry, retryAfter, err := s.claudeRawOnce(ctx, url, payload)
+		text, retry, retryAfter, err := s.claudeRawOnce(ctx, client, url, payload)
 		if err == nil {
 			return text, nil
 		}
@@ -122,14 +134,14 @@ func (s *Server) claudeRaw(ctx context.Context, brief, model string) (string, er
 // de rede, 5xx ou 429); os outros 4xx e resposta malformada são definitivos.
 // retryAfter é o que o servidor pediu pra esperar (cabeçalho Retry-After em
 // segundos, teto claudeRawRetryAfterMax) — zero quando não veio.
-func (s *Server) claudeRawOnce(ctx context.Context, url string, payload []byte) (text string, retry bool, retryAfter time.Duration, err error) {
+func (s *Server) claudeRawOnce(ctx context.Context, client *http.Client, url string, payload []byte) (text string, retry bool, retryAfter time.Duration, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return "", false, 0, fmt.Errorf("agent: new request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.AgentInternalSecret)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := agentHTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", true, 0, fmt.Errorf("agent: http: %w", err)
 	}

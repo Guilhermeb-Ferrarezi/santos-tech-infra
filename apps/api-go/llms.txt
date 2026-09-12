@@ -1374,6 +1374,13 @@ POST   /portal/courses
 GET    /portal/courses/{courseId}
 PATCH  /portal/courses/{courseId}
 DELETE /portal/courses/{courseId}
+GET    /portal/courses/{courseId}/doc                     Material vivo do curso (ver seção própria abaixo)
+PUT    /portal/courses/{courseId}/doc                     body {bodyMd}
+POST   /portal/courses/{courseId}/doc/seed                → 202 {queued:true}
+GET    /portal/courses/{courseId}/doc/revisions
+GET    /portal/courses/{courseId}/doc/revisions/{version}
+POST   /portal/courses/{courseId}/doc/revisions/{version}/restore
+GET    /portal/me/courses/{courseId}/doc                  aluno (só authGuard)
 GET    /portal/courses/{courseId}/modules
 POST   /portal/courses/{courseId}/modules
 PATCH  /portal/modules/{moduleId}
@@ -1391,7 +1398,7 @@ PATCH  /portal/classes/{classId}
 DELETE /portal/classes/{classId}
 GET    /portal/classes/{classId}/students
 POST   /portal/classes/{classId}/students
-PATCH  /portal/classes/{classId}/students/{studentId}  body {individual, contractedLessons?, contratoDriveFileId?, contractedContent?}
+PATCH  /portal/classes/{classId}/students/{studentId}  body {individual, contractedLessons?, contratoDriveFileId?, contractedContent?, contractDate?}
 DELETE /portal/students/{studentId}                    admin + sudo — apaga o ALUNO inteiro
 DELETE /portal/classes/{classId}/students/{studentId}
 GET    /portal/classes/{classId}/cronograma      fases do módulo atual por semana
@@ -1422,9 +1429,19 @@ gerado pelo dashboard) segue a mesma regra de "ausente = mantém", mas string
 VAZIA limpa (grava NULL): é texto que a pessoa apaga de propósito. O valor
 volta como `contractedContent: string|null` no aluno da turma
 (`GET /portal/classes/{id}/students`, `GET /portal/classes/{id}`) e em
-`GET /portal/students-overview` / `GET /portal/me/overview`. O corpo é
-decodificado com `DisallowUnknownFields`: campo desconhecido devolve 400, não
-é ignorado.
+`GET /portal/students-overview` / `GET /portal/me/overview`. `contractDate`
+(aaaa-mm-dd — a data do contrato, que o gerador de contratos do dashboard
+manda no mesmo PATCH) segue a regra de `contractedContent`: ausente mantém,
+string vazia limpa; formato errado → 400. Mudar a data pra um valor
+DIFERENTE do salvo zera os avisos de vencimento já dados (é outro
+contrato); reenviar a mesma data não mexe neles. Os mesmos DTOs devolvem
+`contractDate: string|null` e `packageExpiresAt: string|null` (aaaa-mm-dd)
+— este SÓ pra matrícula em turma de aula particular (`individualClass`):
+`(contractDate, senão início da turma) + 12 meses`; turma de grupo vem
+`null`. `GET /portal/me/overview` ganha ainda `hasCourseDoc: bool` por
+matrícula (o curso já tem Material vivo pra ler — ver seção própria). O
+corpo é decodificado com `DisallowUnknownFields`: campo desconhecido
+devolve 400, não é ignorado.
 
 ## Portal — conteúdo (Fase 2): exercícios, containers, materiais, vídeos
 
@@ -1961,6 +1978,171 @@ Tabelas (banco do Portal, criadas no boot por `portal_migrate.go`):
 soft, índices `(user_id, available_from)` e `(session_id)`);
 `posaula_answer` (UNIQUE `task_id`). Envs: `AGENT_URL` (default
 `https://api.santos-tech.com`), `AGENT_INTERNAL_SECRET`.
+
+### Pós-aula — Material vivo — `/portal/courses/{id}/doc`, `/portal/me/courses/{id}/doc`
+
+UM documento em markdown por CURSO, escrito pelo Claude a partir da
+descrição do curso, do currículo (módulos/fases) e do conteúdo contratado
+dos alunos, e atualizado sozinho a cada aula registrada. **Sem aprovação
+humana** (decisão do Rodrigo); o que substitui a aprovação é o histórico
+completo de versões com "voltar pra esta versão". O aluno lê o material do
+curso da matrícula dele. Vocabulário: "Material vivo" (admin), "Material do
+curso" (aluno).
+
+Como funciona por dentro (api-go, `posaula_material.go`): task asynq
+`posaula:material` na fila `posaula` (MaxRetry 2, Timeout 22 min — cabe o
+pior caso da semente: 2 tentativas de parse × 2 tentativas HTTP × 5 min),
+dois caminhos:
+- **Semente** (`sessionId` 0): `POST …/doc/seed` (ou automática, ver
+  abaixo) → brief em português com nome/descrição/nível do curso, módulos e
+  fases (títulos) e os `contractedContent` distintos das matrículas do
+  curso → Claude **opus** (teto 5 min por chamada) devolve markdown puro:
+  `# Curso`, intro, `## Sumário`, uma `## ` por tema (6–12) com
+  explicações curtas, exemplos e `### Para praticar`, ≤ 12.000
+  caracteres pedidos. Cerca ```` ```markdown ```` envolvendo tudo é aceita;
+  sem nenhum `## ` ou > 60.000 caracteres → inválido (UMA retentativa com o
+  motivo; inválido de novo → `failed`). Grava versão nova `source:"seed"`.
+- **Aula** (`sessionId` > 0): brief com o material atual (inteiro até
+  30.000 caracteres; maior que isso vai o sumário + só as seções cujo
+  título casa com palavras do diário) e o diário da aula (resumo do
+  professor, anexos de texto até 20.000 caracteres — **não** o resumo pro
+  aluno: é a mensagem endereçada a UMA pessoa, não conteúdo do curso) →
+  Claude **sonnet** devolve um PATCH `{"secoes":[{"titulo","acao":
+  "adicionar"|"substituir","markdown"}],"changelog"}` só com o que a aula
+  acrescenta de NOVO; `{"secoes":[],"changelog":"sem novidade"}` não cria
+  versão. **Regra de privacidade** (brief e cinto de segurança): o material é
+  do CURSO, lido por todo aluno matriculado em qualquer turma dele — o brief
+  instrui "escreva de forma IMPESSOAL, nunca cite nomes de alunos, notas,
+  faltas ou dificuldades individuais" (mesma instrução na semente, porque
+  `contractedContent` é texto livre do contrato e pode ter nome); depois do
+  parse, se título/markdown/changelog de alguma seção citar o nome de um
+  aluno da TURMA DA AULA (completo ou só o primeiro nome com 4+ letras,
+  sem acento/caixa), o patch é rejeitado como se fosse JSON inválido (UMA
+  retentativa; na última vira `failed`, material intacto).
+  Aplicação (função pura `aplicarPatchMaterial`): seção = bloco `## Título`
+  até o próximo `## ` (um `## ` dentro de bloco de código não conta);
+  "substituir" troca o bloco de mesmo título (sem acento/caixa; o título que
+  fica é o do documento), "adicionar" entra no FIM — seção inexistente vira
+  adicionar e existente vira substituir; `## ` dentro do markdown de uma
+  seção vira `### `; uma cerca de código (```` ``` ````/`~~~`) que o modelo
+  deixou aberta (saída truncada) é fechada com uma linha extra, em vez de
+  engolir as seções seguintes; título com quebra de linha ou crase é
+  rejeitado. A seção `## Sumário`, se existir, é refeita com os títulos
+  atuais. Resultado > 60.000 caracteres, OU com **menos de 70% dos
+  caracteres do material atual** (patch que reduz demais — "substituir"
+  esvaziando seção em vez de completar) → `failed`, material intacto. Se o
+  material mudou de versão enquanto o patch era calculado (edição manual no
+  meio), relê e reaplica. Grava `source:"aula"` com `sourceSessionId` e o
+  `changelog` do modelo, e **notifica todos os admins** (`notifyUser`:
+  "Material do curso <nome> foi atualizado", corpo = changelog, url
+  `/dashboard/admin/portal/cursos/{id}`) — sem aprovação humana, é o aviso
+  (mais o histórico) que dá chance de alguém notar uma mudança ruim.
+- **Automático:** quando `posaula:gerar` (as práticas) termina com sucesso,
+  a 1ª aula de um curso SEM course_doc nenhum dispara a semente
+  (`AposSessionID` = esta aula, incorporada assim que ela terminar); curso
+  com material (`version` > 0) recebe o patch da aula, na hora. Curso com
+  course_doc mas `version` 0 (semente já pedida por OUTRA aula, ou pelo
+  admin, e ainda pending/running/failed) **nunca** dispara uma segunda
+  semente: o patch desta aula é agendado com TaskID próprio (não conflita
+  com o da semente) pra rodar ~90 s depois (`materialEnfileirarAposAula`/
+  `materialEnfileirarComConflito` → `materialAgendarPatchAposSemente`); se
+  ele rodar e a semente ainda não tiver terminado (`version` ainda 0), o
+  patch devolve um erro retentável em vez de virar semente
+  (`materialAguardarSemente`) — na última tentativa desiste em silêncio, e a
+  aula entra no material na próxima vez que o diário dela for salvo de novo.
+  Idempotência: `ai_run.idempotency_key =
+  sha256("material|curso|aula|versão|v1")` — versão = instante do pedido
+  na semente (cada "Regerar" gera de novo) e `updated_at` do diário na aula
+  (a mesma versão do diário entra uma vez só, mesmo regerando as
+  práticas). Falha → `ai_status=failed` + `ai_error`, material anterior
+  intacto; erro transitório do Claude segue o mesmo "Tentando de novo…" das
+  práticas. `ai_run.kind = "material"` com o modelo usado.
+
+Staff (guard `portal_cursos`: professor lê; admin ou cargo com
+`portal_cursos:write` escreve):
+- `GET /portal/courses/{courseId}/doc` → `{doc}`. `doc = {courseId,
+  bodyMd, version, updatedAt, aiStatus, aiError}` ou `null` enquanto
+  ninguém pediu a semente. **Depois do seed a linha existe com `version: 0`
+  e `bodyMd: ""` até a primeira versão sair** — é aí que a tela mostra
+  "gerando…"/"falhou"; trate `version === 0` como "ainda sem material".
+  `aiStatus` (`null|pending|running|ok|failed`) e `aiError` seguem o
+  estado efetivo do diário (pending/running velho > 20 min vem `failed`
+  "A geração expirou…"). 404 se o curso não existe.
+- `PUT /portal/courses/{courseId}/doc` body `{bodyMd, version}` (`bodyMd` ≤
+  60.000 caracteres, não vazio, corpo até 512 KiB, `DisallowUnknownFields`;
+  30/min) → 200 `{doc}`. `version` é opcional (0 = sem checagem, compat) —
+  concorrência otimista: se a versão atual do curso não bater com a
+  enviada (alguém salvou por baixo — o patch de uma aula, outro admin), **409**
+  em vez de sobrescrever em silêncio ("o material mudou enquanto você
+  editava — recarregue e tente de novo"); a tela já tem `doc.version`
+  disponível pra mandar. Versão nova `source:"manual"` com `authorEmail` da
+  sessão. Não mexe em `aiStatus`.
+- `POST /portal/courses/{courseId}/doc/seed` (10/min) → 202
+  `{queued:true}`. "Gerar com o Claude" quando não existe; "Regerar" quando
+  existe (gera uma versão nova; as anteriores ficam no histórico). Com uma
+  semente já na fila o pedido é engolido (a que está lá vai rodar); com uma
+  ATIVA entra uma segunda agendada pra 30 s. 503 `QUEUE_UNAVAILABLE` sem
+  fila.
+- `GET /portal/courses/{courseId}/doc/revisions` → `{revisions:[{version,
+  changelog, source:"seed"|"aula"|"manual"|"restore", sourceSessionId:
+  string|null, authorEmail: string|null, createdAt, chars}]}`, mais recente
+  primeiro, sem o corpo.
+- `GET /portal/courses/{courseId}/doc/revisions/{version}` → `{revision}`
+  (os mesmos campos + `bodyMd`). 404 se a versão não existe.
+- `POST /portal/courses/{courseId}/doc/revisions/{version}/restore`
+  (30/min) → 200 `{doc}`. Versão NOVA com o corpo da antiga
+  (`source:"restore"`, changelog "Voltou pra versão N") — o histórico é
+  linear, nunca apaga o que veio depois.
+
+Aluno (só authGuard; casado por e-mail com o `"user"` do Portal):
+- `GET /portal/me/courses/{courseId}/doc` (120/min) → `{doc:{courseId,
+  courseName, bodyMd, version, updatedAt}}`. 404 se a pessoa não está
+  matriculada em turma desse curso OU o curso ainda não tem material
+  (`version` 0) — não confirma que o curso existe.
+- `GET /portal/me/overview`: cada matrícula ganha `hasCourseDoc: bool`.
+
+Auditoria: `material_semear` (admin pediu), `material_semeado` (versão da
+semente gravada; ator = quem pediu, ou não grava na automática),
+`material_atualizado` (aula incorporada; ator = autor do diário),
+`material_editado`, `material_restaurado`. Tabelas (banco do Portal,
+`portal_migrate.go`): `course_doc` (PK `course_id`, FK pra `course` com
+cascata, `body_md`, `version`, `ai_status/ai_error/ai_updated_at`) e
+`course_doc_revision` (UNIQUE `(course_id, version)`, cascata do doc).
+
+**NOTA de deploy:** este PR (api-go) precisa subir **ANTES** do PR do
+dashboard que manda `contractDate` no PATCH da matrícula
+(`/portal/classes/{classId}/students/{studentId}`) — a API decodifica o
+corpo com `DisallowUnknownFields`, e recusaria (400) o campo novo se o
+dashboard fosse deployado primeiro (o PATCH inteiro falharia, não só o
+campo novo).
+
+### Avisos de expiração do pacote de aula particular
+
+Aula particular tem validade de **12 meses a partir da data do contrato**
+(`enrollment.contract_date`, que o gerador de contratos manda no PATCH da
+matrícula; sem ela, o `start_date` da turma). A escola avisa o aluno e os
+administradores **60 e 30 dias antes** de vencer — automático, no sino do
+dashboard + push (`notifyUser`), sem e-mail. Worker in-process
+(`portal_expiracao_worker.go`) a cada 6 h com trava no Redis, mas cada
+aviso sai UMA vez por matrícula: `enrollment.expiry_notice_60_at` /
+`expiry_notice_30_at` marcam o que já foi dado (função pura
+`avisosDevidos(hoje, vencimento, avisado60, avisado30)`; "hoje" é o dia em
+America/Sao_Paulo). A marcação é a TRAVA de idempotência: o worker marca
+primeiro (`UPDATE … WHERE col IS NULL RETURNING 1`) e só chama `notifyUser`
+quando esse UPDATE afetou uma linha — nunca o contrário, senão um erro entre
+notificar e marcar reenviaria o mesmo aviso na varredura seguinte. Só
+matrícula em turma com `individual_class`. Se os dois
+marcos chegaram juntos (contrato lançado atrasado) sai UM aviso com os dias
+reais que faltam e as duas colunas são marcadas; se o vencimento **já
+passou** quando o worker olhou pela primeira vez, marca as duas colunas SEM
+avisar (ninguém quer aviso atrasado de contrato antigo). Aluno: título "Seu
+pacote de aulas vence em N dias" (ou "hoje"/"amanhã"), corpo com a data por
+extenso, url `/dashboard/`. Todos os administradores ativos do auth: "Pacote
+de <aluno> vence em N dias", url `/dashboard/admin/portal/turmas/{classId}`
+(o mesmo formato `/dashboard/…` dos outros avisos — o sino tira o prefixo
+antes de navegar). Aluno sem conta no auth é pulado (com aviso no log) e a
+matrícula é marcada mesmo assim. O vencimento calculado é o
+`packageExpiresAt` dos DTOs da matrícula (ver o PATCH da matrícula acima).
 
 ### Sync com o Notion — `POST /portal/notion/sync` (admin-only, 6/min)
 

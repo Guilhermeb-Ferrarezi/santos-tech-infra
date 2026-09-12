@@ -75,6 +75,9 @@ func main() {
 	srv.startChamadaWorker(ctx)
 	// Avisa o aluno quando a prática do Pós-aula libera (ver posaula_worker.go).
 	srv.startPosaulaWorker(ctx)
+	// Avisa aluno e administradores 60 e 30 dias antes de o pacote de aula
+	// particular vencer (ver portal_expiracao_worker.go).
+	srv.startExpiracaoWorker(ctx)
 	// Publica sozinho o post do calendário social cujo horário chegou.
 	srv.startAgendadorSocial(ctx)
 

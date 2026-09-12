@@ -211,7 +211,7 @@ func (s *Server) handlePortalSetStudentIndividual(w http.ResponseWriter, r *http
 		writeErr(w, err)
 		return
 	}
-	if err := s.portalSetStudentIndividual(r.Context(), classID, studentID, in.Individual, in.ContractedLessons, in.ContratoDriveFileID, in.ContractedContent); err != nil {
+	if err := s.portalSetStudentIndividual(r.Context(), classID, studentID, in.Individual, in.ContractedLessons, in.ContratoDriveFileID, in.ContractedContent, in.ContractDate); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -221,7 +221,7 @@ func (s *Server) handlePortalSetStudentIndividual(w http.ResponseWriter, r *http
 	s.portalLogActivity(r, "class_student_individual", "class", fmt.Sprint(classID), map[string]any{
 		"studentId": fmt.Sprint(studentID), "individual": in.Individual,
 		"contractedLessons": in.ContractedLessons, "contratoDriveFileId": in.ContratoDriveFileID,
-		"contractedContentChanged": in.ContractedContent != nil,
+		"contractedContentChanged": in.ContractedContent != nil, "contractDate": in.ContractDate,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }

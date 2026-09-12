@@ -258,6 +258,10 @@ type posaulaRun struct {
 	Status     string
 	Error      *string
 	Duration   time.Duration
+	// Model/PromptVersion: vazios = os das práticas (posaulaModelo /
+	// posaulaPromptVersion). O Material vivo grava os dele (opus na semente).
+	Model         string
+	PromptVersion string
 }
 
 func posaulaInsertRunSQL() string {
@@ -267,7 +271,14 @@ func posaulaInsertRunSQL() string {
 
 func (s *Server) posaulaInsertRun(ctx context.Context, tx pgx.Tx, r posaulaRun) (int64, error) {
 	var id int64
-	args := []any{r.Key, r.Kind, r.SessionID, r.AnswerID, posaulaModelo, posaulaPromptVersion, r.InputChars, r.OutputRaw, r.Status, r.Error, r.Duration.Milliseconds()}
+	model, versao := r.Model, r.PromptVersion
+	if model == "" {
+		model = posaulaModelo
+	}
+	if versao == "" {
+		versao = posaulaPromptVersion
+	}
+	args := []any{r.Key, r.Kind, r.SessionID, r.AnswerID, model, versao, r.InputChars, r.OutputRaw, r.Status, r.Error, r.Duration.Milliseconds()}
 	var err error
 	if tx != nil {
 		err = tx.QueryRow(ctx, posaulaInsertRunSQL(), args...).Scan(&id)
@@ -300,7 +311,10 @@ func (s *Server) handlePosaulaGerar(ctx context.Context, t *asynq.Task) error {
 
 // posaulaContexto é tudo que a geração lê do banco antes de montar o brief.
 type posaulaContexto struct {
-	ClassID       int64
+	ClassID int64
+	// CourseID: o curso da turma — é o que decide qual Material vivo recebe
+	// esta aula no fim da geração (posaula_material.go). 0 = turma sem curso.
+	CourseID      int64
 	Date          string
 	ClassName     string
 	CourseName    string
@@ -324,14 +338,14 @@ func (s *Server) posaulaCarregarContexto(ctx context.Context, sessionID int64) (
 	c := &posaulaContexto{}
 	var summary, attachments, authorEmail *string
 	err := s.portalDB.QueryRow(ctx, `
-		SELECT cs.class_id, to_char(cs.date,'YYYY-MM-DD'), COALESCE(cl.name,''), COALESCE(co.name,''),
+		SELECT cs.class_id, to_char(cs.date,'YYYY-MM-DD'), COALESCE(cl.name,''), COALESCE(co.name,''), COALESCE(co.id, 0),
 		       sd.summary, sd.attachments::text, sd.author_email
 		FROM class_session cs
 		JOIN class cl ON cl.id = cs.class_id
 		LEFT JOIN course co ON co.id = cl.course_id
 		LEFT JOIN session_diary sd ON sd.session_id = cs.id
 		WHERE cs.id = $1`, sessionID).
-		Scan(&c.ClassID, &c.Date, &c.ClassName, &c.CourseName, &summary, &attachments, &authorEmail)
+		Scan(&c.ClassID, &c.Date, &c.ClassName, &c.CourseName, &c.CourseID, &summary, &attachments, &authorEmail)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, nil // sessionExists=false
 	}
@@ -433,11 +447,17 @@ func (s *Server) posaulaCarregarContexto(ctx context.Context, sessionID int64) (
 // lista que vai pro brief, respeitando o teto por arquivo e o total. Falha
 // em um anexo não derruba a geração — o modelo fica sem aquele arquivo.
 func (s *Server) posaulaLerAnexosTexto(ctx context.Context, anexos []portalDiaryAttachmentDTO) []briefAnexo {
+	return s.posaulaLerAnexosTextoAte(ctx, anexos, posaulaAnexosMaxChars)
+}
+
+// posaulaLerAnexosTextoAte é o posaulaLerAnexosTexto com teto total próprio
+// (o brief do Material vivo tem menos espaço pros anexos).
+func (s *Server) posaulaLerAnexosTextoAte(ctx context.Context, anexos []portalDiaryAttachmentDTO, maxChars int) []briefAnexo {
 	if s.drive == nil {
 		return nil
 	}
 	var out []briefAnexo
-	restante := posaulaAnexosMaxChars
+	restante := maxChars
 	for _, a := range anexos {
 		if restante <= 0 {
 			break
@@ -605,6 +625,10 @@ func (s *Server) posaulaGerar(ctx context.Context, p posaulaGerarPayload) error 
 		"praticas": len(out.Praticas), "alunos": len(c.Alunos), "inseridas": n, "availableFrom": liberacao,
 	})
 	slog.Info("posaula: práticas geradas", "session", p.SessionID, "praticas", len(out.Praticas), "alunos", len(c.Alunos), "availableFrom", liberacao, "ms", time.Since(inicio).Milliseconds())
+	// Material vivo (fase 3): a aula registrada entra no material do curso —
+	// semente se o curso ainda não tem, patch se já tem. Colateral: falha ao
+	// enfileirar não desfaz as práticas, só loga.
+	s.materialEnfileirarAposAula(ctx, c.CourseID, p.SessionID)
 	return nil
 }
 
