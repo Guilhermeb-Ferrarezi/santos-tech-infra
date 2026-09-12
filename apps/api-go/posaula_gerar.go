@@ -730,19 +730,33 @@ func (s *Server) posaulaGravarPraticas(ctx context.Context, sessionID int64, key
 		  AND NOT EXISTS (SELECT 1 FROM posaula_answer pa WHERE pa.task_id = posaula_task.id)`, sessionID); err != nil {
 		return 0, err
 	}
+	// Antes: 1 INSERT por (aluno × prática), serializado — uma turma de 30
+	// alunos com 5 práticas geradas virava 150 round trips sequenciais dentro
+	// desta transação. Agora vai tudo num pgx.Batch só.
 	n := 0
+	batch := &pgx.Batch{}
 	for _, aluno := range c.Alunos {
 		for _, p := range out.Praticas {
 			opcoes, err := json.Marshal(p.Opcoes)
 			if err != nil {
 				return 0, err
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO posaula_task (session_id, user_id, title, statement, kind, options, answer_key, hint, difficulty, available_from, ai_run_id, created_at)
+			batch.Queue(`INSERT INTO posaula_task (session_id, user_id, title, statement, kind, options, answer_key, hint, difficulty, available_from, ai_run_id, created_at)
 				VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, now())`,
-				sessionID, aluno.ID, p.Titulo, p.Enunciado, p.Tipo, string(opcoes), string(p.Gabarito), p.Dica, p.Dificuldade, liberacao, runID); err != nil {
+				sessionID, aluno.ID, p.Titulo, p.Enunciado, p.Tipo, string(opcoes), string(p.Gabarito), p.Dica, p.Dificuldade, liberacao, runID)
+			n++
+		}
+	}
+	if batch.Len() > 0 {
+		res := tx.SendBatch(ctx, batch)
+		for i := 0; i < batch.Len(); i++ {
+			if _, err := res.Exec(); err != nil {
+				res.Close()
 				return 0, err
 			}
-			n++
+		}
+		if err := res.Close(); err != nil {
+			return 0, err
 		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE session_diary SET student_summary = $2, ai_status = 'ok', ai_error = NULL, ai_updated_at = now() WHERE session_id = $1`,
