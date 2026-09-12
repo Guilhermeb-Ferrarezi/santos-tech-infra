@@ -554,4 +554,11 @@ func (s *Server) registerDriveRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /drive-folders/{id}/files/{fileId}/move", s.rateLimit(30, min, s.folderAccessGuard("write", s.handleMoveDriveFile)))
 	mux.HandleFunc("POST /drive-folders/{id}/files", s.rateLimit(10, min, s.folderAccessGuard("write", s.handleUploadDriveFile)))
 	mux.HandleFunc("POST /drive-folders/{id}/folders", s.rateLimit(20, min, s.folderAccessGuard("write", s.handleCreateDriveSubfolder)))
+
+	// Upload resumable (arquivo grande demais pro multipart acima) — ver
+	// drive_resumable.go/handlers_drive_uploads.go. Mesmo requisito de acesso
+	// do upload comum: é o mesmo upload, só que fatiado em pedaços.
+	mux.HandleFunc("POST /drive-folders/{id}/uploads", s.rateLimit(10, min, s.folderAccessGuard("write", s.handleCreateDriveUpload)))
+	mux.HandleFunc("PUT /drive-folders/{id}/uploads/{uploadId}", s.rateLimit(240, min, s.folderAccessGuard("write", s.handlePutDriveUploadChunk)))
+	mux.HandleFunc("GET /drive-folders/{id}/uploads/{uploadId}", s.rateLimit(60, min, s.folderAccessGuard("write", s.handleGetDriveUploadStatus)))
 }
