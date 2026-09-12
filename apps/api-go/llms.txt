@@ -804,6 +804,54 @@ Usuário autenticado (qualquer papel — acesso resolvido por pasta, não por pe
   do escopo) · rejeita destino == fileId e mover uma pasta pra dentro de uma
   subpasta dela mesma (ciclo, checado via IsDescendant invertido)
 
+### Upload resumable (arquivo grande demais pro multipart)
+
+`POST /drive-folders/{id}/files` (acima) tem teto de 500MB e sobe tudo numa
+tacada só — inviável pra um vídeo de aula de 1-2h em 1080p (2-6GB). Estas três
+rotas fazem o mesmo upload em PEDAÇOS, retomável se a conexão cair no meio
+(`uploadType=resumable` do Google) — mesmo requisito de acesso (`write` na
+raiz `{id}`, `folderAccessGuard`) do upload comum, porque é o mesmo upload.
+
+Fluxo: `POST .../uploads` cria a sessão → o cliente manda `PUT
+.../uploads/{uploadId}` em ordem, um por pedaço → se um PUT falhar (rede caiu,
+502), consulta `GET .../uploads/{uploadId}` pra saber quantos bytes o Google
+já tem e retoma o PRÓXIMO pedaço a partir dali (nunca reenvia bytes já
+aceitos). A URI real da sessão no Google (`Location` da resposta de criação) é
+uma credencial de ESCRITA direta no arquivo — NUNCA sai do backend, fica só
+no registro (Redis, TTL 24h, chave `drive:upload:<uploadId>`); o cliente só
+enxerga um `uploadId` opaco (64 hex chars, `crypto/rand`).
+
+- `POST /drive-folders/{id}/uploads[?parent=<driveFileId>] {name, mimeType?, size}`
+  → 201 `{uploadId, chunkSize}` · rate limit 10/min · `size` até 16GB
+  (`maxDriveResumableSize`), `parent` com a mesma validação de ancestralidade
+  do upload comum · `chunkSize` sugerido = 32MiB (múltiplo de 256KiB, exigência
+  do Google) · a conta de upload é a da PASTA (`folder.UploadAccount`), mesma
+  regra do multipart
+- `PUT /drive-folders/{id}/uploads/{uploadId}` — header `Content-Range: bytes
+  <início>-<fim>/<total>` obrigatório, corpo = os bytes do pedaço · rate limit
+  240/min · `{done:false, received}` (Google pediu mais, 308) ou `{done:true,
+  file}` no pedaço que fecha o upload (200/201) · valida `uploadId` (formato +
+  dono + pasta batendo com a sessão — um `uploadId` de OUTRO usuário responde
+  404 igual a um inexistente, não vaza existência), `total` batendo com o
+  tamanho declarado na criação, `Content-Length` batendo com o range, pedaço
+  ≤ 64MiB e início múltiplo de 256KiB (exceto o ÚLTIMO pedaço, que pode
+  terminar em qualquer tamanho) · SEM retry automático no pedaço (corpo vem de
+  `r.Body`, não é reenviável) — erro de rede/502 aqui é o cliente quem decide
+  retomar via GET status, não este endpoint
+- `GET /drive-folders/{id}/uploads/{uploadId}` — rate limit 60/min · pergunta
+  ao Google quantos bytes ele já tem SEM mandar nada novo → mesmo formato de
+  resposta do PUT (`{done, received}` ou `{done:true, file}`) · é o que o
+  cliente chama depois de uma queda de conexão pra saber de onde retomar
+- Sessão perdida no Google (expirou, ou nunca existiu do lado de lá) → 410
+  `UPLOAD_SESSION_LOST` nos dois (PUT e GET), e o registro no Redis é apagado
+  — o cliente tem que criar uma sessão NOVA (`POST .../uploads` de novo), não
+  adianta repetir com o mesmo `uploadId`
+- Segurança: mesmo sniff de Content-Type do multipart — se o `mimeType`
+  declarado na criação cai na allowlist "segura pra inline" (imagem/vídeo/
+  áudio/PDF), o PRIMEIRO pedaço tem os 512 bytes iniciais conferidos contra
+  ele (`http.DetectContentType`); Content-Type mentiroso → 400 e a sessão é
+  apagada (o cliente recomeça declarando o tipo certo, não só re-tenta)
+
 ## Social — Calendário Editorial — `api.santos-tech.com/social`
 
 **Publicação automática do agendado** (social_agendador.go, roda dentro do
