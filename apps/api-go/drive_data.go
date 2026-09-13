@@ -191,17 +191,43 @@ func (s *Server) replaceDriveFolderAccess(ctx context.Context, folderID string, 
 	if _, err := tx.Exec(ctx, `DELETE FROM drive_folder_members WHERE folder_id = $1::uuid`, folderID); err != nil {
 		return err
 	}
-	for _, ra := range roles {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO drive_folder_role_access (folder_id, role_kind, role_value, access)
-			VALUES ($1::uuid, $2, $3, $4)`, folderID, ra.RoleKind, ra.RoleValue, ra.Access); err != nil {
+	// Antes: 1 INSERT por cargo + 1 por membro, serializados — o handler
+	// aceita até 100 cargos + 500 membros num único save de ACL, o que virava
+	// até ~600 round trips sequenciais dentro desta transação. Agora vai tudo
+	// num pgx.Batch por tabela.
+	if len(roles) > 0 {
+		rb := &pgx.Batch{}
+		for _, ra := range roles {
+			rb.Queue(`
+				INSERT INTO drive_folder_role_access (folder_id, role_kind, role_value, access)
+				VALUES ($1::uuid, $2, $3, $4)`, folderID, ra.RoleKind, ra.RoleValue, ra.Access)
+		}
+		rres := tx.SendBatch(ctx, rb)
+		for i := 0; i < rb.Len(); i++ {
+			if _, err := rres.Exec(); err != nil {
+				rres.Close()
+				return err
+			}
+		}
+		if err := rres.Close(); err != nil {
 			return err
 		}
 	}
-	for _, m := range members {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO drive_folder_members (folder_id, user_id, access)
-			VALUES ($1::uuid, $2, $3)`, folderID, m.UserID, m.Access); err != nil {
+	if len(members) > 0 {
+		mb := &pgx.Batch{}
+		for _, m := range members {
+			mb.Queue(`
+				INSERT INTO drive_folder_members (folder_id, user_id, access)
+				VALUES ($1::uuid, $2, $3)`, folderID, m.UserID, m.Access)
+		}
+		mres := tx.SendBatch(ctx, mb)
+		for i := 0; i < mb.Len(); i++ {
+			if _, err := mres.Exec(); err != nil {
+				mres.Close()
+				return err
+			}
+		}
+		if err := mres.Close(); err != nil {
 			return err
 		}
 	}
