@@ -130,9 +130,19 @@ func (s *Server) replaceLabDeviceInventory(ctx context.Context, deviceUUID, devi
 	if _, err := tx.Exec(ctx, `DELETE FROM hour_lab_device_programs WHERE device_id = $1::uuid`, deviceID); err != nil {
 		return nil, err
 	}
-	// Set pra não repetir hash na resposta (vários programas do mesmo
-	// fabricante compartilham o mesmo ícone).
-	missing := map[string]bool{}
+
+	// Resolve nome/hash de cada programa primeiro (resolveIconHashTx só toca o
+	// banco quando o app manda os bytes do ícone — formato legado da 0.1.5) e
+	// junta tudo em slices. Um PC real manda até maxInventoryPrograms (1000)
+	// entradas: antes disso era 1 INSERT + 1 SELECT EXISTS por programa (até
+	// ~2000 round-trips numa única transação); agora vira 1 INSERT em lote
+	// (unnest, mesmo padrão de blog_heatmap.go/portal_chamada.go) + 1 SELECT
+	// com hash = ANY(...) pros hashes distintos do lote.
+	names := make([]string, 0, len(programs))
+	versions := make([]string, 0, len(programs))
+	publishers := make([]string, 0, len(programs))
+	iconHashes := make([]string, 0, len(programs))
+	hashSet := map[string]bool{}
 	for _, p := range programs {
 		name := sanitizeInventoryField(p.Name)
 		if name == "" {
@@ -142,28 +152,62 @@ func (s *Server) replaceLabDeviceInventory(ctx context.Context, deviceUUID, devi
 		if err != nil {
 			return nil, err
 		}
+		names = append(names, name)
+		versions = append(versions, sanitizeInventoryField(p.Version))
+		publishers = append(publishers, sanitizeInventoryField(p.Publisher))
+		iconHashes = append(iconHashes, hash)
+		if hash != "" {
+			hashSet[hash] = true
+		}
+	}
+
+	if len(names) > 0 {
 		// ON CONFLICT: a chave é (device_id, name, version) e o registro do
-		// Windows repete a mesma entrada em HKLM e HKCU com frequência.
+		// Windows repete a mesma entrada em HKLM e HKCU com frequência. Duas
+		// linhas do MESMO lote com a mesma chave são resolvidas em sequência
+		// pelo próprio Postgres (a segunda vê a primeira já inserida e o
+		// DO NOTHING descarta) — diferente de DO UPDATE, isso é seguro dentro
+		// de um único INSERT ... SELECT FROM unnest.
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO hour_lab_device_programs (device_id, name, version, publisher, icon_hash)
-			VALUES ($1::uuid, $2, $3, $4, $5)
+			SELECT $1::uuid, t.name, t.version, t.publisher, NULLIF(t.icon_hash, '')
+			FROM unnest($2::text[], $3::text[], $4::text[], $5::text[]) AS t(name, version, publisher, icon_hash)
 			ON CONFLICT (device_id, name, version) DO NOTHING`,
-			deviceID, name,
-			sanitizeInventoryField(p.Version),
-			sanitizeInventoryField(p.Publisher),
-			nullIfEmpty(hash)); err != nil {
+			deviceID, names, versions, publishers, iconHashes); err != nil {
 			return nil, err
 		}
-		if hash == "" {
-			continue
+	}
+
+	// Set pra não repetir hash na resposta (vários programas do mesmo
+	// fabricante compartilham o mesmo ícone).
+	missing := map[string]bool{}
+	if len(hashSet) > 0 {
+		uniqueHashes := make([]string, 0, len(hashSet))
+		for h := range hashSet {
+			uniqueHashes = append(uniqueHashes, h)
 		}
-		var known bool
-		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM hour_lab_program_icons WHERE hash = $1)`, hash).Scan(&known); err != nil {
+		rows, err := tx.Query(ctx, `SELECT hash FROM hour_lab_program_icons WHERE hash = ANY($1::text[])`, uniqueHashes)
+		if err != nil {
 			return nil, err
 		}
-		if !known {
-			missing[hash] = true
+		known := map[string]bool{}
+		for rows.Next() {
+			var h string
+			if err := rows.Scan(&h); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			known[h] = true
+		}
+		rowsErr := rows.Err()
+		rows.Close()
+		if rowsErr != nil {
+			return nil, rowsErr
+		}
+		for h := range hashSet {
+			if !known[h] {
+				missing[h] = true
+			}
 		}
 	}
 	if _, err := tx.Exec(ctx,
@@ -204,13 +248,6 @@ func storeIconTx(ctx context.Context, tx labDeviceQuerier, hash string, png []by
 		INSERT INTO hour_lab_program_icons (hash, png) VALUES ($1, $2)
 		ON CONFLICT (hash) DO NOTHING`, hash, png)
 	return err
-}
-
-func nullIfEmpty(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }
 
 // sanitizeInventoryField limpa um campo vindo do registro do Windows.
