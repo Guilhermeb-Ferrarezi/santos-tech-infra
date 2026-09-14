@@ -75,6 +75,23 @@ func TestSudoGuardElevacaoExpirada(t *testing.T) {
 	}
 }
 
+// TestGenerateSudoAccessCarregaTypAccess garante que o token elevado tem o
+// claim "typ"="access" como qualquer access token novo (token.go,
+// oauthprovider.go) — sem isso ele cairia na exceção de verifyToken para
+// tokens legados sem "typ" e passaria a validação de tipo indevidamente.
+func TestGenerateSudoAccessCarregaTypAccess(t *testing.T) {
+	access, err := generateSudoAccess("s3cr3t", 1, "a@b.com", "", time.Now().Add(10*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := verifyToken(access, "s3cr3t", tokenTypeAccess); err != nil {
+		t.Fatalf("token elevado deveria validar como access: %v", err)
+	}
+	if _, _, err := verifyToken(access, "s3cr3t", tokenTypeRefresh); err == nil {
+		t.Fatal("token elevado (typ=access) não deveria validar como refresh")
+	}
+}
+
 func TestTokenSudoUntilSecretErrado(t *testing.T) {
 	access, _ := generateSudoAccess("s3cr3t", 1, "a@b.com", "", time.Now().Add(10*time.Minute))
 	if !tokenSudoUntil(access, "outro-secret").IsZero() {

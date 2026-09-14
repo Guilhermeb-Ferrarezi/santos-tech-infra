@@ -18,12 +18,18 @@ import (
 const sudoTTL = 15 * time.Minute
 
 // generateSudoAccess re-emite um access token com o claim sudo_exp.
+//
+// Carrega "typ": tokenTypeAccess como os demais emissores de token (token.go,
+// oauthprovider.go) — sem isso, o token elevado cairia na exceção de
+// verifyToken para tokens SEM claim "typ" (mantida só para sessões antigas já
+// emitidas), o que é incorreto aqui: este token é sempre novo, nunca legado.
 func generateSudoAccess(secret string, userID int64, email, name string, sudoExp time.Time) (string, error) {
 	now := time.Now()
 	claims := jwt.MapClaims{
 		"sub":      strconv.FormatInt(userID, 10),
 		"iat":      now.Unix(),
 		"exp":      now.Add(accessTTL).Unix(),
+		"typ":      tokenTypeAccess,
 		"sudo_exp": sudoExp.Unix(),
 	}
 	if email != "" {
