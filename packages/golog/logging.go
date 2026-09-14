@@ -241,6 +241,15 @@ func (w *logResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, http.ErrNotSupported
 }
 
+// Unwrap expõe o ResponseWriter original para http.ResponseController (Go
+// 1.20+) — sem isso, SetReadDeadline/SetWriteDeadline chamado por qualquer
+// handler (ex. upload resumable do drive) sempre falha com "feature not
+// supported", porque o controller não enxerga o *http.response por trás
+// deste wrapper.
+func (w *logResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 // RequestLogger é o middleware de log de acesso. Deve ser o mais EXTERNO da
 // cadeia, pra medir tempo e status finais e recuperar panics de qualquer camada.
 func RequestLogger(next http.Handler) http.Handler {
