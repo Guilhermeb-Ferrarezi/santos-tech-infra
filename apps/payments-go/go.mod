@@ -1,6 +1,6 @@
 module github.com/santos-tech/payments
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/alicebob/miniredis/v2 v2.39.0
@@ -11,7 +11,7 @@ require (
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/santos-tech/golog v0.0.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	golang.org/x/time v0.15.0
+	golang.org/x/time v0.16.0
 	software.sslmate.com/src/go-pkcs12 v0.7.3
 )
 
