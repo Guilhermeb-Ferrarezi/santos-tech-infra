@@ -326,6 +326,11 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		// Sem isso, um cache compartilhado (CDN/proxy) na frente do serviço pode
+		// servir a resposta CORS de uma origem para outra origem (o
+		// Access-Control-Allow-Origin refletido fica preso ao 1º cache) — mesmo
+		// ajuste já feito em api-go/agent-go.
+		w.Header().Add("Vary", "Origin")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
