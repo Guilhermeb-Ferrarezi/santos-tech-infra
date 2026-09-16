@@ -397,6 +397,7 @@ func (s *Server) registerLinkShowcaseRoutes(mux *http.ServeMux) {
 func (s *Server) registerHourSessionRoutes(mux *http.ServeMux) {
 	const min = time.Minute
 	mux.HandleFunc("GET /hour-clients", s.adminGuard(s.handleListHourClients))
+	mux.HandleFunc("GET /hour-clients/{id}", s.adminGuard(s.handleGetHourClient))
 	mux.HandleFunc("POST /hour-clients", s.rateLimit(20, min, s.adminGuard(s.handleCreateHourClient)))
 	mux.HandleFunc("POST /hour-clients/{id}/purchases", s.rateLimit(30, min, s.adminGuard(s.handleAddHourPurchase)))
 	mux.HandleFunc("GET /hour-clients/{id}/purchases", s.adminGuard(s.handleListHourPurchases))

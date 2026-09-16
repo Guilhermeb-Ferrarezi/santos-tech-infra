@@ -104,13 +104,48 @@ func TestAdjustHourSessionRecusaValorForaDoLimite(t *testing.T) {
 func TestAddHourPurchaseRecusaFormaDePagamentoInvalida(t *testing.T) {
 	s := &Server{}
 	invalid := "boleto"
-	if _, err := s.addHourPurchase(context.Background(), "id", 60, nil, nil, &invalid, 1); err == nil {
+	if _, err := s.addHourPurchase(context.Background(), "id", 60, nil, &invalid, 1); err == nil {
 		t.Error("forma de pagamento fora do CHECK deveria ser recusada")
 	}
 	for _, method := range []string{"dinheiro", "pix", "cartao_credito", "cartao_debito", "outro"} {
 		if !validHourPaymentMethods[method] {
 			t.Errorf("%q deveria ser uma forma de pagamento válida", method)
 		}
+	}
+}
+
+// Venda (com forma de pagamento) só pode adicionar minutos — validado antes
+// de calcular preço, então testável sem banco (Server{} vazio).
+func TestAddHourPurchaseRecusaVendaComMinutosNaoPositivos(t *testing.T) {
+	s := &Server{}
+	pix := "pix"
+	for _, minutes := range []int{0, -60} {
+		if _, err := s.addHourPurchase(context.Background(), "id", minutes, nil, &pix, 1); err == nil {
+			t.Errorf("venda com minutesAdded=%d deveria ser recusada", minutes)
+		}
+	}
+}
+
+// Preço automático: bate exato com uma regra cadastrada; sem match, calcula
+// proporcional à regra de 60min (hora avulsa), arredondando pro centavo mais
+// próximo; sem regra nenhuma pra apoiar o cálculo, recusa (nunca deixa
+// passar sem preço).
+func TestPriceCentsForMinutes(t *testing.T) {
+	rules := []HourPriceRule{
+		{Minutes: 60, PriceCents: 2000},  // hora avulsa: R$20
+		{Minutes: 600, PriceCents: 15000}, // pacote 10h: R$150 (não é 20*10, é o preço cadastrado)
+	}
+	if got, err := priceCentsForMinutes(rules, 600); err != nil || got != 15000 {
+		t.Errorf("pacote de 10h: got=%d err=%v, quer 15000 (match exato, não proporcional)", got, err)
+	}
+	if got, err := priceCentsForMinutes(rules, 240); err != nil || got != 8000 {
+		t.Errorf("4h sem regra própria: got=%d err=%v, quer 8000 (4 * 2000, proporcional à hora avulsa)", got, err)
+	}
+	if got, err := priceCentsForMinutes(rules, 90); err != nil || got != 3000 {
+		t.Errorf("1h30 sem regra própria: got=%d err=%v, quer 3000 (90/60 * 2000)", got, err)
+	}
+	if _, err := priceCentsForMinutes(nil, 60); err == nil {
+		t.Error("sem nenhuma regra cadastrada deveria recusar, não deixar passar sem preço")
 	}
 }
 
