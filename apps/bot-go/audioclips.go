@@ -137,9 +137,7 @@ func (s *AudioClipStore) RecordGap(ctx context.Context, tenantID TenantID, voice
 		return nil
 	}
 	// Texto longo vira ruído no painel; o suficiente para reconhecer a fala.
-	if len(sampleText) > 500 {
-		sampleText = sampleText[:500]
-	}
+	sampleText = truncaRunes(sampleText, 500)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO audio_gaps (tenant_id, voice, intent_key, sample_text)
 		VALUES ($1, $2, $3, $4)
@@ -150,6 +148,28 @@ func (s *AudioClipStore) RecordGap(ctx context.Context, tenantID TenantID, voice
 		return fmt.Errorf("AudioClipStore.RecordGap: %w", err)
 	}
 	return nil
+}
+
+// truncaRunes corta em no máximo n RUNES, não bytes.
+//
+// Cortar por byte no meio de um caractere multibyte produz UTF-8 inválido, e o
+// Postgres recusa o INSERT inteiro com "invalid byte sequence for encoding
+// UTF8". Em português isso não é caso raro: "ç", "ã" e os acentos ocupam dois
+// bytes, então qualquer resposta um pouco mais longa tinha chance real de cair
+// exatamente na emenda — e a lacuna, que é justamente o que se quer registrar,
+// se perdia em silêncio.
+func truncaRunes(s string, n int) string {
+	if len(s) <= n { // len em bytes: se cabe em bytes, cabe em runes
+		return s
+	}
+	i := 0
+	for idx := range s {
+		if i == n {
+			return s[:idx]
+		}
+		i++
+	}
+	return s
 }
 
 // AudioGapRow — uma lacuna, para listar no painel.
