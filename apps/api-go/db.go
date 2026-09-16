@@ -546,6 +546,11 @@ ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code TEXT UNIQUE;
 ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS short_code_expires_at TIMESTAMPTZ;
 ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS scheduled_end_at TIMESTAMPTZ;
 ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS scheduled_start_at TIMESTAMPTZ;
+
+-- end_requested_at: pedido do cliente pra encerrar de vez (rota pública "Já
+-- vou embora"), espelha pause_requested_at — quem decide encerrar de fato
+-- continua sendo o admin, que pode usar esse horário como referência.
+ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS end_requested_at TIMESTAMPTZ;
 -- status ganhou 'scheduled' (sessão que ainda não começou, ver
 -- autoStartIfDue em hour_sessions.go) — DROP+ADD é rápido (só valida
 -- metadado, sem reescrever a tabela), linhas existentes já cabem no CHECK novo.
