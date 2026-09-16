@@ -60,7 +60,9 @@ func (s *Server) handleCreateHourClient(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, map[string]any{"client": c})
 }
 
-// POST /hour-clients/{id}/purchases — {minutesAdded, note?}
+// POST /hour-clients/{id}/purchases — {minutesAdded, note?, amountCents?, paymentMethod?}
+// amountCents/paymentMethod ficam de fora numa correção de saldo (bônus,
+// ajuste) que não é uma venda de verdade — ver addHourPurchase.
 func (s *Server) handleAddHourPurchase(w http.ResponseWriter, r *http.Request) {
 	id, err := hourUUIDFrom(r, "id", errHourClientNotFound)
 	if err != nil {
@@ -69,8 +71,10 @@ func (s *Server) handleAddHourPurchase(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	var in struct {
-		MinutesAdded int     `json:"minutesAdded"`
-		Note         *string `json:"note"`
+		MinutesAdded  int     `json:"minutesAdded"`
+		Note          *string `json:"note"`
+		AmountCents   *int64  `json:"amountCents"`
+		PaymentMethod *string `json:"paymentMethod"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
@@ -80,12 +84,47 @@ func (s *Server) handleAddHourPurchase(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "minutesAdded não pode ser zero"))
 		return
 	}
-	c, err := s.addHourPurchase(r.Context(), id, in.MinutesAdded, in.Note, userIDFrom(r))
+	if in.AmountCents != nil && *in.AmountCents <= 0 {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "amountCents deve ser positivo"))
+		return
+	}
+	c, err := s.addHourPurchase(r.Context(), id, in.MinutesAdded, in.Note, in.AmountCents, in.PaymentMethod, userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"client": c})
+}
+
+// GET /hour-clients/{id}/purchases — extrato de compras/ajustes do cliente.
+func (s *Server) handleListHourPurchases(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errHourClientNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	purchases, err := s.listHourPurchases(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"purchases": purchases})
+}
+
+// GET /hour-clients/{id}/sessions — histórico completo de sessões do
+// cliente (qualquer status), mais antiga primeiro.
+func (s *Server) handleListHourSessionsByClient(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errHourClientNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	sessions, err := s.listHourSessionsByClient(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 }
 
 // PATCH /hour-clients/{id} — {name?, phone?, discountPercent?}: update

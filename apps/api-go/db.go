@@ -595,6 +595,20 @@ ALTER TABLE hour_clients DROP CONSTRAINT IF EXISTS hour_clients_discount_percent
 ALTER TABLE hour_clients ADD CONSTRAINT hour_clients_discount_percent_check
   CHECK (discount_percent BETWEEN 0 AND 100);
 
+-- amount_cents/payment_method: quanto o cliente efetivamente pagou por esta
+-- compra de minutos e como (dinheiro no balcão, na maioria dos casos — nada
+-- a ver com o gateway online do payments-go). Ambos NULL para linhas que só
+-- registram um AJUSTE de saldo (bônus, correção), não uma venda de verdade —
+-- por isso não entram na soma de "quanto o cliente já gastou" por engano.
+ALTER TABLE hour_purchases ADD COLUMN IF NOT EXISTS amount_cents BIGINT;
+ALTER TABLE hour_purchases ADD COLUMN IF NOT EXISTS payment_method TEXT;
+ALTER TABLE hour_purchases DROP CONSTRAINT IF EXISTS hour_purchases_amount_cents_check;
+ALTER TABLE hour_purchases ADD CONSTRAINT hour_purchases_amount_cents_check
+  CHECK (amount_cents IS NULL OR amount_cents > 0);
+ALTER TABLE hour_purchases DROP CONSTRAINT IF EXISTS hour_purchases_payment_method_check;
+ALTER TABLE hour_purchases ADD CONSTRAINT hour_purchases_payment_method_check
+  CHECK (payment_method IS NULL OR payment_method IN ('dinheiro', 'pix', 'cartao_credito', 'cartao_debito', 'outro'));
+
 -- PCs do laboratório: cada instalação do app desktop (hour-timer-app) gera um
 -- device_uuid estável e manda heartbeat periódico. Nome é atribuído pelo admin
 -- (nunca pelo próprio PC) para não bagunçar com quem estiver sentado nele.
