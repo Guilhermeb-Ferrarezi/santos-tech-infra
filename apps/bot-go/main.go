@@ -95,6 +95,19 @@ func main() {
 	// 9. Instancia WhatsAppSender + cliente Evolution (canal não-oficial)
 	sender := NewWhatsAppSender(cfg.MetaAccessToken, cfg.MetaPhoneNumberID)
 	voiceClient := NewVoiceClient(cfg)
+	// Banco de áudios pré-gravados (provider 'clips'). Sem AUDIO_CLIPS_DIR, o
+	// store fica desabilitado e o bot segue no comportamento anterior.
+	clipStore := NewAudioClipStore(pool, cfg.AudioClipsDir)
+	// Indexa no boot o que está em disco. Idempotente: no-op quando nada mudou.
+	// Falha aqui NÃO derruba o bot — sem índice ele só deixa de usar clipes e
+	// responde em texto, que é degradação aceitável.
+	if clipStore.Enabled() {
+		if n, err := clipStore.SyncFromManifest(ctx, TenantID(cfg.TenantID)); err != nil {
+			logger.Error("audio: falha ao sincronizar manifesto de clipes", "err", err)
+		} else {
+			logger.Info("audio: banco de clipes sincronizado", "clipes", n, "dir", cfg.AudioClipsDir)
+		}
+	}
 	evolutionClient := NewEvolutionClient(cfg.EvolutionAPIURL, cfg.EvolutionAPIKey, cfg.EvolutionInstance)
 
 	// 10. Instancia WSHub e inicia loop em background
@@ -122,6 +135,7 @@ func main() {
 		Bookings:        bookings,
 		Notion:          notionClient,
 		Voice:           voiceClient,
+		AudioClips:      clipStore,
 	})
 
 	// 11b. Engine para o canal Evolution: mesmos repos, mas responde via Evolution.

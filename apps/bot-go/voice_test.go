@@ -13,6 +13,7 @@ func newTestVoice(baseURL string) *VoiceClient {
 	return &VoiceClient{
 		enabled: true, apiKey: "k", baseURL: baseURL,
 		ttsVoice: "nova", ttsModel: "gpt-4o-mini-tts", sttModel: "whisper-1",
+		elevenKey: "11k", elevenBaseURL: baseURL, elevenModel: "eleven_multilingual_v2",
 		http: &http.Client{},
 	}
 }
@@ -59,7 +60,7 @@ func TestSynthesize(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := newTestVoice(srv.URL).Synthesize(context.Background(), "olá")
+	got, err := newTestVoice(srv.URL).Synthesize(context.Background(), "olá", VoiceSelection{})
 	if err != nil {
 		t.Fatalf("erro: %v", err)
 	}

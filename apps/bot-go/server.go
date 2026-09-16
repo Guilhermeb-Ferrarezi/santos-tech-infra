@@ -137,6 +137,9 @@ type Server struct {
 	evoEngine  *ConversationEngine
 	evoClient  *EvolutionClient
 	voice      *VoiceClient
+	// audioClips — banco de áudios pré-gravados. Pode ser nil (AUDIO_CLIPS_DIR
+	// não configurado); nesse caso os endpoints de lacuna devolvem lista vazia.
+	audioClips *AudioClipStore
 	// rdb pode ser nil — o dedupe de notificações cai pro fallback in-memory.
 	rdb         *redis.Client
 	notifDedupe *notifDedupe
@@ -173,6 +176,7 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		evoEngine:   evoEngine,
 		evoClient:   evoClient,
 		voice:       voice,
+		audioClips:  NewAudioClipStore(pool, cfg.AudioClipsDir),
 		rdb:         rdb,
 		notifDedupe: newNotifDedupe(),
 		retryStream: NewRetryStream(rdb, cfg.RetryStreamKey, cfg.RetryStreamGroup, cfg.RetryStreamConsumer, logger),
@@ -216,6 +220,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/leads/{id}", da(s.handleDashPatchLead))
 	mux.Handle("DELETE /api/leads/{id}", da(s.handleDashDeleteLead))
 	mux.Handle("GET /api/evolution/instances", da(s.handleDashEvolutionInstances))
+	mux.Handle("GET /api/audio/gaps", da(s.handleDashAudioGaps))
+	mux.Handle("POST /api/audio/gaps/{id}/resolve", da(s.handleDashResolveAudioGap))
 	mux.HandleFunc("GET /api/ws", s.handleDashWS)
 	// OPTIONS preflight (sem auth)
 	mux.HandleFunc("OPTIONS /api/", func(w http.ResponseWriter, r *http.Request) {

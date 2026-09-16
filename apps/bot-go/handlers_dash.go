@@ -77,6 +77,17 @@ type dashConfig struct {
 	NotifEnabled         bool   `json:"notifEnabled"`
 	NotifOnSuccess       bool   `json:"notifOnSuccess"`
 	NotifOnContainerDown bool   `json:"notifOnContainerDown"`
+
+	// Voz (0033) — qual voz o bot usa ao responder uma mensagem de áudio.
+	//
+	// Ponteiros de propósito: um painel que ainda não conhece estes campos não
+	// os envia no PATCH, e aí `nil` significa "não mexe" em vez de "desliga".
+	// Sem isso, salvar qualquer outra configuração no painel antigo apagaria a
+	// escolha de voz.
+	VoiceEnabled  *bool   `json:"voiceEnabled"`
+	VoiceProvider *string `json:"voiceProvider"` // "openai" | "elevenlabs"
+	VoiceID       *string `json:"voiceId"`
+	VoiceModel    *string `json:"voiceModel"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -365,6 +376,10 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 	var captureDisabledRaw []byte
 	var qhStart, qhEnd *string
 	var kbRaw *string
+	// Colunas NOT NULL; lidas em locais e promovidas a ponteiro no JSON, para o
+	// painel receber sempre um valor concreto (e o PATCH poder omitir).
+	var voiceEnabled bool
+	var voiceProvider, voiceID, voiceModel string
 
 	err := s.pool.QueryRow(ctx, `
 		SELECT tc.bot_name, tc.bot_gender, tc.bot_enabled_by_default,
@@ -382,7 +397,11 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		       tc.notif_instance,
 		       tc.notif_enabled,
 		       tc.notif_on_success,
-		       tc.notif_on_container_down
+		       tc.notif_on_container_down,
+		       tc.voice_enabled,
+		       tc.voice_provider,
+		       tc.voice_id,
+		       tc.voice_model
 		FROM tenant_config tc
 		WHERE tc.tenant_id = $1
 	`, tenantID).Scan(
@@ -393,6 +412,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		&cfg.EvolutionLeadCaptureEnabled, &captureDisabledRaw,
 		&cfg.NotifPhone, &cfg.NotifInstance, &cfg.NotifEnabled,
 		&cfg.NotifOnSuccess, &cfg.NotifOnContainerDown,
+		&voiceEnabled, &voiceProvider, &voiceID, &voiceModel,
 	)
 	if err != nil {
 		s.logger.Error("dash: get config", "err", err)
@@ -421,6 +441,10 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg.QuietHoursStart = qhStart
 	cfg.QuietHoursEnd = qhEnd
+	cfg.VoiceEnabled = &voiceEnabled
+	cfg.VoiceProvider = &voiceProvider
+	cfg.VoiceID = &voiceID
+	cfg.VoiceModel = &voiceModel
 
 	if kbRaw != nil && *kbRaw != "" && *kbRaw != "null" {
 		_ = json.Unmarshal([]byte(*kbRaw), &cfg.KBContent)
@@ -500,6 +524,18 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		legacyAdmin = body.AdminWhatsAppNumbers[0]
 	}
 
+	// voice_provider: só os dois implementados. Valor desconhecido vira 'openai',
+	// porque a constraint do banco rejeitaria e derrubaria o PATCH inteiro.
+	// nil (campo ausente) segue nil → o COALESCE preserva o que já está lá.
+	var voiceProvider *string
+	if body.VoiceProvider != nil {
+		p := *body.VoiceProvider
+		if p != "elevenlabs" {
+			p = "openai"
+		}
+		voiceProvider = &p
+	}
+
 	// debounce_ms: clamp defensivo (0–15s; 0 = sem agrupamento).
 	debounceMs := body.DebounceMs
 	if debounceMs < 0 {
@@ -546,14 +582,19 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		    notif_instance = $17,
 		    notif_enabled  = $18,
 		    notif_on_success = $19,
-		    notif_on_container_down = $20
+		    notif_on_container_down = $20,
+		    voice_enabled  = COALESCE($21, voice_enabled),
+		    voice_provider = COALESCE($22, voice_provider),
+		    voice_id       = COALESCE($23, voice_id),
+		    voice_model    = COALESCE($24, voice_model)
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
 		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt,
 		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt, body.EvolutionBotReplyEnabled,
 		body.EvolutionLeadCaptureEnabled, captureDisabledJSON,
 		body.NotifPhone, body.NotifInstance, body.NotifEnabled,
-		body.NotifOnSuccess, body.NotifOnContainerDown)
+		body.NotifOnSuccess, body.NotifOnContainerDown,
+		body.VoiceEnabled, voiceProvider, body.VoiceID, body.VoiceModel)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)
@@ -764,6 +805,53 @@ func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/evolution/instances — status dos números conectados na Evolution.
+// ── GET /api/audio/gaps ──────────────────────────────────────────────────────
+//
+// Lista os momentos em que o bot quis falar e não tinha gravação, mais
+// frequentes primeiro. É a fila de gravação: cada linha é um áudio que vale
+// gravar, ordenada pelo que mais faz falta na prática.
+func (s *Server) handleDashAudioGaps(w http.ResponseWriter, r *http.Request) {
+	if s.audioClips == nil || !s.audioClips.Enabled() {
+		jsonOK(w, []AudioGapRow{})
+		return
+	}
+	incluirResolvidas := r.URL.Query().Get("all") == "true"
+	limit := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	gaps, err := s.audioClips.ListGaps(r.Context(), TenantID(s.cfg.TenantID), incluirResolvidas, limit)
+	if err != nil {
+		s.logger.Error("dash: audio gaps", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, gaps)
+}
+
+// ── POST /api/audio/gaps/{id}/resolve ────────────────────────────────────────
+//
+// Marca a lacuna como resolvida, depois que o áudio foi gravado e importado.
+func (s *Server) handleDashResolveAudioGap(w http.ResponseWriter, r *http.Request) {
+	if s.audioClips == nil || !s.audioClips.Enabled() {
+		jsonErr(w, "audio clips not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		jsonErr(w, "missing id", http.StatusBadRequest)
+		return
+	}
+	if err := s.audioClips.ResolveGap(r.Context(), TenantID(s.cfg.TenantID), id); err != nil {
+		s.logger.Error("dash: resolve audio gap", "err", err, "id", id)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
 func (s *Server) handleDashEvolutionInstances(w http.ResponseWriter, r *http.Request) {
 	if s.evoClient == nil {
 		jsonOK(w, []EvolutionInstance{})

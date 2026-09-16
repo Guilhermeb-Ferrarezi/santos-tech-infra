@@ -79,8 +79,12 @@ type EngineDeps struct {
 	Bookings *PendingBookingRepo
 	// Notion — cliente para ler/gravar a agenda de aulas (agendamento).
 	Notion *NotionClient
-	// Voice — STT/TTS via OpenAI (opcional). Habilitado → responde em áudio às mensagens de voz.
+	// Voice — STT/TTS (opcional). Habilitado → responde em áudio às mensagens de voz.
 	Voice *VoiceClient
+	// AudioClips — banco de áudios pré-gravados (opcional). Usado quando o tenant
+	// escolhe voice_provider='clips': em vez de sintetizar, envia a gravação real
+	// do atendente. Sem clipe para o momento, registra a lacuna e cai no texto.
+	AudioClips *AudioClipStore
 	// ForceBotEnabled — força o bot ativo nas conversas deste engine (ex.: canal
 	// Evolution, cujo gate é o toggle externo, não o whitelist do tenant).
 	ForceBotEnabled bool
@@ -392,8 +396,8 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	// Modo espelho: se o cliente mandou voz e o TTS está ligado, tenta responder com
 	// UMA nota de voz. Qualquer falha cai (com log) para o envio de texto abaixo.
 	sentVoice := false
-	if shouldReplyAsAudio(e.deps.Voice, inbound) && len(output.Bubbles) > 0 {
-		sentVoice = e.trySendVoice(ctx, conv, inbound, output, reasoningJSON)
+	if shouldReplyAsAudio(e.deps.Voice, cfg, inbound) && len(output.Bubbles) > 0 {
+		sentVoice = e.trySendVoice(ctx, conv, inbound, output, reasoningJSON, cfg)
 		if !sentVoice {
 			log.Info("voz falhou; caindo para texto", "wamid", wamid)
 		}
@@ -1055,28 +1059,90 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// shouldReplyAsAudio: responde em áudio só quando o cliente mandou voz e o TTS está ligado.
-func shouldReplyAsAudio(v *VoiceClient, inbound InboundMessage) bool {
-	return inbound.WasVoice && v.Enabled()
+// shouldReplyAsAudio: responde em áudio só quando o cliente mandou voz, o TTS
+// está ligado no ambiente E o tenant não desligou a voz no painel.
+func shouldReplyAsAudio(v *VoiceClient, cfg TenantConfig, inbound InboundMessage) bool {
+	return inbound.WasVoice && v.Enabled() && cfg.VoiceEnabled
 }
 
 // trySendVoice gera UMA nota de voz com a resposta inteira e envia pelo Meta.
 // Retorna false (com log) em qualquer falha → chamador cai no texto.
-func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation, inbound InboundMessage, output ResponderOutput, reasoningJSON *string) bool {
+func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation, inbound InboundMessage, output ResponderOutput, reasoningJSON *string, cfg TenantConfig) bool {
 	log := e.deps.Logger
-	ms, ok := e.deps.Sender.(*WhatsAppSender)
-	if !ok {
+	if _, ok := e.deps.Sender.(*WhatsAppSender); !ok {
 		return false // só Meta suporta upload de mídia
 	}
 	text := joinBubbles(output.Bubbles)
-	ogg, err := e.deps.Voice.Synthesize(ctx, text)
+	sel := VoiceSelection{Provider: cfg.VoiceProvider, VoiceID: cfg.VoiceID, Model: cfg.VoiceModel}
+
+	// Provider 'clips': a voz do atendente não pode mais ser sintetizada (o plano
+	// de TTS acabou), então só existe o acervo gravado. Sem clipe para este
+	// momento, a escolha deliberada é responder em TEXTO em vez de usar outra
+	// voz — o cliente ouve o atendente ou lê, nunca um estranho no meio da
+	// conversa. A lacuna fica registrada para virar gravação depois.
+	if sel.Provider == "clips" {
+		voice := sel.VoiceID
+		if voice == "" {
+			voice = "henrique"
+		}
+		if e.deps.AudioClips == nil || !e.deps.AudioClips.Enabled() {
+			log.Warn("clips: banco de áudios não configurado; caindo para texto")
+			return false
+		}
+		if gerr := e.deps.AudioClips.RecordGap(ctx, inbound.TenantID, voice, output.AudioIntent, text); gerr != nil {
+			// Best-effort: perder o registro da lacuna não pode travar a resposta.
+			log.Warn("clips: falha ao registrar lacuna", "err", gerr)
+		}
+		clip, cerr := e.deps.AudioClips.Resolve(ctx, inbound.TenantID, voice, output.AudioIntent)
+		if cerr != nil {
+			log.Error("clips: resolve", "err", cerr)
+			return false
+		}
+		if clip == nil {
+			log.Info("clips: sem áudio para a intenção; respondendo em texto",
+				"voice", voice, "intent", output.AudioIntent)
+			return false
+		}
+		data, rerr := e.deps.AudioClips.Read(clip)
+		if rerr != nil {
+			log.Error("clips: leitura do arquivo", "err", rerr, "file", clip.FilePath)
+			return false
+		}
+		return e.sendVoiceBytes(ctx, conv, inbound, data, clip.Transcript, reasoningJSON)
+	}
+
+	ogg, err := e.deps.Voice.Synthesize(ctx, text, sel)
+	if err != nil && sel.Provider == "elevenlabs" {
+		// A voz escolhida falhou (quota, plano sem clonagem, voz apagada). Em vez
+		// de devolver texto a quem mandou áudio, tenta o OpenAI para preservar o
+		// espelhamento de mídia. Fica no log porque é troca de voz silenciosa —
+		// o cliente ouve alguém diferente do configurado.
+		log.Warn("tts: voz escolhida falhou; caindo para o provedor padrão",
+			"provider", sel.Provider, "voice_id", sel.VoiceID, "err", err)
+		ogg, err = e.deps.Voice.Synthesize(ctx, text, VoiceSelection{})
+	}
 	if err != nil {
 		log.Error("tts: synthesize", "err", err)
 		return false
 	}
+	return e.sendVoiceBytes(ctx, conv, inbound, ogg, text, reasoningJSON)
+}
+
+// sendVoiceBytes faz o upload do OGG e envia como nota de voz, gravando a
+// mensagem na mesma transação. Compartilhado pelos dois caminhos (TTS e clipe
+// pré-gravado), que só diferem em COMO o áudio foi obtido.
+//
+// `transcript` é o que o áudio fala — vai para o histórico, para o bot lembrar
+// depois do que ele mesmo disse.
+func (e *ConversationEngine) sendVoiceBytes(ctx context.Context, conv Conversation, inbound InboundMessage, ogg []byte, transcript string, reasoningJSON *string) bool {
+	log := e.deps.Logger
+	ms, ok := e.deps.Sender.(*WhatsAppSender)
+	if !ok {
+		return false
+	}
 	mediaID, err := ms.UploadAudio(ctx, ogg)
 	if err != nil {
-		log.Error("tts: upload", "err", err)
+		log.Error("voz: upload", "err", err)
 		return false
 	}
 	ref := "wa_media_id:" + mediaID
@@ -1087,7 +1153,7 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 		Channel:        inbound.Channel,
 		To:             inbound.ExternalID,
 		Intent:         IntentFreeForm,
-		Content:        MessageContent{Type: "audio", MediaURL: &ref, Transcript: &text},
+		Content:        MessageContent{Type: "audio", MediaURL: &ref, Transcript: &transcript},
 		IdempotencyKey: idemKey,
 	}
 	txErr := e.withTenant(ctx, func(tx pgx.Tx) error {
@@ -1095,10 +1161,10 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 		if serr != nil {
 			return serr
 		}
-		return e.deps.Messages.RecordOutbound(ctx, tx, idemKey, inbound.TenantID, conv.ID, providerMsgID, text, reasoningJSON)
+		return e.deps.Messages.RecordOutbound(ctx, tx, idemKey, inbound.TenantID, conv.ID, providerMsgID, transcript, reasoningJSON)
 	})
 	if txErr != nil {
-		log.Error("tts: enviar/gravar", "err", txErr)
+		log.Error("voz: enviar/gravar", "err", txErr)
 		return false
 	}
 	if e.deps.Broadcast != nil {
