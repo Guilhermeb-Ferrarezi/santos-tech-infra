@@ -235,13 +235,62 @@ var validHourPaymentMethods = map[string]bool{
 var errInvalidPaymentMethod = appErr(http.StatusBadRequest, "BAD_REQUEST",
 	"Forma de pagamento inválida (use dinheiro, pix, cartao_credito, cartao_debito ou outro)")
 
+var errHourSaleMustBePositive = appErr(http.StatusBadRequest, "BAD_REQUEST",
+	"Uma venda (com forma de pagamento) só pode adicionar minutos — pra tirar saldo sem cobrar, use o ajuste de tempo sem forma de pagamento")
+
+var errHourPriceRuleNotConfigured = appErr(http.StatusBadRequest, "HOUR_PRICE_RULE_NOT_CONFIGURED",
+	"Cadastre um preço pra essa duração (ou a hora avulsa de 60min) em Preços antes de registrar a venda")
+
+// computeAutoPriceCents calcula o preço da venda a partir de hour_price_rules
+// — nunca aceita um valor digitado pelo admin (decisão explícita: preço
+// sempre automático). Bate exato com uma regra pra essa duração; sem match,
+// calcula proporcional à regra de 60min ("hora avulsa"); sem nenhuma das
+// duas, recusa o registro (em vez de deixar passar sem preço).
+func (s *Server) computeAutoPriceCents(ctx context.Context, minutes int) (int64, error) {
+	rules, err := s.listHourPriceRules(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return priceCentsForMinutes(rules, minutes)
+}
+
+// priceCentsForMinutes é a parte pura de computeAutoPriceCents (sem banco),
+// separada só pra dar pra testar o arredondamento e o fallback sem precisar
+// de Postgres.
+func priceCentsForMinutes(rules []HourPriceRule, minutes int) (int64, error) {
+	for _, r := range rules {
+		if r.Minutes == minutes {
+			return r.PriceCents, nil
+		}
+	}
+	for _, r := range rules {
+		if r.Minutes == 60 {
+			return (r.PriceCents*int64(minutes) + 30) / 60, nil
+		}
+	}
+	return 0, errHourPriceRuleNotConfigured
+}
+
 // addHourPurchase registra a compra (auditoria) e credita o saldo do cliente
-// na mesma transação. amountCents/paymentMethod são opcionais — nil/nil
-// registra um AJUSTE de saldo (bônus, correção), não uma venda; nesse caso
-// não entra na soma de TotalSpentCents.
-func (s *Server) addHourPurchase(ctx context.Context, clientID string, minutesAdded int, note *string, amountCents *int64, paymentMethod *string, createdBy int64) (*HourClient, error) {
-	if paymentMethod != nil && !validHourPaymentMethods[*paymentMethod] {
-		return nil, errInvalidPaymentMethod
+// na mesma transação. paymentMethod nil = AJUSTE de saldo (bônus, correção,
+// pode ser negativo) — não entra na soma de TotalSpentCents. paymentMethod
+// preenchido = VENDA de verdade: minutesAdded tem que ser positivo, e o
+// preço é sempre calculado por computeAutoPriceCents (nunca recebido do
+// chamador — preço 100% automático, decisão explícita do Guilherme).
+func (s *Server) addHourPurchase(ctx context.Context, clientID string, minutesAdded int, note *string, paymentMethod *string, createdBy int64) (*HourClient, error) {
+	var amountCents *int64
+	if paymentMethod != nil {
+		if !validHourPaymentMethods[*paymentMethod] {
+			return nil, errInvalidPaymentMethod
+		}
+		if minutesAdded <= 0 {
+			return nil, errHourSaleMustBePositive
+		}
+		cents, err := s.computeAutoPriceCents(ctx, minutesAdded)
+		if err != nil {
+			return nil, err
+		}
+		amountCents = &cents
 	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {

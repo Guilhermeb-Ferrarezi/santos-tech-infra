@@ -36,6 +36,26 @@ func (s *Server) handleListHourClients(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"clients": clients})
 }
 
+// GET /hour-clients/{id} — um cliente só (dashboard /admin/horas/clientes/{id}
+// no front, que não precisa carregar a lista inteira pra abrir direto por link).
+func (s *Server) handleGetHourClient(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errHourClientNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	c, err := s.getHourClient(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if c == nil {
+		writeErr(w, errHourClientNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"client": c})
+}
+
 // POST /hour-clients — {name, phone?}
 func (s *Server) handleCreateHourClient(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
@@ -60,9 +80,11 @@ func (s *Server) handleCreateHourClient(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, map[string]any{"client": c})
 }
 
-// POST /hour-clients/{id}/purchases — {minutesAdded, note?, amountCents?, paymentMethod?}
-// amountCents/paymentMethod ficam de fora numa correção de saldo (bônus,
-// ajuste) que não é uma venda de verdade — ver addHourPurchase.
+// POST /hour-clients/{id}/purchases — {minutesAdded, note?, paymentMethod?}
+// paymentMethod ausente = ajuste de saldo (bônus, correção, minutesAdded pode
+// ser negativo). paymentMethod preenchido = venda de verdade: minutesAdded
+// tem que ser positivo e o preço é sempre calculado automaticamente a
+// partir de hour_price_rules — nunca recebido no corpo — ver addHourPurchase.
 func (s *Server) handleAddHourPurchase(w http.ResponseWriter, r *http.Request) {
 	id, err := hourUUIDFrom(r, "id", errHourClientNotFound)
 	if err != nil {
@@ -73,7 +95,6 @@ func (s *Server) handleAddHourPurchase(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		MinutesAdded  int     `json:"minutesAdded"`
 		Note          *string `json:"note"`
-		AmountCents   *int64  `json:"amountCents"`
 		PaymentMethod *string `json:"paymentMethod"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
@@ -84,11 +105,7 @@ func (s *Server) handleAddHourPurchase(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "minutesAdded não pode ser zero"))
 		return
 	}
-	if in.AmountCents != nil && *in.AmountCents <= 0 {
-		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "amountCents deve ser positivo"))
-		return
-	}
-	c, err := s.addHourPurchase(r.Context(), id, in.MinutesAdded, in.Note, in.AmountCents, in.PaymentMethod, userIDFrom(r))
+	c, err := s.addHourPurchase(r.Context(), id, in.MinutesAdded, in.Note, in.PaymentMethod, userIDFrom(r))
 	if err != nil {
 		writeErr(w, err)
 		return
