@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 # Pacote compartilhado (replace local ../../packages/golog no go.mod do serviço).
 COPY packages/golog ./packages/golog
