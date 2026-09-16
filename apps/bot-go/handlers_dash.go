@@ -524,13 +524,18 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		legacyAdmin = body.AdminWhatsAppNumbers[0]
 	}
 
-	// voice_provider: só os dois implementados. Valor desconhecido vira 'openai',
+	// voice_provider: só os implementados. Valor desconhecido vira 'openai',
 	// porque a constraint do banco rejeitaria e derrubaria o PATCH inteiro.
 	// nil (campo ausente) segue nil → o COALESCE preserva o que já está lá.
+	//
+	// 'clips' PRECISA estar aqui. O painel reenvia o config inteiro a cada save
+	// (`{...cfg.data, ...draft}`), então deixar 'clips' de fora fazia qualquer
+	// salvamento — mudar o nome do bot, por exemplo — derrubar a voz gravada do
+	// atendente para a voz sintética do OpenAI, sem avisar ninguém.
 	var voiceProvider *string
 	if body.VoiceProvider != nil {
 		p := *body.VoiceProvider
-		if p != "elevenlabs" {
+		if p != "elevenlabs" && p != "clips" {
 			p = "openai"
 		}
 		voiceProvider = &p

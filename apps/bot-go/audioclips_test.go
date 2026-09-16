@@ -3,7 +3,9 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // Sem AUDIO_CLIPS_DIR o store fica inerte: nada de pânico, nada de erro no boot,
@@ -94,5 +96,25 @@ func TestReadClipFromArquivoVazio(t *testing.T) {
 func TestReadClipFromInexistente(t *testing.T) {
 	if _, err := readClipFrom(t.TempDir(), "nao-existe.ogg"); err == nil {
 		t.Fatal("arquivo inexistente deveria virar erro")
+	}
+}
+
+func TestTruncaRunesNaoQuebraUTF8(t *testing.T) {
+	// "ção" repetido: quase todo caractere ocupa 2 bytes, então o corte em 500
+	// bytes cairia no meio de um deles.
+	s := strings.Repeat("ção ", 400)
+	got := truncaRunes(s, 500)
+
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncaRunes devolveu UTF-8 inválido")
+	}
+	if n := utf8.RuneCountInString(got); n != 500 {
+		t.Fatalf("esperava 500 runes, veio %d", n)
+	}
+	if s2 := truncaRunes("curto", 500); s2 != "curto" {
+		t.Fatalf("texto curto foi alterado: %q", s2)
+	}
+	if s2 := truncaRunes("", 500); s2 != "" {
+		t.Fatalf("string vazia virou %q", s2)
 	}
 }
