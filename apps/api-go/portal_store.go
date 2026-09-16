@@ -573,7 +573,8 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p p
 		return nil, 0, err
 	}
 	rows, err := s.portalDB.Query(ctx, `SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.name,''), u.role, e.individual, e.contracted_lessons, e.contrato_drive_file_id, e.contracted_content,
-		       e.contract_date, cl.start_date::date, cl.individual_class
+		       e.contract_date, cl.start_date::date, cl.individual_class,
+		       e.payer_name, e.payer_cpf, e.payer_email, e.payer_whatsapp
 		FROM enrollment e JOIN "user" u ON u.id = e.user_id
 		JOIN class cl ON cl.id = e.class_id
 		WHERE e.class_id=$1 ORDER BY COALESCE(u.name,'') ASC, u.id ASC
@@ -588,7 +589,8 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p p
 		var contractDate, classStart *time.Time
 		var individualClass bool
 		if err := rows.Scan(&dto.ID, &dto.Email, &dto.Name, &dto.Role, &dto.Individual, &dto.ContractedLessons, &dto.ContratoDriveFileID, &dto.ContractedContent,
-			&contractDate, &classStart, &individualClass); err != nil {
+			&contractDate, &classStart, &individualClass,
+			&dto.PayerName, &dto.PayerCPF, &dto.PayerEmail, &dto.PayerWhatsapp); err != nil {
 			return nil, 0, err
 		}
 		dto.ContractDate = dataISO(contractDate)
@@ -600,13 +602,14 @@ func (s *Server) portalListClassStudents(ctx context.Context, classID int64, p p
 
 // portalSetStudentIndividual atualiza o toggle "particular" e, opcionalmente, o
 // pacote de aulas contratadas, o contrato vinculado, o conteúdo das aulas do
-// contrato e/ou a data do contrato de uma matrícula. Os opcionais só entram
-// na cláusula SET quando vêm no payload (ponteiro não-nil) — update parcial,
-// mesmo desenho pros quatro. contractedContent e contractDate vazios gravam
-// NULL (limpam) — ver portalStudentIndividualInput. Data do contrato
-// DIFERENTE da salva zera os avisos de vencimento (é outro contrato); a
-// mesma data (o gerador reenvia a cada PATCH) não mexe neles.
-func (s *Server) portalSetStudentIndividual(ctx context.Context, classID, studentID int64, individual bool, contractedLessons *int, contratoDriveFileID, contractedContent, contractDate *string) error {
+// contrato, a data do contrato e/ou os dados de quem paga (payer_*) de uma
+// matrícula. Os opcionais só entram na cláusula SET quando vêm no payload
+// (ponteiro não-nil) — update parcial, mesmo desenho pra todos. Os campos de
+// texto vazios gravam NULL (limpam) — ver portalStudentIndividualInput. Data
+// do contrato DIFERENTE da salva zera os avisos de vencimento (é outro
+// contrato); CPF do pagador DIFERENTE do salvo zera o asaas_customer_id em
+// cache (é outro pagador, o cliente do Asaas de antes não serve mais).
+func (s *Server) portalSetStudentIndividual(ctx context.Context, classID, studentID int64, individual bool, contractedLessons *int, contratoDriveFileID, contractedContent, contractDate *string, payerName, payerCPF, payerEmail, payerWhatsapp *string) error {
 	sets := []string{"individual=$3"}
 	args := []any{classID, studentID, individual}
 	if contractedLessons != nil {
@@ -630,6 +633,27 @@ func (s *Server) portalSetStudentIndividual(ctx context.Context, classID, studen
 			fmt.Sprintf("expiry_notice_60_at=CASE WHEN contract_date IS DISTINCT FROM NULLIF($%d,'')::date THEN NULL ELSE expiry_notice_60_at END", n),
 			fmt.Sprintf("expiry_notice_30_at=CASE WHEN contract_date IS DISTINCT FROM NULLIF($%d,'')::date THEN NULL ELSE expiry_notice_30_at END", n),
 			fmt.Sprintf("contract_date=NULLIF($%d,'')::date", n))
+	}
+	if payerName != nil {
+		args = append(args, strings.TrimSpace(*payerName))
+		sets = append(sets, fmt.Sprintf("payer_name=NULLIF($%d,'')", len(args)))
+	}
+	if payerEmail != nil {
+		args = append(args, strings.TrimSpace(*payerEmail))
+		sets = append(sets, fmt.Sprintf("payer_email=NULLIF($%d,'')", len(args)))
+	}
+	if payerWhatsapp != nil {
+		args = append(args, strings.TrimSpace(*payerWhatsapp))
+		sets = append(sets, fmt.Sprintf("payer_whatsapp=NULLIF($%d,'')", len(args)))
+	}
+	if payerCPF != nil {
+		args = append(args, strings.TrimSpace(*payerCPF))
+		n := len(args)
+		// CPF diferente do salvo é outro pagador — o cliente do Asaas em cache
+		// (se algum dia foi criado pra esta matrícula) não vale mais pra ela.
+		sets = append(sets,
+			fmt.Sprintf("asaas_customer_id=CASE WHEN payer_cpf IS DISTINCT FROM NULLIF($%d,'') THEN NULL ELSE asaas_customer_id END", n),
+			fmt.Sprintf("payer_cpf=NULLIF($%d,'')", n))
 	}
 	query := fmt.Sprintf(`UPDATE enrollment SET %s WHERE class_id=$1 AND user_id=$2`, strings.Join(sets, ", "))
 	tag, err := s.portalDB.Exec(ctx, query, args...)

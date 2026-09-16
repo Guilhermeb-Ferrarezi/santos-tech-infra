@@ -211,17 +211,20 @@ func (s *Server) handlePortalSetStudentIndividual(w http.ResponseWriter, r *http
 		writeErr(w, err)
 		return
 	}
-	if err := s.portalSetStudentIndividual(r.Context(), classID, studentID, in.Individual, in.ContractedLessons, in.ContratoDriveFileID, in.ContractedContent, in.ContractDate); err != nil {
+	if err := s.portalSetStudentIndividual(r.Context(), classID, studentID, in.Individual, in.ContractedLessons, in.ContratoDriveFileID, in.ContractedContent, in.ContractDate,
+		in.PayerName, in.PayerCPF, in.PayerEmail, in.PayerWhatsapp); err != nil {
 		writeErr(w, err)
 		return
 	}
 	// contractedContent não vai pro log inteiro (pode ter 20 mil caracteres —
 	// o "Message" de logs é cortado em 8000 e engoliria o resto do payload);
-	// só registra que mudou.
+	// só registra que mudou. payer_* pelo mesmo motivo de segurança que
+	// qualquer outro CPF/dado pessoal: o log registra QUE mudou, nunca o valor.
 	s.portalLogActivity(r, "class_student_individual", "class", fmt.Sprint(classID), map[string]any{
 		"studentId": fmt.Sprint(studentID), "individual": in.Individual,
 		"contractedLessons": in.ContractedLessons, "contratoDriveFileId": in.ContratoDriveFileID,
 		"contractedContentChanged": in.ContractedContent != nil, "contractDate": in.ContractDate,
+		"payerDataChanged": in.PayerName != nil || in.PayerCPF != nil || in.PayerEmail != nil || in.PayerWhatsapp != nil,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }

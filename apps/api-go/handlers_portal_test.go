@@ -239,6 +239,30 @@ func TestPortalSetStudentIndividualContratoDriveFileIdValidationBeforeDB(t *test
 	}
 }
 
+func TestPortalSetStudentIndividualPayerCpfValidationBeforeDB(t *testing.T) {
+	s := testServer(Config{})
+
+	r := httptest.NewRequest("PATCH", "/portal/classes/1/students/1", strings.NewReader(`{"individual":true,"payerCpf":"123"}`))
+	r.SetPathValue("classId", "1")
+	r.SetPathValue("studentId", "1")
+	w := httptest.NewRecorder()
+	s.handlePortalSetStudentIndividual(w, reqAs(r, 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("payerCpf com menos de 11 dígitos: code=%d want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestPortalStudentIndividualInputNormalizesPayerCpf(t *testing.T) {
+	cpf := "529.982.247-25"
+	in := portalStudentIndividualInput{Individual: true, PayerCPF: &cpf}
+	if err := in.validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if *in.PayerCPF != "52998224725" {
+		t.Fatalf("payerCpf não normalizado: got %q", *in.PayerCPF)
+	}
+}
+
 func TestPortalMySessionsRequiresAuthBeforeDB(t *testing.T) {
 	s := testServer(Config{})
 	w := httptest.NewRecorder()
