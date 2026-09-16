@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestInstagramClientSendPrivateReply(t *testing.T) {
@@ -59,6 +60,28 @@ func TestInstagramClientDisabled(t *testing.T) {
 	}
 	if err := c.sendPrivateReply(context.Background(), "c1", "t"); err == nil {
 		t.Error("client desabilitado deveria recusar o envio")
+	}
+}
+
+// Se a Graph API devolver erro HTTP (token expirado, rate limit) enquanto o
+// vídeo ainda está processando, o polling não pode tratar isso como
+// "continua em progresso" e esperar o timeout inteiro (~4min) — tem que
+// devolver o erro real na hora.
+func TestInstagramClientWaitMediaFinishedErrorStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"token expirado"}}`))
+	}))
+	defer srv.Close()
+
+	c := &instagramClient{baseURL: srv.URL, userID: "999", token: "tok-123", client: srv.Client()}
+	start := time.Now()
+	err := c.waitMediaFinished(context.Background(), "creation-1")
+	if err == nil {
+		t.Fatal("esperava erro para status 401 da consulta de status")
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("devolveu erro só depois de %v — deveria falhar já na primeira consulta, não esperar o timeout inteiro", elapsed)
 	}
 }
 
