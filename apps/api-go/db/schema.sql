@@ -294,7 +294,11 @@ CREATE TABLE IF NOT EXISTS hour_purchases (
   minutes_added INTEGER NOT NULL,
   note          TEXT,
   created_by    INTEGER NOT NULL REFERENCES users(id),
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- amount_cents/payment_method: quanto o cliente pagou e como, só quando é
+  -- venda de verdade — NULL/NULL num ajuste de saldo (bônus, correção).
+  amount_cents    BIGINT CHECK (amount_cents IS NULL OR amount_cents > 0),
+  payment_method  TEXT CHECK (payment_method IS NULL OR payment_method IN ('dinheiro', 'pix', 'cartao_credito', 'cartao_debito', 'outro'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_hour_purchases_client ON hour_purchases(client_id);

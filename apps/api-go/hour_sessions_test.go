@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -93,6 +94,22 @@ func TestAdjustHourSessionRecusaValorForaDoLimite(t *testing.T) {
 	for _, delta := range []int64{0, maxAdjustSeconds + 1, -maxAdjustSeconds - 1} {
 		if _, err := s.adjustHourSession(nil, "id", 1, delta, nil); err == nil {
 			t.Errorf("delta %d deveria ser recusado", delta)
+		}
+	}
+}
+
+// Forma de pagamento é validada ANTES de tocar no banco (dá pra testar com
+// Server{} vazio) — só os valores do CHECK de hour_purchases.payment_method
+// passam; nil (ajuste sem valor associado) é sempre aceito.
+func TestAddHourPurchaseRecusaFormaDePagamentoInvalida(t *testing.T) {
+	s := &Server{}
+	invalid := "boleto"
+	if _, err := s.addHourPurchase(context.Background(), "id", 60, nil, nil, &invalid, 1); err == nil {
+		t.Error("forma de pagamento fora do CHECK deveria ser recusada")
+	}
+	for _, method := range []string{"dinheiro", "pix", "cartao_credito", "cartao_debito", "outro"} {
+		if !validHourPaymentMethods[method] {
+			t.Errorf("%q deveria ser uma forma de pagamento válida", method)
 		}
 	}
 }

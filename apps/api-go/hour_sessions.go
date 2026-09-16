@@ -26,6 +26,25 @@ type HourClient struct {
 	DiscountPercent int       `json:"discountPercent"`
 	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
+	// TotalSpentCents: soma de amount_cents de hour_purchases deste cliente
+	// (ajustes sem valor, amount_cents NULL, não entram). Sempre recalculado
+	// via subquery, nunca um total guardado à parte — mesma filosofia do
+	// elapsed de sessão, pra nunca dessincronizar de hour_purchases.
+	TotalSpentCents int64 `json:"totalSpentCents"`
+}
+
+// HourPurchase é uma linha de hour_purchases: tanto uma compra de verdade
+// (amount_cents/payment_method preenchidos) quanto um ajuste de saldo sem
+// valor associado (bônus, correção — os dois campos ficam NULL).
+type HourPurchase struct {
+	ID            string    `json:"id"`
+	ClientID      string    `json:"clientId"`
+	MinutesAdded  int       `json:"minutesAdded"`
+	Note          *string   `json:"note"`
+	AmountCents   *int64    `json:"amountCents"`
+	PaymentMethod *string   `json:"paymentMethod"`
+	CreatedByID   int64     `json:"createdById"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 // HourSession é a view completa (admin) ou pública, dependendo do handler que
@@ -103,11 +122,12 @@ func validateEventAt(at, since, now time.Time) error {
 
 // ── clientes ─────────────────────────────────────────────────────────────────
 
-const hourClientCols = `id::text, name, phone, balance_minutes, discount_percent, created_at, updated_at`
+const hourClientCols = `id::text, name, phone, balance_minutes, discount_percent, created_at, updated_at,
+	(SELECT COALESCE(SUM(amount_cents), 0) FROM hour_purchases WHERE client_id = hour_clients.id)`
 
 func scanHourClient(row pgx.Row) (*HourClient, error) {
 	var c HourClient
-	err := row.Scan(&c.ID, &c.Name, &c.Phone, &c.BalanceMinutes, &c.DiscountPercent, &c.CreatedAt, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.Name, &c.Phone, &c.BalanceMinutes, &c.DiscountPercent, &c.CreatedAt, &c.UpdatedAt, &c.TotalSpentCents)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -133,7 +153,7 @@ func (s *Server) listHourClients(ctx context.Context) ([]HourClient, error) {
 	out := []HourClient{}
 	for rows.Next() {
 		var c HourClient
-		if err := rows.Scan(&c.ID, &c.Name, &c.Phone, &c.BalanceMinutes, &c.DiscountPercent, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Phone, &c.BalanceMinutes, &c.DiscountPercent, &c.CreatedAt, &c.UpdatedAt, &c.TotalSpentCents); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -198,18 +218,33 @@ func (s *Server) deleteHourClient(ctx context.Context, id string) error {
 	return nil
 }
 
+// validHourPaymentMethods espelha o CHECK de hour_purchases.payment_method —
+// pagamento no balcão (a imensa maioria em dinheiro/pix manual), sem nenhuma
+// relação com os métodos do gateway online do payments-go (pix/boleto/card).
+var validHourPaymentMethods = map[string]bool{
+	"dinheiro": true, "pix": true, "cartao_credito": true, "cartao_debito": true, "outro": true,
+}
+
+var errInvalidPaymentMethod = appErr(http.StatusBadRequest, "BAD_REQUEST",
+	"Forma de pagamento inválida (use dinheiro, pix, cartao_credito, cartao_debito ou outro)")
+
 // addHourPurchase registra a compra (auditoria) e credita o saldo do cliente
-// na mesma transação.
-func (s *Server) addHourPurchase(ctx context.Context, clientID string, minutesAdded int, note *string, createdBy int64) (*HourClient, error) {
+// na mesma transação. amountCents/paymentMethod são opcionais — nil/nil
+// registra um AJUSTE de saldo (bônus, correção), não uma venda; nesse caso
+// não entra na soma de TotalSpentCents.
+func (s *Server) addHourPurchase(ctx context.Context, clientID string, minutesAdded int, note *string, amountCents *int64, paymentMethod *string, createdBy int64) (*HourClient, error) {
+	if paymentMethod != nil && !validHourPaymentMethods[*paymentMethod] {
+		return nil, errInvalidPaymentMethod
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO hour_purchases (client_id, minutes_added, note, created_by)
-		VALUES ($1::uuid, $2, $3, $4)`,
-		clientID, minutesAdded, note, createdBy); err != nil {
+		INSERT INTO hour_purchases (client_id, minutes_added, note, amount_cents, payment_method, created_by)
+		VALUES ($1::uuid, $2, $3, $4, $5, $6)`,
+		clientID, minutesAdded, note, amountCents, paymentMethod, createdBy); err != nil {
 		return nil, err
 	}
 	c, err := scanHourClient(tx.QueryRow(ctx, `
@@ -227,6 +262,67 @@ func (s *Server) addHourPurchase(ctx context.Context, clientID string, minutesAd
 		return nil, err
 	}
 	return c, nil
+}
+
+const hourPurchaseCols = `id::text, client_id::text, minutes_added, note, amount_cents, payment_method, created_by, created_at`
+
+// listHourPurchases devolve o histórico de compras/ajustes do cliente, mais
+// recente primeiro — é o extrato usado pra ver forma de pagamento e valor de
+// cada venda (TotalSpentCents em HourClient é a soma já pronta).
+func (s *Server) listHourPurchases(ctx context.Context, clientID string) ([]HourPurchase, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT `+hourPurchaseCols+`
+		FROM hour_purchases WHERE client_id = $1::uuid ORDER BY created_at DESC`, clientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HourPurchase{}
+	for rows.Next() {
+		var p HourPurchase
+		if err := rows.Scan(&p.ID, &p.ClientID, &p.MinutesAdded, &p.Note, &p.AmountCents, &p.PaymentMethod, &p.CreatedByID, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// listHourSessionsByClient devolve TODAS as sessões do cliente (qualquer
+// status, ao contrário de listActiveHourSessions), mais antiga primeiro —
+// out[0] é a primeira sessão dele. ElapsedSeconds de sessão 'ended' é fixo
+// (sem cauda "rodando" a somar), mas passa pelo mesmo
+// hourSessionElapsedSeconds pra nunca duplicar a lógica de cálculo.
+func (s *Server) listHourSessionsByClient(ctx context.Context, clientID string) ([]HourSession, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT `+hourSessionCols+`
+		FROM hour_sessions s JOIN hour_clients c ON c.id = s.client_id
+		WHERE s.client_id = $1::uuid
+		ORDER BY s.created_at`, clientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HourSession{}
+	for rows.Next() {
+		h, err := scanHourSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	for i := range out {
+		elapsed, err := s.hourSessionElapsedSeconds(ctx, out[i].ID, now)
+		if err != nil {
+			return nil, err
+		}
+		out[i].ElapsedSeconds = elapsed
+	}
+	return out, nil
 }
 
 // ── sessões ──────────────────────────────────────────────────────────────────

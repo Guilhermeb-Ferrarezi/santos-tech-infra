@@ -399,6 +399,8 @@ func (s *Server) registerHourSessionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /hour-clients", s.adminGuard(s.handleListHourClients))
 	mux.HandleFunc("POST /hour-clients", s.rateLimit(20, min, s.adminGuard(s.handleCreateHourClient)))
 	mux.HandleFunc("POST /hour-clients/{id}/purchases", s.rateLimit(30, min, s.adminGuard(s.handleAddHourPurchase)))
+	mux.HandleFunc("GET /hour-clients/{id}/purchases", s.adminGuard(s.handleListHourPurchases))
+	mux.HandleFunc("GET /hour-clients/{id}/sessions", s.adminGuard(s.handleListHourSessionsByClient))
 	mux.HandleFunc("PATCH /hour-clients/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateHourClient)))
 	mux.HandleFunc("DELETE /hour-clients/{id}", s.rateLimit(20, min, s.adminGuard(s.handleDeleteHourClient)))
 
