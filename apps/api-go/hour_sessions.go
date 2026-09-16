@@ -34,7 +34,11 @@ type HourSession struct {
 	ClientName       string     `json:"clientName"`
 	Status           string     `json:"status"`
 	PauseRequestedAt *time.Time `json:"pauseRequestedAt"`
-	CreatedAt        time.Time  `json:"createdAt"`
+	// EndRequestedAt: pedido do cliente pra encerrar de vez (rota pública "Já
+	// vou embora"). Espelha PauseRequestedAt — quem decide encerrar
+	// continua sendo o admin.
+	EndRequestedAt *time.Time `json:"endRequestedAt"`
+	CreatedAt      time.Time  `json:"createdAt"`
 	UpdatedAt        time.Time  `json:"updatedAt"`
 	ElapsedSeconds   int64      `json:"elapsedSeconds"`
 	BalanceMinutes   int        `json:"balanceMinutes"`
@@ -70,6 +74,30 @@ type HourSessionEvent struct {
 
 var errHourClientNotFound = appErr(http.StatusNotFound, "HOUR_CLIENT_NOT_FOUND", "Cliente não encontrado")
 var errHourSessionNotFound = appErr(http.StatusNotFound, "HOUR_SESSION_NOT_FOUND", "Sessão não encontrada")
+
+var errEventAtInFuture = appErr(http.StatusBadRequest, "EVENT_AT_IN_FUTURE",
+	"Horário não pode ser no futuro")
+
+// errEventAtBeforeSegmentStart: mensagem inclui o horário real de início pra
+// o admin entender por que foi recusado (dígito errado ao digitar, geralmente).
+func errEventAtBeforeSegmentStart(since time.Time) error {
+	return appErr(http.StatusBadRequest, "EVENT_AT_BEFORE_SEGMENT_START",
+		"Horário inválido: a sessão só está rodando desde "+since.Format("15:04"))
+}
+
+// validateEventAt é a parte pura (testável sem banco) da validação de um
+// horário explícito de pause/end: não pode ser no futuro, nem anterior ao
+// início do trecho em andamento (`since`) — geraria duração negativa nesse
+// segmento. Limites inclusivos.
+func validateEventAt(at, since, now time.Time) error {
+	if at.After(now) {
+		return errEventAtInFuture
+	}
+	if at.Before(since) {
+		return errEventAtBeforeSegmentStart(since)
+	}
+	return nil
+}
 
 // ── clientes ─────────────────────────────────────────────────────────────────
 
@@ -164,11 +192,11 @@ func (s *Server) addHourPurchase(ctx context.Context, clientID string, minutesAd
 // ── sessões ──────────────────────────────────────────────────────────────────
 
 const hourSessionCols = `s.id::text, s.client_id::text, c.name, s.status, s.pause_requested_at,
-	s.created_at, s.updated_at, c.balance_minutes, s.scheduled_end_at, s.scheduled_start_at`
+	s.end_requested_at, s.created_at, s.updated_at, c.balance_minutes, s.scheduled_end_at, s.scheduled_start_at`
 
 func scanHourSession(row pgx.Row) (*HourSession, error) {
 	var h HourSession
-	err := row.Scan(&h.ID, &h.ClientID, &h.ClientName, &h.Status, &h.PauseRequestedAt,
+	err := row.Scan(&h.ID, &h.ClientID, &h.ClientName, &h.Status, &h.PauseRequestedAt, &h.EndRequestedAt,
 		&h.CreatedAt, &h.UpdatedAt, &h.BalanceMinutes, &h.ScheduledEndAt, &h.ScheduledStartAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -492,7 +520,7 @@ func (s *Server) autoEndIfDue(ctx context.Context, h *HourSession) error {
 	if err := s.db.QueryRow(ctx, `SELECT created_by FROM hour_sessions WHERE id = $1::uuid`, h.ID).Scan(&createdBy); err != nil {
 		return err
 	}
-	ended, err := s.endHourSession(ctx, h.ID, createdBy)
+	ended, err := s.endHourSession(ctx, h.ID, createdBy, time.Now())
 	if err != nil {
 		if ae, ok := err.(*AppError); ok && ae.Code == "HOUR_SESSION_BAD_STATE" {
 			fresh, ferr := scanHourSession(s.db.QueryRow(ctx, `
@@ -637,7 +665,7 @@ func (s *Server) listHourSessionEvents(ctx context.Context, sessionID string) ([
 
 // transitionHourSession aplica pause/resume: valida a troca de estado, grava
 // o evento e atualiza o status — tudo numa transação.
-func (s *Server) transitionHourSession(ctx context.Context, id string, actorID int64, from, to, eventType string) (*HourSession, error) {
+func (s *Server) transitionHourSession(ctx context.Context, id string, actorID int64, from, to, eventType string, eventAt time.Time) (*HourSession, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -661,9 +689,9 @@ func (s *Server) transitionHourSession(ctx context.Context, id string, actorID i
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO hour_session_events (session_id, event_type, actor_user_id)
-		VALUES ($1::uuid, $2, $3)`,
-		id, eventType, actorID); err != nil {
+		INSERT INTO hour_session_events (session_id, event_type, actor_user_id, created_at)
+		VALUES ($1::uuid, $2, $3, $4)`,
+		id, eventType, actorID, eventAt); err != nil {
 		return nil, err
 	}
 	h, err := scanHourSession(tx.QueryRow(ctx, `
@@ -686,8 +714,11 @@ func (s *Server) transitionHourSession(ctx context.Context, id string, actorID i
 // endHourSession encerra a sessão e debita o tempo usado do saldo do cliente
 // — cálculo do decorrido, evento "end", status e débito de saldo na mesma
 // transação. Saldo nunca fica negativo (GREATEST trava em 0): se a sessão
-// passou do saldo disponível, o excedente não vira dívida — só zera.
-func (s *Server) endHourSession(ctx context.Context, id string, actorID int64) (*HourSession, error) {
+// passou do saldo disponível, o excedente não vira dívida — só zera. eventAt
+// é o horário em que a sessão de fato parou de rodar (ver resolveExplicitEventAt) —
+// tanto o corte do tempo decorrido quanto o evento "end" usam esse instante,
+// não necessariamente "agora".
+func (s *Server) endHourSession(ctx context.Context, id string, actorID int64, eventAt time.Time) (*HourSession, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -705,7 +736,7 @@ func (s *Server) endHourSession(ctx context.Context, id string, actorID int64) (
 	if status == "ended" {
 		return nil, appErr(http.StatusConflict, "HOUR_SESSION_BAD_STATE", "Sessão já foi encerrada")
 	}
-	elapsed, err := s.hourSessionElapsedSeconds(ctx, id, time.Now())
+	elapsed, err := s.hourSessionElapsedSeconds(ctx, id, eventAt)
 	if err != nil {
 		return nil, err
 	}
@@ -727,15 +758,15 @@ func (s *Server) endHourSession(ctx context.Context, id string, actorID int64) (
 	if _, err := tx.Exec(ctx, `
 		UPDATE hour_sessions
 		SET status = 'ended', short_code = NULL, short_code_expires_at = NULL,
-		    billable_minutes = $2, updated_at = now()
+		    billable_minutes = $2, end_requested_at = NULL, updated_at = now()
 		WHERE id = $1::uuid`,
 		id, billableMinutes); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO hour_session_events (session_id, event_type, actor_user_id)
-		VALUES ($1::uuid, 'end', $2)`,
-		id, actorID); err != nil {
+		INSERT INTO hour_session_events (session_id, event_type, actor_user_id, created_at)
+		VALUES ($1::uuid, 'end', $2, $3)`,
+		id, actorID, eventAt); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -786,6 +817,54 @@ func (s *Server) denyHourSessionPauseRequest(ctx context.Context, id string) err
 		return errHourSessionNotFound
 	}
 	return nil
+}
+
+// requestHourSessionEnd marca o pedido de encerramento do cliente (rota
+// pública "Já vou embora") — só grava se a sessão ainda estiver rodando
+// (active ou paused) e não houver pedido pendente; quem decide encerrar de
+// fato é o admin.
+func (s *Server) requestHourSessionEnd(ctx context.Context, tokenHash string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE hour_sessions SET end_requested_at = now(), updated_at = now()
+		WHERE token_hash = $1 AND status IN ('active', 'paused') AND end_requested_at IS NULL`,
+		tokenHash)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return appErr(http.StatusConflict, "HOUR_SESSION_END_NOT_APPLICABLE",
+			"Sessão não está ativa/pausada ou já tem pedido de encerramento pendente")
+	}
+	return nil
+}
+
+// denyHourSessionEndRequest limpa o pedido sem encerrar (admin recusa).
+func (s *Server) denyHourSessionEndRequest(ctx context.Context, id string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE hour_sessions SET end_requested_at = NULL, updated_at = now()
+		WHERE id = $1::uuid`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errHourSessionNotFound
+	}
+	return nil
+}
+
+// hourSessionCurrentSegmentStart devolve o início do trecho em andamento (o
+// último 'start'/'resume') — usado por validateEventAt pra recusar um
+// horário explícito de pause/end anterior a isso. COALESCE com now() cobre o
+// caso sem start/resume ainda (sessão 'scheduled'): pause/end nem deveriam
+// ser chamados nesse estado, mas rejeitar aqui é mais seguro que aceitar.
+func (s *Server) hourSessionCurrentSegmentStart(ctx context.Context, sessionID string) (time.Time, error) {
+	var since time.Time
+	err := s.db.QueryRow(ctx, `
+		SELECT COALESCE(MAX(created_at), now())
+		FROM hour_session_events
+		WHERE session_id = $1::uuid AND event_type IN ('start', 'resume')`, sessionID).
+		Scan(&since)
+	return since, err
 }
 
 // ── faturamento avulso ──────────────────────────────────────────────────────

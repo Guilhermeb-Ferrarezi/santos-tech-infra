@@ -96,3 +96,36 @@ func TestAdjustHourSessionRecusaValorForaDoLimite(t *testing.T) {
 		}
 	}
 }
+
+// Um horário explícito de pause/end não pode ser no futuro nem anterior ao
+// início do trecho em andamento (geraria duração negativa nesse segmento).
+func TestValidateEventAtRecusaFuturo(t *testing.T) {
+	now := time.Date(2026, 9, 16, 15, 0, 0, 0, time.UTC)
+	since := now.Add(-time.Hour)
+	if err := validateEventAt(now.Add(time.Minute), since, now); err == nil {
+		t.Fatal("deveria recusar horário no futuro")
+	}
+}
+
+func TestValidateEventAtRecusaAntesDoInicioDoTrecho(t *testing.T) {
+	now := time.Date(2026, 9, 16, 15, 0, 0, 0, time.UTC)
+	since := now.Add(-time.Hour)
+	if err := validateEventAt(since.Add(-time.Minute), since, now); err == nil {
+		t.Fatal("deveria recusar horário anterior ao início do trecho em andamento")
+	}
+}
+
+func TestValidateEventAtAceitaDentroDoIntervalo(t *testing.T) {
+	now := time.Date(2026, 9, 16, 15, 0, 0, 0, time.UTC)
+	since := now.Add(-time.Hour)
+	if err := validateEventAt(since.Add(10*time.Minute), since, now); err != nil {
+		t.Fatalf("deveria aceitar horário dentro do intervalo, erro: %v", err)
+	}
+	// Limites inclusivos.
+	if err := validateEventAt(since, since, now); err != nil {
+		t.Fatalf("horário igual ao início do trecho deveria ser aceito: %v", err)
+	}
+	if err := validateEventAt(now, since, now); err != nil {
+		t.Fatalf("horário igual a agora deveria ser aceito: %v", err)
+	}
+}
