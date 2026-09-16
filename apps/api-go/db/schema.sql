@@ -301,6 +301,19 @@ CREATE TABLE IF NOT EXISTS hour_purchases (
   payment_method  TEXT CHECK (payment_method IS NULL OR payment_method IN ('dinheiro', 'pix', 'cartao_credito', 'cartao_debito', 'outro'))
 );
 
+-- Tabela de preços: sugere o valor no formulário de compra (não valida
+-- amount_cents contra ela — só preenche o campo). Uma linha com minutes=60
+-- é a "hora avulsa".
+CREATE TABLE IF NOT EXISTS hour_price_rules (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  label       TEXT NOT NULL,
+  minutes     INTEGER NOT NULL CHECK (minutes > 0),
+  price_cents BIGINT NOT NULL CHECK (price_cents > 0),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (minutes)
+);
+
 CREATE INDEX IF NOT EXISTS idx_hour_purchases_client ON hour_purchases(client_id);
 
 CREATE TABLE IF NOT EXISTS hour_sessions (

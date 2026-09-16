@@ -609,6 +609,21 @@ ALTER TABLE hour_purchases DROP CONSTRAINT IF EXISTS hour_purchases_payment_meth
 ALTER TABLE hour_purchases ADD CONSTRAINT hour_purchases_payment_method_check
   CHECK (payment_method IS NULL OR payment_method IN ('dinheiro', 'pix', 'cartao_credito', 'cartao_debito', 'outro'));
 
+-- Tabela de preços: quanto cobrar por pacote (ex.: "Pacote 10h" = 600min por
+-- R$150) ou pela hora avulsa (uma linha com minutes=60) — usada só para
+-- SUGERIR o valor no formulário de "Registrar compra" (handleAddHourPurchase
+-- continua aceitando amount_cents livre, sem validar contra esta tabela).
+-- UNIQUE em minutes: evita duas regras conflitantes pra mesma duração.
+CREATE TABLE IF NOT EXISTS hour_price_rules (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  label       TEXT NOT NULL,
+  minutes     INTEGER NOT NULL CHECK (minutes > 0),
+  price_cents BIGINT NOT NULL CHECK (price_cents > 0),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (minutes)
+);
+
 -- PCs do laboratório: cada instalação do app desktop (hour-timer-app) gera um
 -- device_uuid estável e manda heartbeat periódico. Nome é atribuído pelo admin
 -- (nunca pelo próprio PC) para não bagunçar com quem estiver sentado nele.
