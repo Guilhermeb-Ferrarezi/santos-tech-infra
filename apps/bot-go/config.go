@@ -112,13 +112,25 @@ type Config struct {
 	SentryAPIToken     string
 	SentryPollInterval time.Duration
 
-	// Voz (STT/TTS via OpenAI). VOICE_ENABLED liga a feature.
+	// Voz. VOICE_ENABLED é o interruptor geral; o provedor e a voz de cada
+	// tenant vêm de tenant_config (painel), com estes valores como fallback.
+	// O STT é sempre OpenAI — só o TTS é trocável.
 	VoiceEnabled   bool
 	OpenAIKey      string
 	OpenAIBaseURL  string
 	OpenAITTSVoice string
 	OpenAITTSModel string
 	OpenAISTTModel string
+
+	// ElevenLabs (TTS alternativo — voz clonada). Sem chave, o provider
+	// 'elevenlabs' é ignorado e o tenant cai no OpenAI.
+	ElevenLabsKey     string
+	ElevenLabsBaseURL string
+	ElevenLabsModel   string
+
+	// AudioClipsDir — diretório com os áudios pré-gravados (OGG/Opus), usado pelo
+	// provider 'clips'. Vazio = banco de áudios desligado.
+	AudioClipsDir string
 }
 
 func LoadConfig() Config {
@@ -203,6 +215,12 @@ func LoadConfig() Config {
 		OpenAITTSVoice: getEnv("OPENAI_TTS_VOICE", "nova"),
 		OpenAITTSModel: getEnv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
 		OpenAISTTModel: getEnv("OPENAI_STT_MODEL", "whisper-1"),
+
+		ElevenLabsKey:     getEnv("ELEVENLABS_API_KEY", ""),
+		ElevenLabsBaseURL: strings.TrimRight(getEnv("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io/v1"), "/"),
+		ElevenLabsModel:   getEnv("ELEVENLABS_MODEL", "eleven_multilingual_v2"),
+
+		AudioClipsDir: getEnv("AUDIO_CLIPS_DIR", ""),
 	}
 }
 

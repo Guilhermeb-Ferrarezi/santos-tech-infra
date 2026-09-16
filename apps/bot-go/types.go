@@ -117,6 +117,13 @@ type TenantConfig struct {
 	AdminWhatsAppNumber  string   // legado (0014) — mantido por compatibilidade
 	AdminWhatsAppNumbers []string // múltiplos admins (0016) — fonte de verdade
 
+	// Voz (0033) — escolhidos no painel. VoiceProvider: "openai" | "elevenlabs".
+	// VoiceID e VoiceModel vazios = usa o default do ambiente para o provedor.
+	VoiceEnabled  bool
+	VoiceProvider string
+	VoiceID       string
+	VoiceModel    string
+
 	// Transient — não vem do banco; setado pelo engine antes de chamar o Responder.
 	IsAdminConversation bool
 	// AllowedWebURLs — páginas (do sitemap) que o bot pode consultar via WebFetch.
@@ -345,6 +352,11 @@ type ResponderOutput struct {
 	ClientActions     []ClientAction     // modo admin: rascunhos/envios para clientes pendentes
 	SchedulingRequest *SchedulingRequest // cliente: pedido de agendamento detectado
 	BookingActions    []BookingAction    // modo admin: confirmar/ajustar/rejeitar agendamentos
+
+	// AudioIntent — chave do banco de áudios pré-gravados que corresponde a esta
+	// resposta (ex.: "conv_experimental"). Vazio quando a resposta não é uma fala
+	// padrão. Só é consultado quando o tenant usa voice_provider='clips'.
+	AudioIntent string
 }
 
 // ScheduledContact — reativação pedida pelo cliente ("me chama em julho").

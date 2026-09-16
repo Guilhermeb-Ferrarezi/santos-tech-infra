@@ -32,7 +32,16 @@ func voiceHTTPClient() *http.Client {
 	}
 }
 
-// VoiceClient faz STT e TTS via OpenAI (HTTP). Sem binários locais.
+// VoiceSelection — provedor e voz escolhidos no painel para um tenant.
+// Campos vazios caem no default do ambiente.
+type VoiceSelection struct {
+	Provider string // "openai" | "elevenlabs" (vazio = openai)
+	VoiceID  string
+	Model    string
+}
+
+// VoiceClient faz STT (sempre OpenAI) e TTS (OpenAI ou ElevenLabs). Sem binários
+// locais — tudo por HTTP.
 type VoiceClient struct {
 	enabled  bool
 	apiKey   string
@@ -40,7 +49,12 @@ type VoiceClient struct {
 	ttsVoice string
 	ttsModel string
 	sttModel string
-	http     *http.Client
+
+	elevenKey     string
+	elevenBaseURL string
+	elevenModel   string
+
+	http *http.Client
 }
 
 func NewVoiceClient(cfg Config) *VoiceClient {
@@ -51,8 +65,37 @@ func NewVoiceClient(cfg Config) *VoiceClient {
 		ttsVoice: cfg.OpenAITTSVoice,
 		ttsModel: cfg.OpenAITTSModel,
 		sttModel: cfg.OpenAISTTModel,
-		http:     voiceHTTPClient(),
+
+		elevenKey:     cfg.ElevenLabsKey,
+		elevenBaseURL: cfg.ElevenLabsBaseURL,
+		elevenModel:   cfg.ElevenLabsModel,
+
+		http: voiceHTTPClient(),
 	}
+}
+
+// resolve decide o provedor efetivo. ElevenLabs só entra se houver chave E
+// voz escolhida — sem isso cai no OpenAI, que é o caminho que sempre funciona.
+func (v *VoiceClient) resolve(sel VoiceSelection) VoiceSelection {
+	if sel.Provider == "elevenlabs" && v.elevenKey != "" && sel.VoiceID != "" {
+		if sel.Model == "" {
+			sel.Model = v.elevenModel
+		}
+		return sel
+	}
+	out := VoiceSelection{Provider: "openai", VoiceID: sel.VoiceID, Model: sel.Model}
+	if sel.Provider == "elevenlabs" {
+		// Escolha inválida (sem chave ou sem voz): ignora a voz, que é de outro
+		// provedor, e usa o default do ambiente.
+		out.VoiceID, out.Model = "", ""
+	}
+	if out.VoiceID == "" {
+		out.VoiceID = v.ttsVoice
+	}
+	if out.Model == "" {
+		out.Model = v.ttsModel
+	}
+	return out
 }
 
 func (v *VoiceClient) Enabled() bool { return v != nil && v.enabled }
@@ -104,11 +147,21 @@ func joinBubbles(bubbles []string) string {
 	return strings.Join(bubbles, "\n")
 }
 
-// Synthesize gera a nota de voz (OGG/Opus) com a voz feminina configurada.
-func (v *VoiceClient) Synthesize(ctx context.Context, text string) ([]byte, error) {
+// Synthesize gera a nota de voz (OGG/Opus) com a voz escolhida para o tenant.
+// Os dois provedores devolvem OGG/Opus, que é o que o WhatsApp aceita como
+// nota de voz — nenhum transcode local é necessário.
+func (v *VoiceClient) Synthesize(ctx context.Context, text string, sel VoiceSelection) ([]byte, error) {
+	s := v.resolve(sel)
+	if s.Provider == "elevenlabs" {
+		return v.synthesizeElevenLabs(ctx, text, s)
+	}
+	return v.synthesizeOpenAI(ctx, text, s)
+}
+
+func (v *VoiceClient) synthesizeOpenAI(ctx context.Context, text string, sel VoiceSelection) ([]byte, error) {
 	body, err := json.Marshal(map[string]any{
-		"model":           v.ttsModel,
-		"voice":           v.ttsVoice,
+		"model":           sel.Model,
+		"voice":           sel.VoiceID,
 		"input":           text,
 		"response_format": "opus",
 	})
@@ -121,15 +174,47 @@ func (v *VoiceClient) Synthesize(ctx context.Context, text string) ([]byte, erro
 	}
 	req.Header.Set("Authorization", "Bearer "+v.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	return v.doTTS(req, "openai")
+}
 
+// synthesizeElevenLabs usa output_format=opus_48000_64 — devolve OGG/Opus direto.
+//
+// Atenção operacional: vozes de **clonagem instantânea** (categoria "cloned")
+// exigem plano pago com IVC habilitado. Num plano sem IVC a API responde 401
+// `subscription_required` e o chamador cai no texto. Vozes de **Voice Design**
+// (categoria "generated") não têm essa restrição.
+func (v *VoiceClient) synthesizeElevenLabs(ctx context.Context, text string, sel VoiceSelection) ([]byte, error) {
+	body, err := json.Marshal(map[string]any{
+		"text":     text,
+		"model_id": sel.Model,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("voice: 11l marshal: %w", err)
+	}
+	url := fmt.Sprintf("%s/text-to-speech/%s?output_format=opus_48000_64", v.elevenBaseURL, sel.VoiceID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("xi-api-key", v.elevenKey)
+	req.Header.Set("Content-Type", "application/json")
+	return v.doTTS(req, "elevenlabs")
+}
+
+// doTTS executa a requisição e valida a resposta. `provider` só entra na mensagem
+// de erro, para o log dizer qual lado falhou.
+func (v *VoiceClient) doTTS(req *http.Request, provider string) ([]byte, error) {
 	resp, err := v.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("voice: tts do: %w", err)
+		return nil, fmt.Errorf("voice: tts do (%s): %w", provider, err)
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("voice: tts status %d: %s", resp.StatusCode, string(data))
+		return nil, fmt.Errorf("voice: tts status %d (%s): %s", resp.StatusCode, provider, string(data))
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("voice: tts (%s): resposta vazia", provider)
 	}
 	return data, nil
 }

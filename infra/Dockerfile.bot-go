@@ -9,6 +9,11 @@ RUN CGO_ENABLED=0 go build -trimpath -o /bot .
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=build /bot /bot
+# Banco de áudios pré-gravados (voz real do atendente, em OGG/Opus) + manifesto.
+# Vai na imagem de propósito: são ~7 MB imutáveis, e assim o áudio é atômico com
+# o deploy — sem volume para montar, sem storage externo, sem credencial nova.
+# Ligado por AUDIO_CLIPS_DIR=/audio; sem essa env o bot ignora os arquivos.
+COPY apps/bot-go/audio /audio
 EXPOSE 3000
 USER nonroot:nonroot
 ENTRYPOINT ["/bot"]
