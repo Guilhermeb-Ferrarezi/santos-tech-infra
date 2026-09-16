@@ -85,6 +85,16 @@ type EngineDeps struct {
 	// escolhe voice_provider='clips': em vez de sintetizar, envia a gravação real
 	// do atendente. Sem clipe para o momento, registra a lacuna e cai no texto.
 	AudioClips *AudioClipStore
+	// AudioMatchMin — piso de semelhança entre a resposta escrita e a fala
+	// gravada (0 = default do casamento). Subir recusa mais; descer arrisca
+	// mandar áudio que não diz exatamente o que foi respondido.
+	AudioMatchMin float64
+	// AudioMatchMaxMs — teto de duração da gravação enviada. Um monólogo de 40s
+	// em cima de uma dúvida de dez palavras é constrangedor mesmo quando casa.
+	AudioMatchMaxMs int
+	// AudioMatchShadow — decide e registra no log, mas responde em texto. Serve
+	// para medir a taxa de acerto em produção antes de deixar o áudio sair.
+	AudioMatchShadow bool
 	// ForceBotEnabled — força o bot ativo nas conversas deste engine (ex.: canal
 	// Evolution, cujo gate é o toggle externo, não o whitelist do tenant).
 	ForceBotEnabled bool
@@ -1089,25 +1099,49 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 			log.Warn("clips: banco de áudios não configurado; caindo para texto")
 			return false
 		}
-		if gerr := e.deps.AudioClips.RecordGap(ctx, inbound.TenantID, voice, output.AudioIntent, text); gerr != nil {
-			// Best-effort: perder o registro da lacuna não pode travar a resposta.
-			log.Warn("clips: falha ao registrar lacuna", "err", gerr)
-		}
-		clip, cerr := e.deps.AudioClips.Resolve(ctx, inbound.TenantID, voice, output.AudioIntent)
+
+		clip, info, cerr := e.deps.AudioClips.MatchAnswer(ctx, inbound.TenantID, voice, text, MatchOpts{
+			MinScore:     e.deps.AudioMatchMin,
+			MaxDuracaoMs: e.deps.AudioMatchMaxMs,
+			ConversaNova: conv.State == StateNew,
+		})
 		if cerr != nil {
-			log.Error("clips: resolve", "err", cerr)
+			log.Error("clips: casamento", "err", cerr)
 			return false
 		}
+
+		// Modo sombra: decide e registra, mas ainda responde em texto. É como se
+		// mede a taxa de acerto em produção antes de deixar o áudio sair.
+		if clip != nil && e.deps.AudioMatchShadow {
+			log.Info("clips: SOMBRA — casaria e não enviou",
+				"voice", voice, "intent", clip.IntentKey, "variante", clip.Variant,
+				"score", info.Score, "candidatos", info.Candidatos)
+			return false
+		}
+
 		if clip == nil {
-			log.Info("clips: sem áudio para a intenção; respondendo em texto",
-				"voice", voice, "intent", output.AudioIntent)
+			// A lacuna é gravada SÓ quando falta áudio — antes era registrada em
+			// toda mensagem, o que enchia a fila de gravação de falas que já
+			// existem. O near miss entra junto: para quem vai gravar, "ficou
+			// perto de conv_experimental" vale muito mais que uma chave vazia.
+			if gerr := e.deps.AudioClips.RecordGap(ctx, inbound.TenantID, voice, info.NearMiss, text); gerr != nil {
+				// Best-effort: perder o registro não pode travar a resposta.
+				log.Warn("clips: falha ao registrar lacuna", "err", gerr)
+			}
+			log.Info("clips: nenhuma gravação diz isto; respondendo em texto",
+				"voice", voice, "near_miss", info.NearMiss, "melhor_score", info.Score,
+				"considerados", info.Considerados)
 			return false
 		}
+
 		data, rerr := e.deps.AudioClips.Read(clip)
 		if rerr != nil {
 			log.Error("clips: leitura do arquivo", "err", rerr, "file", clip.FilePath)
 			return false
 		}
+		log.Info("clips: nota de voz enviada",
+			"voice", voice, "intent", clip.IntentKey, "variante", clip.Variant,
+			"score", info.Score, "candidatos", info.Candidatos)
 		return e.sendVoiceBytes(ctx, conv, inbound, data, clip.Transcript, reasoningJSON)
 	}
 

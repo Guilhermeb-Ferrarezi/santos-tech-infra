@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -131,6 +132,16 @@ type Config struct {
 	// AudioClipsDir — diretório com os áudios pré-gravados (OGG/Opus), usado pelo
 	// provider 'clips'. Vazio = banco de áudios desligado.
 	AudioClipsDir string
+
+	// AudioMatchMin — piso de semelhança entre a resposta escrita e a fala
+	// gravada. 0.45 medido sobre o acervo real.
+	AudioMatchMin float64
+	// AudioMatchMaxMs — duração máxima da gravação que pode virar resposta.
+	// A mediana do acervo é 6,5s; o teto existe contra os monólogos de 40s+.
+	AudioMatchMaxMs int
+	// AudioMatchShadow — decide, loga e mesmo assim responde em texto. Liga no
+	// primeiro deploy para medir acerto sem risco; depois vira false.
+	AudioMatchShadow bool
 }
 
 func LoadConfig() Config {
@@ -220,7 +231,10 @@ func LoadConfig() Config {
 		ElevenLabsBaseURL: strings.TrimRight(getEnv("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io/v1"), "/"),
 		ElevenLabsModel:   getEnv("ELEVENLABS_MODEL", "eleven_multilingual_v2"),
 
-		AudioClipsDir: getEnv("AUDIO_CLIPS_DIR", ""),
+		AudioClipsDir:    getEnv("AUDIO_CLIPS_DIR", ""),
+		AudioMatchMin:    envFloat("AUDIO_MATCH_MIN", 0.45),
+		AudioMatchMaxMs:  envInt("AUDIO_MATCH_MAX_MS", 12000),
+		AudioMatchShadow: getEnv("AUDIO_MATCH_SHADOW", "true") == "true",
 	}
 }
 
@@ -256,6 +270,20 @@ func envInt(key string, fallback int) int {
 	}
 	var n int
 	if _, err := fmt.Sscanf(v, "%d", &n); err != nil {
+		return fallback
+	}
+	return n
+}
+
+// envFloat lê um float do ambiente; valor ilegível cai no default em vez de
+// derrubar o boot — limiar mal digitado não pode tirar o bot do ar.
+func envFloat(key string, fallback float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
 		return fallback
 	}
 	return n
