@@ -353,10 +353,6 @@ type ResponderOutput struct {
 	SchedulingRequest *SchedulingRequest // cliente: pedido de agendamento detectado
 	BookingActions    []BookingAction    // modo admin: confirmar/ajustar/rejeitar agendamentos
 
-	// AudioIntent — chave do banco de áudios pré-gravados que corresponde a esta
-	// resposta (ex.: "conv_experimental"). Vazio quando a resposta não é uma fala
-	// padrão. Só é consultado quando o tenant usa voice_provider='clips'.
-	AudioIntent string
 }
 
 // ScheduledContact — reativação pedida pelo cliente ("me chama em julho").
