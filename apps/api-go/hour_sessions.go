@@ -39,9 +39,9 @@ type HourSession struct {
 	// continua sendo o admin.
 	EndRequestedAt *time.Time `json:"endRequestedAt"`
 	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt        time.Time  `json:"updatedAt"`
-	ElapsedSeconds   int64      `json:"elapsedSeconds"`
-	BalanceMinutes   int        `json:"balanceMinutes"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+	ElapsedSeconds int64      `json:"elapsedSeconds"`
+	BalanceMinutes int        `json:"balanceMinutes"`
 	// ScheduledEndAt: fim agendado opcional (duração ou horário fixo, o front
 	// resolve os dois pra um timestamp absoluto antes de mandar). NULL =
 	// sessão de duração livre, "até o admin encerrar" (comportamento padrão).
