@@ -409,6 +409,7 @@ func (s *Server) registerHourSessionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /hour-sessions/{id}/resume", s.rateLimit(60, min, s.adminGuard(s.handleResumeHourSession)))
 	mux.HandleFunc("POST /hour-sessions/{id}/end", s.rateLimit(60, min, s.adminGuard(s.handleEndHourSession)))
 	mux.HandleFunc("POST /hour-sessions/{id}/deny-pause", s.rateLimit(60, min, s.adminGuard(s.handleDenyHourSessionPause)))
+	mux.HandleFunc("POST /hour-sessions/{id}/deny-end", s.rateLimit(60, min, s.adminGuard(s.handleDenyHourSessionEnd)))
 	mux.HandleFunc("POST /hour-sessions/{id}/link", s.rateLimit(30, min, s.adminGuard(s.handleReissueHourSessionLink)))
 	// Histórico (quem pausou/retomou, quando) e correção manual de tempo — o
 	// ajuste entra como evento, então aparece no próprio histórico.
@@ -420,6 +421,7 @@ func (s *Server) registerHourSessionRoutes(mux *http.ServeMux) {
 	// pedido de pausa é mais restrito pra não virar canal de spam pro admin.
 	mux.HandleFunc("GET /public/hour-sessions/{token}", s.rateLimit(120, min, s.handleGetPublicHourSession))
 	mux.HandleFunc("POST /public/hour-sessions/{token}/request-pause", s.rateLimit(5, min, s.handleRequestHourSessionPause))
+	mux.HandleFunc("POST /public/hour-sessions/{token}/request-end", s.rateLimit(5, min, s.handleRequestHourSessionEnd))
 	// Código curto (6 dígitos) como alternativa a colar o link no PC — rate
 	// limit apertado pra não virar canal de força-bruta (código expira em 15min
 	// e é de uso único, mas ainda assim vale limitar tentativas por IP).

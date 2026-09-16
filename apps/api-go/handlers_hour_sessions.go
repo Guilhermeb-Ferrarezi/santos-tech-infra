@@ -6,6 +6,8 @@ package main
 
 import (
 	"encoding/hex"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -240,14 +242,46 @@ func (s *Server) handleReissueHourSessionLink(w http.ResponseWriter, r *http.Req
 	})
 }
 
-// POST /hour-sessions/{id}/pause
+// resolveExplicitEventAt lê um horário opcional do corpo ({"at": "..."}) de
+// pause/end. Corpo vazio (comportamento de sempre) devolve now(). Presente,
+// valida contra o servidor via validateEventAt: não pode ser no futuro nem
+// anterior ao início do trecho em andamento da sessão.
+func (s *Server) resolveExplicitEventAt(w http.ResponseWriter, r *http.Request, sessionID string) (time.Time, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var in struct {
+		At *time.Time `json:"at"`
+	}
+	if err := decodeJSON(r, &in); err != nil && !errors.Is(err, io.EOF) {
+		return time.Time{}, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido")
+	}
+	now := time.Now()
+	if in.At == nil {
+		return now, nil
+	}
+	since, err := s.hourSessionCurrentSegmentStart(r.Context(), sessionID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if err := validateEventAt(*in.At, since, now); err != nil {
+		return time.Time{}, err
+	}
+	return *in.At, nil
+}
+
+// POST /hour-sessions/{id}/pause — {at?}: horário explícito opcional (ver
+// resolveExplicitEventAt). Sem "at", pausa "agora" (comportamento de sempre).
 func (s *Server) handlePauseHourSession(w http.ResponseWriter, r *http.Request) {
 	id, err := hourUUIDFrom(r, "id", errHourSessionNotFound)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	h, err := s.transitionHourSession(r.Context(), id, userIDFrom(r), "active", "paused", "pause")
+	eventAt, err := s.resolveExplicitEventAt(w, r, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	h, err := s.transitionHourSession(r.Context(), id, userIDFrom(r), "active", "paused", "pause", eventAt)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -266,7 +300,7 @@ func (s *Server) handleResumeHourSession(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
-	h, err := s.transitionHourSession(r.Context(), id, userIDFrom(r), "paused", "active", "resume")
+	h, err := s.transitionHourSession(r.Context(), id, userIDFrom(r), "paused", "active", "resume", time.Now())
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -274,14 +308,20 @@ func (s *Server) handleResumeHourSession(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"session": h})
 }
 
-// POST /hour-sessions/{id}/end — debita o saldo pelo tempo decorrido
+// POST /hour-sessions/{id}/end — {at?}: mesmo horário explícito opcional de
+// pause. Debita o saldo pelo tempo decorrido até esse horário.
 func (s *Server) handleEndHourSession(w http.ResponseWriter, r *http.Request) {
 	id, err := hourUUIDFrom(r, "id", errHourSessionNotFound)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	h, err := s.endHourSession(r.Context(), id, userIDFrom(r))
+	eventAt, err := s.resolveExplicitEventAt(w, r, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	h, err := s.endHourSession(r.Context(), id, userIDFrom(r), eventAt)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -297,6 +337,20 @@ func (s *Server) handleDenyHourSessionPause(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := s.denyHourSessionPauseRequest(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /hour-sessions/{id}/deny-end — recusa o pedido de encerramento do cliente
+func (s *Server) handleDenyHourSessionEnd(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errHourSessionNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.denyHourSessionEndRequest(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -331,6 +385,7 @@ func (s *Server) handleGetPublicHourSession(w http.ResponseWriter, r *http.Reque
 		"elapsedSeconds":   h.ElapsedSeconds,
 		"remainingMinutes": remainingMinutes,
 		"pauseRequested":   h.PauseRequestedAt != nil,
+		"endRequested":     h.EndRequestedAt != nil,
 	})
 }
 
@@ -342,6 +397,20 @@ func (s *Server) handleRequestHourSessionPause(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if err := s.requestHourSessionPause(r.Context(), sha256Hex(token)); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /public/hour-sessions/{token}/request-end
+func (s *Server) handleRequestHourSessionEnd(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	if !isValidHourSessionToken(token) {
+		writeErr(w, errHourSessionNotFound)
+		return
+	}
+	if err := s.requestHourSessionEnd(r.Context(), sha256Hex(token)); err != nil {
 		writeErr(w, err)
 		return
 	}
