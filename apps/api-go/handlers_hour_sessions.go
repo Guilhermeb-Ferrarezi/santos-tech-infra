@@ -88,9 +88,9 @@ func (s *Server) handleAddHourPurchase(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"client": c})
 }
 
-// PATCH /hour-clients/{id} — {discountPercent}: desconto padrão (0-100)
-// aplicado no faturamento avulso deste cliente (ver GET /hour-billing).
-func (s *Server) handleUpdateHourClientDiscount(w http.ResponseWriter, r *http.Request) {
+// PATCH /hour-clients/{id} — {name?, phone?, discountPercent?}: update
+// parcial, só os campos presentes mudam.
+func (s *Server) handleUpdateHourClient(w http.ResponseWriter, r *http.Request) {
 	id, err := hourUUIDFrom(r, "id", errHourClientNotFound)
 	if err != nil {
 		writeErr(w, err)
@@ -98,22 +98,53 @@ func (s *Server) handleUpdateHourClientDiscount(w http.ResponseWriter, r *http.R
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	var in struct {
-		DiscountPercent int `json:"discountPercent"`
+		Name            *string `json:"name"`
+		Phone           *string `json:"phone"`
+		DiscountPercent *int    `json:"discountPercent"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
 		return
 	}
-	if in.DiscountPercent < 0 || in.DiscountPercent > 100 {
+	if in.Name != nil {
+		trimmed := strings.TrimSpace(*in.Name)
+		if trimmed == "" || len(trimmed) > 200 {
+			writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Nome obrigatório (até 200 caracteres)"))
+			return
+		}
+		in.Name = &trimmed
+	}
+	if in.DiscountPercent != nil && (*in.DiscountPercent < 0 || *in.DiscountPercent > 100) {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "discountPercent precisa estar entre 0 e 100"))
 		return
 	}
-	c, err := s.updateHourClientDiscount(r.Context(), id, in.DiscountPercent)
+	if in.Name == nil && in.Phone == nil && in.DiscountPercent == nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Nada pra atualizar"))
+		return
+	}
+	c, err := s.updateHourClient(r.Context(), id, hourClientUpdateInput{
+		Name: in.Name, Phone: in.Phone, DiscountPercent: in.DiscountPercent,
+	})
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"client": c})
+}
+
+// DELETE /hour-clients/{id} — apaga o cliente e, em cascata, todo o
+// histórico dele (sessões, compras). Irreversível — ver deleteHourClient.
+func (s *Server) handleDeleteHourClient(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errHourClientNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.deleteHourClient(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ── admin: sessões ───────────────────────────────────────────────────────────

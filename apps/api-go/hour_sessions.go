@@ -8,7 +8,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -143,19 +145,57 @@ func (s *Server) getHourClient(ctx context.Context, id string) (*HourClient, err
 	return scanHourClient(s.db.QueryRow(ctx, `SELECT `+hourClientCols+` FROM hour_clients WHERE id = $1::uuid`, id))
 }
 
-// updateHourClientDiscount ajusta o desconto padrão (0-100) aplicado no
-// faturamento avulso deste cliente — ver listHourBilling. Validação do range
-// fica no handler; aqui só o CHECK do banco como rede de segurança.
-func (s *Server) updateHourClientDiscount(ctx context.Context, id string, discountPercent int) (*HourClient, error) {
-	c, err := scanHourClient(s.db.QueryRow(ctx, `
-		UPDATE hour_clients SET discount_percent = $2, updated_at = now()
-		WHERE id = $1::uuid
-		RETURNING `+hourClientCols,
-		id, discountPercent))
+// hourClientUpdateInput é o corpo do PATCH — update parcial, só os campos
+// presentes mudam. Validação (nome obrigatório, discountPercent 0-100) fica
+// no handler; aqui só o CHECK do banco como rede de segurança. Mesma
+// limitação conhecida do *string em Go usada noutros PATCHes do projeto: não
+// dá pra distinguir "não mandei phone" de "mandei null" — só dá pra trocar
+// o telefone por outro valor, não pra "limpar" explicitamente nesta entrega.
+type hourClientUpdateInput struct {
+	Name            *string
+	Phone           *string
+	DiscountPercent *int
+}
+
+func (s *Server) updateHourClient(ctx context.Context, id string, in hourClientUpdateInput) (*HourClient, error) {
+	sets := []string{"updated_at = now()"}
+	args := []any{id}
+	n := 2
+	if in.Name != nil {
+		sets = append(sets, fmt.Sprintf("name = $%d", n))
+		args = append(args, *in.Name)
+		n++
+	}
+	if in.Phone != nil {
+		sets = append(sets, fmt.Sprintf("phone = $%d", n))
+		args = append(args, *in.Phone)
+		n++
+	}
+	if in.DiscountPercent != nil {
+		sets = append(sets, fmt.Sprintf("discount_percent = $%d", n))
+		args = append(args, *in.DiscountPercent)
+		n++
+	}
+	query := fmt.Sprintf(`UPDATE hour_clients SET %s WHERE id = $1::uuid RETURNING `+hourClientCols, strings.Join(sets, ", "))
+	c, err := scanHourClient(s.db.QueryRow(ctx, query, args...))
 	if c == nil && err == nil {
 		return nil, errHourClientNotFound
 	}
 	return c, err
+}
+
+// deleteHourClient apaga o cliente e, por ON DELETE CASCADE, TODO o histórico
+// dele (hour_sessions, hour_purchases) — decisão explícita do Henrique em
+// 16/09/2026: sem soft delete, sem bloqueio por saldo pendente. Irreversível.
+func (s *Server) deleteHourClient(ctx context.Context, id string) error {
+	tag, err := s.db.Exec(ctx, `DELETE FROM hour_clients WHERE id = $1::uuid`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errHourClientNotFound
+	}
+	return nil
 }
 
 // addHourPurchase registra a compra (auditoria) e credita o saldo do cliente
