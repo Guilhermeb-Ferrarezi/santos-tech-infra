@@ -132,7 +132,7 @@ func TestAddHourPurchaseRecusaVendaComMinutosNaoPositivos(t *testing.T) {
 // passar sem preço).
 func TestPriceCentsForMinutes(t *testing.T) {
 	rules := []HourPriceRule{
-		{Minutes: 60, PriceCents: 2000},  // hora avulsa: R$20
+		{Minutes: 60, PriceCents: 2000},   // hora avulsa: R$20
 		{Minutes: 600, PriceCents: 15000}, // pacote 10h: R$150 (não é 20*10, é o preço cadastrado)
 	}
 	if got, err := priceCentsForMinutes(rules, 600); err != nil || got != 15000 {
