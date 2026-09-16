@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -23,6 +23,12 @@ import (
 type AudioClipStore struct {
 	pool *pgxpool.Pool
 	dir  string
+
+	// Índice de casamento por (tenant, voz). Montar custa uma query e um
+	// passe sobre 372 transcrições; usar custa quase nada. Fica em memória e
+	// é descartado quando o manifesto muda.
+	mu  sync.RWMutex
+	idx map[string]*AudioIndex
 }
 
 func NewAudioClipStore(pool *pgxpool.Pool, dir string) *AudioClipStore {
@@ -41,42 +47,91 @@ type AudioClip struct {
 	Variant    int
 	FilePath   string // relativo a dir
 	Transcript string
+	DurationMs int    // duração da fala — o casamento recusa monólogo longo
+	Category   string // pasta de origem: 'saudacao', 'no_show', 'feriado'...
 }
 
-// Resolve devolve UMA variante ativa da intenção, sorteada.
-//
-// O sorteio é o que impede o cliente de perceber que está ouvindo gravação: a
-// mesma saudação sai com palavras diferentes a cada vez. Sem variante ativa,
-// devolve (nil, nil) — ausência não é erro, é o caso normal de lacuna.
-func (s *AudioClipStore) Resolve(ctx context.Context, tenantID TenantID, voice, intentKey string) (*AudioClip, error) {
+// ListActive devolve o acervo ativo de uma voz. É a matéria-prima do índice de
+// casamento — 372 linhas curtas, lidas uma vez e mantidas em memória.
+func (s *AudioClipStore) ListActive(ctx context.Context, tenantID TenantID, voice string) ([]AudioClip, error) {
 	if !s.Enabled() {
 		return nil, nil
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT intent_key, variant, file_path, transcript
+		SELECT intent_key, variant, file_path, transcript, duration_ms, category
 		FROM audio_clips
-		WHERE tenant_id = $1 AND voice = $2 AND intent_key = $3 AND active
-	`, tenantID, voice, intentKey)
+		WHERE tenant_id = $1 AND voice = $2 AND active
+		ORDER BY intent_key, variant
+	`, tenantID, voice)
 	if err != nil {
-		return nil, fmt.Errorf("AudioClipStore.Resolve: %w", err)
+		return nil, fmt.Errorf("AudioClipStore.ListActive: %w", err)
 	}
 	defer rows.Close()
 
-	var opts []AudioClip
+	var out []AudioClip
 	for rows.Next() {
 		var c AudioClip
-		if err := rows.Scan(&c.IntentKey, &c.Variant, &c.FilePath, &c.Transcript); err != nil {
-			return nil, fmt.Errorf("AudioClipStore.Resolve scan: %w", err)
+		if err := rows.Scan(&c.IntentKey, &c.Variant, &c.FilePath, &c.Transcript,
+			&c.DurationMs, &c.Category); err != nil {
+			return nil, fmt.Errorf("AudioClipStore.ListActive scan: %w", err)
 		}
-		opts = append(opts, c)
+		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("AudioClipStore.Resolve rows: %w", err)
+		return nil, fmt.Errorf("AudioClipStore.ListActive rows: %w", err)
 	}
-	if len(opts) == 0 {
-		return nil, nil
+	return out, nil
+}
+
+// MatchAnswer procura no acervo uma fala gravada que diga a mesma coisa que a
+// resposta escrita. Devolve (nil, info, nil) quando não há — ausência é o caso
+// normal, não erro.
+//
+// O índice é caro de montar perto do custo de usar, então fica em cache por
+// (tenant, voz) e é invalidado dentro do SyncFromManifest. Sem essa
+// invalidação, um manifesto novo deixaria o bot casando contra o acervo antigo.
+func (s *AudioClipStore) MatchAnswer(ctx context.Context, tenantID TenantID, voice, resposta string, opts MatchOpts) (*AudioClip, MatchInfo, error) {
+	if !s.Enabled() {
+		return nil, MatchInfo{Motivo: "store_desligado"}, nil
 	}
-	return &opts[rand.Intn(len(opts))], nil
+	ix, err := s.indice(ctx, tenantID, voice)
+	if err != nil {
+		return nil, MatchInfo{Motivo: "erro"}, err
+	}
+	clip, info := ix.Casa(resposta, opts)
+	return clip, info, nil
+}
+
+func (s *AudioClipStore) indice(ctx context.Context, tenantID TenantID, voice string) (*AudioIndex, error) {
+	chave := string(tenantID) + "/" + voice
+
+	s.mu.RLock()
+	ix := s.idx[chave]
+	s.mu.RUnlock()
+	if ix != nil {
+		return ix, nil
+	}
+
+	clips, err := s.ListActive(ctx, tenantID, voice)
+	if err != nil {
+		return nil, err
+	}
+	ix = NovoAudioIndex(clips)
+
+	s.mu.Lock()
+	if s.idx == nil {
+		s.idx = map[string]*AudioIndex{}
+	}
+	s.idx[chave] = ix
+	s.mu.Unlock()
+	return ix, nil
+}
+
+// invalidaIndice descarta o cache. Chamado pela sincronização do manifesto.
+func (s *AudioClipStore) invalidaIndice() {
+	s.mu.Lock()
+	s.idx = nil
+	s.mu.Unlock()
 }
 
 // resolveClipPath transforma um file_path (vindo do banco) em caminho absoluto,
@@ -313,6 +368,9 @@ func (s *AudioClipStore) SyncFromManifest(ctx context.Context, tenantID TenantID
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("SyncFromManifest: commit: %w", err)
 	}
+	// O acervo mudou: o índice em memória virou retrato antigo. Sem isto o bot
+	// continuaria casando contra falas que acabaram de ser desativadas.
+	s.invalidaIndice()
 	return len(vistos), nil
 }
 
