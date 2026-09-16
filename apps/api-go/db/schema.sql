@@ -325,6 +325,11 @@ CREATE TABLE IF NOT EXISTS hour_sessions (
 CREATE INDEX IF NOT EXISTS idx_hour_sessions_client ON hour_sessions(client_id);
 CREATE INDEX IF NOT EXISTS idx_hour_sessions_status ON hour_sessions(status) WHERE status != 'ended';
 
+-- end_requested_at: pedido do cliente pra encerrar de vez (rota pública "Já
+-- vou embora"), espelha pause_requested_at — quem decide encerrar de fato
+-- continua sendo o admin, que pode usar esse horário como referência.
+ALTER TABLE hour_sessions ADD COLUMN IF NOT EXISTS end_requested_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS hour_session_events (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id    UUID NOT NULL REFERENCES hour_sessions(id) ON DELETE CASCADE,
