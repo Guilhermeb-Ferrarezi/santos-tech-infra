@@ -31,6 +31,14 @@ type HourClient struct {
 	// via subquery, nunca um total guardado à parte — mesma filosofia do
 	// elapsed de sessão, pra nunca dessincronizar de hour_purchases.
 	TotalSpentCents int64 `json:"totalSpentCents"`
+	// LiveBalanceMinutes: BalanceMinutes menos o tempo já decorrido (mas
+	// ainda não debitado) das sessões ativas/pausadas do cliente — só pra
+	// exibição em tempo real ("saldo ao vivo"). NUNCA escrito no banco: o
+	// débito de verdade continua acontecendo uma única vez, no encerramento
+	// (endHourSession) — ter duas fontes de verdade pro mesmo débito é que
+	// causaria dessincronia. Pode ficar negativo (cliente avulso já
+	// estourou o saldo, mesma situação de billable_minutes).
+	LiveBalanceMinutes int `json:"liveBalanceMinutes"`
 }
 
 // HourPurchase é uma linha de hour_purchases: tanto uma compra de verdade
@@ -144,11 +152,59 @@ func scanHourClient(row pgx.Row) (*HourClient, error) {
 	return &c, nil
 }
 
+// liveBalanceMinutes é BalanceMinutes menos o tempo já decorrido nas sessões
+// ativas/pausadas do cliente — ver LiveBalanceMinutes. Puramente uma leitura
+// (nenhum UPDATE), reaproveita hourSessionElapsedSeconds (mesma lógica que
+// já usa pra "quanto tempo passou" em qualquer outro lugar do sistema).
+func (s *Server) liveBalanceMinutes(ctx context.Context, clientID string, balanceMinutes int, now time.Time) (int, error) {
+	rows, err := s.db.Query(ctx, `SELECT id::text FROM hour_sessions WHERE client_id = $1::uuid AND status IN ('active', 'paused')`, clientID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var sessionIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		sessionIDs = append(sessionIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	live := balanceMinutes
+	for _, id := range sessionIDs {
+		elapsed, err := s.hourSessionElapsedSeconds(ctx, id, now)
+		if err != nil {
+			return 0, err
+		}
+		live -= int(elapsed / 60)
+	}
+	return live, nil
+}
+
+func (s *Server) withLiveBalance(ctx context.Context, c *HourClient) (*HourClient, error) {
+	if c == nil {
+		return nil, nil
+	}
+	live, err := s.liveBalanceMinutes(ctx, c.ID, c.BalanceMinutes, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	c.LiveBalanceMinutes = live
+	return c, nil
+}
+
 func (s *Server) insertHourClient(ctx context.Context, name string, phone *string) (*HourClient, error) {
-	return scanHourClient(s.db.QueryRow(ctx, `
+	c, err := scanHourClient(s.db.QueryRow(ctx, `
 		INSERT INTO hour_clients (name, phone) VALUES ($1, $2)
 		RETURNING `+hourClientCols,
 		name, phone))
+	if err != nil {
+		return nil, err
+	}
+	return s.withLiveBalance(ctx, c)
 }
 
 func (s *Server) listHourClients(ctx context.Context) ([]HourClient, error) {
@@ -165,11 +221,26 @@ func (s *Server) listHourClients(ctx context.Context) ([]HourClient, error) {
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	for i := range out {
+		live, err := s.liveBalanceMinutes(ctx, out[i].ID, out[i].BalanceMinutes, now)
+		if err != nil {
+			return nil, err
+		}
+		out[i].LiveBalanceMinutes = live
+	}
+	return out, nil
 }
 
 func (s *Server) getHourClient(ctx context.Context, id string) (*HourClient, error) {
-	return scanHourClient(s.db.QueryRow(ctx, `SELECT `+hourClientCols+` FROM hour_clients WHERE id = $1::uuid`, id))
+	c, err := scanHourClient(s.db.QueryRow(ctx, `SELECT `+hourClientCols+` FROM hour_clients WHERE id = $1::uuid`, id))
+	if err != nil {
+		return nil, err
+	}
+	return s.withLiveBalance(ctx, c)
 }
 
 // hourClientUpdateInput é o corpo do PATCH — update parcial, só os campos
@@ -208,7 +279,10 @@ func (s *Server) updateHourClient(ctx context.Context, id string, in hourClientU
 	if c == nil && err == nil {
 		return nil, errHourClientNotFound
 	}
-	return c, err
+	if err != nil {
+		return nil, err
+	}
+	return s.withLiveBalance(ctx, c)
 }
 
 // deleteHourClient apaga o cliente e, por ON DELETE CASCADE, TODO o histórico
@@ -317,7 +391,7 @@ func (s *Server) addHourPurchase(ctx context.Context, clientID string, minutesAd
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return c, nil
+	return s.withLiveBalance(ctx, c)
 }
 
 const hourPurchaseCols = `id::text, client_id::text, minutes_added, note, amount_cents, payment_method, created_by, created_at`
