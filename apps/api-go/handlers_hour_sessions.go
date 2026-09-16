@@ -586,3 +586,91 @@ func (s *Server) handleGetHourBilling(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "from": from, "to": to})
 }
+
+// ── admin: tabela de preços ──────────────────────────────────────────────────
+
+// GET /hour-price-rules
+func (s *Server) handleListHourPriceRules(w http.ResponseWriter, r *http.Request) {
+	rules, err := s.listHourPriceRules(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rules": rules})
+}
+
+// hourPriceRuleInput decodifica e valida {label, minutes, priceCents} — usado
+// tanto no POST quanto no PATCH (mesmo corpo, os dois exigem os 3 campos:
+// diferente de PATCH /hour-clients, aqui não tem update parcial porque os
+// campos são poucos e sempre fazem sentido juntos).
+func hourPriceRuleInput(r *http.Request) (label string, minutes int, priceCents int64, err error) {
+	r.Body = http.MaxBytesReader(nil, r.Body, 4<<10)
+	var in struct {
+		Label      string `json:"label"`
+		Minutes    int    `json:"minutes"`
+		PriceCents int64  `json:"priceCents"`
+	}
+	if e := decodeJSON(r, &in); e != nil {
+		return "", 0, 0, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido")
+	}
+	in.Label = strings.TrimSpace(in.Label)
+	if in.Label == "" || len(in.Label) > 100 {
+		return "", 0, 0, appErr(http.StatusBadRequest, "BAD_REQUEST", "Nome obrigatório (até 100 caracteres)")
+	}
+	if in.Minutes <= 0 {
+		return "", 0, 0, appErr(http.StatusBadRequest, "BAD_REQUEST", "Duração deve ser maior que zero")
+	}
+	if in.PriceCents <= 0 {
+		return "", 0, 0, appErr(http.StatusBadRequest, "BAD_REQUEST", "Preço deve ser maior que zero")
+	}
+	return in.Label, in.Minutes, in.PriceCents, nil
+}
+
+// POST /hour-price-rules — {label, minutes, priceCents}
+func (s *Server) handleCreateHourPriceRule(w http.ResponseWriter, r *http.Request) {
+	label, minutes, priceCents, err := hourPriceRuleInput(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	p, err := s.createHourPriceRule(r.Context(), label, minutes, priceCents)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"rule": p})
+}
+
+// PATCH /hour-price-rules/{id} — {label, minutes, priceCents}
+func (s *Server) handleUpdateHourPriceRule(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errHourPriceRuleNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	label, minutes, priceCents, err := hourPriceRuleInput(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	p, err := s.updateHourPriceRule(r.Context(), id, label, minutes, priceCents)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rule": p})
+}
+
+// DELETE /hour-price-rules/{id}
+func (s *Server) handleDeleteHourPriceRule(w http.ResponseWriter, r *http.Request) {
+	id, err := hourUUIDFrom(r, "id", errHourPriceRuleNotFound)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.deleteHourPriceRule(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}

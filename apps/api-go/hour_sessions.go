@@ -73,6 +73,13 @@ type HourSession struct {
 	// usar ainda) e vira "active" sozinha ao chegar nesse horário — ver
 	// autoStartIfDue. NULL = começa na hora (comportamento padrão).
 	ScheduledStartAt *time.Time `json:"scheduledStartAt"`
+	// StartedAt/EndedAt: horário real do evento 'start'/'end' em
+	// hour_session_events — pode diferir de CreatedAt/UpdatedAt em início
+	// retroativo (ver startHourSessionOnce). Só preenchido por
+	// listHourSessionsByClient (histórico); nil nos outros endpoints, que não
+	// precisam disso. StartedAt nil = sessão 'scheduled' que ainda não começou.
+	StartedAt *time.Time `json:"startedAt,omitempty"`
+	EndedAt   *time.Time `json:"endedAt,omitempty"`
 }
 
 type hourSessionEvent struct {
@@ -294,8 +301,16 @@ func (s *Server) listHourPurchases(ctx context.Context, clientID string) ([]Hour
 // (sem cauda "rodando" a somar), mas passa pelo mesmo
 // hourSessionElapsedSeconds pra nunca duplicar a lógica de cálculo.
 func (s *Server) listHourSessionsByClient(ctx context.Context, clientID string) ([]HourSession, error) {
+	// started_at/ended_at vêm de hour_session_events (não de created_at/
+	// updated_at da própria sessão) porque início retroativo backdata só o
+	// evento 'start', não a linha — ver startHourSessionOnce. Colunas extras
+	// além de hourSessionCols, então o scan aqui não pode reusar
+	// scanHourSession (mesmo padrão de listHourClients, que também duplica o
+	// scan de scanHourClient por ter uma coluna a mais).
 	rows, err := s.db.Query(ctx, `
-		SELECT `+hourSessionCols+`
+		SELECT `+hourSessionCols+`,
+			(SELECT created_at FROM hour_session_events WHERE session_id = s.id AND event_type = 'start' ORDER BY created_at LIMIT 1),
+			(SELECT created_at FROM hour_session_events WHERE session_id = s.id AND event_type = 'end' ORDER BY created_at DESC LIMIT 1)
 		FROM hour_sessions s JOIN hour_clients c ON c.id = s.client_id
 		WHERE s.client_id = $1::uuid
 		ORDER BY s.created_at`, clientID)
@@ -305,11 +320,13 @@ func (s *Server) listHourSessionsByClient(ctx context.Context, clientID string) 
 	defer rows.Close()
 	out := []HourSession{}
 	for rows.Next() {
-		h, err := scanHourSession(rows)
-		if err != nil {
+		var h HourSession
+		if err := rows.Scan(&h.ID, &h.ClientID, &h.ClientName, &h.Status, &h.PauseRequestedAt, &h.EndRequestedAt,
+			&h.CreatedAt, &h.UpdatedAt, &h.BalanceMinutes, &h.ScheduledEndAt, &h.ScheduledStartAt,
+			&h.StartedAt, &h.EndedAt); err != nil {
 			return nil, err
 		}
-		out = append(out, *h)
+		out = append(out, h)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1060,4 +1077,92 @@ func (s *Server) listHourBilling(ctx context.Context, from, to time.Time) ([]Hou
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// ── tabela de preços ─────────────────────────────────────────────────────────
+//
+// hour_price_rules só existe pra SUGERIR o valor no formulário de "Registrar
+// compra" — não tem relação com avulsoRatePerHourCents/listHourBilling
+// (faturamento de tempo avulso já encerrado, um cálculo totalmente separado).
+
+type HourPriceRule struct {
+	ID         string    `json:"id"`
+	Label      string    `json:"label"`
+	Minutes    int       `json:"minutes"`
+	PriceCents int64     `json:"priceCents"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+}
+
+var errHourPriceRuleNotFound = appErr(http.StatusNotFound, "HOUR_PRICE_RULE_NOT_FOUND", "Regra de preço não encontrada")
+
+const hourPriceRuleCols = `id::text, label, minutes, price_cents, created_at, updated_at`
+
+func scanHourPriceRule(row pgx.Row) (*HourPriceRule, error) {
+	var p HourPriceRule
+	err := row.Scan(&p.ID, &p.Label, &p.Minutes, &p.PriceCents, &p.CreatedAt, &p.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+func (s *Server) listHourPriceRules(ctx context.Context) ([]HourPriceRule, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+hourPriceRuleCols+` FROM hour_price_rules ORDER BY minutes`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HourPriceRule{}
+	for rows.Next() {
+		var p HourPriceRule
+		if err := rows.Scan(&p.ID, &p.Label, &p.Minutes, &p.PriceCents, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+var errHourPriceRuleDuplicateMinutes = appErr(http.StatusBadRequest, "BAD_REQUEST",
+	"Já existe uma regra de preço para essa duração")
+
+func (s *Server) createHourPriceRule(ctx context.Context, label string, minutes int, priceCents int64) (*HourPriceRule, error) {
+	p, err := scanHourPriceRule(s.db.QueryRow(ctx, `
+		INSERT INTO hour_price_rules (label, minutes, price_cents) VALUES ($1, $2, $3)
+		RETURNING `+hourPriceRuleCols,
+		label, minutes, priceCents))
+	if isUniqueViolation(err) {
+		return nil, errHourPriceRuleDuplicateMinutes
+	}
+	return p, err
+}
+
+func (s *Server) updateHourPriceRule(ctx context.Context, id, label string, minutes int, priceCents int64) (*HourPriceRule, error) {
+	p, err := scanHourPriceRule(s.db.QueryRow(ctx, `
+		UPDATE hour_price_rules SET label = $2, minutes = $3, price_cents = $4, updated_at = now()
+		WHERE id = $1::uuid
+		RETURNING `+hourPriceRuleCols,
+		id, label, minutes, priceCents))
+	if isUniqueViolation(err) {
+		return nil, errHourPriceRuleDuplicateMinutes
+	}
+	if p == nil && err == nil {
+		return nil, errHourPriceRuleNotFound
+	}
+	return p, err
+}
+
+func (s *Server) deleteHourPriceRule(ctx context.Context, id string) error {
+	tag, err := s.db.Exec(ctx, `DELETE FROM hour_price_rules WHERE id = $1::uuid`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errHourPriceRuleNotFound
+	}
+	return nil
 }
