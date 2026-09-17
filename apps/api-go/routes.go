@@ -294,6 +294,11 @@ func (s *Server) registerSocialRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /social/series", s.permGuard("social", "read", false, s.handleListSocialSeries))
 	mux.HandleFunc("POST /social/series", s.rateLimit(20, min, s.adminGuard(s.handleCreateSocialSerie)))
 	mux.HandleFunc("PUT /social/series/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateSocialSerie)))
+	// Conta: de quem é a rede social do post (Santos Tech, Edson, ...) —
+	// mesma convenção de série acima (leitura geral, cadastro/edição admin).
+	mux.HandleFunc("GET /social/contas", s.permGuard("social", "read", false, s.handleListSocialContas))
+	mux.HandleFunc("POST /social/contas", s.rateLimit(20, min, s.adminGuard(s.handleCreateSocialConta)))
+	mux.HandleFunc("PUT /social/contas/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateSocialConta)))
 	mux.HandleFunc("GET /tasks", s.permGuard("tarefas", "read", true, s.handleListTasks))
 	mux.HandleFunc("GET /tasks/{id}", s.permGuard("tarefas", "read", true, s.handleGetTask))
 	mux.HandleFunc("POST /tasks", s.rateLimit(30, min, s.permGuard("tarefas", "write", true, s.handleCreateTask)))

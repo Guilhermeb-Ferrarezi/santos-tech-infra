@@ -230,3 +230,54 @@ func TestHandleUnconfirmSocialPostPlatformValidation(t *testing.T) {
 		t.Fatalf("plataforma inválida: code=%d", w.Code)
 	}
 }
+
+// --- Conta (de quem é a rede social do post) ---
+//
+// Mesma NOTA sobre cobertura de acima (harness sem Postgres real): só os
+// ramos de validação que retornam antes de qualquer s.db são testáveis aqui.
+// NÃO têm cobertura automatizada possível com este harness (registrado em
+// PENDENCIAS.md):
+//   - POST /social/contas com nome duplicado → 409 (constraint UNIQUE,
+//     portalDBErr — insertSocialConta chama s.db.QueryRow)
+//   - PUT /social/contas/{id} com id inexistente → 404 (updateSocialConta
+//     chama s.db.QueryRow) e com nome duplicado → 409
+//   - POST/PUT /social/posts sem contaId resolvendo para "Santos Tech"
+//     (resolveDefaultContaID chama s.db.QueryRow)
+//   - POST/PUT /social/posts com contaId inexistente → 400 (validateContaID
+//     chama s.getSocialConta, que toca o banco)
+//   - GET /social/contas → 200 com dados reais
+
+func TestHandleCreateSocialContaBadBody(t *testing.T) {
+	s := testServer(Config{})
+	for _, body := range []string{"xxx", `{"nome":""}`, `{"nome":"   "}`} {
+		w := httptest.NewRecorder()
+		s.handleCreateSocialConta(w, httptest.NewRequest("POST", "/social/contas", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body=%q code=%d", body, w.Code)
+		}
+	}
+}
+
+func TestHandleUpdateSocialContaBadBody(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("PUT", "/social/contas/1", strings.NewReader(`{"nome":"","ativa":true}`))
+	r.SetPathValue("id", "1")
+	w := httptest.NewRecorder()
+	s.handleUpdateSocialConta(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("nome vazio: code=%d", w.Code)
+	}
+}
+
+// id não-numérico é rejeitado antes de tocar o banco (mesma convenção de
+// handleUpdateSocialSerie).
+func TestHandleUpdateSocialContaBadID(t *testing.T) {
+	s := testServer(Config{})
+	r := httptest.NewRequest("PUT", "/social/contas/abc", strings.NewReader(`{"nome":"X","ativa":true}`))
+	r.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	s.handleUpdateSocialConta(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("id inválido: code=%d", w.Code)
+	}
+}

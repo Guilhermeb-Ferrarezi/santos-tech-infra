@@ -215,3 +215,54 @@ func TestMergeSocialPostInput_SerieIdNullLimpaSerie(t *testing.T) {
 		t.Fatalf("esperava serieId nil após serieId:null explícito, veio %v", *in.SerieID)
 	}
 }
+
+// --- Conta (social_contas) ---
+//
+// Igual à seção Série acima: só a lógica pura (sem tocar s.db, que é nil no
+// harness de testes) é testável aqui. O que depende de banco real — nome
+// duplicado → 409, contaId inexistente → 400 (validateContaID), post criado
+// sem contaId resolvendo para "Santos Tech" (resolveDefaultContaID) — fica
+// registrado como pendência de teste de integração (ver PENDENCIAS.md),
+// mesma lacuna já documentada para série/platform-owners em handlers_social_test.go.
+
+// Diferente de Serie (ponteiro, opcional), Conta é sempre presente em
+// SocialPost — socialPostInputFromCurrent reidrata ContaID diretamente do
+// id atual, nunca nil.
+func TestSocialPostInputFromCurrent_PreservaConta(t *testing.T) {
+	current := baseCurrentPost()
+	current.Conta = SocialContaRef{ID: 2, Nome: "Edson"}
+	in := socialPostInputFromCurrent(current)
+	if in.ContaID == nil || *in.ContaID != 2 {
+		t.Fatalf("esperava contaId=2 reidratado do post atual, veio %v", in.ContaID)
+	}
+}
+
+func TestMergeSocialPostInput_ContaIdMerge(t *testing.T) {
+	in := socialPostInputFromCurrent(baseCurrentPost())
+	raw := map[string]json.RawMessage{
+		"contaId": json.RawMessage(`2`),
+	}
+	if err := mergeSocialPostInput(&in, raw); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if in.ContaID == nil || *in.ContaID != 2 {
+		t.Fatalf("esperava contaId=2 aplicado pelo merge, veio %v", in.ContaID)
+	}
+}
+
+// contaId ausente do JSON não é tocado — igual a qualquer outro campo do PUT
+// parcial (ver TestMergeSocialPostInput_PartialUpdateKeepsOtherFields).
+func TestMergeSocialPostInput_ContaIdAusenteMantemAtual(t *testing.T) {
+	current := baseCurrentPost()
+	current.Conta = SocialContaRef{ID: 1, Nome: "Santos Tech"}
+	in := socialPostInputFromCurrent(current)
+	raw := map[string]json.RawMessage{
+		"title": json.RawMessage(`"Novo título"`),
+	}
+	if err := mergeSocialPostInput(&in, raw); err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if in.ContaID == nil || *in.ContaID != 1 {
+		t.Fatalf("contaId não deveria mudar (ausente do JSON), veio %v", in.ContaID)
+	}
+}
