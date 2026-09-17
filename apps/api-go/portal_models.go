@@ -256,6 +256,15 @@ type portalStudentDTO struct {
 	// 12 meses; nil em turma de grupo. Ver portal_expiracao_worker.go.
 	ContractDate     *string `json:"contractDate"`
 	PackageExpiresAt *string `json:"packageExpiresAt"`
+	// PayerName/PayerCPF/PayerEmail/PayerWhatsapp: quem tem a obrigação
+	// financeira desta matrícula (Contratante do contrato) — nem sempre é o
+	// Aluno (responsável de menor, empresa que paga por funcionário). nil =
+	// nunca preenchido (matrícula antiga, ou aluno cadastrado fora do gerador
+	// de contratos). Ver o comentário de payer_cpf em portal_migrate.go.
+	PayerName     *string `json:"payerName"`
+	PayerCPF      *string `json:"payerCpf"`
+	PayerEmail    *string `json:"payerEmail"`
+	PayerWhatsapp *string `json:"payerWhatsapp"`
 }
 
 // portalTeacherDTO é um professor vinculado a uma turma (class_teacher) —
@@ -350,6 +359,16 @@ type portalStudentIndividualInput struct {
 	// vencimento já dados (portal_expiracao_worker.go) — contrato novo,
 	// avisos novos.
 	ContractDate *string `json:"contractDate,omitempty"`
+	// PayerName/PayerCPF/PayerEmail/PayerWhatsapp: dados do Contratante, mesmo
+	// desenho de ContractedContent — nil = não veio, mantém o salvo; string
+	// VAZIA limpa (vira NULL). O gerador de contratos manda os quatro juntos;
+	// PayerCPF passa por uma checagem leve de formato (validate() abaixo) —
+	// a validação completa (dígito verificador) já acontece no formulário do
+	// dashboard antes de chegar aqui.
+	PayerName     *string `json:"payerName,omitempty"`
+	PayerCPF      *string `json:"payerCpf,omitempty"`
+	PayerEmail    *string `json:"payerEmail,omitempty"`
+	PayerWhatsapp *string `json:"payerWhatsapp,omitempty"`
 }
 
 // portalContractedContentMax: mesmo teto do resumo do diário — é o trecho do
@@ -374,6 +393,18 @@ func (in *portalStudentIndividualInput) validate() error {
 			}
 		}
 		in.ContractDate = &d
+	}
+	if in.PayerCPF != nil {
+		digits := strings.Map(func(r rune) rune {
+			if r >= '0' && r <= '9' {
+				return r
+			}
+			return -1
+		}, *in.PayerCPF)
+		if digits != "" && len(digits) != 11 {
+			return validationErr("payerCpf inválido")
+		}
+		in.PayerCPF = &digits
 	}
 	return nil
 }

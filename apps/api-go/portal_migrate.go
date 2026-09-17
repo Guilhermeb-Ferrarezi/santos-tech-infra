@@ -273,6 +273,25 @@ CREATE TABLE IF NOT EXISTS course_doc_revision (
 ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS contract_date DATE;
 ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS expiry_notice_60_at TIMESTAMPTZ;
 ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS expiry_notice_30_at TIMESTAMPTZ;
+
+-- Dados de quem PAGA a matrícula (payer_*): o gerador de contratos do dashboard
+-- já coleta nome/CPF/e-mail/WhatsApp do Contratante pra montar o PDF, mas até
+-- aqui isso nunca era salvo em lugar nenhum consultável depois — só existia
+-- dentro do formulário, no momento da geração. Motivo direto de existir agora:
+-- payer_cpf é a chave de junção com o cliente no Asaas (só-CPF, sem outro
+-- id em comum entre os dois sistemas) pro cálculo de multa/cancelamento e pro
+-- cadastro automático de quem paga por boleto. O Contratante nem sempre é o
+-- Aluno (responsável de menor, empresa que paga por funcionário) — por isso
+-- é "payer", não "student_*": é sobre quem tem a obrigação financeira desta
+-- matrícula, não sobre quem senta na aula.
+-- asaas_customer_id: cache do id do cliente já criado no Asaas, pra não
+-- precisar buscar por CPF de novo a cada consulta (e pra nunca criar
+-- duplicado se a busca por CPF falhar por qualquer instabilidade).
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS payer_name TEXT;
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS payer_cpf TEXT;
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS payer_email TEXT;
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS payer_whatsapp TEXT;
+ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS asaas_customer_id TEXT;
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal
