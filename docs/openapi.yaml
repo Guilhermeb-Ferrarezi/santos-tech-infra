@@ -3851,6 +3851,96 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
               example: { code: SOCIAL_SERIE_NOT_FOUND, message: "Série não encontrada" }
 
+  /social/contas:
+    get:
+      tags: [Social]
+      summary: Lista todas as contas (ativas e inativas)
+      description: |
+        Requer Admin ou cargo com `social:read`. Conta é de quem é a rede
+        social do post (ex. "Santos Tech", "Edson") — diferente de Série,
+        toda post tem exatamente 1 conta (obrigatória, nunca null). Lista
+        fechada: só Admin cadastra/edita. Seed inicial (Santos Tech + Edson)
+        criado pela migração.
+      responses:
+        "200":
+          description: Todas as contas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contas: { type: array, items: { $ref: "#/components/schemas/SocialConta" } }
+                required: [contas]
+
+    post:
+      tags: [Social]
+      summary: Cria conta
+      description: Admin-only. Rate limit 20/min. `nome` único.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { nome: { type: string } }
+              required: [nome]
+      responses:
+        "201":
+          description: Conta criada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { conta: { $ref: "#/components/schemas/SocialConta" } }
+                required: [conta]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          description: Já existe uma conta com esse nome.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: CONFLICT, message: "registro duplicado" }
+
+  /social/contas/{id}:
+    put:
+      tags: [Social]
+      summary: Edita nome ou ativa/desativa uma conta
+      description: |
+        Admin-only. Rate limit 30/min. `ativa: false` só tira a conta do
+        dropdown de criação de post novo — posts que já a usam continuam
+        mostrando o nome, e editar esses posts sem trocar a conta continua
+        funcionando normalmente.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: integer, format: int64 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nome: { type: string }
+                ativa: { type: boolean }
+              required: [nome, ativa]
+      responses:
+        "200":
+          description: Conta atualizada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { conta: { $ref: "#/components/schemas/SocialConta" } }
+                required: [conta]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          description: Conta não encontrada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SOCIAL_CONTA_NOT_FOUND, message: "Conta não encontrada" }
+
   /sentry/issues:
     get:
       tags: [Observabilidade]
@@ -6985,6 +7075,16 @@ components:
           properties:
             id: { type: integer, format: int64 }
             nome: { type: string }
+        conta:
+          type: object
+          description: |
+            Denormalizado a partir de contaId — SEM ponteiro/null, toda post
+            tem exatamente 1 conta (de quem é a rede social do post). Só
+            leitura.
+          properties:
+            id: { type: integer, format: int64 }
+            nome: { type: string }
+          required: [id, nome]
         createdBy: { type: integer, format: int64, nullable: true }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -6993,7 +7093,7 @@ components:
           nullable: true
           description: "Só populado em GET de post único — null em GET /social/posts (lista, evita N+1)."
           items: { $ref: "#/components/schemas/SocialPostPublishConfirmation" }
-      required: [id, title, caption, platform, pilar, status, formato, objetivo, programa, receita, funilEtapa, createdAt, updatedAt]
+      required: [id, title, caption, platform, pilar, status, formato, objetivo, programa, receita, funilEtapa, conta, createdAt, updatedAt]
 
     SocialPostInput:
       type: object
@@ -7032,6 +7132,7 @@ components:
         assigneeIds: { type: array, items: { type: integer, format: int64 }, description: "Substitui a lista inteira a cada save." }
         funilEtapa: { $ref: "#/components/schemas/SocialFunilEtapa" }
         serieId: { type: integer, format: int64, nullable: true, description: "FK social_series.id — null = sem série. Id inexistente → 400." }
+        contaId: { type: integer, format: int64, nullable: true, description: "FK social_contas.id — null/ausente = usa a conta 'Santos Tech' (default). Id inexistente → 400." }
       required: [title, platform, pilar, status, formato, objetivo, programa, receita]
 
     SocialPostNote:
@@ -7090,6 +7191,19 @@ components:
     SocialSerie:
       type: object
       description: Uma linha de conteúdo do calendário editorial (ex. "Tela&Saúde", "GMN").
+      properties:
+        id: { type: integer, format: int64 }
+        nome: { type: string }
+        ativa: { type: boolean }
+        createdAt: { type: string, format: date-time }
+      required: [id, nome, ativa, createdAt]
+
+    SocialConta:
+      type: object
+      description: |
+        De quem é a rede social do post (ex. "Santos Tech", "Edson").
+        Diferente de SocialSerie: obrigatória (toda post tem exatamente 1) e
+        nasce com seed inicial (Santos Tech + Edson) na migração.
       properties:
         id: { type: integer, format: int64 }
         nome: { type: string }

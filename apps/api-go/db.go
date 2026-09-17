@@ -921,6 +921,26 @@ WHERE p.serie_id IS NULL
   AND p.title ~ '^\[[^\]]+\]'
   AND ser.nome = trim(substring(p.title from '^\[([^\]]+)\]'));
 
+-- Campo "Conta" do Calendário Editorial — de quem é a rede social do post
+-- (Santos Tech ou um cliente externo, ex.: "Edson"). Mesmo padrão de
+-- social_series acima, com 2 diferenças: obrigatória (todo post tem
+-- exatamente 1 conta) e com seed inicial. Ver
+-- docs/superpowers/specs/2026-09-17-conta-calendario-editorial-design.md.
+CREATE TABLE IF NOT EXISTS social_contas (
+  id         SERIAL PRIMARY KEY,
+  nome       TEXT NOT NULL UNIQUE,
+  ativa      BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO social_contas (nome) VALUES ('Santos Tech'), ('Edson') ON CONFLICT (nome) DO NOTHING;
+-- Nasce nullable pra permitir o backfill abaixo — Postgres não aceita
+-- subquery em DEFAULT de coluna, então o backfill precisa vir antes do
+-- SET NOT NULL. Todo post existente vira "Santos Tech" (única conta até
+-- aqui); só então a coluna passa a exigir valor. Rodar de novo é no-op.
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS conta_id INTEGER REFERENCES social_contas(id);
+UPDATE social_posts SET conta_id = (SELECT id FROM social_contas WHERE nome = 'Santos Tech') WHERE conta_id IS NULL;
+ALTER TABLE social_posts ALTER COLUMN conta_id SET NOT NULL;
+
 -- Agenda universal — eventos que ocupam horário e/ou PCs: aula de turma
 -- (recorrente semanal), aula particular, aula experimental, avulso, Corujão,
 -- Mix. Ver docs/superpowers/specs/2026-08-26-agenda-arena-design.md (dashboard).

@@ -66,6 +66,10 @@ type SocialPost struct {
 	// Série (linha de conteúdo, ex.: "Tela&Saúde") — nil quando o post não
 	// está associado a nenhuma. Só leitura; ver SocialPostInput.SerieID.
 	Serie *SocialSerieRef `json:"serie"`
+	// Conta (de quem é a rede social do post, ex.: "Santos Tech", "Edson") —
+	// SEM ponteiro, sempre presente (diferente de Serie, que é opcional): todo
+	// post tem exatamente 1 conta. Só leitura; ver SocialPostInput.ContaID.
+	Conta SocialContaRef `json:"conta"`
 
 	ResponsavelNome string `json:"responsavelNome"`
 	// AssigneeIDs são responsáveis ADICIONAIS além de ResponsavelID (o
@@ -150,6 +154,11 @@ type SocialPostInput struct {
 	// SerieID referencia social_series(id); nil = sem série. Validado em
 	// validateSerieID (existência) antes de INSERT/UPDATE.
 	SerieID *int64 `json:"serieId"`
+	// ContaID referencia social_contas(id); nil = ainda não resolvido — o
+	// handler substitui pelo id da conta "Santos Tech" antes de validar e
+	// gravar (toda post tem exatamente 1 conta). Validado em validateContaID
+	// (existência) antes de INSERT/UPDATE.
+	ContaID *int64 `json:"contaId"`
 }
 
 // SocialSerie: uma linha de conteúdo do calendário editorial (ex.:
@@ -168,6 +177,29 @@ type SocialSerieRef struct {
 	ID   int64  `json:"id"`
 	Nome string `json:"nome"`
 }
+
+// SocialConta: de quem é a rede social do post (ex.: "Santos Tech", "Edson")
+// — lista fechada, só admin cadastra/edita/desativa (GET/POST/PUT
+// /social/contas). Diferente de SocialSerie: obrigatória (todo post tem
+// exatamente 1) e nasce com seed inicial (Santos Tech + Edson) na migração.
+// Ativa=false só esconde do dropdown de criação — posts que já usam a conta
+// continuam mostrando o nome normalmente.
+type SocialConta struct {
+	ID        int64     `json:"id"`
+	Nome      string    `json:"nome"`
+	Ativa     bool      `json:"ativa"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// SocialContaRef é a projeção mínima (id+nome) embutida em SocialPost.Conta.
+type SocialContaRef struct {
+	ID   int64  `json:"id"`
+	Nome string `json:"nome"`
+}
+
+// defaultSocialContaNome é a conta usada quando o post não informa contaId
+// explicitamente (ver resolveDefaultContaID). Seedada pela migração.
+const defaultSocialContaNome = "Santos Tech"
 
 // socialPostInputFromCurrent copia os campos editáveis do post atual para um
 // SocialPostInput — é a base sobre a qual o PUT parcial (mergeSocialPostInput)
@@ -207,6 +239,7 @@ func socialPostInputFromCurrent(p *SocialPost) SocialPostInput {
 		FunilEtapa:         p.FunilEtapa,
 		AssigneeIDs:        p.AssigneeIDs,
 		SerieID:            serieIDOf(p.Serie),
+		ContaID:            &p.Conta.ID,
 	}
 }
 
@@ -262,6 +295,7 @@ func mergeSocialPostInput(in *SocialPostInput, raw map[string]json.RawMessage) e
 		"funilEtapa":         &in.FunilEtapa,
 		"assigneeIds":        &in.AssigneeIDs,
 		"serieId":            &in.SerieID,
+		"contaId":            &in.ContaID,
 	}
 	for key, ptr := range fields {
 		v, ok := raw[key]
@@ -321,12 +355,14 @@ const socialPostCols = `id::text, title, caption, platform, pilar, status,
 	responsavel_id, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
 	COALESCE((SELECT array_agg(sa.user_id ORDER BY sa.added_at) FROM social_post_assignees sa WHERE sa.post_id = social_posts.id), '{}'),
 	serie_id, (SELECT nome FROM social_series WHERE id = social_posts.serie_id),
+	conta_id, (SELECT nome FROM social_contas WHERE id = social_posts.conta_id),
 	created_by, created_at, updated_at`
 
 func scanSocialPost(row pgx.Row) (*SocialPost, error) {
 	var p SocialPost
 	var serieID *int64
 	var serieNome *string
+	var contaNome string
 	err := row.Scan(&p.ID, &p.Title, &p.Caption, &p.Platform, &p.Pilar, &p.Status,
 		&p.ScheduledAt, &p.MediaURL, &p.ReferenceURL, &p.DriveFolderID, &p.DriveFileID, &p.DriveFileName,
 		&p.DriveCoverFolderID, &p.DriveCoverFileID, &p.DriveCoverFileName, &p.AltText, &p.CarouselItems,
@@ -334,6 +370,7 @@ func scanSocialPost(row pgx.Row) (*SocialPost, error) {
 		&p.ConceitoVisual, &p.Paleta, &p.PromptIA, &p.Specs, &p.MasterURL, &p.Mandatorios,
 		&p.ResponsavelID, &p.FunilEtapa, &p.ResponsavelNome, &p.AssigneeIDs,
 		&serieID, &serieNome,
+		&p.Conta.ID, &contaNome,
 		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -348,6 +385,7 @@ func scanSocialPost(row pgx.Row) (*SocialPost, error) {
 		}
 		p.Serie = &SocialSerieRef{ID: *serieID, Nome: nome}
 	}
+	p.Conta.Nome = contaNome
 	return &p, nil
 }
 
@@ -416,8 +454,8 @@ func (s *Server) insertSocialPost(ctx context.Context, in SocialPostInput, creat
 			drive_folder_id, drive_file_id, drive_file_name,
 			drive_cover_folder_id, drive_cover_file_id, drive_cover_file_name, alt_text, carousel_items,
 			formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
-			conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios, responsavel_id, funil_etapa, serie_id, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12::uuid,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
+			conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios, responsavel_id, funil_etapa, serie_id, conta_id, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12::uuid,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)
 		RETURNING id::text`,
 		in.Title, in.Caption, in.Platform, in.Pilar, in.Status, in.ScheduledAt, in.MediaURL, in.ReferenceURL,
 		in.DriveFolderID, in.DriveFileID, in.DriveFileName,
@@ -426,7 +464,7 @@ func (s *Server) insertSocialPost(ctx context.Context, in SocialPostInput, creat
 		in.Formato, in.Objetivo, in.Programa, in.Receita, sliceOrEmpty(in.PlataformasDestino),
 		jsonbOrDefault(in.CopyArte, "[]"), sliceOrEmpty(in.Hashtags),
 		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.PromptIA, jsonbOrDefault(in.Specs, "{}"),
-		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.FunilEtapa, in.SerieID, createdBy).Scan(&id)
+		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.FunilEtapa, in.SerieID, in.ContaID, createdBy).Scan(&id)
 	if err != nil {
 		return nil, portalDBErr(err)
 	}
@@ -455,7 +493,7 @@ func (s *Server) updateSocialPost(ctx context.Context, id string, in SocialPostI
 			drive_folder_id=$10::uuid, drive_file_id=$11, drive_file_name=$12,
 			drive_cover_folder_id=$13::uuid, drive_cover_file_id=$14, drive_cover_file_name=$15, alt_text=$16, carousel_items=$17,
 			formato=$18, objetivo=$19, programa=$20, receita=$21, plataformas_destino=$22, copy_arte=$23, hashtags=$24,
-			conceito_visual=$25, paleta=$26, prompt_ia=$27, specs=$28, master_url=$29, mandatorios=$30, responsavel_id=$31, funil_etapa=$32, serie_id=$33, updated_at=now()
+			conceito_visual=$25, paleta=$26, prompt_ia=$27, specs=$28, master_url=$29, mandatorios=$30, responsavel_id=$31, funil_etapa=$32, serie_id=$33, conta_id=$34, updated_at=now()
 		WHERE id=$1::uuid`,
 		id, in.Title, in.Caption, in.Platform, in.Pilar, in.Status, in.ScheduledAt, in.MediaURL, in.ReferenceURL,
 		in.DriveFolderID, in.DriveFileID, in.DriveFileName,
@@ -464,7 +502,7 @@ func (s *Server) updateSocialPost(ctx context.Context, id string, in SocialPostI
 		in.Formato, in.Objetivo, in.Programa, in.Receita, sliceOrEmpty(in.PlataformasDestino),
 		jsonbOrDefault(in.CopyArte, "[]"), sliceOrEmpty(in.Hashtags),
 		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.PromptIA, jsonbOrDefault(in.Specs, "{}"),
-		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.FunilEtapa, in.SerieID); err != nil {
+		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.FunilEtapa, in.SerieID, in.ContaID); err != nil {
 		return nil, portalDBErr(err)
 	}
 	if err := replaceSocialPostAssignees(ctx, tx, id, in.AssigneeIDs, updatedBy); err != nil {
@@ -804,4 +842,90 @@ func (s *Server) updateSocialSerie(ctx context.Context, id int64, nome string, a
 		return nil, portalDBErr(err)
 	}
 	return &se, nil
+}
+
+var errSocialContaNotFound = appErr(http.StatusNotFound, "SOCIAL_CONTA_NOT_FOUND", "Conta não encontrada")
+
+func (s *Server) listSocialContas(ctx context.Context) ([]SocialConta, error) {
+	rows, err := s.db.Query(ctx, `SELECT id, nome, ativa, created_at FROM social_contas ORDER BY nome`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SocialConta{}
+	for rows.Next() {
+		var c SocialConta
+		if err := rows.Scan(&c.ID, &c.Nome, &c.Ativa, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *Server) getSocialConta(ctx context.Context, id int64) (*SocialConta, error) {
+	var c SocialConta
+	err := s.db.QueryRow(ctx, `SELECT id, nome, ativa, created_at FROM social_contas WHERE id = $1`, id).
+		Scan(&c.ID, &c.Nome, &c.Ativa, &c.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// validateContaID só confirma que a conta existe (FK garantiria isso no
+// INSERT/UPDATE de qualquer forma, mas validar antes devolve um erro 400 com
+// mensagem clara em vez de um 500 de violação de FK). Não exige Ativa=true,
+// mesma lógica de validateSerieID.
+func (s *Server) validateContaID(ctx context.Context, id *int64) error {
+	if id == nil {
+		return nil
+	}
+	c, err := s.getSocialConta(ctx, *id)
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Conta inválida")
+	}
+	return nil
+}
+
+// resolveDefaultContaID busca o id da conta padrão (Santos Tech) — usada
+// quando o post não informa contaId explicitamente (ver handleCreateSocialPost/
+// handleUpdateSocialPost). A conta é seedada na migração; erro aqui é erro de
+// banco de verdade, não "conta padrão ausente".
+func (s *Server) resolveDefaultContaID(ctx context.Context) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(ctx, `SELECT id FROM social_contas WHERE nome = $1`, defaultSocialContaNome).Scan(&id)
+	return id, err
+}
+
+func (s *Server) insertSocialConta(ctx context.Context, nome string) (*SocialConta, error) {
+	var c SocialConta
+	err := s.db.QueryRow(ctx,
+		`INSERT INTO social_contas (nome) VALUES ($1) RETURNING id, nome, ativa, created_at`, nome).
+		Scan(&c.ID, &c.Nome, &c.Ativa, &c.CreatedAt)
+	if err != nil {
+		return nil, portalDBErr(err)
+	}
+	return &c, nil
+}
+
+func (s *Server) updateSocialConta(ctx context.Context, id int64, nome string, ativa bool) (*SocialConta, error) {
+	var c SocialConta
+	err := s.db.QueryRow(ctx,
+		`UPDATE social_contas SET nome = $2, ativa = $3 WHERE id = $1 RETURNING id, nome, ativa, created_at`,
+		id, nome, ativa).
+		Scan(&c.ID, &c.Nome, &c.Ativa, &c.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, portalDBErr(err)
+	}
+	return &c, nil
 }

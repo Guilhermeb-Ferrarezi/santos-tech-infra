@@ -977,6 +977,21 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
   inexistente → 400 (`validateSerieID`, existência apenas, não exige `ativa: true`).
   Migração automática rodou 1x no boot: posts antigos com `title` no formato `[Nome] resto`
   tiveram a série extraída/criada e o `[Nome]` removido do título. Feature de 25/08/2026.
+- `GET /social/contas` — lista TODAS as contas (ativas e inativas — mesma convenção de
+  `/social/series` acima). → `{contas:[SocialConta]}`. **Conta**: de quem é a rede social
+  do post (ex.: "Santos Tech", "Edson") — suporta calendário multi-cliente. Diferente de
+  Série: **obrigatória** (toda post tem exatamente 1 conta, nunca null) e nasce com seed
+  inicial (Santos Tech + Edson) na migração. Lista fechada (só admin cadastra/edita).
+- `POST /social/contas {nome}` → 201 `{conta: SocialConta}`. **Admin-only**. `nome` vazio
+  → 400; `nome` duplicado → 409 `registro duplicado` (constraint `UNIQUE`).
+- `PUT /social/contas/{id} {nome, ativa}` → `{conta: SocialConta}`. **Admin-only**. Mesmas
+  validações do POST; id inexistente → 404 `SOCIAL_CONTA_NOT_FOUND`. `ativa: false` só tira
+  a conta do dropdown de criação — posts que já a usam continuam mostrando o nome, e editar
+  esses posts (sem trocar a conta) continua funcionando normalmente.
+  Post ganha campo `contaId` (nullable, FK `social_contas.id`) no `SocialPostInput` — null/
+  ausente resolve para a conta "Santos Tech" (`resolveDefaultContaID`) antes do INSERT/UPDATE;
+  valor inexistente → 400 (`validateContaID`, existência apenas, não exige `ativa: true`).
+  Feature de 17/09/2026.
 
 **SocialPost** (campos do briefing): `title` (interno), `caption` (legenda),
 `platform`, `pilar` (educacional|institucional|captacao|prova_social|bastidores|tech_mundo_real),
@@ -1009,7 +1024,9 @@ default das peças criadas antes do campo existir. Valor inválido → 400),
 `publishConfirmations[]` ({platform,confirmedById,confirmedByName,confirmedAt} — só
 populado em `GET /social/posts/{id}` (post único), vazio em `GET /social/posts` (lista)),
 `serie` (nullable, `{id,nome}` — só leitura, denormalizado a partir de `serieId`; ver
-`GET/POST/PUT /social/series` acima. Feature de 25/08/2026).
+`GET/POST/PUT /social/series` acima. Feature de 25/08/2026),
+`conta` (`{id,nome}`, SEM null — toda post tem exatamente 1 conta — só leitura, denormalizado
+a partir de `contaId`; ver `GET/POST/PUT /social/contas` acima. Feature de 17/09/2026).
 
 **SocialPlatformOwner**: `{platform, userId, userName, updatedAt}` — mapeamento global
 (não por post) de quem pode confirmar aquele canal.
@@ -1019,6 +1036,9 @@ updatedAt}` — config fixa (não por post) do publicador, ver `GET/PUT /social/
 
 **SocialSerie**: `{id, nome, ativa, createdAt}` — uma linha de conteúdo do calendário
 editorial, ver `GET/POST/PUT /social/series` acima.
+
+**SocialConta**: `{id, nome, ativa, createdAt}` — de quem é a rede social do post, ver
+`GET/POST/PUT /social/contas` acima.
 
 ## Automação Instagram (comentário → DM) — `api.santos-tech.com/instagram`
 
