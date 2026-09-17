@@ -81,6 +81,28 @@ func TestTruncateRunesDCR(t *testing.T) {
 	}
 }
 
+// TestIsTrustedDCRRedirect cobre a allowlist que deixa o client do claude.ai
+// nascer já ativo (ver comentário em trustedDCRRedirectURIs): só o exato
+// redirect_uri oficial pula a fila; qualquer outro (mesmo junto do
+// confiável) continua pendente de aprovação manual.
+func TestIsTrustedDCRRedirect(t *testing.T) {
+	cases := []struct {
+		name string
+		uris []string
+		want bool
+	}{
+		{"claude.ai oficial", []string{"https://claude.ai/api/mcp/auth_callback"}, true},
+		{"desconhecido", []string{"https://evil.example.com/callback"}, false},
+		{"mistura confiável+desconhecido", []string{"https://claude.ai/api/mcp/auth_callback", "https://evil.example.com/callback"}, false},
+		{"vazio", []string{}, true}, // nenhum uri fora da allowlist — não deve acontecer na prática (DCR exige >=1)
+	}
+	for _, c := range cases {
+		if got := isTrustedDCRRedirect(c.uris); got != c.want {
+			t.Errorf("%s: isTrustedDCRRedirect(%v) = %v, esperava %v", c.name, c.uris, got, c.want)
+		}
+	}
+}
+
 func TestDCRValidation(t *testing.T) {
 	s := testServer(Config{PublicOrigin: "https://api.example.com"})
 	cases := []struct {
