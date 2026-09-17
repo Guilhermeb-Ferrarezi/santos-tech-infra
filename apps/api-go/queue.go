@@ -201,5 +201,8 @@ func (s *Server) newEmailQueueServer(redisOpt asynq.RedisConnOpt) (*asynq.Server
 	// Material vivo (posaula_material.go): semente do material do curso e
 	// patch por aula — mesma fila "posaula".
 	mux.HandleFunc(TaskPosaulaMaterial, s.handlePosaulaMaterial)
+	// Gerador de currículo, fase 2 (curriculo_gerar.go): reescrita de um
+	// campo pela IA — mesma fila "posaula" (mesmo gargalo, o agent-go).
+	mux.HandleFunc(TaskCurriculoReescrever, s.handleCurriculoReescrever)
 	return srv, mux
 }
