@@ -257,13 +257,19 @@ func (c *instagramClient) waitMediaFinished(ctx context.Context, creationID stri
 		if err != nil {
 			return fmt.Errorf("consultar status do container: %w", err)
 		}
+		body, readErr := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		if res.StatusCode >= 300 {
+			return fmt.Errorf("graph api retornou status %d ao consultar status do container: %q", res.StatusCode, body)
+		}
+		if readErr != nil {
+			return fmt.Errorf("ler status do container: %w", readErr)
+		}
 		var out struct {
 			StatusCode string `json:"status_code"`
 		}
-		decodeErr := json.NewDecoder(res.Body).Decode(&out)
-		res.Body.Close()
-		if decodeErr != nil {
-			return fmt.Errorf("decodificar status do container: %w", decodeErr)
+		if err := json.Unmarshal(body, &out); err != nil {
+			return fmt.Errorf("decodificar status do container: %w", err)
 		}
 		switch out.StatusCode {
 		case "FINISHED":
