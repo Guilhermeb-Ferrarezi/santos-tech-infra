@@ -60,7 +60,21 @@ func blogListParams(r *http.Request) BlogListFilter {
 		PageSize: pageSize,
 		Category: strings.TrimSpace(r.URL.Query().Get("category")),
 		Query:    strings.TrimSpace(r.URL.Query().Get("q")),
+		Audience: strings.TrimSpace(r.URL.Query().Get("audience")),
 	}
+}
+
+// defaultBlogAudience preserva o comportamento de hoje pra quem não manda o
+// parâmetro novo (o blog público atual em santos-tech.com/blog nunca vai
+// mandar ?audience=) — só o novo /adultos/blog manda audience=adultos.
+func defaultBlogAudience(raw string) (string, error) {
+	if raw == "" {
+		return "familia", nil
+	}
+	if !validBlogAudiences[raw] {
+		return "", appErr(http.StatusBadRequest, "BAD_REQUEST", "Audiência inválida")
+	}
+	return raw, nil
 }
 
 func validateBlogPostInput(in *BlogPostInput) error {
@@ -88,11 +102,18 @@ func validateBlogPostInput(in *BlogPostInput) error {
 func validateBlogCategoryInput(in *BlogCategoryInput) error {
 	in.Name = strings.TrimSpace(in.Name)
 	in.Slug = strings.TrimSpace(in.Slug)
+	in.Audience = strings.TrimSpace(in.Audience)
 	if in.Name == "" {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Nome obrigatório")
 	}
 	if !slugRe.MatchString(in.Slug) {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Slug inválido — use letras minúsculas, números e hífens")
+	}
+	if in.Audience == "" {
+		in.Audience = "familia"
+	}
+	if !validBlogAudiences[in.Audience] {
+		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Audiência inválida")
 	}
 	return nil
 }
@@ -110,6 +131,12 @@ func isUniqueViolation(err error) bool {
 func (s *Server) handleListPublicBlogPosts(w http.ResponseWriter, r *http.Request) {
 	f := blogListParams(r)
 	f.Status = "published"
+	audience, err := defaultBlogAudience(f.Audience)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	f.Audience = audience
 	posts, total, err := s.listBlogPosts(r.Context(), f)
 	if err != nil {
 		writeErr(w, err)
@@ -125,7 +152,12 @@ func (s *Server) handleListPublicBlogPosts(w http.ResponseWriter, r *http.Reques
 // GET /public/blog/posts/{slug}
 func (s *Server) handleGetPublicBlogPost(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
-	post, err := s.getBlogPostBySlug(r.Context(), slug, "published")
+	audience, err := defaultBlogAudience(strings.TrimSpace(r.URL.Query().Get("audience")))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	post, err := s.getBlogPostBySlug(r.Context(), slug, "published", audience)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -139,7 +171,12 @@ func (s *Server) handleGetPublicBlogPost(w http.ResponseWriter, r *http.Request)
 
 // GET /public/blog/categories
 func (s *Server) handleListBlogCategories(w http.ResponseWriter, r *http.Request) {
-	cats, err := s.listBlogCategories(r.Context())
+	audience, err := defaultBlogAudience(strings.TrimSpace(r.URL.Query().Get("audience")))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	cats, err := s.listBlogCategories(r.Context(), audience)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -151,9 +188,15 @@ func (s *Server) handleListBlogCategories(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, views)
 }
 
-// GET /blog/categories (admin — com id, pra editar/apagar)
+// GET /blog/categories (admin — com id, pra editar/apagar). audience vazio
+// (default) lista todas; o dashboard pode filtrar mandando ?audience=.
 func (s *Server) handleListBlogCategoriesAdmin(w http.ResponseWriter, r *http.Request) {
-	cats, err := s.listBlogCategories(r.Context())
+	audience := strings.TrimSpace(r.URL.Query().Get("audience"))
+	if audience != "" && !validBlogAudiences[audience] {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Audiência inválida"))
+		return
+	}
+	cats, err := s.listBlogCategories(r.Context(), audience)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -169,6 +212,10 @@ func (s *Server) handleListBlogPosts(w http.ResponseWriter, r *http.Request) {
 	f.Status = strings.TrimSpace(r.URL.Query().Get("status"))
 	if f.Status != "" && !validBlogStatuses[f.Status] {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Status inválido"))
+		return
+	}
+	if f.Audience != "" && !validBlogAudiences[f.Audience] {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Audiência inválida"))
 		return
 	}
 	posts, total, err := s.listBlogPosts(r.Context(), f)

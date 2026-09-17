@@ -13,15 +13,21 @@ import (
 // ── Models ───────────────────────────────────────────────────────────────────
 
 type BlogCategory struct {
-	ID   string `json:"id"`
-	Slug string `json:"slug"`
-	Name string `json:"name"`
+	ID       string `json:"id"`
+	Slug     string `json:"slug"`
+	Name     string `json:"name"`
+	Audience string `json:"audience"`
 }
 
 type BlogCategoryInput struct {
-	Slug string `json:"slug"`
-	Name string `json:"name"`
+	Slug     string `json:"slug"`
+	Name     string `json:"name"`
+	Audience string `json:"audience"`
 }
+
+// validBlogAudiences isola o blog institucional (família/crianças) do blog de
+// cursos para adultos — ver migration da coluna blog_categories.audience.
+var validBlogAudiences = map[string]bool{"familia": true, "adultos": true}
 
 // BlogPost é a view ADMIN (CRUD completo, todos os campos e status).
 type BlogPost struct {
@@ -106,19 +112,28 @@ func toPostView(p BlogPost) BlogPostView {
 
 // ── Store — categorias ───────────────────────────────────────────────────────
 
-const blogCategoryCols = `id::text, slug, name`
+const blogCategoryCols = `id::text, slug, name, audience`
 
 func scanBlogCategory(row pgx.Row) (*BlogCategory, error) {
 	var c BlogCategory
-	err := row.Scan(&c.ID, &c.Slug, &c.Name)
+	err := row.Scan(&c.ID, &c.Slug, &c.Name, &c.Audience)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	return &c, err
 }
 
-func (s *Server) listBlogCategories(ctx context.Context) ([]BlogCategory, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+blogCategoryCols+` FROM blog_categories ORDER BY name`)
+// listBlogCategories — audience vazio lista todas (uso admin); "familia"/"adultos"
+// filtra pro público correspondente.
+func (s *Server) listBlogCategories(ctx context.Context, audience string) ([]BlogCategory, error) {
+	sql := `SELECT ` + blogCategoryCols + ` FROM blog_categories`
+	args := []any{}
+	if audience != "" {
+		sql += ` WHERE audience = $1`
+		args = append(args, audience)
+	}
+	sql += ` ORDER BY name`
+	rows, err := s.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -140,14 +155,14 @@ func (s *Server) getBlogCategory(ctx context.Context, id string) (*BlogCategory,
 
 func (s *Server) insertBlogCategory(ctx context.Context, in BlogCategoryInput) (*BlogCategory, error) {
 	return scanBlogCategory(s.db.QueryRow(ctx,
-		`INSERT INTO blog_categories (slug, name) VALUES ($1,$2) RETURNING `+blogCategoryCols,
-		in.Slug, in.Name))
+		`INSERT INTO blog_categories (slug, name, audience) VALUES ($1,$2,$3) RETURNING `+blogCategoryCols,
+		in.Slug, in.Name, in.Audience))
 }
 
 func (s *Server) updateBlogCategory(ctx context.Context, id string, in BlogCategoryInput) (*BlogCategory, error) {
 	return scanBlogCategory(s.db.QueryRow(ctx,
-		`UPDATE blog_categories SET slug=$2, name=$3 WHERE id=$1::uuid RETURNING `+blogCategoryCols,
-		id, in.Slug, in.Name))
+		`UPDATE blog_categories SET slug=$2, name=$3, audience=$4 WHERE id=$1::uuid RETURNING `+blogCategoryCols,
+		id, in.Slug, in.Name, in.Audience))
 }
 
 func (s *Server) deleteBlogCategory(ctx context.Context, id string) (bool, error) {
@@ -206,6 +221,7 @@ type BlogListFilter struct {
 	Category string // slug
 	Query    string
 	Status   string
+	Audience string // "familia"/"adultos"; vazio = qualquer uma (uso admin)
 }
 
 func (s *Server) listBlogPosts(ctx context.Context, f BlogListFilter) ([]BlogPost, int, error) {
@@ -220,6 +236,9 @@ func (s *Server) listBlogPosts(ctx context.Context, f BlogListFilter) ([]BlogPos
 	}
 	if f.Category != "" {
 		where = append(where, "c.slug = "+arg(f.Category))
+	}
+	if f.Audience != "" {
+		where = append(where, "c.audience = "+arg(f.Audience))
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		like := "%" + q + "%"
@@ -256,9 +275,17 @@ func (s *Server) getBlogPost(ctx context.Context, id string) (*BlogPost, error) 
 		`SELECT `+blogPostCols+` `+blogPostFrom+` WHERE p.id = $1::uuid`, id))
 }
 
-func (s *Server) getBlogPostBySlug(ctx context.Context, slug string, status string) (*BlogPost, error) {
+// getBlogPostBySlug — audience vazio não filtra (uso admin); "familia"/"adultos"
+// garante que um post não é acessível pelo contexto errado (ex.: post de
+// cursos de adultos servido a partir de /blog institucional).
+func (s *Server) getBlogPostBySlug(ctx context.Context, slug string, status string, audience string) (*BlogPost, error) {
+	if audience == "" {
+		return scanBlogPost(s.db.QueryRow(ctx,
+			`SELECT `+blogPostCols+` `+blogPostFrom+` WHERE p.slug = $1 AND p.status = $2`, slug, status))
+	}
 	return scanBlogPost(s.db.QueryRow(ctx,
-		`SELECT `+blogPostCols+` `+blogPostFrom+` WHERE p.slug = $1 AND p.status = $2`, slug, status))
+		`SELECT `+blogPostCols+` `+blogPostFrom+` WHERE p.slug = $1 AND p.status = $2 AND c.audience = $3`,
+		slug, status, audience))
 }
 
 func (s *Server) insertBlogPost(ctx context.Context, in BlogPostInput, authorID int64) (*BlogPost, error) {

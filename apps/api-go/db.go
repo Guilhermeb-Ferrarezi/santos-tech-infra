@@ -1017,6 +1017,18 @@ ALTER TABLE hour_lab_devices ADD COLUMN IF NOT EXISTS cs2_build_id TEXT;
 -- contratos (que carregam CPF, endereço e nome de menor). String vazia = conta
 -- padrão, ou seja, o comportamento de antes desta coluna existir.
 ALTER TABLE drive_folders ADD COLUMN IF NOT EXISTS upload_account TEXT NOT NULL DEFAULT '';
+
+-- Isola o blog institucional (família/crianças) do blog novo de cursos para
+-- adultos, sem duplicar blog_posts/blog_categories: cada categoria pertence a
+-- uma audiência, e todo post herda a audiência da própria categoria (join já
+-- existente em listBlogPosts/getBlogPostBySlug). Default 'familia' preserva o
+-- comportamento de hoje para quem não manda o parâmetro novo (blog público
+-- atual em santos-tech.com/blog).
+ALTER TABLE blog_categories ADD COLUMN IF NOT EXISTS audience TEXT NOT NULL DEFAULT 'familia';
+ALTER TABLE blog_categories DROP CONSTRAINT IF EXISTS blog_categories_audience_check;
+ALTER TABLE blog_categories ADD CONSTRAINT blog_categories_audience_check
+  CHECK (audience IN ('familia','adultos'));
+CREATE INDEX IF NOT EXISTS idx_blog_categories_audience ON blog_categories(audience);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

@@ -1171,6 +1171,27 @@ pra qualquer colaborador.
 simples). Índice único por `lower(term)` — não é possível cadastrar o mesmo termo duas vezes
 com capitalização diferente.
 
+## Blog — `api.santos-tech.com/public/blog/*` e `/blog/*` (admin)
+
+Blog institucional (santos-tech.com/blog) e blog de cursos para adultos
+(santos-tech.com/adultos/blog) — mesmo motor/CMS, isolados por
+`blog_categories.audience` (`familia`|`adultos`; todo post herda a
+audiência da própria categoria, não há coluna de audiência em `blog_posts`).
+Contrato completo (schemas, exemplos): `docs/openapi.yaml`, tag `Blog`.
+
+- Público (sem auth): `GET /public/blog/posts?page&pageSize&category?&q?&audience?`,
+  `GET /public/blog/posts/{slug}?audience?`, `GET /public/blog/categories?audience?`.
+  `audience` tem **default `familia`** — o blog institucional atual nunca manda esse
+  parâmetro e continua funcionando igual; só o novo /adultos/blog manda
+  `audience=adultos` explicitamente. Post/categoria de uma audiência não aparece
+  nem é acessível por slug a partir da outra (404).
+- Admin (`blog_posts:read`/`write`, delete admin+sudo): `GET/POST /blog/posts`,
+  `GET/PATCH/DELETE /blog/posts/{id}`, `GET/POST /blog/categories`,
+  `PATCH/DELETE /blog/categories/{id}`. `audience` vazio (default) lista/mistura
+  as duas audiências — o dashboard filtra mandando `?audience=`.
+- **BlogCategoryInput.audience**: `familia` (default) ou `adultos`. Categoria nova
+  de "cursos para adultos" deve ser criada explicitamente com `audience: "adultos"`.
+
 ## Blog Analytics — `api.santos-tech.com/blog/events` e `/admin/blog/metrics`
 
 Coleta de eventos anônimos do blog público (pageviews e cliques no CTA) e

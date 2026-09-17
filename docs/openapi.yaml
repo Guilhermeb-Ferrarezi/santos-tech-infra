@@ -66,8 +66,14 @@ tags:
     description: Pagamentos (payments-go — prefixo /payments em produção)
   - name: Blog
     description: |
-      Blog institucional (santos-tech.com/blog). `/public/blog/*` é leitura 100%
-      pública (sem cookie/token, só posts com status `published`). `/blog/*` é o
+      Blog institucional (santos-tech.com/blog) e blog de cursos para adultos
+      (santos-tech.com/adultos/blog) — mesmo motor/CMS, isolados via
+      `blog_categories.audience` (`familia`|`adultos`; todo post herda a
+      audiência da própria categoria). Endpoints públicos aceitam `?audience=`
+      com default `familia` — o consumidor atual do blog institucional não
+      precisa mandar nada; só o novo /adultos/blog manda `audience=adultos`
+      explicitamente. `/public/blog/*` é leitura 100% pública (sem
+      cookie/token, só posts com status `published`). `/blog/*` é o
       CRUD admin — requer role Admin ou cargo personalizado com a permissão
       `blog_posts:read`/`blog_posts:write`; exclusão é admin-only + sudo mode.
   - name: Horas
@@ -2665,6 +2671,13 @@ paths:
           name: q
           schema: { type: string }
           description: Busca em título/resumo (ILIKE).
+        - in: query
+          name: audience
+          schema: { type: string, enum: [familia, adultos], default: familia }
+          description: >
+            Isola o blog institucional do blog de cursos para adultos. Default
+            `familia` (comportamento do blog atual, que não manda esse
+            parâmetro) — o novo /adultos/blog manda `adultos` explicitamente.
       responses:
         "200":
           description: Página de posts publicados.
@@ -2685,13 +2698,17 @@ paths:
     get:
       tags: [Blog]
       summary: Post publicado por slug (público)
-      description: Sem autenticação. 404 se não existir ou não estiver publicado.
+      description: Sem autenticação. 404 se não existir, não estiver publicado, ou pertencer à outra audiência.
       security: []
       parameters:
         - in: path
           name: slug
           required: true
           schema: { type: string }
+        - in: query
+          name: audience
+          schema: { type: string, enum: [familia, adultos], default: familia }
+          description: Mesmo isolamento de /public/blog/posts — 404 se o post não pertencer a essa audiência.
       responses:
         "200":
           description: Post publicado.
@@ -2712,6 +2729,11 @@ paths:
       tags: [Blog]
       summary: Lista categorias (público)
       security: []
+      parameters:
+        - in: query
+          name: audience
+          schema: { type: string, enum: [familia, adultos], default: familia }
+          description: Mesmo isolamento de /public/blog/posts.
       responses:
         "200":
           description: Todas as categorias.
@@ -2745,6 +2767,10 @@ paths:
         - in: query
           name: q
           schema: { type: string }
+        - in: query
+          name: audience
+          schema: { type: string, enum: [familia, adultos] }
+          description: Vazio (default) lista posts de qualquer audiência.
       responses:
         "200":
           description: Página de posts (todos os status).
@@ -2874,6 +2900,11 @@ paths:
       tags: [Blog]
       summary: Lista categorias (admin — com id)
       description: Requer `blog_posts:read`. Igual `/public/blog/categories`, mas com `id` (necessário pra editar/apagar).
+      parameters:
+        - in: query
+          name: audience
+          schema: { type: string, enum: [familia, adultos] }
+          description: Vazio (default) lista categorias de qualquer audiência.
       responses:
         "200":
           description: Todas as categorias.
@@ -6761,13 +6792,15 @@ components:
         id: { type: string, format: uuid }
         slug: { type: string }
         name: { type: string }
-      required: [id, slug, name]
+        audience: { type: string, enum: [familia, adultos], description: "Isola o blog institucional do blog de cursos para adultos." }
+      required: [id, slug, name, audience]
 
     BlogCategoryInput:
       type: object
       properties:
         slug: { type: string, description: "Minúsculo, números e hífens (ex.: novidades)." }
         name: { type: string }
+        audience: { type: string, enum: [familia, adultos], default: familia }
       required: [slug, name]
 
     BlogPost:
