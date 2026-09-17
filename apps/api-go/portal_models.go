@@ -261,10 +261,10 @@ type portalStudentDTO struct {
 	// Aluno (responsável de menor, empresa que paga por funcionário). nil =
 	// nunca preenchido (matrícula antiga, ou aluno cadastrado fora do gerador
 	// de contratos). Ver o comentário de payer_cpf em portal_migrate.go.
-	PayerName      *string `json:"payerName"`
-	PayerCPF       *string `json:"payerCpf"`
-	PayerEmail     *string `json:"payerEmail"`
-	PayerWhatsapp  *string `json:"payerWhatsapp"`
+	PayerName     *string `json:"payerName"`
+	PayerCPF      *string `json:"payerCpf"`
+	PayerEmail    *string `json:"payerEmail"`
+	PayerWhatsapp *string `json:"payerWhatsapp"`
 }
 
 // portalTeacherDTO é um professor vinculado a uma turma (class_teacher) —
