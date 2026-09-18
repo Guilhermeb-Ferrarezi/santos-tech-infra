@@ -102,6 +102,11 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	// espera correção, e um laboratório inteiro divide o mesmo IP.
 	mux.HandleFunc("GET /portal/me/tasks", s.rateLimit(120, min, s.authGuard(s.handlePortalMyTasks)))
 	mux.HandleFunc("POST /portal/me/tasks/{taskId}/answer", s.rateLimit(60, min, s.authGuard(s.handlePortalAnswerTask)))
+	// Exercícios de múltipla escolha (autosserviço) — turma e aula particular
+	// usam o mesmo endpoint, ver portal_me_exercicios.go.
+	mux.HandleFunc("GET /portal/me/exercises", s.rateLimit(60, min, s.authGuard(s.handlePortalMyExercises)))
+	mux.HandleFunc("GET /portal/me/exercises/{exerciseId}", s.rateLimit(60, min, s.authGuard(s.handlePortalMyExerciseDetail)))
+	mux.HandleFunc("POST /portal/me/exercises/{exerciseId}/answer", s.rateLimit(30, min, s.authGuard(s.handlePortalMyExerciseAnswer)))
 	mux.HandleFunc("GET /portal/sessions/{sessionId}/tasks", s.portalDiario("read", s.handlePortalSessionTasks))
 	// 10/min: cada pedido é uma chamada ao Claude (rate limit de 10/min lá também).
 	mux.HandleFunc("POST /portal/sessions/{sessionId}/tasks/regenerate", s.rateLimit(10, min, s.portalDiario("write", s.handlePortalRegenerateTasks)))
