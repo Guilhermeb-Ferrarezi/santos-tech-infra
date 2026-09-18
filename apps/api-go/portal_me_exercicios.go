@@ -143,9 +143,12 @@ func (s *Server) portalSubmitMyAnswer(ctx context.Context, portalUserID, exercis
 		return nil, err
 	}
 
+	// user_exercise_flow_id tem DEFAULT 0, mas 0 não existe em
+	// user_exercise_flow — o default do schema legado viola a própria FK dele.
+	// NULL explícito (a coluna é nullable) evita o 23503.
 	if _, err := s.portalDB.Exec(ctx, `
-		INSERT INTO answer (user_id, question_id, exercise_id, selected_option, is_correct, answered_at)
-		VALUES ($1, $2, $3, $4, $5, now())`,
+		INSERT INTO answer (user_id, question_id, exercise_id, selected_option, is_correct, answered_at, user_exercise_flow_id)
+		VALUES ($1, $2, $3, $4, $5, now(), NULL)`,
 		portalUserID, in.questionID, exerciseID, in.optionID, isCorrect); err != nil {
 		return nil, err
 	}
