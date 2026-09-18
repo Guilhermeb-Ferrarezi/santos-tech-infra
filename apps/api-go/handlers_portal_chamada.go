@@ -11,6 +11,11 @@ import (
 // materializa as aulas a partir da grade semanal, entre duas datas.
 // Sem "from", usa a data de início da turma — que é o caso normal: "cadastra
 // as aulas desde que esse aluno começou".
+//
+// Com "dates" no corpo, o comportamento muda pro caminho de IMPORTAÇÃO:
+// aulas antigas (de antes do Portal, sem grade semanal que bata com elas) em
+// datas explícitas, já marcadas como presença do aluno indicado — ver
+// portalCreateSessionsAtDates.
 func (s *Server) handlePortalGenerateSessions(w http.ResponseWriter, r *http.Request) {
 	classID, err := portalPathID(r, "classId")
 	if err != nil {
@@ -20,12 +25,29 @@ func (s *Server) handlePortalGenerateSessions(w http.ResponseWriter, r *http.Req
 	var in struct {
 		From string `json:"from"`
 		To   string `json:"to"`
+		// Dates + StudentID: import de aulas em datas explícitas em vez de
+		// gerar pela grade semanal. Os dois só valem juntos.
+		Dates     []string `json:"dates"`
+		StudentID int64    `json:"studentId"`
 	}
 	if r.ContentLength > 0 {
 		if err := portalBodyJSON(w, r, &in); err != nil {
 			writeErr(w, err)
 			return
 		}
+	}
+	if len(in.Dates) > 0 {
+		if in.StudentID <= 0 {
+			writeErr(w, validationErr("studentId é obrigatório para importar aulas em datas explícitas"))
+			return
+		}
+		criadas, err := s.portalCreateSessionsAtDates(r.Context(), classID, in.StudentID, in.Dates)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"criadas": criadas})
+		return
 	}
 	de, err := s.portalSessionRangeStart(r.Context(), classID, in.From)
 	if err != nil {

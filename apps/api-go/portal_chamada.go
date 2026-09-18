@@ -318,6 +318,127 @@ func (s *Server) portalGerarAulasDeTodasAsTurmas(ctx context.Context, diasParaTr
 	return len(alvos), criadas, nil
 }
 
+// portalNormalizeImportDates valida e deduplica as datas de um import (função
+// pura, sem tocar o banco, pra dar pra testar sem Postgres — ver
+// portal_chamada_test.go). Preserva a primeira ocorrência de cada data.
+func portalNormalizeImportDates(dates []string) ([]string, error) {
+	if len(dates) == 0 {
+		return nil, validationErr("informe ao menos uma data")
+	}
+	vistos := map[string]bool{}
+	limpos := make([]string, 0, len(dates))
+	for _, d := range dates {
+		if _, err := time.Parse("2006-01-02", d); err != nil {
+			return nil, validationErr(fmt.Sprintf("data inválida: %q (use AAAA-MM-DD)", d))
+		}
+		if !vistos[d] {
+			vistos[d] = true
+			limpos = append(limpos, d)
+		}
+	}
+	return limpos, nil
+}
+
+// portalCreateSessionsAtDates cria aulas em datas EXPLÍCITAS — diferente de
+// portalGenerateSessions, que deriva as datas da grade semanal. É o caminho
+// de "importar aulas antigas": um aluno que estudava antes do Portal existir,
+// sem grade semanal que reproduza as datas reais de 2+ anos de aula.
+//
+// Já marca a presença do aluno como "presente" em cada aula criada — são
+// aulas que já aconteceram de verdade, não slots vazios esperando chamada.
+//
+// Idempotente por CONSULTA prévia, não pelo índice único de class_session
+// (class_id, date, start_time): aqui start_time fica NULL, e o Postgres trata
+// NULL como distinto em índice único, então ON CONFLICT não deduplicaria.
+// Rodar o import de novo com as mesmas datas não duplica: as que já têm aula
+// nesta turma são só ignoradas.
+func (s *Server) portalCreateSessionsAtDates(ctx context.Context, classID, studentID int64, dates []string) (int, error) {
+	limpos, err := portalNormalizeImportDates(dates)
+	if err != nil {
+		return 0, err
+	}
+
+	var matriculado bool
+	if err := s.portalDB.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM enrollment WHERE class_id=$1 AND user_id=$2)`, classID, studentID).Scan(&matriculado); err != nil {
+		return 0, err
+	}
+	if !matriculado {
+		return 0, appErr(400, "NAO_MATRICULADO", "Este aluno não está matriculado na turma")
+	}
+
+	existentes := map[string]bool{}
+	rows, err := s.portalDB.Query(ctx, `SELECT to_char(date,'YYYY-MM-DD') FROM class_session WHERE class_id=$1`, classID)
+	if err != nil {
+		return 0, err
+	}
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		existentes[d] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	novas := make([]string, 0, len(limpos))
+	for _, d := range limpos {
+		if !existentes[d] {
+			novas = append(novas, d)
+		}
+	}
+	if len(novas) == 0 {
+		return 0, nil
+	}
+
+	tx, err := s.portalDB.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	rowsIns, err := tx.Query(ctx,
+		`INSERT INTO class_session (class_id, date, aula_count, created_at, updated_at)
+		 SELECT $1, d, 1, NOW(), NOW() FROM unnest($2::date[]) AS d
+		 RETURNING id`,
+		classID, novas)
+	if err != nil {
+		return 0, err
+	}
+	var ids []int64
+	for rowsIns.Next() {
+		var id int64
+		if err := rowsIns.Scan(&id); err != nil {
+			rowsIns.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rowsIns.Close()
+	if err := rowsIns.Err(); err != nil {
+		return 0, err
+	}
+
+	for _, id := range ids {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO attendance (session_id, user_id, status, created_at, updated_at)
+			 VALUES ($1,$2,'presente',NOW(),NOW())`,
+			id, studentID); err != nil {
+			return 0, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	s.invalidatePortalOverview()
+	return len(ids), nil
+}
+
 // portalMySessions é o histórico self-service de aulas do PRÓPRIO aluno numa
 // turma — diferente de portalListSessions (staff, todos os alunos da turma):
 // aqui é só a chamada da pessoa logada, e exige matrícula própria na turma

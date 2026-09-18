@@ -1860,6 +1860,18 @@ Duas camadas distintas, de propósito:
   `to` ausente = hoje. Idempotente (ON CONFLICT em class_id+date+start_time):
   rodar de novo não duplica nem apaga chamada já feita. Turma sem grade → 400
   `SEM_GRADE`. Intervalo > 1 ano → 400.
+- `POST /portal/classes/{classId}/sessions {dates:[...], studentId}` → `{criadas}`.
+  MESMA rota, modo diferente: em vez de gerar pela grade, cria aulas em datas
+  EXPLÍCITAS (formato `AAAA-MM-DD`) já com a presença do `studentId` marcada
+  `presente` — é o import de aulas antigas (aluno de antes do Portal, sem
+  grade que reproduza as datas reais). `studentId` obrigatório quando `dates`
+  vem preenchido → 400 sem ele. Aluno tem que estar matriculado na turma → 400
+  `NAO_MATRICULADO`. Idempotente por CONSULTA (não pelo índice único —
+  `start_time` fica NULL aqui, e Postgres trata NULL como distinto em UNIQUE):
+  datas já existentes na turma são ignoradas, não duplicadas. Sem `start_time`/
+  `endTime`/`teacherId` (aula sem esses dados) e sem diário (`hasDiary` fica
+  `false` pra sempre nessas linhas — não há conteúdo pra registrar
+  retroativamente, é um estado normal do modelo).
 - `GET /portal/classes/{classId}/sessions` → `{items:[{id,date,startTime,endTime,
   canceled,note,hasDiary,presencas:[{userId,userName,userEmail,status,note}]}]}`.
   **`status` vazio = chamada não feita** — é diferente de falta. `attendance`
