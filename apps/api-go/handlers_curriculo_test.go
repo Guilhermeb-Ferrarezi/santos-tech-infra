@@ -40,6 +40,19 @@ func TestCurriculoPostReescreverValidationBeforeDB(t *testing.T) {
 	}
 }
 
+// "objetivo" é o único campo que pode ser pedido com texto vazio — vira
+// GERAÇÃO do zero, pensando em quem nunca trabalhou. Sem fila, a validação
+// passa e o handler falha depois, no enqueue (503) — prova que não foi a
+// validação que rejeitou.
+func TestCurriculoPostReescreverObjetivoVazioPassaDaValidacao(t *testing.T) {
+	s := testServer(Config{})
+	w := httptest.NewRecorder()
+	s.handleCurriculoPostReescrever(w, curriculoReq(`{"campo":"objetivo","texto":"","maxChars":160}`, 1))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code=%d want %d (deveria passar da validação e falhar só no enqueue) body=%s", w.Code, http.StatusServiceUnavailable, w.Body.String())
+	}
+}
+
 func TestCurriculoGetReescreverIDInvalido(t *testing.T) {
 	s := testServer(Config{})
 	r := httptest.NewRequest("GET", "/portal/curriculo/reescrever/x", nil)

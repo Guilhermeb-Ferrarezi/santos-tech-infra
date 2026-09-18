@@ -57,6 +57,40 @@ func TestMontarBriefCurriculoReescritaComErroAnterior(t *testing.T) {
 	}
 }
 
+func TestCurriculoCampoPermiteGeracao(t *testing.T) {
+	if !curriculoCampoPermiteGeracao("objetivo") {
+		t.Error("objetivo deveria permitir geração do zero")
+	}
+	for _, campo := range []string{"resumo", "topico", "projeto"} {
+		if curriculoCampoPermiteGeracao(campo) {
+			t.Errorf("%s não deveria permitir geração do zero", campo)
+		}
+	}
+}
+
+// Sem texto original (objetivo de quem nunca trabalhou), o brief muda de
+// "reescrever" pra "escrever do zero" e não menciona um texto original que
+// não existe — e usa a formação como o principal fato disponível.
+func TestMontarBriefCurriculoReescritaGeracaoDoZero(t *testing.T) {
+	brief := montarBriefCurriculoReescrita(briefCurriculoInput{
+		Campo:         "objetivo",
+		MaxChars:      160,
+		TextoOriginal: "",
+		Contexto: curriculoContexto{
+			VagaCargo: "Assistente de TI",
+			Formacao:  []string{"Ensino Médio — Escola Pública Tal Tal Tal, cursando"},
+		},
+	})
+	for _, want := range []string{"ESCREVER", "do zero", "PRIMEIRO emprego", "Assistente de TI", "Ensino Médio — Escola Pública Tal Tal Tal, cursando"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief não contém %q:\n%s", want, brief)
+		}
+	}
+	if strings.Contains(brief, "Texto original") {
+		t.Error("sem rascunho, não deveria mencionar \"Texto original\"")
+	}
+}
+
 func TestParseCurriculoRewriteValido(t *testing.T) {
 	out, err := parseCurriculoRewrite(`{"texto": "Desenvolvi um sistema de vendas em Python, reduzindo o tempo de fechamento em 30%."}`, 460)
 	if err != nil {

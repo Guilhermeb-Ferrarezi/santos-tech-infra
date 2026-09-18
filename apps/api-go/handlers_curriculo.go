@@ -21,7 +21,7 @@ func (in curriculoReescreverBody) validate() error {
 	if !curriculoCampoValido(in.Campo) {
 		return validationErr("campo inválido")
 	}
-	if strings.TrimSpace(in.Texto) == "" {
+	if strings.TrimSpace(in.Texto) == "" && !curriculoCampoPermiteGeracao(in.Campo) {
 		return validationErr("texto é obrigatório")
 	}
 	if len([]rune(in.Texto)) > curriculoTextoOriginalMax {
