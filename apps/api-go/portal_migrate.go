@@ -292,6 +292,25 @@ ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS payer_cpf TEXT;
 ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS payer_email TEXT;
 ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS payer_whatsapp TEXT;
 ALTER TABLE enrollment ADD COLUMN IF NOT EXISTS asaas_customer_id TEXT;
+
+-- Gerador de currículo, fase 2 (curriculo_gerar.go/curriculo_prompt.go): botão
+-- "Melhorar com IA" que reescreve um campo (resumo/objetivo/tópico/projeto) na
+-- fórmula verbo+atividade+método+resultado, pelo mesmo caminho do Pós-aula
+-- (agent-go, assíncrono). Não existe "rascunho" de currículo persistido em
+-- lugar nenhum (decisão do Rodrigo: gera o PDF na hora, sem salvar) — esta
+-- tabela não é isso; é só o estado de UM pedido de reescrita, pra a tela ter
+-- um id pra consultar enquanto pending/running, igual ao ai_status do diário.
+CREATE TABLE IF NOT EXISTS curriculo_rewrite (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    contexto JSONB NOT NULL,
+    texto_original TEXT NOT NULL,
+    texto_reescrito TEXT,
+    ai_status TEXT NOT NULL DEFAULT 'pending',
+    ai_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_curriculo_rewrite_user ON curriculo_rewrite(user_id);
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal
