@@ -403,18 +403,32 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		reasoningJSON = &s
 	}
 
-	// Modo espelho: se o cliente mandou voz e o TTS está ligado, tenta responder com
-	// UMA nota de voz. Qualquer falha cai (com log) para o envio de texto abaixo.
-	sentVoice := false
+	// Modo espelho: se o cliente mandou voz e o TTS está ligado, tenta responder
+	// com nota de voz. Qualquer falha cai (com log) para o envio de texto abaixo.
+	//
+	// O retorno é QUANTAS bolhas viraram áudio, contadas do começo — não um
+	// booleano. Com clipes gravados só a primeira bolha costuma casar (é onde
+	// mora a fala protocolar: "Perfeito!", "Só um instante"), e as seguintes
+	// carregam o conteúdo específico daquele atendimento, que gravação nenhuma
+	// diz. Mandar a primeira em voz e o resto em texto é o que o atendente faz.
+	bolhasEmVoz := 0
 	if shouldReplyAsAudio(e.deps.Voice, cfg, inbound) && len(output.Bubbles) > 0 {
-		sentVoice = e.trySendVoice(ctx, conv, inbound, output, reasoningJSON, cfg)
-		if !sentVoice {
+		bolhasEmVoz = e.trySendVoice(ctx, conv, inbound, output, reasoningJSON, cfg)
+		if bolhasEmVoz == 0 {
 			log.Info("voz falhou; caindo para texto", "wamid", wamid)
 		}
 	}
 
-	if !sentVoice {
+	if bolhasEmVoz < len(output.Bubbles) {
+		// O que saiu em voz também conta para a pausa: quem acabou de ouvir uma
+		// nota de voz não deve receber o texto seguinte no mesmo instante.
+		if bolhasEmVoz > 0 {
+			prevText = output.Bubbles[bolhasEmVoz-1]
+		}
 		for i, bubble := range output.Bubbles {
+			if i < bolhasEmVoz {
+				continue // já saiu como nota de voz
+			}
 			// Calcula delay de humanização
 			var delay time.Duration
 			if i == 0 {
@@ -1077,10 +1091,10 @@ func shouldReplyAsAudio(v *VoiceClient, cfg TenantConfig, inbound InboundMessage
 
 // trySendVoice gera UMA nota de voz com a resposta inteira e envia pelo Meta.
 // Retorna false (com log) em qualquer falha → chamador cai no texto.
-func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation, inbound InboundMessage, output ResponderOutput, reasoningJSON *string, cfg TenantConfig) bool {
+func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation, inbound InboundMessage, output ResponderOutput, reasoningJSON *string, cfg TenantConfig) int {
 	log := e.deps.Logger
 	if _, ok := e.deps.Sender.(*WhatsAppSender); !ok {
-		return false // só Meta suporta upload de mídia
+		return 0 // só Meta suporta upload de mídia
 	}
 	text := joinBubbles(output.Bubbles)
 	sel := VoiceSelection{Provider: cfg.VoiceProvider, VoiceID: cfg.VoiceID, Model: cfg.VoiceModel}
@@ -1097,17 +1111,27 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 		}
 		if e.deps.AudioClips == nil || !e.deps.AudioClips.Enabled() {
 			log.Warn("clips: banco de áudios não configurado; caindo para texto")
-			return false
+			return 0
 		}
 
-		clip, info, cerr := e.deps.AudioClips.MatchAnswer(ctx, inbound.TenantID, voice, text, MatchOpts{
+		// Casa contra a PRIMEIRA bolha, não contra a resposta inteira.
+		//
+		// O bot responde em duas mensagens: a primeira é a fala protocolar
+		// ("Opa, tudo certo por aqui!") e a segunda carrega o conteúdo daquele
+		// atendimento ("qual dia fica melhor pra você?"). Juntar as duas e
+		// procurar UMA gravação que diga tudo não acha nada — e nem chega a
+		// pontuar, porque os fatos da segunda bolha (dia, curso, idade) não
+		// existem em nenhum clipe. Medido em produção: 0 clipes considerados
+		// na frase junta, 30 na primeira bolha isolada.
+		alvo := output.Bubbles[0]
+		clip, info, cerr := e.deps.AudioClips.MatchAnswer(ctx, inbound.TenantID, voice, alvo, MatchOpts{
 			MinScore:     e.deps.AudioMatchMin,
 			MaxDuracaoMs: e.deps.AudioMatchMaxMs,
 			ConversaNova: conv.State == StateNew,
 		})
 		if cerr != nil {
 			log.Error("clips: casamento", "err", cerr)
-			return false
+			return 0
 		}
 
 		// Modo sombra: decide e registra, mas ainda responde em texto. É como se
@@ -1116,7 +1140,7 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 			log.Info("clips: SOMBRA — casaria e não enviou",
 				"voice", voice, "intent", clip.IntentKey, "variante", clip.Variant,
 				"score", info.Score, "candidatos", info.Candidatos)
-			return false
+			return 0
 		}
 
 		if clip == nil {
@@ -1124,25 +1148,29 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 			// toda mensagem, o que enchia a fila de gravação de falas que já
 			// existem. O near miss entra junto: para quem vai gravar, "ficou
 			// perto de conv_experimental" vale muito mais que uma chave vazia.
-			if gerr := e.deps.AudioClips.RecordGap(ctx, inbound.TenantID, voice, info.NearMiss, text); gerr != nil {
+			if gerr := e.deps.AudioClips.RecordGap(ctx, inbound.TenantID, voice, info.NearMiss, alvo); gerr != nil {
 				// Best-effort: perder o registro não pode travar a resposta.
 				log.Warn("clips: falha ao registrar lacuna", "err", gerr)
 			}
 			log.Info("clips: nenhuma gravação diz isto; respondendo em texto",
 				"voice", voice, "near_miss", info.NearMiss, "melhor_score", info.Score,
 				"considerados", info.Considerados)
-			return false
+			return 0
 		}
 
 		data, rerr := e.deps.AudioClips.Read(clip)
 		if rerr != nil {
 			log.Error("clips: leitura do arquivo", "err", rerr, "file", clip.FilePath)
-			return false
+			return 0
 		}
 		log.Info("clips: nota de voz enviada",
 			"voice", voice, "intent", clip.IntentKey, "variante", clip.Variant,
-			"score", info.Score, "candidatos", info.Candidatos)
-		return e.sendVoiceBytes(ctx, conv, inbound, data, clip.Transcript, reasoningJSON)
+			"score", info.Score, "candidatos", info.Candidatos,
+			"bolhas_restantes", len(output.Bubbles)-1)
+		if !e.sendVoiceBytes(ctx, conv, inbound, data, clip.Transcript, reasoningJSON) {
+			return 0
+		}
+		return 1 // só a primeira bolha; o resto segue em texto
 	}
 
 	ogg, err := e.deps.Voice.Synthesize(ctx, text, sel)
@@ -1157,9 +1185,14 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 	}
 	if err != nil {
 		log.Error("tts: synthesize", "err", err)
-		return false
+		return 0
 	}
-	return e.sendVoiceBytes(ctx, conv, inbound, ogg, text, reasoningJSON)
+	// O TTS sintetiza a resposta INTEIRA numa nota só — diferente dos clipes,
+	// ele não depende do que já existe gravado. Consome todas as bolhas.
+	if !e.sendVoiceBytes(ctx, conv, inbound, ogg, text, reasoningJSON) {
+		return 0
+	}
+	return len(output.Bubbles)
 }
 
 // sendVoiceBytes faz o upload do OGG e envia como nota de voz, gravando a
