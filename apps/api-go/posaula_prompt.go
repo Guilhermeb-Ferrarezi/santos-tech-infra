@@ -295,7 +295,7 @@ func parsePraticas(text string) (praticasOut, error) {
 	}
 	var out praticasOut
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return praticasOut{}, fmt.Errorf("JSON inválido: %v", err)
+		return praticasOut{}, fmt.Errorf("JSON inválido: %w", err)
 	}
 	out.ResumoAluno = truncarRunas(strings.TrimSpace(out.ResumoAluno), posaulaResumoAlunoMax)
 	if out.ResumoAluno == "" {
@@ -476,7 +476,7 @@ func parseCorrecao(text string) (correcaoOut, error) {
 	}
 	var out correcaoOut
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return correcaoOut{}, fmt.Errorf("JSON inválido: %v", err)
+		return correcaoOut{}, fmt.Errorf("JSON inválido: %w", err)
 	}
 	out.Feedback = truncarRunas(strings.TrimSpace(out.Feedback), posaulaFeedbackMax)
 	if out.Feedback == "" {

@@ -812,7 +812,7 @@ func (s *Server) materialIncorporarAula(ctx context.Context, p materialPayload, 
 			if doc, err = s.courseDocGet(ctx, p.CourseID); err != nil || doc == nil {
 				msg := "erro ao reler o material"
 				s.materialSetAIStatusFinal(ctx, p.CourseID, "failed", &msg)
-				return fmt.Errorf("material: reler material: %v", err)
+				return fmt.Errorf("material: reler material: %w", err)
 			}
 			continue
 		}

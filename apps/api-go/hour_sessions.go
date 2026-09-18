@@ -224,15 +224,87 @@ func (s *Server) listHourClients(ctx context.Context) ([]HourClient, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	now := time.Now()
-	for i := range out {
-		live, err := s.liveBalanceMinutes(ctx, out[i].ID, out[i].BalanceMinutes, now)
-		if err != nil {
-			return nil, err
-		}
-		out[i].LiveBalanceMinutes = live
+	if err := s.fillLiveBalances(ctx, out, time.Now()); err != nil {
+		return nil, err
 	}
 	return out, nil
+}
+
+// fillLiveBalances preenche LiveBalanceMinutes de todos os clientes em DUAS
+// queries (sessões ativas/pausadas de todos + eventos de todas essas sessões),
+// em vez do antigo 1+N+M (uma query de sessões e outra de eventos POR
+// cliente/sessão) que listHourClients fazia chamando liveBalanceMinutes em
+// loop — lento com muitos clientes cadastrados (GET /hour-clients alimenta a
+// tela principal do admin, sem paginação).
+func (s *Server) fillLiveBalances(ctx context.Context, clients []HourClient, now time.Time) error {
+	if len(clients) == 0 {
+		return nil
+	}
+	idx := make(map[string]int, len(clients))
+	clientIDs := make([]string, len(clients))
+	for i, c := range clients {
+		idx[c.ID] = i
+		clientIDs[i] = c.ID
+		clients[i].LiveBalanceMinutes = c.BalanceMinutes
+	}
+
+	sessRows, err := s.db.Query(ctx, `SELECT id::text, client_id::text FROM hour_sessions WHERE client_id = ANY($1::uuid[]) AND status IN ('active', 'paused')`, clientIDs)
+	if err != nil {
+		return err
+	}
+	sessionClient := map[string]string{}
+	var sessionIDs []string
+	for sessRows.Next() {
+		var sid, cid string
+		if err := sessRows.Scan(&sid, &cid); err != nil {
+			sessRows.Close()
+			return err
+		}
+		sessionClient[sid] = cid
+		sessionIDs = append(sessionIDs, sid)
+	}
+	sessRows.Close()
+	if err := sessRows.Err(); err != nil {
+		return err
+	}
+	if len(sessionIDs) == 0 {
+		return nil
+	}
+
+	evRows, err := s.db.Query(ctx, `
+		SELECT session_id::text, event_type, created_at, delta_seconds FROM hour_session_events
+		WHERE session_id = ANY($1::uuid[]) ORDER BY session_id, created_at`, sessionIDs)
+	if err != nil {
+		return err
+	}
+	eventsBySession := map[string][]hourSessionEvent{}
+	for evRows.Next() {
+		var sid string
+		var e hourSessionEvent
+		if err := evRows.Scan(&sid, &e.EventType, &e.CreatedAt, &e.DeltaSeconds); err != nil {
+			evRows.Close()
+			return err
+		}
+		eventsBySession[sid] = append(eventsBySession[sid], e)
+	}
+	evRows.Close()
+	if err := evRows.Err(); err != nil {
+		return err
+	}
+
+	for sid, events := range eventsBySession {
+		cid, ok := sessionClient[sid]
+		if !ok {
+			continue
+		}
+		i, ok := idx[cid]
+		if !ok {
+			continue
+		}
+		elapsed := computeElapsedSeconds(events, now)
+		clients[i].LiveBalanceMinutes -= int(elapsed / 60)
+	}
+	return nil
 }
 
 func (s *Server) getHourClient(ctx context.Context, id string) (*HourClient, error) {
