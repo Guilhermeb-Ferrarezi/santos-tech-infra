@@ -158,18 +158,21 @@ func (s *Server) portalGetCourse(ctx context.Context, id int64) (*portalCourseDT
 
 func (s *Server) portalListModules(ctx context.Context, courseID int64, p portalPagination) ([]portalModuleDTO, int64, error) {
 	args := []any{courseID}
-	where := "WHERE course_id = $1"
+	where := "WHERE mo.course_id = $1"
+	countWhere := "WHERE course_id = $1"
 	if p.Query != "" {
 		args = append(args, "%"+p.Query+"%")
-		where += fmt.Sprintf(" AND (COALESCE(name, '') ILIKE $%d OR COALESCE(description, '') ILIKE $%d)", len(args), len(args))
+		where += fmt.Sprintf(" AND (COALESCE(mo.name, '') ILIKE $%d OR COALESCE(mo.description, '') ILIKE $%d)", len(args), len(args))
+		countWhere += fmt.Sprintf(" AND (COALESCE(name, '') ILIKE $%d OR COALESCE(description, '') ILIKE $%d)", len(args), len(args))
 	}
 	var total int64
-	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM module `+where, args...).Scan(&total); err != nil {
+	if err := s.portalDB.QueryRow(ctx, `SELECT COUNT(*) FROM module `+countWhere, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, p.Limit, p.Offset)
-	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT id::text, course_id::text, COALESCE(name, ''), description, index_order
-		FROM module %s ORDER BY index_order ASC, id ASC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
+	rows, err := s.portalDB.Query(ctx, fmt.Sprintf(`SELECT mo.id::text, mo.course_id::text, COALESCE(mo.name, ''), mo.description, mo.index_order,
+		COALESCE((SELECT COUNT(*) FROM exercise ex JOIN phase ph ON ph.id = ex.phase_id WHERE ph.module_id = mo.id), 0)
+		FROM module mo %s ORDER BY mo.index_order ASC, mo.id ASC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -177,7 +180,7 @@ func (s *Server) portalListModules(ctx context.Context, courseID int64, p portal
 	items := []portalModuleDTO{}
 	for rows.Next() {
 		var dto portalModuleDTO
-		if err := rows.Scan(&dto.ID, &dto.CourseID, &dto.Name, &dto.Description, &dto.IndexOrder); err != nil {
+		if err := rows.Scan(&dto.ID, &dto.CourseID, &dto.Name, &dto.Description, &dto.IndexOrder, &dto.ExerciseCount); err != nil {
 			return nil, 0, err
 		}
 		if dto.Name == "" {

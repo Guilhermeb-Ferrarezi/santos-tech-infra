@@ -132,6 +132,12 @@ type portalModuleDTO struct {
 	Name        string  `json:"name"`
 	Description *string `json:"description"`
 	IndexOrder  int     `json:"indexOrder"`
+	// ExerciseCount: soma dos exercícios de todas as fases do módulo. Sem
+	// isso, quem cria uma turma/aula particular escolhe o módulo às cegas e
+	// pode cair num módulo sem exercício nenhum — "tarefa do dia" nunca
+	// aparece pro aluno matriculado ali, e não tem como perceber isso na hora
+	// de criar (só descobre depois, com o aluno já matriculado).
+	ExerciseCount int `json:"exerciseCount"`
 }
 
 type portalPhaseDTO struct {

@@ -25,6 +25,11 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /portal/me/overview", s.authGuard(s.handlePortalMyOverview))
 	mux.HandleFunc("GET /portal/me/sessions", s.authGuard(s.handlePortalMySessions))
 
+	// Gerador de currículo, fase 2: botão "Melhorar com IA" — self-service,
+	// qualquer sessão autenticada (o aluno reescreve o próprio currículo).
+	mux.HandleFunc("POST /portal/curriculo/reescrever", s.rateLimit(10, min, s.authGuard(s.handleCurriculoPostReescrever)))
+	mux.HandleFunc("GET /portal/curriculo/reescrever/{id}", s.rateLimit(120, min, s.authGuard(s.handleCurriculoGetReescrever)))
+
 	// Cursos / módulos / fases → portal_cursos
 	mux.HandleFunc("GET /portal/courses", s.portalRead("portal_cursos", s.handlePortalListCourses))
 	mux.HandleFunc("POST /portal/courses", s.rateLimit(20, min, s.portalWrite("portal_cursos", s.handlePortalCreateCourse)))

@@ -100,15 +100,41 @@ func dcrError(w http.ResponseWriter, code, desc string) {
 	})
 }
 
+// trustedDCRRedirectURIs são redirect_uris de apps oficiais conhecidos: um
+// registro DCR cujos redirect_uris estejam TODOS aqui nasce já ativo, pulando
+// a fila de aprovação manual (ver isTrustedDCRRedirect).
+//
+// Sem isso, o login MCP do claude.ai nunca funcionava: claude.ai faz o DCR e
+// já redireciona o navegador pro /oauth/authorize em seguida, sem nenhuma
+// janela entre os dois passos pra um admin aprovar o client no meio — todo
+// client nascia pendente e a autorização caía sempre em INVALID_CLIENT. Prova
+// disso em produção: dezenas de registros "Claude" acumulados desde
+// jun/2026, nenhum jamais aprovado a tempo de ser usado.
+var trustedDCRRedirectURIs = map[string]bool{
+	"https://claude.ai/api/mcp/auth_callback": true,
+}
+
+// isTrustedDCRRedirect diz se TODOS os redirect_uris pedidos no registro
+// pertencem à allowlist de apps oficiais.
+func isTrustedDCRRedirect(uris []string) bool {
+	for _, u := range uris {
+		if !trustedDCRRedirectURIs[u] {
+			return false
+		}
+	}
+	return true
+}
+
 // POST /oauth/register — Dynamic Client Registration (RFC 7591), público com
 // rate limit. Só clients públicos (PKCE, sem secret).
 //
-// O client nasce INATIVO: registrar não dá acesso a nada e nem sequer permite
-// chegar na tela de consentimento (o /oauth/authorize recusa client inativo).
-// Sem isso, qualquer um registrava anonimamente um client com client_name
-// livre — o texto que o usuário lê na hora de autorizar — e só dependia de
-// convencer alguém a clicar. Liberar é ato de admin:
-// POST /auth/admin/oauth-clients/{id}/approve.
+// O client nasce INATIVO por padrão: registrar não dá acesso a nada e nem
+// sequer permite chegar na tela de consentimento (o /oauth/authorize recusa
+// client inativo). Sem isso, qualquer um registrava anonimamente um client
+// com client_name livre — o texto que o usuário lê na hora de autorizar — e
+// só dependia de convencer alguém a clicar. Liberar é ato de admin:
+// POST /auth/admin/oauth-clients/{id}/approve. Exceção: redirect_uris de apps
+// oficiais conhecidos (trustedDCRRedirectURIs) nascem já ativos — ver comentário lá.
 func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var body struct {
@@ -132,12 +158,16 @@ func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "App registrado dinamicamente"
 	}
-	c, err := s.insertPendingOAuthClient(r.Context(), clientID, name, body.RedirectURIs)
+	insert, logMsg := s.insertPendingOAuthClient, "oauth_dcr_register: client criado PENDENTE de aprovação"
+	if isTrustedDCRRedirect(body.RedirectURIs) {
+		insert, logMsg = s.insertOAuthClient, "oauth_dcr_register: client de app confiável criado JÁ ATIVO (trustedDCRRedirectURIs)"
+	}
+	c, err := insert(r.Context(), clientID, name, body.RedirectURIs)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	slog.Info("oauth_dcr_register: client criado PENDENTE de aprovação",
+	slog.Info(logMsg,
 		"clientId", c.ClientID, "name", c.Name, "redirectUris", c.RedirectURIs, "ip", clientIP(r))
 	writePublicJSON(w, http.StatusCreated, map[string]any{
 		"client_id":                  c.ClientID,

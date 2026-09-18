@@ -569,7 +569,7 @@ func parsePatchMaterial(text string) (materialPatchOut, error) {
 	}
 	var out materialPatchOut
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return materialPatchOut{}, fmt.Errorf("JSON inválido: %v", err)
+		return materialPatchOut{}, fmt.Errorf("JSON inválido: %w", err)
 	}
 	if out.Secoes == nil {
 		out.Secoes = []materialPatchSecao{}
