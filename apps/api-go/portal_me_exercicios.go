@@ -34,16 +34,23 @@ type portalMyExerciseDTO struct {
 // aluno — a primeira fase (menor id) do módulo em que a turma/aula está,
 // igual à regra que corrigimos no portal .NET (GetCurrentPhaseModuleUserAsync).
 func (s *Server) portalMyExercises(ctx context.Context, portalUserID int64) ([]portalMyExerciseDTO, error) {
+	// DISTINCT + ORDER BY precisam da mesma expressão no Postgres (42P10) — o
+	// cast ::text no SELECT e o "ex.id" cru no ORDER BY são expressões
+	// diferentes pra esse fim. Subquery evita o problema (e mantém a
+	// ordenação numérica certa, não lexicográfica de string).
 	rows, err := s.portalDB.Query(ctx, `
-		SELECT DISTINCT ex.id::text, ex.phase_id::text, COALESCE(ex.title,''), COALESCE(ex.type_exercise,2), COALESCE(ex.points_redeem,0),
-			EXISTS(SELECT 1 FROM answer a WHERE a.exercise_id = ex.id AND a.user_id = $1) AS answered
-		FROM enrollment e
-		JOIN class c ON c.id = e.class_id
-		JOIN phase ph ON ph.module_id = c.current_module_id
-		JOIN exercise ex ON ex.phase_id = ph.id
-		WHERE e.user_id = $1
-		  AND ph.id = (SELECT MIN(ph2.id) FROM phase ph2 WHERE ph2.module_id = c.current_module_id)
-		ORDER BY ex.id ASC`, portalUserID)
+		SELECT id::text, phase_id::text, title, type_exercise, points_redeem, answered FROM (
+			SELECT DISTINCT ex.id, ex.phase_id, COALESCE(ex.title,'') AS title,
+				COALESCE(ex.type_exercise,2) AS type_exercise, COALESCE(ex.points_redeem,0) AS points_redeem,
+				EXISTS(SELECT 1 FROM answer a WHERE a.exercise_id = ex.id AND a.user_id = $1) AS answered
+			FROM enrollment e
+			JOIN class c ON c.id = e.class_id
+			JOIN phase ph ON ph.module_id = c.current_module_id
+			JOIN exercise ex ON ex.phase_id = ph.id
+			WHERE e.user_id = $1
+			  AND ph.id = (SELECT MIN(ph2.id) FROM phase ph2 WHERE ph2.module_id = c.current_module_id)
+		) t
+		ORDER BY t.id ASC`, portalUserID)
 	if err != nil {
 		return nil, err
 	}
