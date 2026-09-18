@@ -36,7 +36,10 @@ export default function SwitchAccountPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['accounts'] }),
   })
 
-  const loginUrl = `/?redirect=${encodeURIComponent(redirect ?? '')}`
+  // add_account=1 impede o auto-redirect de "já logado" da tela de login
+  // (index.tsx) — sem isso, a sessão ainda ativa manda de volta pra cá
+  // (redirect vazio → /switch-account), formando um loop.
+  const loginUrl = `/?add_account=1&redirect=${encodeURIComponent(redirect ?? '')}`
 
   return (
     <AuthLayout>
