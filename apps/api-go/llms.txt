@@ -1563,6 +1563,45 @@ GET    /portal/videos/{videoId}
 PATCH  /portal/videos/{videoId}
 DELETE /portal/videos/{videoId}
 
+### Exercícios — autosserviço do aluno — `/portal/me/exercises`
+
+Diferente do CRUD acima (admin), aqui é o próprio aluno respondendo o que já
+existe. Curso/módulo/fase é conteúdo do curso, não da matrícula — o mesmo
+endpoint atende turma e aula particular sem distinção, filtrando só pela fase
+ATUAL (a de menor id) do módulo em que a matrícula está — mesma regra do
+`GetCurrentPhaseModuleUserAsync` do portal .NET. Só múltipla escolha
+(type=1); código e dissertativo (0 e 2) nem aparecem aqui, ficam pro fluxo de
+correção manual do professor (seção "acompanhamento" abaixo). Só authGuard,
+casado por e-mail com o `"user"` do Portal (como `/portal/me/overview`).
+
+- `GET /portal/me/exercises` → `{exercises:[{id, phaseId, title,
+  description, type, pointsRedeem, answered}]}`. Rate 60/min. `answered`
+  só é `true` quando TODAS as questões do exercício já têm resposta do
+  aluno (exercício de 1 pergunta: respondeu = true na hora; de N perguntas:
+  só vira true na última).
+- `GET /portal/me/exercises/{id}` → `{exercise: {id, title, description,
+  type, pointsRedeem, questions:[{id, statement, answered, options:[{id,
+  text, selected, isCorrect?}]}]}}`. Rate 60/min. `isCorrect` só existe
+  numa questão com `answered=true` — pendente nunca revela gabarito antes
+  de responder; depois de responder, todas as opções da questão vêm com
+  `isCorrect` e a escolhida vem com `selected=true` (dá pra montar a visão
+  "você respondeu X, a certa era Y" sem reenviar nada).
+- `POST /portal/me/exercises/{id}/answer` body `{questionId: string,
+  optionId: string}` (strings, não número — mesmo formato que os ids vêm
+  no GET) → 200 `{isCorrect, pointsEarned, alreadyAnswered}`. Rate 30/min.
+  A opção só é aceita se pertencer À questão **e** a questão pertencer ao
+  exercício do path (as três pontas amarradas na mesma query — sem isso
+  dava pra usar id de questão de QUALQUER curso do sistema como oráculo de
+  gabarito alheio). Responder de novo a mesma questão é idempotente:
+  devolve o resultado já salvo (`alreadyAnswered:true`), não duplica linha
+  em `answer` nem ponto (advisory lock por aluno+exercício+questão
+  serializa clique duplo/retry). `pointsEarned` é o que JÁ foi creditado
+  de verdade em `portal_point` (via `grantPointsForAnswers`, mesma
+  função do fluxo de correção do professor) — fica 0 enquanto o
+  exercício tiver questão pendente, porque o crédito só acontece quando
+  todas as questões estão corrigidas (proporcional: `points_redeem *
+  corretas/total`).
+
 ## Portal — acompanhamento (Fase 3): respostas, correção, progresso
 
 Schema novo: respostas granulares por questão (tabela `answer`, is_correct
