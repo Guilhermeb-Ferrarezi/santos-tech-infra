@@ -86,6 +86,20 @@ var fatosFixos = map[string]bool{
 	// negação — inverte tudo
 	"nao": true,
 
+	// NOME PRÓPRIO É DADO, não estilo.
+	//
+	// O acervo é a voz de uma pessoa, mas a persona do bot pode ter outro nome
+	// — a escola usa um nome distinto justamente para reconhecer, quando o
+	// cliente chega, que o atendimento foi do bot. Sem os nomes aqui, a
+	// gravação "Aqui quem fala é o Henrique" casaria com "Aqui é o Marcos":
+	// mesma frase, nome diferente, e o cliente ouviria o bot se apresentar
+	// com o nome errado. O gate de fatos resolve sem regra nova.
+	"henrique": true, "marcos": true, "bia": true, "julia": true,
+	"rodrigo": true, "guilherme": true,
+	// papel também é afirmação sobre quem está falando
+	"coordenador": true, "coordenadora": true, "coordenacao": true,
+	"professor": true, "professora": true,
+
 	// "bom dia DE NOVO" afirma que já houve conversa antes
 	"novo": true, "novamente": true, "denovo": true, "volta": true,
 	"voltou": true, "retorno": true,
