@@ -26,7 +26,7 @@ func mfaEmailAcctCDKey(uid int64) string { return fmt.Sprintf("api-go:mfa_email_
 // reenvio explícito (/auth/mfa/email).
 func (s *Server) sendChallengeEmailCode(ctx context.Context, challenge, email string) error {
 	code := emailCode()
-	if err := s.rdb.Set(ctx, "mfa_email:"+challenge, code, 10*time.Minute).Err(); err != nil {
+	if err := s.rdb.Set(ctx, "api-go:mfa_email:"+challenge, code, 10*time.Minute).Err(); err != nil {
 		return err
 	}
 	html := emailCodeHTML(code, "Use o código abaixo para concluir o seu login:")

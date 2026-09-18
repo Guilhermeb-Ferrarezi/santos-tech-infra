@@ -161,7 +161,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	// mesmo desafio do login por senha e manda o auth-web pro passo do código.
 	if u.MFAEnabled {
 		challenge := randomToken(24)
-		if err := s.rdb.Set(r.Context(), "mfa_challenge:"+challenge, u.ID, 10*time.Minute).Err(); err != nil {
+		if err := s.rdb.Set(r.Context(), "api-go:mfa_challenge:"+challenge, u.ID, 10*time.Minute).Err(); err != nil {
 			fail("oauth_failed")
 			return
 		}

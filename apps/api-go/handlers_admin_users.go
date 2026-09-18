@@ -344,7 +344,7 @@ func (s *Server) handleSendResetAdminUser(w http.ResponseWriter, r *http.Request
 	// Mesmo mecanismo do forgot-password: token efêmero no Redis (TTL 1h).
 	token := randomToken(32)
 	hash := sha256Hex(token)
-	if err := s.rdb.Set(r.Context(), "pwd_reset:"+hash, u.ID, time.Hour).Err(); err != nil {
+	if err := s.rdb.Set(r.Context(), "api-go:pwd_reset:"+hash, u.ID, time.Hour).Err(); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -359,7 +359,7 @@ func (s *Server) handleSendResetAdminUser(w http.ResponseWriter, r *http.Request
 func (s *Server) sendInvite(ctx context.Context, u *User) {
 	token := randomToken(32)
 	hash := sha256Hex(token)
-	if err := s.rdb.Set(ctx, "pwd_reset:"+hash, u.ID, 72*time.Hour).Err(); err != nil {
+	if err := s.rdb.Set(ctx, "api-go:pwd_reset:"+hash, u.ID, 72*time.Hour).Err(); err != nil {
 		slog.Error("falha ao gravar token de convite", "err", err, "user", u.ID)
 		return
 	}
