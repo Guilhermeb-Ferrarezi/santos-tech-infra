@@ -28,11 +28,13 @@ func TestPortalMyExerciseAnswerValidationBeforeDB(t *testing.T) {
 		exerciseID string
 		body       string
 	}{
-		{"exerciseId inválido", "x", `{"questionId":1,"optionId":1}`},
+		{"exerciseId inválido", "x", `{"questionId":"1","optionId":"1"}`},
 		{"corpo inválido", "1", "xxx"},
-		{"sem questionId", "1", `{"optionId":1}`},
-		{"sem optionId", "1", `{"questionId":1}`},
-		{"ids zerados", "1", `{"questionId":0,"optionId":0}`},
+		{"questionId como número (deve ser string)", "1", `{"questionId":1,"optionId":"1"}`},
+		{"sem questionId", "1", `{"optionId":"1"}`},
+		{"sem optionId", "1", `{"questionId":"1"}`},
+		{"ids vazios", "1", `{"questionId":"","optionId":""}`},
+		{"ids não numéricos", "1", `{"questionId":"abc","optionId":"abc"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -87,14 +88,24 @@ func (s *Server) portalMyExerciseAccess(ctx context.Context, portalUserID, exerc
 	return ok, err
 }
 
+// QuestionID/OptionID chegam como STRING no JSON — os DTOs de leitura
+// (portalQuestionDTO/portalOptionDTO) já expõem id como string (::text, pro
+// front não perder precisão em número grande), e o front devolve o mesmo
+// valor que recebeu. Corpo com número aqui quebraria o decode.
 type portalMySubmitInput struct {
-	QuestionID int64 `json:"questionId"`
-	OptionID   int64 `json:"optionId"`
+	QuestionID string `json:"questionId"`
+	OptionID   string `json:"optionId"`
+	questionID int64
+	optionID   int64
 }
 
 func (in *portalMySubmitInput) validate() error {
-	if in.QuestionID <= 0 || in.OptionID <= 0 {
-		return validationErr("questionId e optionId são obrigatórios")
+	var err error
+	if in.questionID, err = strconv.ParseInt(in.QuestionID, 10, 64); err != nil || in.questionID <= 0 {
+		return validationErr("questionId inválido")
+	}
+	if in.optionID, err = strconv.ParseInt(in.OptionID, 10, 64); err != nil || in.optionID <= 0 {
+		return validationErr("optionId inválido")
 	}
 	return nil
 }
@@ -111,7 +122,7 @@ type portalMySubmitResult struct {
 func (s *Server) portalSubmitMyAnswer(ctx context.Context, portalUserID, exerciseID int64, in portalMySubmitInput) (*portalMySubmitResult, error) {
 	var existing bool
 	err := s.portalDB.QueryRow(ctx, `SELECT is_correct FROM answer WHERE user_id=$1 AND exercise_id=$2 AND question_id=$3`,
-		portalUserID, exerciseID, in.QuestionID).Scan(&existing)
+		portalUserID, exerciseID, in.questionID).Scan(&existing)
 	if err == nil {
 		points := 0
 		if existing {
@@ -125,7 +136,7 @@ func (s *Server) portalSubmitMyAnswer(ctx context.Context, portalUserID, exercis
 
 	var isCorrect bool
 	if err := s.portalDB.QueryRow(ctx, `SELECT is_correct FROM question_option WHERE id=$1 AND question_id=$2`,
-		in.OptionID, in.QuestionID).Scan(&isCorrect); err != nil {
+		in.optionID, in.questionID).Scan(&isCorrect); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, validationErr("opção não encontrada para essa questão")
 		}
@@ -135,7 +146,7 @@ func (s *Server) portalSubmitMyAnswer(ctx context.Context, portalUserID, exercis
 	if _, err := s.portalDB.Exec(ctx, `
 		INSERT INTO answer (user_id, question_id, exercise_id, selected_option, is_correct, answered_at)
 		VALUES ($1, $2, $3, $4, $5, now())`,
-		portalUserID, in.QuestionID, exerciseID, in.OptionID, isCorrect); err != nil {
+		portalUserID, in.questionID, exerciseID, in.optionID, isCorrect); err != nil {
 		return nil, err
 	}
 
