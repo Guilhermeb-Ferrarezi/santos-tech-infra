@@ -49,10 +49,19 @@ func curriculoCampoValido(campo string) bool {
 	return ok
 }
 
+// curriculoCampoPermiteGeracao: só "objetivo" pode ser pedido com texto
+// vazio — os outros campos (resumo, tópico, projeto) são sempre uma
+// REESCRITA de um rascunho que a pessoa já tem; "objetivo" também serve pra
+// GERAR do zero, pensando em quem nunca trabalhou e não sabe por onde
+// começar a escrever um objetivo profissional.
+func curriculoCampoPermiteGeracao(campo string) bool {
+	return campo == "objetivo"
+}
+
 // curriculoContexto é o que o formulário já tem preenchido — vira parte do
-// brief pra a reescrita não inventar fatos que a pessoa não informou. Tudo
-// opcional: a pessoa pode estar reescrevendo o resumo antes de preencher o
-// resto.
+// brief pra a reescrita (ou geração) não inventar fatos que a pessoa não
+// informou. Tudo opcional: a pessoa pode estar reescrevendo o resumo antes
+// de preencher o resto.
 type curriculoContexto struct {
 	Cargo              string   `json:"cargo,omitempty"`
 	TituloProfissional string   `json:"tituloProfissional,omitempty"`
@@ -61,6 +70,10 @@ type curriculoContexto struct {
 	ExperienciaCargo   string   `json:"experienciaCargo,omitempty"`
 	ExperienciaEmpresa string   `json:"experienciaEmpresa,omitempty"`
 	Competencias       []string `json:"competencias,omitempty"`
+	// Formacao: um resumo por item ("Ensino Médio — Escola Tal, cursando").
+	// Importa principalmente pra GERAR o objetivo de quem nunca trabalhou —
+	// sem experiência, a formação é o principal fato disponível.
+	Formacao []string `json:"formacao,omitempty"`
 }
 
 // briefCurriculoInput é tudo que o prompt precisa pra reescrever um campo.
@@ -74,13 +87,19 @@ type briefCurriculoInput struct {
 }
 
 // montarBriefCurriculoReescrita monta o prompt em português: identidade →
-// contexto já preenchido → o rascunho a reescrever → instruções de saída.
+// contexto já preenchido → o rascunho a reescrever (ou aviso de que não há
+// rascunho, pra GERAR do zero) → instruções de saída.
 func montarBriefCurriculoReescrita(in briefCurriculoInput) string {
 	var b strings.Builder
 	b.WriteString("Você ajuda pessoas a escrever currículos profissionais em português do Brasil, no estilo direto e objetivo pedido por sistemas de triagem automática (ATS): frases curtas, verbo de ação no início, sem adjetivos vazios (\"excelente\", \"apaixonado\").\n\n")
 
 	campoNome := curriculoCampos[in.Campo]
-	fmt.Fprintf(&b, "Sua tarefa: reescrever o %s abaixo, melhorando a clareza e a força, SEM inventar nenhum fato, número, ferramenta ou empresa que não esteja no texto original ou no contexto fornecido.\n\n", campoNome)
+	temTextoOriginal := strings.TrimSpace(in.TextoOriginal) != ""
+	if temTextoOriginal {
+		fmt.Fprintf(&b, "Sua tarefa: reescrever o %s abaixo, melhorando a clareza e a força, SEM inventar nenhum fato, número, ferramenta ou empresa que não esteja no texto original ou no contexto fornecido.\n\n", campoNome)
+	} else {
+		fmt.Fprintf(&b, "Sua tarefa: ESCREVER um %s do zero, coerente com o contexto abaixo — a pessoa ainda não escreveu nada. Use só os fatos do contexto (vaga-alvo, formação, competências); muita gente que usa isto está buscando o PRIMEIRO emprego e não tem experiência nenhuma — nesse caso, apoie o texto na formação/competências, sem jamais inventar uma experiência que a pessoa não teve.\n\n", campoNome)
+	}
 
 	if in.Contexto.VagaCargo != "" || in.Contexto.VagaEmpresa != "" {
 		fmt.Fprintf(&b, "## Vaga-alvo\nCargo: %s\nEmpresa: %s\n\n", vazioOu(in.Contexto.VagaCargo, "(não informado)"), vazioOu(in.Contexto.VagaEmpresa, "(não informada)"))
@@ -94,8 +113,13 @@ func montarBriefCurriculoReescrita(in briefCurriculoInput) string {
 	if len(in.Contexto.Competencias) > 0 {
 		fmt.Fprintf(&b, "## Competências que a pessoa já listou\n%s\n\n", strings.Join(in.Contexto.Competencias, ", "))
 	}
+	if len(in.Contexto.Formacao) > 0 {
+		fmt.Fprintf(&b, "## Formação da pessoa\n%s\n\n", strings.Join(in.Contexto.Formacao, "; "))
+	}
 
-	fmt.Fprintf(&b, "## Texto original (rascunho da pessoa)\n%s\n\n", strings.TrimSpace(in.TextoOriginal))
+	if temTextoOriginal {
+		fmt.Fprintf(&b, "## Texto original (rascunho da pessoa)\n%s\n\n", strings.TrimSpace(in.TextoOriginal))
+	}
 
 	if in.Campo == "topico" || in.Campo == "projeto" {
 		b.WriteString("Formato esperado para este campo: verbo de ação + o que foi feito + método/ferramenta/escala (se souber) + resultado (se souber). Se o texto original não menciona método ou resultado, NÃO invente — reescreva só o que já está lá, de forma mais clara.\n\n")
@@ -106,7 +130,9 @@ func montarBriefCurriculoReescrita(in briefCurriculoInput) string {
 	b.WriteString(`{"texto": "..."}` + "\n\n")
 	fmt.Fprintf(&b, "Regras:\n- texto: até %d caracteres — se não couber, corte o menos importante, nunca invente pra preencher espaço.\n", in.MaxChars)
 	b.WriteString("- Português do Brasil, sem emoji, sem markdown dentro do texto.\n")
-	b.WriteString("- Se o texto original já estiver bom, pode devolver quase igual — o objetivo é melhorar, não mudar por mudar.\n")
+	if temTextoOriginal {
+		b.WriteString("- Se o texto original já estiver bom, pode devolver quase igual — o objetivo é melhorar, não mudar por mudar.\n")
+	}
 	if strings.TrimSpace(in.ErroAnterior) != "" {
 		fmt.Fprintf(&b, "\nATENÇÃO: sua resposta anterior foi rejeitada por este motivo: %s. Corrija e devolva só o JSON.\n", strings.TrimSpace(in.ErroAnterior))
 	}
