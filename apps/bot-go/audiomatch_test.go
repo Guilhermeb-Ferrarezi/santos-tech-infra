@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -262,5 +263,29 @@ func TestAcervoRealPoucosCruzamentosEntreIntencoes(t *testing.T) {
 
 	if frac := float64(cruzados) / float64(total); frac > 0.35 {
 		t.Errorf("cruzamento entre intenções em %.1f%% — acima do teto de 35%%", 100*frac)
+	}
+}
+
+// A persona do bot pode não se chamar como a pessoa que gravou o acervo — a
+// escola usa um nome distinto de propósito, para reconhecer o atendimento do
+// bot quando o cliente chega. A gravação não pode desmentir a persona.
+func TestNomeProprioNaoPodeDivergir(t *testing.T) {
+	ix := NovoAudioIndex(acervoReal(t))
+
+	if clip, info := ix.Casa("Aqui é o Marcos, da Escola Santos Tech.", MatchOpts{}); clip != nil {
+		t.Errorf("persona Marcos casou com gravação %q (score %.2f): %s",
+			clip.IntentKey, info.Score, clip.Transcript)
+	}
+	// Uma saudação sem nome também não pode puxar uma apresentação com nome.
+	if clip, _ := ix.Casa("Oi, boa tarde! Como posso te ajudar?", MatchOpts{}); clip != nil {
+		if strings.Contains(strings.ToLower(clip.Transcript), "henrique") {
+			t.Errorf("saudação sem nome trouxe apresentação com nome: %s", clip.Transcript)
+		}
+	}
+	// E o papel também é afirmação: o bot não é o coordenador pedagógico.
+	if clip, info := ix.Casa("Eu faço as aulas experimentais aqui.", MatchOpts{}); clip != nil {
+		if strings.Contains(strings.ToLower(clip.Transcript), "coordenador") {
+			t.Errorf("bot assumiu papel de coordenador (score %.2f): %s", info.Score, clip.Transcript)
+		}
 	}
 }
