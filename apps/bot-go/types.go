@@ -151,6 +151,14 @@ type Booking struct {
 	WhatsApp string // telefone do cliente (E.164 ou como veio)
 	DataHora string // ISO 8601 com hora; vazio = não resolvido (cai pra Status "Confirmar")
 	Status   string // "Agendada" (com data) | "Confirmar" (sem data resolvida)
+
+	// O que segue vira CONTEÚDO da página, não propriedade: a base do Notion
+	// não tem campo para isto e quem abre o agendamento quer o contexto ali,
+	// não numa coluna espremida na tabela.
+	Tipo   string // "experimental" | "individual"
+	Curso  string // curso/área de interesse
+	Idade  int    // 0 = adulto ou não informado
+	Resumo string // o que aconteceu no atendimento, escrito pelo bot
 }
 
 // SchedulingRequest — pedido de agendamento detectado pelo LLM na conversa do cliente.

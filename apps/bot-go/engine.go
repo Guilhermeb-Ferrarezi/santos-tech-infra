@@ -916,6 +916,14 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 					WhatsApp: pb.ClientPhone,
 					DataHora: dataHora,
 					Status:   status,
+					// Contexto do atendimento: vai no corpo da página, para quem
+					// for dar a aula chegar sabendo com quem vai falar. Era
+					// coletado na conversa (schedulingRequest.notes) e morria no
+					// banco — o Notion só recebia nome, telefone e horário.
+					Tipo:   pb.Kind,
+					Curso:  pb.Course,
+					Idade:  pb.Age,
+					Resumo: pb.Notes,
 				})
 				if notionErr != nil {
 					log.Error("bookingAction: falha ao gravar no Notion", "id", pb.ID, "err", notionErr)

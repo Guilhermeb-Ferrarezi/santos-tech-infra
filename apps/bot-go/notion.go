@@ -155,6 +155,9 @@ func (c *NotionClient) CreateBooking(ctx context.Context, b Booking) error {
 		"parent":     map[string]any{"type": "data_source_id", "data_source_id": c.dsID},
 		"properties": props,
 	}
+	if filhos := blocosDoAtendimento(b); len(filhos) > 0 {
+		body["children"] = filhos
+	}
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("notion: marshal booking: %w", err)
@@ -180,6 +183,92 @@ func (c *NotionClient) CreateBooking(ctx context.Context, b Booking) error {
 	c.cache = nil
 	c.mu.Unlock()
 	return nil
+}
+
+// blocosDoAtendimento monta o CONTEÚDO da página do agendamento: a ficha do
+// aluno e o resumo do que foi conversado.
+//
+// Vai como conteúdo, e não como propriedade, por dois motivos: a base "Agenda —
+// Aulas Experimentais" não tem campo para texto livre (são seis propriedades, e
+// nenhuma serve), e um resumo de atendimento numa coluna de tabela é ilegível.
+// Quem abre o agendamento antes da aula quer o contexto na página.
+func blocosDoAtendimento(b Booking) []any {
+	var ficha []string
+	if b.Tipo != "" {
+		ficha = append(ficha, "Tipo: "+b.Tipo)
+	}
+	if b.Curso != "" {
+		ficha = append(ficha, "Curso de interesse: "+b.Curso)
+	}
+	if b.Idade > 0 {
+		ficha = append(ficha, fmt.Sprintf("Idade do aluno: %d", b.Idade))
+	}
+	if b.WhatsApp != "" {
+		ficha = append(ficha, "WhatsApp: "+b.WhatsApp)
+	}
+
+	resumo := strings.TrimSpace(b.Resumo)
+	if len(ficha) == 0 && resumo == "" {
+		return nil
+	}
+
+	blocos := []any{titulo("Atendimento pelo bot")}
+	if len(ficha) > 0 {
+		blocos = append(blocos, paragrafo(strings.Join(ficha, " · ")))
+	}
+	if resumo != "" {
+		blocos = append(blocos, titulo("Resumo da conversa"))
+		// O Notion recusa rich_text acima de 2000 caracteres por bloco. Quebrar
+		// é melhor que truncar: o resumo é justamente o que dá contexto.
+		for _, pedaco := range fatia(resumo, 1900) {
+			blocos = append(blocos, paragrafo(pedaco))
+		}
+	}
+	return blocos
+}
+
+func titulo(txt string) map[string]any {
+	return map[string]any{
+		"object": "block", "type": "heading_3",
+		"heading_3": map[string]any{
+			"rich_text": []any{map[string]any{"type": "text", "text": map[string]any{"content": txt}}},
+		},
+	}
+}
+
+func paragrafo(txt string) map[string]any {
+	return map[string]any{
+		"object": "block", "type": "paragraph",
+		"paragraph": map[string]any{
+			"rich_text": []any{map[string]any{"type": "text", "text": map[string]any{"content": txt}}},
+		},
+	}
+}
+
+// fatia quebra em pedaços de no máximo n RUNES, preferindo cortar no espaço
+// mais próximo para não partir palavra no meio.
+func fatia(s string, n int) []string {
+	r := []rune(s)
+	if len(r) <= n {
+		return []string{s}
+	}
+	var out []string
+	for len(r) > 0 {
+		if len(r) <= n {
+			out = append(out, string(r))
+			break
+		}
+		corte := n
+		for i := n; i > n/2; i-- {
+			if r[i] == ' ' || r[i] == '\n' {
+				corte = i
+				break
+			}
+		}
+		out = append(out, strings.TrimSpace(string(r[:corte])))
+		r = r[corte:]
+	}
+	return out
 }
 
 // UpdateBookingDateTime atualiza a propriedade "Data e hora" de uma página de aula

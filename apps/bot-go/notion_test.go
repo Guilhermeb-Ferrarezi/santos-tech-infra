@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -95,5 +96,44 @@ func TestFormatBRDateTime(t *testing.T) {
 	// data pura (sem hora) também formata
 	if got := formatBRDateTime("2026-06-19"); got == "" {
 		t.Error("formatBRDateTime de data pura não deveria ser vazio")
+	}
+}
+
+func TestBlocosDoAtendimento(t *testing.T) {
+	b := Booking{
+		Aluno: "Guilherme", WhatsApp: "5516991590787",
+		Tipo: "experimental", Curso: "Tecnologia Júnior", Idade: 9,
+		Resumo: "Pai procurando curso para o filho de 9 anos. Ele gosta de Minecraft e Roblox. " +
+			"Perguntou o preço logo no começo. Ficou de confirmar terça, 22, à uma da tarde.",
+	}
+	blocos := blocosDoAtendimento(b)
+	if len(blocos) < 3 {
+		t.Fatalf("esperava ficha + resumo, veio %d blocos", len(blocos))
+	}
+	// Sem nada para contar, não polui a página com um cabeçalho vazio.
+	if blocosDoAtendimento(Booking{Aluno: "X"}) != nil {
+		t.Error("booking sem contexto não deveria gerar blocos")
+	}
+}
+
+func TestFatiaNaoPartePalavra(t *testing.T) {
+	longo := ""
+	for i := 0; i < 500; i++ {
+		longo += "palavra "
+	}
+	partes := fatia(longo, 1900)
+	if len(partes) < 2 {
+		t.Fatalf("esperava mais de um pedaço, veio %d", len(partes))
+	}
+	for _, p := range partes {
+		if n := len([]rune(p)); n > 1900 {
+			t.Errorf("pedaço com %d runes, acima do limite do Notion", n)
+		}
+		if strings.HasSuffix(p, "palavr") || strings.HasPrefix(p, "avra") {
+			t.Errorf("cortou no meio da palavra: %q", p)
+		}
+	}
+	if s := fatia("curto", 1900); len(s) != 1 || s[0] != "curto" {
+		t.Errorf("texto curto foi alterado: %v", s)
 	}
 }
