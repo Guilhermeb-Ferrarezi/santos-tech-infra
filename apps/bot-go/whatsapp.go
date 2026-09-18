@@ -212,12 +212,19 @@ func (s *WhatsAppSender) uploadAudioTo(ctx context.Context, url string, ogg []by
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	_ = mw.WriteField("messaging_product", "whatsapp")
-	_ = mw.WriteField("type", "audio/ogg")
+	// O "; codecs=opus" NÃO é decoração.
+	//
+	// Com "audio/ogg" puro o WhatsApp entrega o arquivo, mas desenha um player
+	// de ANEXO: ícone de fone, barra lisa, sem foto de quem mandou. Com o codec
+	// declarado, ele reconhece como nota de voz (PTT) e desenha a forma de onda
+	// e o avatar — igual a um áudio gravado na hora. Para quem recebe, é a
+	// diferença entre "me mandaram um arquivo" e "falaram comigo".
+	_ = mw.WriteField("type", "audio/ogg; codecs=opus")
 	// CreateFormFile marcaria a parte como application/octet-stream e o Meta rejeita
-	// (precisa de um MIME de áudio). Montamos a parte com Content-Type audio/ogg.
+	// (precisa de um MIME de áudio). Montamos a parte à mão.
 	partHeader := textproto.MIMEHeader{}
 	partHeader.Set("Content-Disposition", `form-data; name="file"; filename="voice.ogg"`)
-	partHeader.Set("Content-Type", "audio/ogg")
+	partHeader.Set("Content-Type", "audio/ogg; codecs=opus")
 	fw, err := mw.CreatePart(partHeader)
 	if err != nil {
 		return "", fmt.Errorf("whatsapp: upload form: %w", err)

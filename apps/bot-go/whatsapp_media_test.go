@@ -40,8 +40,8 @@ func TestUploadAudio(t *testing.T) {
 			if err != nil {
 				break
 			}
-			if p.FormName() == "file" && p.Header.Get("Content-Type") != "audio/ogg" {
-				t.Errorf("parte 'file' com Content-Type %q, esperava audio/ogg", p.Header.Get("Content-Type"))
+			if p.FormName() == "file" && p.Header.Get("Content-Type") != "audio/ogg; codecs=opus" {
+				t.Errorf("parte 'file' com Content-Type %q, esperava audio/ogg; codecs=opus (sem o codec o WhatsApp mostra anexo, não nota de voz)", p.Header.Get("Content-Type"))
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
