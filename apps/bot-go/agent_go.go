@@ -54,7 +54,7 @@ func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx 
 	}
 	// Agenda de aulas (Notion) para o bot propor horários de agendamento.
 	if c.notion != nil && !cfg.IsAdminConversation {
-		cfg.Schedule = c.notion.Schedule(ctx)
+		cfg.Schedule, cfg.EstadoAgenda = c.notion.Schedule(ctx)
 	}
 	prompt := BuildPrompt(cfg, convCtx, inboundText, time.Now())
 

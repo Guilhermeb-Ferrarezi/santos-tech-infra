@@ -86,7 +86,7 @@ func main() {
 	logRepo := NewProcessingLogRepo(pool)
 	pending := NewPendingQuestionRepo(pool)
 	bookings := NewPendingBookingRepo(pool)
-	notionClient := NewNotionClient(cfg.NotionToken, cfg.NotionExperimentalDSID)
+	notionClient := NewNotionClient(cfg.NotionToken, cfg.NotionExperimentalDSID, logger)
 
 	// 8. Instancia AgentGoClient (Responder)
 	sitemapCache := NewSitemapCache(cfg.SiteURL)

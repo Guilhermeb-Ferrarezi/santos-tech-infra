@@ -131,6 +131,14 @@ type TenantConfig struct {
 	// Schedule — aulas já agendadas (do Notion), injetadas no prompt do cliente
 	// para o bot propor horários livres. Vazio = agendamento desabilitado/sem dados.
 	Schedule []ScheduleEntry
+	// EstadoAgenda — se dá para confiar em Schedule. Agenda vazia e Notion fora
+	// do ar são a mesma lista; sem isto o prompt não distingue.
+	EstadoAgenda EstadoAgenda
+	// Funcionamento e duração da aula experimental, para o prompt e para a
+	// validação em Go. Ficavam chumbados numa string do prompt.
+	EscolaAbre     string // "08:00"
+	EscolaFecha    string // "22:00"
+	AulaDuracaoMin int    // 60
 }
 
 // ScheduleEntry — uma aula experimental já agendada, lida do data source

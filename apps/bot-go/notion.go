@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,22 +28,52 @@ type NotionClient struct {
 	token string
 	dsID  string // data source id (não o database id)
 	http  *http.Client
+	log   *slog.Logger
+
+	// Janela de leitura: quanto do futuro interessa. Agenda de daqui a seis
+	// meses não ajuda a propor horário e só infla o prompt.
+	janela time.Duration
 
 	// cache da leitura da agenda (TTL curto) para não consultar a cada mensagem.
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	cache   []ScheduleEntry
 	cacheAt time.Time
+	cacheOK bool // a última leitura deu certo?
 	ttl     time.Duration
 }
 
+// EstadoAgenda — o que se sabe sobre a agenda neste instante.
+//
+// Existe porque "lista vazia" era ambíguo: agenda realmente livre e Notion fora
+// do ar produziam exatamente o mesmo resultado, e o prompt não tinha como
+// distinguir. Com o bot agendando sozinho, essa ambiguidade vira aula marcada
+// em cima de outra.
+type EstadoAgenda int
+
+// A ordem importa: o VALOR ZERO é AgendaIndisponivel, não AgendaOK.
+//
+// Quem constrói um TenantConfig sem preencher este campo (conversa de admin,
+// fixture de teste, código futuro) deve herdar "não sei nada sobre a agenda",
+// nunca "pode confiar". Confiança precisa ser afirmada de propósito.
+const (
+	AgendaIndisponivel EstadoAgenda = iota // não há nada confiável para mostrar
+	AgendaAntiga                           // leitura falhou, mas há cache anterior
+	AgendaOK                               // leitura fresca, pode confiar
+)
+
 // NewNotionClient cria o cliente. Se token/dsID estiverem vazios, Enabled()=false
 // e as operações degradam (sem erro fatal).
-func NewNotionClient(token, dsID string) *NotionClient {
+func NewNotionClient(token, dsID string, log *slog.Logger) *NotionClient {
+	if log == nil {
+		log = slog.Default()
+	}
 	return &NotionClient{
-		token: strings.TrimSpace(token),
-		dsID:  strings.TrimSpace(dsID),
-		http:  &http.Client{Timeout: 15 * time.Second},
-		ttl:   5 * time.Minute,
+		token:  strings.TrimSpace(token),
+		dsID:   strings.TrimSpace(dsID),
+		http:   &http.Client{Timeout: 15 * time.Second},
+		log:    log,
+		janela: 21 * 24 * time.Hour,
+		ttl:    2 * time.Minute,
 	}
 }
 
@@ -51,79 +82,136 @@ func (c *NotionClient) Enabled() bool {
 	return c != nil && c.token != "" && c.dsID != ""
 }
 
-// Schedule retorna as aulas experimentais já agendadas (cacheadas por TTL). Em erro,
-// devolve o último cache bom (ou nil) — best-effort.
-func (c *NotionClient) Schedule(ctx context.Context) []ScheduleEntry {
+// Schedule retorna as aulas agendadas e o QUANTO SE PODE CONFIAR nelas.
+//
+// O segundo retorno não é decoração: sem ele, "nenhuma aula marcada" e "não
+// consegui falar com o Notion" produzem a mesma lista vazia, e quem lê decide
+// errado. Com o bot propondo horário sozinho, essa ambiguidade vira aula
+// marcada em cima de outra.
+func (c *NotionClient) Schedule(ctx context.Context) ([]ScheduleEntry, EstadoAgenda) {
 	if !c.Enabled() {
-		return nil
+		return nil, AgendaIndisponivel
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 
-	if c.cache != nil && time.Since(c.cacheAt) < c.ttl {
-		return c.cache
+	c.mu.RLock()
+	fresco := c.cacheOK && time.Since(c.cacheAt) < c.ttl
+	cache, temCache := c.cache, c.cacheOK
+	c.mu.RUnlock()
+	if fresco {
+		return cache, AgendaOK
 	}
+
+	// A chamada HTTP fica FORA do lock de propósito: são até 15s, e segurar o
+	// mutex aqui enfileiraria todas as conversas simultâneas atrás de uma só.
 	entries, err := c.fetchSchedule(ctx)
 	if err != nil {
-		return c.cache // mantém o último bom
+		c.log.Error("notion: falha ao ler a agenda", "err", err, "tem_cache", temCache)
+		if temCache {
+			return cache, AgendaAntiga
+		}
+		return nil, AgendaIndisponivel
 	}
-	c.cache = entries
-	c.cacheAt = time.Now()
-	return entries
+
+	c.mu.Lock()
+	c.cache, c.cacheAt, c.cacheOK = entries, time.Now(), true
+	c.mu.Unlock()
+	return entries, AgendaOK
 }
 
+// fetchSchedule lê a agenda da janela útil, paginando até o fim.
+//
+// Antes, o corpo da consulta era literalmente `{}`: sem filtro, sem ordenação e
+// sem paginação. O Notion devolve no máximo 100 linhas por página, e aula
+// passada nunca sai da base — então bastava a agenda acumular 100 registros
+// antigos para as 100 linhas retornadas serem todas passado, o filtro
+// client-side descartar tudo, e o bot passar a enxergar a agenda VAZIA. Sem
+// erro, sem log, sem sintoma: ele simplesmente começaria a marcar em cima de
+// aula existente.
+//
+// Agora o Notion faz o recorte: só o intervalo que interessa, em ordem, e o
+// código segue o next_cursor até acabar.
 func (c *NotionClient) fetchSchedule(ctx context.Context) ([]ScheduleEntry, error) {
+	inicio := time.Now().In(brLocation).Truncate(24 * time.Hour)
+	fim := inicio.Add(c.janela)
+
+	filtro := map[string]any{
+		"filter": map[string]any{
+			"and": []any{
+				map[string]any{"property": "Data e hora", "date": map[string]any{"on_or_after": inicio.Format(time.RFC3339)}},
+				map[string]any{"property": "Data e hora", "date": map[string]any{"before": fim.Format(time.RFC3339)}},
+			},
+		},
+		"sorts":     []any{map[string]any{"property": "Data e hora", "direction": "ascending"}},
+		"page_size": 100,
+	}
+
 	url := fmt.Sprintf("https://api.notion.com/v1/data_sources/%s/query", c.dsID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("{}")))
-	if err != nil {
-		return nil, err
-	}
-	c.setHeaders(req)
+	var entries []ScheduleEntry
+	cursor := ""
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("notion: query status %d: %s", resp.StatusCode, string(raw))
-	}
-
-	var out struct {
-		Results []struct {
-			ID         string                     `json:"id"`
-			Properties map[string]json.RawMessage `json:"properties"`
-		} `json:"results"`
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("notion: query unmarshal: %w", err)
-	}
-
-	// Corta o que não ocupa mais um horário: aulas passadas e as marcadas como
-	// Faltou/Remarcou (o slot voltou a ficar livre).
-	todayStart := time.Now().In(brLocation).Truncate(24 * time.Hour)
-
-	entries := make([]ScheduleEntry, 0, len(out.Results))
-	for _, r := range out.Results {
-		status := notionStatus(r.Properties["Status"])
-		if status == "Faltou" || status == "Remarcou" {
-			continue
+	// Teto de páginas: 20 × 100 cobre qualquer agenda real de três semanas e
+	// impede que um next_cursor que nunca acaba prenda a goroutine.
+	for pagina := 0; pagina < 20; pagina++ {
+		if cursor != "" {
+			filtro["start_cursor"] = cursor
 		}
-		start := notionDateStart(r.Properties["Data e hora"])
-		if t, ok := parseNotionTime(start); ok && t.Before(todayStart) {
-			continue // já passou
+		corpo, err := json.Marshal(filtro)
+		if err != nil {
+			return nil, fmt.Errorf("notion: marshal query: %w", err)
 		}
-		entries = append(entries, ScheduleEntry{
-			PageID:    r.ID,
-			Aluno:     notionTitle(r.Properties["Aluno/Responsável"]),
-			DataHora:  start,
-			Display:   formatBRDateTime(start),
-			Status:    status,
-			Professor: notionPeopleNames(r.Properties["Professor(a)"]),
-			WhatsApp:  notionPhone(r.Properties["WhatsApp"]),
-		})
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(corpo))
+		if err != nil {
+			return nil, err
+		}
+		c.setHeaders(req)
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("notion: query status %d: %s", resp.StatusCode, string(raw))
+		}
+
+		var out struct {
+			Results []struct {
+				ID         string                     `json:"id"`
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"results"`
+			HasMore    bool   `json:"has_more"`
+			NextCursor string `json:"next_cursor"`
+		}
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return nil, fmt.Errorf("notion: query unmarshal: %w", err)
+		}
+
+		for _, r := range out.Results {
+			// Faltou/Remarcou devolvem o horário para a grade — não ocupam nada.
+			status := notionStatus(r.Properties["Status"])
+			if status == "Faltou" || status == "Remarcou" {
+				continue
+			}
+			start := notionDateStart(r.Properties["Data e hora"])
+			entries = append(entries, ScheduleEntry{
+				PageID:    r.ID,
+				Aluno:     notionTitle(r.Properties["Aluno/Responsável"]),
+				DataHora:  start,
+				Display:   formatBRDateTime(start),
+				Status:    status,
+				Professor: notionPeopleNames(r.Properties["Professor(a)"]),
+				WhatsApp:  notionPhone(r.Properties["WhatsApp"]),
+			})
+		}
+
+		if !out.HasMore || out.NextCursor == "" {
+			return entries, nil
+		}
+		cursor = out.NextCursor
 	}
+	// Chegou ao teto: melhor devolver o que se tem do que estourar em silêncio.
+	c.log.Warn("notion: agenda passou do teto de páginas", "lidas", len(entries))
 	return entries, nil
 }
 

@@ -910,7 +910,8 @@ func (s *Server) handleDashBookings(w http.ResponseWriter, r *http.Request) {
 	out := dashAgenda{Upcoming: []dashUpcoming{}, Pending: []dashPending{}}
 
 	if n := s.engine.deps.Notion; n != nil && n.Enabled() {
-		for _, e := range n.Schedule(ctx) {
+		agenda, _ := n.Schedule(ctx)
+		for _, e := range agenda {
 			out.Upcoming = append(out.Upcoming, dashUpcoming{
 				PageID: e.PageID,
 				Aluno:  e.Aluno, DataHora: e.DataHora, Display: e.Display,

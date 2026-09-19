@@ -137,3 +137,59 @@ func TestFatiaNaoPartePalavra(t *testing.T) {
 		t.Errorf("texto curto foi alterado: %v", s)
 	}
 }
+
+func TestHoraLegivel(t *testing.T) {
+	casos := map[string]string{
+		"08:00": "8h", "22:00": "22h", "19:30": "19h30", "08:05": "8h05",
+	}
+	for entrada, quer := range casos {
+		if got := horaLegivel(entrada, "PADRAO"); got != quer {
+			t.Errorf("horaLegivel(%q) = %q, queria %q", entrada, got, quer)
+		}
+	}
+	// Valor ruim cai no padrão: horário errado no prompt vira aula marcada com
+	// a escola fechada.
+	for _, ruim := range []string{"", "abc", "25:00", "08", "08:99", "-1:00"} {
+		if got := horaLegivel(ruim, "PADRAO"); got != "PADRAO" {
+			t.Errorf("horaLegivel(%q) = %q, queria o padrão", ruim, got)
+		}
+	}
+}
+
+func TestPromptDizQuandoNaoConsegueLerAgenda(t *testing.T) {
+	base := TenantConfig{EscolaAbre: "08:00", EscolaFecha: "22:00", AulaDuracaoMin: 60}
+	agora := time.Unix(1789000000, 0).UTC()
+
+	p := BuildPrompt(base, ConversationContext{}, "tem horário quinta?", agora)
+	if !strings.Contains(p, "NÃO consigo consultar a agenda agora") {
+		t.Error("agenda indisponível deveria avisar o modelo para não propor horário")
+	}
+
+	comAgenda := base
+	comAgenda.EstadoAgenda = AgendaOK
+	comAgenda.Schedule = []ScheduleEntry{{Display: "ter 22/09 às 13:00", Aluno: "Fulano"}}
+	p2 := BuildPrompt(comAgenda, ConversationContext{}, "tem horário quinta?", agora)
+	if strings.Contains(p2, "NÃO consigo consultar") {
+		t.Error("com agenda fresca não deve haver aviso de indisponível")
+	}
+	if !strings.Contains(p2, "ter 22/09 às 13:00") {
+		t.Error("a agenda lida deveria aparecer no prompt")
+	}
+
+	velha := comAgenda
+	velha.EstadoAgenda = AgendaAntiga
+	if p3 := BuildPrompt(velha, ConversationContext{}, "x", agora); !strings.Contains(p3, "pode estar desatualizada") {
+		t.Error("agenda velha deveria ser marcada como sujeita a confirmação")
+	}
+}
+
+func TestPromptInformaDuracaoDaAula(t *testing.T) {
+	cfg := TenantConfig{EscolaAbre: "08:00", EscolaFecha: "22:00", AulaDuracaoMin: 60}
+	p := BuildPrompt(cfg, ConversationContext{}, "quanto tempo dura?", time.Unix(1789000000, 0).UTC())
+	if !strings.Contains(p, "aproximadamente 60 minutos") {
+		t.Error("o prompt deveria informar a duração da aula experimental")
+	}
+	if !strings.Contains(p, "das 8h às 22h") {
+		t.Errorf("o prompt deveria informar o funcionamento configurado")
+	}
+}
