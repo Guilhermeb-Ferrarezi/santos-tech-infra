@@ -252,7 +252,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// preferido é email, o código já sai enviado (estilo GitHub).
 	if u.MFAEnabled {
 		challenge := randomToken(24)
-		if err := s.rdb.Set(r.Context(), "mfa_challenge:"+challenge, u.ID, 10*time.Minute).Err(); err != nil {
+		if err := s.rdb.Set(r.Context(), "api-go:mfa_challenge:"+challenge, u.ID, 10*time.Minute).Err(); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -365,7 +365,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta suspensa"))
 		return
 	}
-	if err := s.rdb.Set(r.Context(), "user:last_seen:"+strconv.FormatInt(u.ID, 10), "1", 5*time.Minute).Err(); err != nil {
+	if err := s.rdb.Set(r.Context(), "api-go:user:last_seen:"+strconv.FormatInt(u.ID, 10), "1", 5*time.Minute).Err(); err != nil {
 		slog.Warn("falha ao registrar último acesso", "uid", u.ID, "err", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": s.buildProfile(r.Context(), u)})

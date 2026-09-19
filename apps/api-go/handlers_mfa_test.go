@@ -69,7 +69,7 @@ func TestHandleMFAEmailCooldownBlocks(t *testing.T) {
 	challenge := strings.Repeat("a", 48)
 	ctx := context.Background()
 	// Semente do challenge (simula login que gerou o desafio).
-	_ = s.rdb.Set(ctx, "mfa_challenge:"+challenge, "1", 0)
+	_ = s.rdb.Set(ctx, "api-go:mfa_challenge:"+challenge, "1", 0)
 	// Semente do cooldown (simula envio já realizado neste challenge).
 	_ = s.rdb.SetNX(ctx, "api-go:mfa_email_resend_cd:"+challenge, "1", 60*time.Second)
 
@@ -91,7 +91,7 @@ func TestHandleMFAEmailCooldownRedisDown(t *testing.T) {
 
 	challenge := strings.Repeat("a", 48)
 	// Semente do challenge para passar do challengeUser com sucesso.
-	_ = s.rdb.Set(context.Background(), "mfa_challenge:"+challenge, "1", 0)
+	_ = s.rdb.Set(context.Background(), "api-go:mfa_challenge:"+challenge, "1", 0)
 
 	// Derruba o Redis depois de semear o challenge: o SetNX do cooldown vai falhar.
 	mr.SetError("ERR simulated failure")
@@ -460,7 +460,7 @@ func TestHandleMFAEnableTooManyAttempts(t *testing.T) {
 	s := testServerWithRedis(t, Config{})
 	ctx := context.Background()
 	// Setup ativo (necessário para o Get passar antes do Incr).
-	if err := s.rdb.Set(ctx, "mfa_setup:42", "JBSWY3DPEHPK3PXP", 0).Err(); err != nil {
+	if err := s.rdb.Set(ctx, "api-go:mfa_setup:42", "JBSWY3DPEHPK3PXP", 0).Err(); err != nil {
 		t.Fatalf("set mfa_setup: %v", err)
 	}
 	// Simula 5 tentativas anteriores.
@@ -475,7 +475,7 @@ func TestHandleMFAEnableTooManyAttempts(t *testing.T) {
 		t.Fatalf("6ª tentativa deve retornar 429, veio %d", w.Code)
 	}
 	// Ambas as chaves devem ser apagadas (força o usuário a reiniciar o setup).
-	if n, err := s.rdb.Exists(ctx, "mfa_setup:42").Result(); err != nil {
+	if n, err := s.rdb.Exists(ctx, "api-go:mfa_setup:42").Result(); err != nil {
 		t.Fatalf("redis exists mfa_setup: %v", err)
 	} else if n != 0 {
 		t.Error("mfa_setup deve ser apagado após lockout")

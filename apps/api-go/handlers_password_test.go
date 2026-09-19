@@ -42,7 +42,7 @@ func TestHandleResetPasswordRedisDown(t *testing.T) {
 	// Pré-semeamos uma chave válida para que o handler alcance o GetDel.
 	validToken := strings.Repeat("a", 64)
 	hash := sha256Hex(validToken)
-	if err := s.rdb.Set(context.Background(), "pwd_reset:"+hash, "42", 0).Err(); err != nil {
+	if err := s.rdb.Set(context.Background(), "api-go:pwd_reset:"+hash, "42", 0).Err(); err != nil {
 		t.Fatalf("set token: %v", err)
 	}
 
@@ -67,7 +67,7 @@ func TestHandleResetPasswordTokenHitsRedis(t *testing.T) {
 
 	rawToken := strings.Repeat("b", 64)
 	hash := sha256Hex(rawToken)
-	if err := s.rdb.Set(context.Background(), "pwd_reset:"+hash, "99", 0).Err(); err != nil {
+	if err := s.rdb.Set(context.Background(), "api-go:pwd_reset:"+hash, "99", 0).Err(); err != nil {
 		t.Fatalf("set token: %v", err)
 	}
 
@@ -91,7 +91,7 @@ func TestHandleResetPasswordTokenHitsRedis(t *testing.T) {
 	}
 
 	// A chave deve ter sido deletada do Redis (GetDel é atômico).
-	exists, err := s.rdb.Exists(context.Background(), "pwd_reset:"+hash).Result()
+	exists, err := s.rdb.Exists(context.Background(), "api-go:pwd_reset:"+hash).Result()
 	if err != nil {
 		t.Fatalf("redis exists: %v", err)
 	}

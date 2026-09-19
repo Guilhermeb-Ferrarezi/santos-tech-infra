@@ -34,7 +34,7 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	if u != nil && !u.LoginDisabled {
 		token := randomToken(32)
 		hash := sha256Hex(token)
-		if err := s.rdb.Set(r.Context(), "pwd_reset:"+hash, u.ID, time.Hour).Err(); err != nil {
+		if err := s.rdb.Set(r.Context(), "api-go:pwd_reset:"+hash, u.ID, time.Hour).Err(); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -76,7 +76,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	// GetDel consome o token atomicamente: a chave é deletada junto com o Get,
 	// eliminando a janela TOCTOU em que dois requests simultâneos com o mesmo
 	// token poderiam ambos ter sucesso. Padrão já usado no OAuth code exchange.
-	idStr, err := s.rdb.GetDel(r.Context(), "pwd_reset:"+hash).Result()
+	idStr, err := s.rdb.GetDel(r.Context(), "api-go:pwd_reset:"+hash).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			writeErr(w, appErr(http.StatusBadRequest, "INVALID_TOKEN", "Link de recuperação inválido ou expirado"))
