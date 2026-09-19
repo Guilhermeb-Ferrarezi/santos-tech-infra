@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -354,6 +355,24 @@ func (s *Server) publishCarouselPost(ctx context.Context, post *SocialPost, targ
 	}
 }
 
+// safeStorageExt extrai uma extensão segura (só [a-z0-9], até 8 chars) do
+// nome de arquivo original — usada para compor uma KEY de storage, nunca o
+// nome inteiro (que pode trazer "/" ou ".." de fora do nosso controle). Sem
+// extensão reconhecível, cai pra "" (a key ainda funciona, só sem sufixo).
+func safeStorageExt(filename string) string {
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filename), "."))
+	clean := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return -1
+	}, ext)
+	if clean == "" || len(clean) > 8 {
+		return ""
+	}
+	return "." + clean
+}
+
 // resolveDriveFileToPublicURL baixa UM arquivo privado do Drive (service
 // account) e sobe pro R2 (público) sob uma chave temporária — extraído de
 // resolveSocialPostMediaURL pra ser reaproveitado pela mídia principal, pela
@@ -383,7 +402,14 @@ func (s *Server) resolveDriveFileToPublicURL(ctx context.Context, keyPrefix, dri
 		return "", noop, appErr(http.StatusRequestEntityTooLarge, "MEDIA_TOO_LARGE", "Arquivo grande demais para publicar (máx 100MB)")
 	}
 
-	key := keyPrefix + "/" + sanitizeFilenameForHeader(filename)
+	// randomToken + extensão (nunca o nome do Drive inteiro): quem tem acesso
+	// pra escolher/renomear o arquivo do Drive referenciado no post controla
+	// `filename`, e sanitizeFilenameForHeader só filtra pra uso seguro em
+	// Content-Disposition (aspas/CRLF/RTLO) — não remove "/" nem "..", que aqui
+	// viram parte da KEY do objeto no R2 (ex.: filename "../avatars/1/x.png"
+	// escaparia do prefixo "social-publish/<postID>/" pretendido). Mesmo padrão
+	// de chave usado em todo outro Upload do repo (handlers_upload.go etc).
+	key := keyPrefix + "/" + randomToken(12) + safeStorageExt(filename)
 	publicURL, err = s.r2.Upload(ctx, key, contentType, data)
 	if err != nil {
 		slog.Error("social publish: falha ao subir mídia pro R2", "key", key, "content_type", contentType, "bytes", len(data), "err", err)

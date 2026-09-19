@@ -30,6 +30,26 @@ func TestSocialPostIsVideo(t *testing.T) {
 	}
 }
 
+func TestSafeStorageExt(t *testing.T) {
+	cases := []struct {
+		filename string
+		want     string
+	}{
+		{"foto.png", ".png"},
+		{"Video.MP4", ".mp4"},
+		{"sem_extensao", ""},
+		{"../avatars/1/x.png", ".png"},
+		{"../../etc/passwd", ""},
+		{"nome com espaço.jpeg", ".jpeg"},
+		{"arquivo.extensao-gigante-demais", ""},
+	}
+	for _, c := range cases {
+		if got := safeStorageExt(c.filename); got != c.want {
+			t.Errorf("safeStorageExt(%q) = %q, want %q", c.filename, got, c.want)
+		}
+	}
+}
+
 func TestSocialPublishAdaptersEmptyWhenDisabled(t *testing.T) {
 	s := &Server{instagram: newInstagramClient(Config{}), facebook: newFacebookClient(Config{})}
 	adapters := s.socialPublishAdapters()
