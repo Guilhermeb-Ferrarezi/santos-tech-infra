@@ -142,6 +142,12 @@ type Config struct {
 	// AudioMatchShadow — decide, loga e mesmo assim responde em texto. Liga no
 	// primeiro deploy para medir acerto sem risco; depois vira false.
 	AudioMatchShadow bool
+
+	// Agenda: funcionamento da escola e duração da aula experimental. Eram uma
+	// frase fixa dentro do prompt — mudar o horário de sábado exigia recompilar.
+	EscolaAbre     string
+	EscolaFecha    string
+	AulaDuracaoMin int
 }
 
 func LoadConfig() Config {
@@ -235,6 +241,10 @@ func LoadConfig() Config {
 		AudioMatchMin:    envFloat("AUDIO_MATCH_MIN", 0.45),
 		AudioMatchMaxMs:  envInt("AUDIO_MATCH_MAX_MS", 12000),
 		AudioMatchShadow: getEnv("AUDIO_MATCH_SHADOW", "true") == "true",
+
+		EscolaAbre:     getEnv("ESCOLA_ABRE", "08:00"),
+		EscolaFecha:    getEnv("ESCOLA_FECHA", "22:00"),
+		AulaDuracaoMin: envInt("AULA_DURACAO_MIN", 60),
 	}
 }
 

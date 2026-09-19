@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -78,7 +79,24 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	// ── Agendamento de aulas ──────────────────────────────────────────────────
 	sb.WriteString("# Agendamento de aulas\n")
 	sb.WriteString("Você pode ajudar o cliente a agendar uma AULA EXPERIMENTAL (gratuita) ou uma AULA INDIVIDUAL de adulto.\n")
-	sb.WriteString("Horário de funcionamento: Seg–Sex das 8h às 22h, Sáb das 8h às 18h.\n")
+	fmt.Fprintf(&sb, "Horário de funcionamento: todos os dias das %s às %s.\n",
+		horaLegivel(cfg.EscolaAbre, "8h"), horaLegivel(cfg.EscolaFecha, "22h"))
+	dur := cfg.AulaDuracaoMin
+	if dur <= 0 {
+		dur = 60
+	}
+	fmt.Fprintf(&sb, "A aula experimental dura aproximadamente %d minutos (pode terminar um pouco antes). Se o cliente perguntar quanto tempo dura, informe isso.\n", dur)
+
+	// O estado da agenda é dito em voz alta de propósito. Antes, "nenhuma aula
+	// marcada" e "não consegui ler o Notion" chegavam aqui como a mesma lista
+	// vazia — e o modelo lia as duas como "está tudo livre".
+	switch cfg.EstadoAgenda {
+	case AgendaIndisponivel:
+		sb.WriteString("⚠️ NÃO consigo consultar a agenda agora. NÃO proponha nenhum horário específico e NÃO afirme que algo está livre. Diga que vai verificar a disponibilidade e retornar.\n")
+	case AgendaAntiga:
+		sb.WriteString("⚠️ A agenda abaixo pode estar desatualizada (a última leitura falhou). Trate qualquer horário como SUJEITO A CONFIRMAÇÃO e diga isso ao cliente.\n")
+	}
+
 	if len(cfg.Schedule) > 0 {
 		sb.WriteString("Aulas experimentais JÁ AGENDADAS (não proponha estes horários):\n")
 		for _, e := range cfg.Schedule {
@@ -386,4 +404,23 @@ func deriveStyleGuidance(context ConversationContext) string {
 		}
 	}
 	return "Espelhe o estilo do cliente."
+}
+
+// horaLegivel transforma "08:00" em "8h" e "19:30" em "19h30", que é como se
+// fala horário por aqui. Valor vazio ou malformado cai no padrão informado —
+// horário errado no prompt vira aula marcada com a escola fechada.
+func horaLegivel(hhmm, padrao string) string {
+	p := strings.SplitN(strings.TrimSpace(hhmm), ":", 2)
+	if len(p) != 2 {
+		return padrao
+	}
+	h, err1 := strconv.Atoi(p[0])
+	m, err2 := strconv.Atoi(p[1])
+	if err1 != nil || err2 != nil || h < 0 || h > 23 || m < 0 || m > 59 {
+		return padrao
+	}
+	if m == 0 {
+		return strconv.Itoa(h) + "h"
+	}
+	return fmt.Sprintf("%dh%02d", h, m)
 }
