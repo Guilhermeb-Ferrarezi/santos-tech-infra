@@ -84,14 +84,23 @@ func soLetrasENumeros(s string) string {
 // sufixo ".002", ".003" — com três dígitos porque assim a ordem alfabética
 // continua batendo com a ordem de cadastro, o que não aconteceria com ".2" e
 // ".10" lado a lado.
+//
+// Antes disso conferia e-mail por e-mail (até maxTentativasEmailAluno idas ao
+// banco); em escolas com sobrenomes comuns (Silva, Santos, Souza) isso virava
+// dezenas de round-trips sequenciais numa única ação de admin. Agora é uma
+// consulta só: busca todos os candidatos de uma vez e escolhe o primeiro livre
+// em memória.
 func (s *Server) emailAlunoDisponivel(ctx context.Context, base string) (string, error) {
+	candidatos := make([]string, maxTentativasEmailAluno)
 	for i := 1; i <= maxTentativasEmailAluno; i++ {
-		email := localPartTentativa(base, i) + "@" + staffDomain
-		existing, err := s.userByEmail(ctx, email)
-		if err != nil {
-			return "", err
-		}
-		if existing == nil {
+		candidatos[i-1] = localPartTentativa(base, i) + "@" + staffDomain
+	}
+	ocupados, err := s.emailsAlunoOcupados(ctx, candidatos)
+	if err != nil {
+		return "", err
+	}
+	for _, email := range candidatos {
+		if !ocupados[email] {
 			return email, nil
 		}
 	}

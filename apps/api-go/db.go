@@ -1088,6 +1088,26 @@ func (s *Server) userByIdentifier(ctx context.Context, identifier string) (*User
 	return scanUser(s.db.QueryRow(ctx, `SELECT `+userCols+` FROM users WHERE email=$1 OR username=$1`, identifier))
 }
 
+// emailsAlunoOcupados devolve, dentre os e-mails candidatos passados, os que já
+// existem em users — numa consulta só (ANY($1) com todo o array de candidatos),
+// em vez de uma consulta por candidato.
+func (s *Server) emailsAlunoOcupados(ctx context.Context, candidatos []string) (map[string]bool, error) {
+	rows, err := s.db.Query(ctx, `SELECT email FROM users WHERE email = ANY($1)`, candidatos)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ocupados := make(map[string]bool)
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, err
+		}
+		ocupados[email] = true
+	}
+	return ocupados, rows.Err()
+}
+
 func (s *Server) insertUser(ctx context.Context, email, name, passwordHash string) (*User, error) {
 	return scanUser(s.db.QueryRow(ctx,
 		`INSERT INTO users (email, name, password_hash) VALUES ($1,$2,$3) RETURNING `+userCols,
