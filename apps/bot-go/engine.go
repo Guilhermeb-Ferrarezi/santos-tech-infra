@@ -95,6 +95,9 @@ type EngineDeps struct {
 	// AudioMatchShadow — decide e registra no log, mas responde em texto. Serve
 	// para medir a taxa de acerto em produção antes de deixar o áudio sair.
 	AudioMatchShadow bool
+	// AgendaAutoConfirm — o bot grava a aula no Notion sem esperar um humano.
+	// Desligado por padrão: ligar só depois das travas verificadas em produção.
+	AgendaAutoConfirm bool
 	// ForceBotEnabled — força o bot ativo nas conversas deste engine (ex.: canal
 	// Evolution, cujo gate é o toggle externo, não o whitelist do tenant).
 	ForceBotEnabled bool
@@ -704,7 +707,122 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		}()
 	}
 
+	// Agendamento sem intermediário — DEPOIS do commit e DEPOIS da resposta.
+	//
+	// Fora da transação de propósito: gravar no Notion é efeito externo, e se a
+	// transação desse rollback a página ficaria lá, órfã, sem pendência no banco
+	// para explicá-la.
+	if err == nil && !cfg.IsAdminConversation && output.SchedulingRequest != nil {
+		e.autoConfirmarAgendamento(ctx, conv, inbound, cfg, output.SchedulingRequest, contactName)
+	}
+
 	return err
+}
+
+// autoConfirmarAgendamento grava a aula no Notion sem esperar um humano.
+//
+// Só roda quando AGENDA_AUTO_CONFIRM está ligado. Desligado, o comportamento é
+// o de sempre: fica a pendência, alguém confirma.
+//
+// NÃO passa pelas bookingActions do LLM. Aquele caminho é guardado por
+// IsAdminConversation, e abri-lo na conversa do cliente transformaria injeção
+// de prompt em agendamento arbitrário: bastaria o cliente mandar uma mensagem
+// fingindo ser instrução de sistema. Aqui, quem decide é o código — o modelo
+// só propõe data e hora, e todas as travas são verificadas em Go.
+func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv Conversation, inbound InboundMessage, cfg TenantConfig, sr *SchedulingRequest, contactName string) {
+	log := e.deps.Logger
+	if !e.deps.AgendaAutoConfirm || e.deps.Notion == nil || !e.deps.Notion.Enabled() {
+		return
+	}
+
+	janela, err := ParseFuncionamento(cfg.EscolaAbre, cfg.EscolaFecha)
+	if err != nil {
+		log.Error("agenda: funcionamento mal configurado; não vou marcar sozinho", "err", err)
+		return
+	}
+	dur := time.Duration(cfg.AulaDuracaoMin) * time.Minute
+	if dur <= 0 {
+		dur = time.Hour
+	}
+
+	// A data vem do modelo, então é conferida aqui: proposedDate (ISO) primeiro,
+	// rótulo humano ("quinta") como último recurso.
+	iso, ok := ResolveBookingDateTime(firstNonEmpty(sr.ProposedDate, sr.ProposedDay), sr.ProposedTime, time.Now())
+	if !ok {
+		log.Info("agenda: não consegui resolver a data proposta; fica a pendência",
+			"dia", sr.ProposedDay, "data", sr.ProposedDate, "hora", sr.ProposedTime)
+		return
+	}
+	inicio, ok := parseNotionTime(iso)
+	if !ok {
+		log.Error("agenda: data resolvida ilegível", "iso", iso)
+		return
+	}
+
+	// Trava 1: agenda fresca. Cache não vale para decidir gravar.
+	agenda, estado := e.deps.Notion.Schedule(ctx)
+	if estado != AgendaOK {
+		log.Warn("agenda: leitura não confiável; não vou marcar sozinho", "estado", estado)
+		return
+	}
+	if motivo := PodeMarcar(inicio, dur, time.Now(), janela, agenda); motivo != "" {
+		log.Info("agenda: horário recusado pelas travas", "motivo", string(motivo), "quando", iso)
+		return
+	}
+
+	// Trava 2: última palavra, sem cache, imediatamente antes de gravar.
+	if outro, ocupado, err := e.deps.Notion.SlotOcupado(ctx, inicio, dur); err != nil {
+		log.Error("agenda: falha ao checar o horário; não vou marcar sozinho", "err", err)
+		return
+	} else if ocupado {
+		log.Info("agenda: horário ocupado na checagem final", "quando", iso, "conflito_com", outro.Aluno)
+		return
+	}
+
+	aluno := firstNonEmpty(sr.StudentName, contactName)
+	if err := e.deps.Notion.CreateBooking(ctx, Booking{
+		Aluno:    aluno,
+		WhatsApp: inbound.ExternalID,
+		DataHora: iso,
+		Status:   "Agendada",
+		Tipo:     sr.Kind,
+		Curso:    sr.Course,
+		Idade:    sr.Age,
+		Resumo:   sr.Notes,
+	}); err != nil {
+		log.Error("agenda: falha ao gravar no Notion", "err", err, "quando", iso)
+		return
+	}
+
+	log.Info("agenda: aula marcada pelo bot", "aluno", aluno, "quando", iso, "conversa", conv.ID)
+	e.avisaAdminsDoAgendamento(ctx, conv, inbound, aluno, sr, iso)
+}
+
+// avisaAdminsDoAgendamento manda o recado para quem opera a escola. É o que
+// substitui o "alguém confirmou, então alguém sabe" que existia antes.
+func (e *ConversationEngine) avisaAdminsDoAgendamento(ctx context.Context, conv Conversation, inbound InboundMessage, aluno string, sr *SchedulingRequest, iso string) {
+	if e.deps.Emitter == nil {
+		return
+	}
+	msg := fmt.Sprintf("✅ Aula experimental MARCADA pelo bot: %s%s — %s. Cliente: %s",
+		aluno, courseSuffix(sr.Course), formatBRDateTime(iso), inbound.ExternalID)
+	ev := DomainEvent{
+		TenantID:    inbound.TenantID,
+		AggregateID: conv.ID,
+		Type:        "notification.requested",
+		Payload: map[string]any{
+			"type":            "BOOKING_CONFIRMED",
+			"conversation_id": conv.ID,
+			"channel":         inbound.Channel,
+			"message":         msg,
+		},
+		OccurredAt: time.Now(),
+	}
+	if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+		return e.deps.Emitter.Emit(ctx, tx, ev)
+	}); err != nil {
+		e.deps.Logger.Error("agenda: falha ao avisar os admins", "err", err)
+	}
 }
 
 // ---------------------------------------------------------------------------

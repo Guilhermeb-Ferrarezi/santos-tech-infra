@@ -226,9 +226,12 @@ func (c *NotionClient) CreateBooking(ctx context.Context, b Booking) error {
 		status = "Confirmar"
 	}
 
+	// O título carrega o marcador. É o que permite, depois, distinguir o que o
+	// bot criou do que Henrique e Rodrigo lançaram na mão — e portanto o que ele
+	// pode remanejar ou arquivar. Ver EhAulaExperimental em agenda.go.
 	props := map[string]any{
 		"Aluno/Responsável": map[string]any{
-			"title": []any{map[string]any{"text": map[string]any{"content": b.Aluno}}},
+			"title": []any{map[string]any{"text": map[string]any{"content": TituloAgendamento(b.Aluno)}}},
 		},
 		"Status": map[string]any{"status": map[string]any{"name": status}},
 	}
@@ -267,9 +270,7 @@ func (c *NotionClient) CreateBooking(ctx context.Context, b Booking) error {
 		return fmt.Errorf("notion: create page status %d: %s", resp.StatusCode, string(raw))
 	}
 	// Invalida o cache pra o próximo Schedule() já refletir o novo agendamento.
-	c.mu.Lock()
-	c.cache = nil
-	c.mu.Unlock()
+	c.invalidaCache()
 	return nil
 }
 
@@ -627,4 +628,211 @@ func notionTitle(raw json.RawMessage) string {
 		sb.WriteString(t.PlainText)
 	}
 	return sb.String()
+}
+
+// ── operações que o bot faz sozinho ──────────────────────────────────────────
+
+// SlotOcupado checa, SEM CACHE, se já existe aula no intervalo pedido.
+//
+// O cache de dois minutos serve para montar prompt; não serve para decidir
+// gravar. Duas conversas simultâneas leem a mesma agenda cacheada, as duas
+// acham o horário livre, e as duas marcam. Esta consulta é a última palavra,
+// feita imediatamente antes do INSERT.
+//
+// Ainda é TOCTOU — entre a checagem e a gravação cabe uma corrida. Mas reduz a
+// janela de dois minutos para alguns milissegundos, e o Notion não oferece
+// transação para fechar isso de vez.
+func (c *NotionClient) SlotOcupado(ctx context.Context, inicio time.Time, dur time.Duration) (ScheduleEntry, bool, error) {
+	if !c.Enabled() {
+		return ScheduleEntry{}, false, fmt.Errorf("notion: não configurado")
+	}
+	// Margem generosa nos dois lados: pega aula que começa antes e invade o
+	// intervalo, não só a que começa dentro dele.
+	de := inicio.Add(-dur)
+	ate := inicio.Add(dur)
+
+	filtro := map[string]any{
+		"filter": map[string]any{"and": []any{
+			map[string]any{"property": "Data e hora", "date": map[string]any{"on_or_after": de.Format(time.RFC3339)}},
+			map[string]any{"property": "Data e hora", "date": map[string]any{"before": ate.Format(time.RFC3339)}},
+		}},
+		"page_size": 100,
+	}
+	corpo, err := json.Marshal(filtro)
+	if err != nil {
+		return ScheduleEntry{}, false, err
+	}
+	url := fmt.Sprintf("https://api.notion.com/v1/data_sources/%s/query", c.dsID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(corpo))
+	if err != nil {
+		return ScheduleEntry{}, false, err
+	}
+	c.setHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return ScheduleEntry{}, false, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return ScheduleEntry{}, false, fmt.Errorf("notion: slot query status %d: %s", resp.StatusCode, string(raw))
+	}
+	var out struct {
+		Results []struct {
+			ID         string                     `json:"id"`
+			Properties map[string]json.RawMessage `json:"properties"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return ScheduleEntry{}, false, err
+	}
+
+	vizinhos := make([]ScheduleEntry, 0, len(out.Results))
+	for _, r := range out.Results {
+		st := notionStatus(r.Properties["Status"])
+		if st == "Faltou" || st == "Remarcou" {
+			continue
+		}
+		vizinhos = append(vizinhos, ScheduleEntry{
+			PageID:   r.ID,
+			Aluno:    notionTitle(r.Properties["Aluno/Responsável"]),
+			DataHora: notionDateStart(r.Properties["Data e hora"]),
+			Status:   st,
+		})
+	}
+	e, bateu := Conflito(inicio, dur, vizinhos)
+	return e, bateu, nil
+}
+
+// ArquivarBooking tira o agendamento da agenda (archive, não delete — o Notion
+// mantém na lixeira e dá para recuperar).
+//
+// NUNCA arquiva o que não for do bot. Antes de mexer, lê o título da página e
+// exige o marcador. Henrique e Rodrigo lançam aulas na mão na mesma base: um
+// erro aqui apaga compromisso de gente de verdade, e "o bot sumiu com a minha
+// aula" não tem desfazer bom.
+func (c *NotionClient) ArquivarBooking(ctx context.Context, pageID string) error {
+	if !c.Enabled() {
+		return fmt.Errorf("notion: não configurado")
+	}
+	titulo, err := c.tituloDaPagina(ctx, pageID)
+	if err != nil {
+		return fmt.Errorf("notion: não deu para conferir o título antes de arquivar: %w", err)
+	}
+	if !EhAulaExperimental(titulo) {
+		return fmt.Errorf("notion: recusado — %q não é agendamento do bot", titulo)
+	}
+
+	corpo, err := json.Marshal(map[string]any{"archived": true})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch,
+		"https://api.notion.com/v1/pages/"+pageID, bytes.NewReader(corpo))
+	if err != nil {
+		return err
+	}
+	c.setHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("notion: archive status %d: %s", resp.StatusCode, string(raw))
+	}
+	c.invalidaCache()
+	c.log.Info("notion: agendamento arquivado", "page", pageID, "titulo", titulo)
+	return nil
+}
+
+// tituloDaPagina lê só o título — é a verificação de dono antes de qualquer
+// escrita destrutiva.
+func (c *NotionClient) tituloDaPagina(ctx context.Context, pageID string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"https://api.notion.com/v1/pages/"+pageID, nil)
+	if err != nil {
+		return "", err
+	}
+	c.setHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("notion: get page status %d: %s", resp.StatusCode, string(raw))
+	}
+	var out struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", err
+	}
+	return notionTitle(out.Properties["Aluno/Responsável"]), nil
+}
+
+// ExperimentaisPassadas lista as aulas do bot que já aconteceram, para a
+// faxina. Só devolve as que têm o marcador — as lançadas à mão ficam de fora
+// da lista, então nem chegam perto do arquivamento.
+func (c *NotionClient) ExperimentaisPassadas(ctx context.Context, antesDe time.Time) ([]ScheduleEntry, error) {
+	if !c.Enabled() {
+		return nil, fmt.Errorf("notion: não configurado")
+	}
+	filtro := map[string]any{
+		"filter":    map[string]any{"property": "Data e hora", "date": map[string]any{"before": antesDe.Format(time.RFC3339)}},
+		"sorts":     []any{map[string]any{"property": "Data e hora", "direction": "ascending"}},
+		"page_size": 100,
+	}
+	corpo, err := json.Marshal(filtro)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("https://api.notion.com/v1/data_sources/%s/query", c.dsID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(corpo))
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("notion: passadas status %d: %s", resp.StatusCode, string(raw))
+	}
+	var out struct {
+		Results []struct {
+			ID         string                     `json:"id"`
+			Properties map[string]json.RawMessage `json:"properties"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	var passadas []ScheduleEntry
+	for _, r := range out.Results {
+		titulo := notionTitle(r.Properties["Aluno/Responsável"])
+		if !EhAulaExperimental(titulo) {
+			continue // não é do bot: não é da conta dele
+		}
+		passadas = append(passadas, ScheduleEntry{
+			PageID:   r.ID,
+			Aluno:    titulo,
+			DataHora: notionDateStart(r.Properties["Data e hora"]),
+			Display:  formatBRDateTime(notionDateStart(r.Properties["Data e hora"])),
+			Status:   notionStatus(r.Properties["Status"]),
+		})
+	}
+	return passadas, nil
+}
+
+func (c *NotionClient) invalidaCache() {
+	c.mu.Lock()
+	c.cacheOK = false
+	c.mu.Unlock()
 }
