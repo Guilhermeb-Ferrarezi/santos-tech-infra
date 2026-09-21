@@ -136,7 +136,7 @@ rate limit por rota+IP).
 
 **WebSocket** — cliente envia `{type:"prompt", text}` ou `{type:"interrupt"}`; servidor
 emite `init` · `delta` (texto ao vivo) · `tool_use` · `tool_result` · `result` ·
-`error` · `busy` · `done` · `design_updated` (só em conversas `kind=design`).
+`error` · `busy` · `done` · `design_updated` · `design_no_change` (só em conversas `kind=design`).
 
 **Auth** — autentica via JWT de sessão (cookie/Bearer) **ou** Personal Access Token do auth
 (`Authorization: Bearer st_…`, validado na tabela `api_keys` compartilhada). As rotas

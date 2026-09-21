@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,5 +252,22 @@ func TestResumoDoPrompt(t *testing.T) {
 		if got != "Elemento selecionado no preview: `div`" {
 			t.Fatalf("fallback do formato quebrado = %q", got)
 		}
+	}
+}
+
+func TestDesignTurnEvent(t *testing.T) {
+	// erro → nenhum evento (já foi logado por quem chama)
+	if ev := designTurnEvent("qualquercoisa", errors.New("falhou")); ev != nil {
+		t.Fatalf("erro deveria devolver nil, veio %+v", ev)
+	}
+	// sem mudança → design_no_change, sem Text
+	ev := designTurnEvent("", nil)
+	if ev == nil || ev.Type != "design_no_change" || ev.Text != "" {
+		t.Fatalf("sem mudança = %+v, queria {Type:design_no_change}", ev)
+	}
+	// com mudança → design_updated com o sha
+	ev = designTurnEvent("a1b2c3d", nil)
+	if ev == nil || ev.Type != "design_updated" || ev.Text != "a1b2c3d" {
+		t.Fatalf("com sha = %+v, queria {Type:design_updated, Text:a1b2c3d}", ev)
 	}
 }

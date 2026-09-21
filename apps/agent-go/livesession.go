@@ -375,15 +375,18 @@ func (ls *liveSession) onTurnEnd() {
 	}
 
 	// Projeto de design: o estado do disco vira um commit e o painel recarrega o
-	// preview pelo sha. Falha aqui não derruba o turno — o design continua no disco.
+	// preview pelo sha, ou é avisado que nada mudou. Falha aqui não derruba o
+	// turno — o design continua no disco.
 	if ls.conv.Kind == designKind {
 		ls.mu.Lock()
 		prompt := ls.lastPrompt
 		ls.mu.Unlock()
-		if sha, err := ls.mgr.s.commitDesignTurn(ls.conv, prompt); err != nil {
+		sha, err := ls.mgr.s.commitDesignTurn(ls.conv, prompt)
+		if err != nil {
 			slog.Error("commit do turno de design falhou", "conv", ls.conv.ID, "err", err)
-		} else if sha != "" {
-			ls.mgr.dispatch(ls.conv.ID, turnEvent{Type: "design_updated", Text: sha})
+		}
+		if ev := designTurnEvent(sha, err); ev != nil {
+			ls.mgr.dispatch(ls.conv.ID, *ev)
 		}
 	}
 

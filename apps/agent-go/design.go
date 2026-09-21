@@ -336,6 +336,20 @@ func (s *Server) commitDesignTurn(conv *Conversation, prompt string) (string, er
 	return gitRun(conv.Workdir, "rev-parse", "--short", "HEAD")
 }
 
+// designTurnEvent decide qual evento de WebSocket despachar depois de
+// commitDesignTurn rodar, a partir do resultado dela. Separada de onTurnEnd
+// pra ser testável sem o harness de processo do liveSession. Erro já foi
+// logado pelo chamador — aqui só decide se ele impede o despacho de evento.
+func designTurnEvent(sha string, err error) *turnEvent {
+	if err != nil {
+		return nil
+	}
+	if sha == "" {
+		return &turnEvent{Type: "design_no_change"}
+	}
+	return &turnEvent{Type: "design_updated", Text: sha}
+}
+
 // bootstrapDesignWorkspace prepara o workdir de um projeto de design: guia, tela
 // inicial, manifesto e repositório git com o commit de origem. Idempotente — nunca
 // sobrescreve arquivo que já existe (pode rodar de novo numa conversa antiga).
