@@ -204,5 +204,6 @@ func (s *Server) newEmailQueueServer(redisOpt asynq.RedisConnOpt) (*asynq.Server
 	// Gerador de currículo, fase 2 (curriculo_gerar.go): reescrita de um
 	// campo pela IA — mesma fila "posaula" (mesmo gargalo, o agent-go).
 	mux.HandleFunc(TaskCurriculoReescrever, s.handleCurriculoReescrever)
+	mux.HandleFunc(TaskCurriculoGerar, s.handleCurriculoGerar)
 	return srv, mux
 }

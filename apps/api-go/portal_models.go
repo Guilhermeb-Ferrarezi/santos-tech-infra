@@ -336,6 +336,10 @@ type portalStudentOverviewDTO struct {
 	// HasCourseDoc: o curso desta matrícula já tem Material vivo pra ler
 	// (GET /portal/me/courses/{courseId}/doc) — o card mostra o link.
 	HasCourseDoc bool `json:"hasCourseDoc"`
+	// CourseDurationHours: carga horária do curso (nil quando o catálogo não
+	// preencheu). O gerador de currículo do dashboard usa pra pré-preencher
+	// "Cursos e certificações" com os cursos da Santos Tech sem passar pela IA.
+	CourseDurationHours *int `json:"courseDurationHours"`
 }
 
 // portalStudentIndividualInput é o corpo do PATCH que atualiza uma matrícula:

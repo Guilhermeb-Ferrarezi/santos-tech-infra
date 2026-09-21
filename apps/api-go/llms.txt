@@ -2270,6 +2270,48 @@ corpo com `DisallowUnknownFields`, e recusaria (400) o campo novo se o
 dashboard fosse deployado primeiro (o PATCH inteiro falharia, não só o
 campo novo).
 
+### Currículo (gerador do dashboard) — `/portal/curriculo/*`
+
+Self-service (só `authGuard`, qualquer sessão): o gerador de currículo do
+dashboard (`/curriculo`) é pra aluno, professor e admin. O PDF é montado no
+navegador; a API só entra pra IA. Tudo assíncrono (fila `posaula` do asynq →
+`agent-go`), mesmo desenho do Pós-aula: POST enfileira, GET consulta. O
+balde de 10 req/min do agent-go é **compartilhado** por todas as IAs — 429 vira
+`ai_error` legível ("Muita gente usando a IA agora…"). Nada de currículo fica
+salvo no servidor: a tabela `curriculo_rewrite` guarda só o estado de cada
+pedido (`ai_status` pending|running|ok|failed, `ai_error`).
+
+Reescrever UM campo ("Melhorar com IA"):
+- `POST /portal/curriculo/reescrever` (10/min) body `{campo: "resumo"|"objetivo"|
+  "topico"|"projeto", texto, maxChars, contexto: {tituloProfissional?, vagaCargo?,
+  vagaEmpresa?, experienciaCargo?, experienciaEmpresa?, competencias?: string[],
+  formacao?: string[]}}` → 202 `{id, queued:true}`. `texto` é obrigatório, exceto
+  em `objetivo`, que aceita vazio (GERA do zero pra quem nunca trabalhou).
+  `maxChars` é limitado a 40–600 no servidor. 400 campo inválido/texto longo
+  (>2.000); 503 `QUEUE_UNAVAILABLE` sem fila.
+- `GET /portal/curriculo/reescrever/{id}` (120/min) → `{id, status, error?,
+  textoReescrito?}`; 404 se não é do usuário.
+
+Gerar o currículo INTEIRO (Modo Rápido — 5 respostas opcionais):
+- `POST /portal/curriculo/gerar` (5/min) body `{perfil: "experiencia"|
+  "primeiro-emprego", respostas: {vaga, habilidades, experiencia, projetos,
+  estudos} (todas opcionais, ≤2.000 chars cada), contexto: {nome,
+  cursosSantosTech: [{nome, cargaHoras}]}}` → 202 `{id, queued:true}`. 400
+  perfil inválido/resposta longa; 503 sem fila. As respostas entram no prompt
+  como DADO delimitado (anti-injeção); a IA é instruída a nunca inventar
+  empresa/número/experiência — sem experiência contada, `experiencias: []`.
+- `GET /portal/curriculo/gerar/{id}` (120/min) → `{id, status, error?,
+  curriculo?}`; `curriculo` só em `ok`, no formato do formulário do dashboard:
+  `{objetivo, resumo, competencias: string[], experiencias: [{cargo, empresa,
+  cidadeUf, inicio, fim, topicos: [{texto}]}], projetos: [{nome, papel, data,
+  descricao, link}], formacao: [{nivel (um dos presets: Ensino Fundamental|
+  Médio|Técnico|Superior|Pós-graduação|Outro), curso, instituicao, situacao}],
+  idiomas: [{idioma, nivel}]}`. O servidor já trunca/corta nos limites do
+  formulário (resumo ≤460, objetivo ≤160, tópico ≤130, ≤2 experiências, ≤3
+  projetos…) e descarta item incompleto — o aluno revisa no formulário.
+  Contato e os cursos da Santos Tech **não** vêm da IA (o front preenche do
+  portal; `GET /portal/me/overview` agora traz `courseDurationHours`).
+
 ### Avisos de expiração do pacote de aula particular
 
 Aula particular tem validade de **12 meses a partir da data do contrato**

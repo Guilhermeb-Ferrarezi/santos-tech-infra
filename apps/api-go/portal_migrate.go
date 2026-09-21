@@ -311,6 +311,14 @@ CREATE TABLE IF NOT EXISTS curriculo_rewrite (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_curriculo_rewrite_user ON curriculo_rewrite(user_id);
+
+-- Modo Rápido do currículo (curriculo_completo.go): a mesma tabela guarda
+-- também o pedido de GERAR o currículo inteiro a partir de 5 respostas —
+-- kind distingue ('campo' = reescrita de um campo; 'completo' = geração
+-- inteira) e resultado guarda o JSON gerado. Continua não sendo rascunho
+-- persistido do currículo: é o estado de um pedido, e só.
+ALTER TABLE curriculo_rewrite ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'campo';
+ALTER TABLE curriculo_rewrite ADD COLUMN IF NOT EXISTS resultado JSONB;
 `
 
 // portalLegacyIndexes: índices sobre as tabelas do schema legado do portal
