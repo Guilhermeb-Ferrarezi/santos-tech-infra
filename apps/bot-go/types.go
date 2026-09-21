@@ -355,12 +355,15 @@ type ToolCall struct {
 
 // ResponderOutput — saída parseada do LLM (contrato JSON do prompt).
 type ResponderOutput struct {
-	Bubbles           []string
-	Answered          bool
-	AnsweredFromKb    bool
-	CitedEntryIDs     []string
-	Handoff           bool
-	Smalltalk         bool // saudação/agradecimento/conversa fiada — não conta como gap de KB
+	Bubbles        []string
+	Answered       bool
+	AnsweredFromKb bool
+	CitedEntryIDs  []string
+	Handoff        bool
+	Smalltalk      bool // saudação/agradecimento/conversa fiada — não conta como gap de KB
+	// CancelaAula — o cliente disse que NÃO vai à aula marcada. Libera o
+	// horário; o bot não decide sozinho, só reconhece o que foi dito.
+	CancelaAula       bool
 	ScheduledContact  *ScheduledContact
 	QuotedReplies     []QuotedReply
 	ToolCalls         []ToolCall

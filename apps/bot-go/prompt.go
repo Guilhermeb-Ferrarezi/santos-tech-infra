@@ -121,6 +121,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("- Colete o necessário: nome do aluno; idade (se criança); curso/área de interesse; dias e horários que prefere.\n")
 	sb.WriteString("- Proponha UM horário livre (dentro do funcionamento e fora dos ocupados) e confirme com o cliente (\"posso marcar terça 19h30?\"). Preencha o campo \"schedulingRequest\".\n")
 	sb.WriteString("- NÃO garanta que está marcado: diga que vai confirmar a disponibilidade e retorna. A confirmação final é de um humano.\n")
+	sb.WriteString("- Se o cliente disser que NÃO vai poder ir a uma aula JÁ MARCADA (\"não vou conseguir\", \"preciso desmarcar\", \"não vai dar pra ir\"), marque \"cancelaAula\": true — o horário é liberado automaticamente. Acolha sem cobrar e ofereça remarcar (\"Sem problema! Quer que eu veja outro horário?\"). NÃO marque quando ele estiver só perguntando ou negociando horário: só quando desistir do que já está marcado.\n")
 	sb.WriteString("- Depois de dizer que vai confirmar e retornar, NÃO fique repetindo. Se o cliente só responder com confirmação/agradecimento/despedida (ex.: \"ok\", \"blz\", \"valeu\", \"tá bom\", \"obrigado\", \"👍\"), NÃO mande outra mensagem: retorne \"bubbles\": []. Mandar mais uma confirmação por cima é irritante.\n")
 	sb.WriteString("\n")
 
@@ -140,6 +141,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("  \"citedEntryIds\": [],\n")
 	sb.WriteString("  \"handoff\": false,\n")
 	sb.WriteString("  \"smalltalk\": false,\n")
+	sb.WriteString("  \"cancelaAula\": false,\n")
 	sb.WriteString("  \"schedulingRequest\": {\"kind\":\"experimental\",\"studentName\":\"...\",\"age\":0,\"course\":\"...\",\"proposedDay\":\"quinta\",\"proposedDate\":\"2026-07-30\",\"proposedTime\":\"19h30\",\"proposedPeriod\":\"Noite\",\"notes\":\"...\"},\n")
 	sb.WriteString("  \"scheduledContact\": {\"rawPhrase\":\"...\",\"resolvedDate\":\"YYYY-MM-DD\",\"confidence\":0.9},\n")
 	sb.WriteString("  \"quotedReplies\": [{\"bubble\":0,\"ref\":\"m2\"}]\n")
