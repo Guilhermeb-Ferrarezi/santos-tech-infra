@@ -1049,6 +1049,17 @@ ALTER TABLE blog_categories DROP CONSTRAINT IF EXISTS blog_categories_audience_c
 ALTER TABLE blog_categories ADD CONSTRAINT blog_categories_audience_check
   CHECK (audience IN ('familia','adultos'));
 CREATE INDEX IF NOT EXISTS idx_blog_categories_audience ON blog_categories(audience);
+
+-- Status novo "sem_recurso" ("Não dá pra produzir" na UI): peça que exige algo
+-- que a operação não tem hoje (ex.: turma/sala/aluno que não existe), diferente
+-- de "arquivado" (decisão de não fazer por outro motivo). motivo_sem_recurso é
+-- a justificativa em texto — obrigatória quando status=sem_recurso, validada em
+-- validateSocialPostInput (handlers_social.go), não aqui no schema (CHECK entre
+-- colunas exigiria trigger; mais simples e já é o padrão do repo validar no Go).
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS motivo_sem_recurso TEXT NOT NULL DEFAULT '';
+ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_status_check;
+ALTER TABLE social_posts ADD CONSTRAINT social_posts_status_check
+  CHECK (status IN ('ideia','planejado','em_producao','revisao','aprovado','agendado','publicado','arquivado','sem_recurso'));
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

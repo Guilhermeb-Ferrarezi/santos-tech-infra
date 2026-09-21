@@ -7003,7 +7003,12 @@ components:
       enum: [facebook, instagram, tiktok, youtube, threads, google_meu_negocio, blog, twitter_x, linkedin]
     SocialStatus:
       type: string
-      enum: [ideia, planejado, em_producao, revisao, aprovado, agendado, publicado, arquivado]
+      enum: [ideia, planejado, em_producao, revisao, aprovado, agendado, publicado, arquivado, sem_recurso]
+      description: >-
+        "sem_recurso" ("Não dá pra produzir" na UI) exige motivoSemRecurso
+        preenchido — peça que depende de algo que a operação não tem hoje
+        (ex.: turma/sala/aluno que não existe), diferente de "arquivado"
+        (decisão de não fazer por outro motivo).
     SocialPilar:
       type: string
       enum: [educacional, institucional, captacao, prova_social, bastidores, tech_mundo_real]
@@ -7098,6 +7103,7 @@ components:
         masterUrl: { type: string }
         mandatorios: { type: string }
         responsavelId: { type: integer, format: int64, nullable: true, description: "Quem executa o post (principal)." }
+        motivoSemRecurso: { type: string, description: "Obrigatório quando status=sem_recurso — o que falta pra produzir a peça." }
         responsavelNome: { type: string, description: "Denormalizado, só leitura — vazio se sem responsável ou usuário removido." }
         assigneeIds: { type: array, items: { type: integer, format: int64 }, description: "Responsáveis ADICIONAIS ao principal." }
         funilEtapa: { $ref: "#/components/schemas/SocialFunilEtapa" }
@@ -7162,6 +7168,7 @@ components:
         masterUrl: { type: string }
         mandatorios: { type: string }
         responsavelId: { type: integer, format: int64, nullable: true }
+        motivoSemRecurso: { type: string, description: "Obrigatório quando status=sem_recurso — o que falta pra produzir a peça. 400 se vazio/só espaço nessa condição." }
         assigneeIds: { type: array, items: { type: integer, format: int64 }, description: "Substitui a lista inteira a cada save." }
         funilEtapa: { $ref: "#/components/schemas/SocialFunilEtapa" }
         serieId: { type: integer, format: int64, nullable: true, description: "FK social_series.id — null = sem série. Id inexistente → 400." }

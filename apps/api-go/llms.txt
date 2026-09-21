@@ -995,7 +995,10 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
 
 **SocialPost** (campos do briefing): `title` (interno), `caption` (legenda),
 `platform`, `pilar` (educacional|institucional|captacao|prova_social|bastidores|tech_mundo_real),
-`status` (ideia|planejado|em_producao|revisao|aprovado|agendado|publicado|arquivado),
+`status` (ideia|planejado|em_producao|revisao|aprovado|agendado|publicado|arquivado|sem_recurso —
+`sem_recurso` = "Não dá pra produzir" na UI, exige `motivoSemRecurso` preenchido, 400 se vazio;
+diferente de `arquivado`, que não exige justificativa. Feature de 21/09/2026),
+`motivoSemRecurso` (obrigatório só quando `status=sem_recurso`),
 `scheduledAt`, `mediaUrl`, `referenceUrl` (link da foto ref),
 `driveFolderId` (nullable, FK `drive_folders.id` — QUALQUER pasta cadastrada em Arquivos,
 não uma fixa), `driveFileId` (id do arquivo no Google Drive dentro dela), `driveFileName`

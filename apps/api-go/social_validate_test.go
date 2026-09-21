@@ -69,6 +69,32 @@ func TestValidateSocialPostInput_TituloLongoDemais(t *testing.T) {
 	}
 }
 
+func TestValidateSocialPostInput_SemRecursoSemMotivo(t *testing.T) {
+	in := baseValidInput()
+	in.Status = "sem_recurso"
+	if err := validateSocialPostInput(&in); err == nil {
+		t.Fatal("esperava erro: status sem_recurso exige motivoSemRecurso")
+	}
+}
+
+func TestValidateSocialPostInput_SemRecursoComMotivoOK(t *testing.T) {
+	in := baseValidInput()
+	in.Status = "sem_recurso"
+	in.MotivoSemRecurso = "Precisa de turma com 20 alunos, hoje a maior sala comporta 10"
+	if err := validateSocialPostInput(&in); err != nil {
+		t.Fatalf("esperava nil com motivo preenchido, veio %v", err)
+	}
+}
+
+func TestValidateSocialPostInput_MotivoSemRecursoTrimado(t *testing.T) {
+	in := baseValidInput()
+	in.Status = "sem_recurso"
+	in.MotivoSemRecurso = "   "
+	if err := validateSocialPostInput(&in); err == nil {
+		t.Fatal("esperava erro: motivoSemRecurso só com espaços conta como vazio")
+	}
+}
+
 func TestValidateSocialPostInput_ProgramaVazioOK(t *testing.T) {
 	in := baseValidInput()
 	in.Programa = ""

@@ -37,6 +37,10 @@ func validateSocialPostInput(in *SocialPostInput) error {
 	if !validSocialStatuses[in.Status] {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Status inválido")
 	}
+	in.MotivoSemRecurso = strings.TrimSpace(in.MotivoSemRecurso)
+	if in.Status == "sem_recurso" && in.MotivoSemRecurso == "" {
+		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Status \"sem_recurso\" exige motivoSemRecurso (o que falta pra produzir a peça)")
+	}
 	if !validSocialFormatos[in.Formato] {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Formato inválido")
 	}
@@ -297,6 +301,14 @@ func (s *Server) handleUpdateSocialPostStatus(w http.ResponseWriter, r *http.Req
 			writeErr(w, err)
 			return
 		}
+	}
+
+	// Trava: "sem_recurso" exige motivoSemRecurso, mas esta rota só recebe
+	// {status} — o motivo tem que já estar preenchido no post (via PUT
+	// completo) antes de fazer essa transição por aqui.
+	if in.Status == "sem_recurso" && strings.TrimSpace(current.MotivoSemRecurso) == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Preencha motivoSemRecurso (editar o post) antes de mudar o status pra \"sem_recurso\""))
+		return
 	}
 
 	post, err := s.updateSocialPostStatus(r.Context(), id, in.Status)
