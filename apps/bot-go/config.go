@@ -148,6 +148,8 @@ type Config struct {
 	EscolaAbre     string
 	EscolaFecha    string
 	AulaDuracaoMin int
+	// AgendaAutoConfirm — bot marca sozinho. Default false, de propósito.
+	AgendaAutoConfirm bool
 }
 
 func LoadConfig() Config {
@@ -242,9 +244,10 @@ func LoadConfig() Config {
 		AudioMatchMaxMs:  envInt("AUDIO_MATCH_MAX_MS", 12000),
 		AudioMatchShadow: getEnv("AUDIO_MATCH_SHADOW", "true") == "true",
 
-		EscolaAbre:     getEnv("ESCOLA_ABRE", "08:00"),
-		EscolaFecha:    getEnv("ESCOLA_FECHA", "22:00"),
-		AulaDuracaoMin: envInt("AULA_DURACAO_MIN", 60),
+		EscolaAbre:        getEnv("ESCOLA_ABRE", "08:00"),
+		EscolaFecha:       getEnv("ESCOLA_FECHA", "22:00"),
+		AulaDuracaoMin:    envInt("AULA_DURACAO_MIN", 60),
+		AgendaAutoConfirm: getEnv("AGENDA_AUTO_CONFIRM", "false") == "true",
 	}
 }
 
