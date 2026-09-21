@@ -215,10 +215,14 @@ func (c *NotionClient) fetchSchedule(ctx context.Context) ([]ScheduleEntry, erro
 	return entries, nil
 }
 
-// CreateBooking grava uma nova aula experimental na agenda (após confirmação do admin).
-func (c *NotionClient) CreateBooking(ctx context.Context, b Booking) error {
+// CreateBooking grava uma nova aula experimental na agenda e devolve o ID da
+// página criada.
+//
+// O ID é o que amarra esta aula aos eventos do Google Agenda: quando ela for
+// cancelada ou remarcada, é por ele que se acham os eventos a mexer.
+func (c *NotionClient) CreateBooking(ctx context.Context, b Booking) (string, error) {
 	if !c.Enabled() {
-		return fmt.Errorf("notion: não configurado")
+		return "", fmt.Errorf("notion: não configurado")
 	}
 
 	status := b.Status
@@ -251,27 +255,37 @@ func (c *NotionClient) CreateBooking(ctx context.Context, b Booking) error {
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("notion: marshal booking: %w", err)
+		return "", fmt.Errorf("notion: marshal booking: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.notion.com/v1/pages", bytes.NewReader(payload))
 	if err != nil {
-		return err
+		return "", err
 	}
 	c.setHeaders(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("notion: create page status %d: %s", resp.StatusCode, string(raw))
+		return "", fmt.Errorf("notion: create page status %d: %s", resp.StatusCode, string(raw))
 	}
 	// Invalida o cache pra o próximo Schedule() já refletir o novo agendamento.
 	c.invalidaCache()
-	return nil
+
+	var criada struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &criada); err != nil {
+		// A página foi criada; só não consegui ler o id. Não é erro fatal, mas
+		// sem ele a aula fica sem vínculo com o Google Agenda.
+		c.log.Warn("notion: página criada mas id ilegível", "err", err)
+		return "", nil
+	}
+	return criada.ID, nil
 }
 
 // blocosDoAtendimento monta o CONTEÚDO da página do agendamento: a ficha do

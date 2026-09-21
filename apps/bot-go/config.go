@@ -150,6 +150,11 @@ type Config struct {
 	AulaDuracaoMin int
 	// AgendaAutoConfirm — bot marca sozinho. Default false, de propósito.
 	AgendaAutoConfirm bool
+
+	// Google Agenda — mesmo cliente OAuth do ecossistema. Vazio = desligado.
+	GoogleClientID     string
+	GoogleClientSecret string
+	GoogleRedirectURL  string
 }
 
 func LoadConfig() Config {
@@ -248,6 +253,10 @@ func LoadConfig() Config {
 		EscolaFecha:       getEnv("ESCOLA_FECHA", "22:00"),
 		AulaDuracaoMin:    envInt("AULA_DURACAO_MIN", 60),
 		AgendaAutoConfirm: getEnv("AGENDA_AUTO_CONFIRM", "false") == "true",
+
+		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
+		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
+		GoogleRedirectURL:  getEnv("GOOGLE_CALENDAR_REDIRECT_URL", "https://api.santos-tech.com/bot/auth/google/callback"),
 	}
 }
 
