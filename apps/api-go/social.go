@@ -65,8 +65,8 @@ type SocialPost struct {
 	// Justificativa obrigatória quando Status=="sem_recurso" (ver
 	// validateSocialPostInput) — o que falta pra produzir a peça (aluno, turma,
 	// sala etc.). Vazia pra qualquer outro status.
-	MotivoSemRecurso   string          `json:"motivoSemRecurso"`
-	FunilEtapa         string          `json:"funilEtapa"`
+	MotivoSemRecurso string `json:"motivoSemRecurso"`
+	FunilEtapa       string `json:"funilEtapa"`
 	// Série (linha de conteúdo, ex.: "Tela&Saúde") — nil quando o post não
 	// está associado a nenhuma. Só leitura; ver SocialPostInput.SerieID.
 	Serie *SocialSerieRef `json:"serie"`
