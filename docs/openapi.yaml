@@ -7035,7 +7035,11 @@ components:
       description: "String vazia = sem etapa definida (default de peças antigas)."
     SocialReceita:
       type: string
-      enum: ["", capa_gancho, hero_numero, versus, antes_depois, desenvolvimento, cta_fechamento, checklist, passo_a_passo, citacao_depoimento, poster_anuncio]
+      enum: ["", capa_gancho, hero_numero, versus, antes_depois, desenvolvimento, cta_fechamento, checklist, passo_a_passo, citacao_depoimento, poster_anuncio, templatezao, ilustrativo]
+      description: >-
+        "templatezao" e "ilustrativo" são vocabulário específico do cliente
+        externo Edson (fundo branco+frase+foto de perfil vs arte com conceito
+        próprio gerado por IA) — as outras receitas são da Santos Tech.
 
     SocialCopyArteSlide:
       type: object

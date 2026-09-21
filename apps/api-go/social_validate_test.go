@@ -53,6 +53,16 @@ func TestValidateSocialPostInput_ReceitaInvalida(t *testing.T) {
 	}
 }
 
+func TestValidateSocialPostInput_ReceitaEdsonOK(t *testing.T) {
+	for _, receita := range []string{"templatezao", "ilustrativo"} {
+		in := baseValidInput()
+		in.Receita = receita
+		if err := validateSocialPostInput(&in); err != nil {
+			t.Fatalf("receita %q deveria ser válida, veio %v", receita, err)
+		}
+	}
+}
+
 func TestValidateSocialPostInput_PlataformaDestinoInvalida(t *testing.T) {
 	in := baseValidInput()
 	in.PlataformasDestino = []string{"instagram", "orkut"}

@@ -353,6 +353,10 @@ var validSocialReceitas = map[string]bool{
 	"": true, "capa_gancho": true, "hero_numero": true, "versus": true,
 	"antes_depois": true, "desenvolvimento": true, "cta_fechamento": true,
 	"checklist": true, "passo_a_passo": true, "citacao_depoimento": true, "poster_anuncio": true,
+	// Vocabulário específico do Edson (cliente externo) — ver PENDENCIAS.md.
+	// "templatezao": fundo branco, frase, foto de perfil, @ verificado, só
+	// troca o texto. "ilustrativo": arte com conceito próprio gerada por IA.
+	"templatezao": true, "ilustrativo": true,
 }
 
 const socialPostCols = `id::text, title, caption, platform, pilar, status,
