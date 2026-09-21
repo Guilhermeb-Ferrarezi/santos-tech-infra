@@ -24,6 +24,7 @@ type ClaudeConversation struct {
 	UserID         int64
 	Title          *string
 	Repo           *string
+	Kind           string
 	Workdir        string
 	Model          string
 	Status         string

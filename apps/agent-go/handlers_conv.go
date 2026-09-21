@@ -10,10 +10,24 @@ import (
 type createConvBody struct {
 	Title         string `json:"title"`
 	Repo          string `json:"repo"`
+	Kind          string `json:"kind"`
 	Model         string `json:"model"`
 	ToolsDisabled bool   `json:"toolsDisabled"`
 	WebSearch     bool   `json:"webSearch"`
 	Effort        string `json:"effort"`
+}
+
+// normalizeKind valida o tipo da conversa. Vazio = chat (compatibilidade com os
+// clientes antigos, que não mandam o campo).
+func normalizeKind(raw string) (string, error) {
+	switch strings.TrimSpace(raw) {
+	case "", chatKind:
+		return chatKind, nil
+	case designKind:
+		return designKind, nil
+	default:
+		return "", appErr(http.StatusBadRequest, "VALIDATION_ERROR", "kind inválido (use chat ou design)")
+	}
 }
 
 // validEfforts são os níveis aceitos pelo claude CLI (--effort). Vazio = default.
@@ -27,7 +41,12 @@ var validEfforts = map[string]bool{"": true, "low": true, "medium": true, "high"
 var validModels = map[string]bool{"": true, "sonnet": true, "opus": true, "haiku": true}
 
 func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request) {
-	convs, err := s.listConversations(r.Context(), userIDFrom(r))
+	kind, err := normalizeKind(r.URL.Query().Get("kind"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	convs, err := s.listConversationsByKind(r.Context(), userIDFrom(r), kind)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -52,6 +71,20 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "effort inválido (low|medium|high|xhigh|max)"))
 		return
 	}
+	kind, err := normalizeKind(body.Kind)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	// Design e repo são mutuamente exclusivos: prepareWorkspace escreve o PAT do
+	// GitHub em .mcp.json dentro do workdir e, se ali houvesse um clone real, o
+	// commit por turno do design levaria esse arquivo para o histórico do repo
+	// clonado (com origin configurado). O front nunca manda os dois juntos, mas
+	// um POST manual mandaria — então o backend recusa.
+	if kind == designKind && strings.TrimSpace(body.Repo) != "" {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "projeto de design não aceita repo"))
+		return
+	}
 
 	conv := &Conversation{
 		ID:            newUUID(),
@@ -62,6 +95,7 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 		ToolsDisabled: body.ToolsDisabled,
 		WebSearch:     body.WebSearch,
 		Effort:        effort,
+		Kind:          kind,
 	}
 	conv.Workdir = filepath.Join(s.cfg.WorkspaceRoot, conv.ID)
 	if t := strings.TrimSpace(body.Title); t != "" {
@@ -80,6 +114,13 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 	if err := s.prepareWorkspace(r.Context(), conv); err != nil {
 		writeErr(w, err)
 		return
+	}
+
+	if conv.Kind == designKind {
+		if err := s.bootstrapDesignWorkspace(conv); err != nil {
+			writeErr(w, err)
+			return
+		}
 	}
 
 	if err := s.insertConversation(r.Context(), conv); err != nil {

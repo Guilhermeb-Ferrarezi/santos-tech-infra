@@ -76,6 +76,7 @@ CREATE INDEX IF NOT EXISTS idx_conv_user ON claude_conversations(user_id, update
 ALTER TABLE claude_conversations ADD COLUMN IF NOT EXISTS tools_disabled BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE claude_conversations ADD COLUMN IF NOT EXISTS effort TEXT NOT NULL DEFAULT '';
 ALTER TABLE claude_conversations ADD COLUMN IF NOT EXISTS web_search BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE claude_conversations ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'chat';
 
 CREATE TABLE IF NOT EXISTS claude_messages (
   id              BIGSERIAL PRIMARY KEY,
@@ -157,6 +158,30 @@ func convFromGetRow(r agentdb.GetConversationRow) *Conversation {
 		UserID:         r.UserID,
 		Title:          r.Title,
 		Repo:           r.Repo,
+		Kind:           r.Kind,
+		Workdir:        r.Workdir,
+		Model:          r.Model,
+		Status:         r.Status,
+		SessionID:      r.SessionID,
+		SessionStarted: r.SessionStarted,
+		ToolsDisabled:  r.ToolsDisabled,
+		Effort:         r.Effort,
+		WebSearch:      r.WebSearch,
+		CreatedAt:      r.CreatedAt.Time,
+		UpdatedAt:      r.UpdatedAt.Time,
+	}
+}
+
+// convFromGetAnyRow converte uma GetConversationAnyRow (cópia de GetConversationRow:
+// o sqlc gera uma struct própria por query, mesmo com as colunas idênticas) para
+// *Conversation.
+func convFromGetAnyRow(r agentdb.GetConversationAnyRow) *Conversation {
+	return &Conversation{
+		ID:             r.ID,
+		UserID:         r.UserID,
+		Title:          r.Title,
+		Repo:           r.Repo,
+		Kind:           r.Kind,
 		Workdir:        r.Workdir,
 		Model:          r.Model,
 		Status:         r.Status,
@@ -177,6 +202,7 @@ func convFromListRow(r agentdb.ListConversationsRow) Conversation {
 		UserID:         r.UserID,
 		Title:          r.Title,
 		Repo:           r.Repo,
+		Kind:           r.Kind,
 		Workdir:        r.Workdir,
 		Model:          r.Model,
 		Status:         r.Status,
@@ -219,6 +245,7 @@ func (s *Server) insertConversation(ctx context.Context, c *Conversation) error 
 		UserID:         c.UserID,
 		Title:          c.Title,
 		Repo:           c.Repo,
+		Kind:           c.Kind,
 		Workdir:        c.Workdir,
 		Model:          c.Model,
 		Status:         c.Status,
@@ -244,6 +271,19 @@ func (s *Server) conversationByID(ctx context.Context, id string, userID int64) 
 	return convFromGetRow(row), nil
 }
 
+// conversationByIDAny busca a conversa sem filtrar por dono. Só o preview usa —
+// lá a autorização é o token assinado, não o JWT.
+func (s *Server) conversationByIDAny(ctx context.Context, id string) (*Conversation, error) {
+	row, err := s.q.GetConversationAny(ctx, uuidFromStr(id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return convFromGetAnyRow(row), nil
+}
+
 func (s *Server) listConversations(ctx context.Context, userID int64) ([]Conversation, error) {
 	rows, err := s.q.ListConversations(ctx, userID)
 	if err != nil {
@@ -252,6 +292,26 @@ func (s *Server) listConversations(ctx context.Context, userID int64) ([]Convers
 	out := make([]Conversation, len(rows))
 	for i, r := range rows {
 		out[i] = convFromListRow(r)
+	}
+	return out, nil
+}
+
+func (s *Server) listConversationsByKind(ctx context.Context, userID int64, kind string) ([]Conversation, error) {
+	rows, err := s.q.ListConversationsByKind(ctx, agentdb.ListConversationsByKindParams{
+		UserID: userID,
+		Kind:   kind,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Conversation, len(rows))
+	for i, r := range rows {
+		out[i] = Conversation{
+			ID: r.ID, UserID: r.UserID, Title: r.Title, Repo: r.Repo, Kind: r.Kind,
+			Workdir: r.Workdir, Model: r.Model, Status: r.Status, SessionID: r.SessionID,
+			SessionStarted: r.SessionStarted, ToolsDisabled: r.ToolsDisabled, Effort: r.Effort,
+			WebSearch: r.WebSearch, CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time,
+		}
 	}
 	return out, nil
 }

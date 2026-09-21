@@ -29,10 +29,11 @@ type liveSession struct {
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
 
-	mu       sync.Mutex
-	state    string // StatusIdle | StatusRunning
-	queue    []pendingMsg
-	lastUsed time.Time
+	mu         sync.Mutex
+	state      string // StatusIdle | StatusRunning
+	queue      []pendingMsg
+	lastUsed   time.Time
+	lastPrompt string // último pedido do usuário — vira o assunto do commit de design
 
 	// evicted: tombstone de morte intencional (Evict por /clear, /model, /compact).
 	// Quando true, o crash path do readLoop NÃO emite TURN_FAILED — a morte foi
@@ -189,6 +190,10 @@ func (ls *liveSession) persistAndWrite(prompt string, atts []Attachment) {
 	ctx := context.Background()
 	m := ls.mgr
 	conv := ls.conv
+
+	ls.mu.Lock()
+	ls.lastPrompt = prompt
+	ls.mu.Unlock()
 
 	// 1. Mídia: valida e grava em <workdir>/media ANTES de qualquer efeito — anexo
 	// inválido aborta o turno inteiro (fail-closed) e devolve a sessão a idle.
@@ -368,6 +373,23 @@ func (ls *liveSession) onTurnEnd() {
 	if needMark {
 		_ = ls.mgr.s.markSessionStarted(ctx, ls.conv.ID)
 	}
+
+	// Projeto de design: o estado do disco vira um commit e o painel recarrega o
+	// preview pelo sha, ou é avisado que nada mudou. Falha aqui não derruba o
+	// turno — o design continua no disco.
+	if ls.conv.Kind == designKind {
+		ls.mu.Lock()
+		prompt := ls.lastPrompt
+		ls.mu.Unlock()
+		sha, err := ls.mgr.s.commitDesignTurn(ls.conv, prompt)
+		if err != nil {
+			slog.Error("commit do turno de design falhou", "conv", ls.conv.ID, "err", err)
+		}
+		if ev := designTurnEvent(sha, err); ev != nil {
+			ls.mgr.dispatch(ls.conv.ID, *ev)
+		}
+	}
+
 	ls.mgr.dispatch(ls.conv.ID, turnEvent{Type: "done"})
 	if !ls.mgr.hasSubs(ls.conv.ID) {
 		// Usa snapshot de Title (lido sob ls.mu) para não correr com persistAndWrite.

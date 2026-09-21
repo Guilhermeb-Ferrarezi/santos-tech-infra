@@ -88,6 +88,23 @@ claude -p --output-format stream-json --verbose --include-partial-messages \
     *seed* (Redis) do próximo turno. Rejeita com `BUSY` (409) se há turno em andamento.
   - `/clear`: rotaciona a sessão (contexto zerado).
 
+## Claude Design (kind='design')
+
+Uma conversa com `kind='design'` é um projeto de design: o `workdir` guarda
+`CLAUDE.md` (o guia visual), `design.json` e `telas/index.html`, versionados por
+git. Quem commita é a API, ao fim de cada turno (`commitDesignTurn`), e o painel
+recebe `{"type":"design_updated","text":"<sha>"}` pelo WebSocket.
+
+O preview é servido por `GET /claude/designs/{id}/preview/{path...}`, fora do
+`authGuard`: quem autentica é o token assinado (`previewToken`), porque a URL vive
+num iframe de origem opaca, sem cookie. A resposta carrega CSP própria
+(`designCSP`) com `connect-src 'none'` e `img-src` sem `https:` — o HTML é gerado
+por um modelo e tratado como não confiável.
+
+⚠️ O painel embute esse iframe com `sandbox="allow-scripts allow-forms"`.
+**Nunca acrescente `allow-same-origin`**: é ele que impede o conteúdo gerado de
+alcançar cookie e storage de `api.santos-tech.com`.
+
 ## Stack
 
 `net/http` stdlib · `pgx/v5` (Postgres) · `go-redis/v9` (lock de turno, estado, rate
@@ -96,19 +113,21 @@ limit, seed) · `golang-jwt/v5` (valida o JWT do auth central) · `coder/websock
 repouso) · `slog`. Mesmas convenções do `apps/api-go` (erros `{code,message}`, CORS,
 rate limit por rota+IP).
 
-## Endpoints (sob `/claude`, todos admin exceto health)
+## Endpoints (sob `/claude`, todos admin exceto health e o preview de design)
 
 | Método | Rota | Descrição |
 |--------|------|-----------|
 | GET | `/claude/health` | liveness (sem auth) |
-| GET | `/claude/conversations` | lista do usuário |
-| POST | `/claude/conversations` | cria `{title?, repo?, model?}` → workdir + `.mcp.json` + clone |
+| GET | `/claude/conversations?kind=chat\|design` | lista do usuário (filtra por tipo; sem o parâmetro, `kind=chat`) |
+| POST | `/claude/conversations` | cria `{title?, repo?, kind?, model?}` (kind=design bootstrap um workspace de design em vez de clonar repo — os dois são mutuamente exclusivos) → workdir + `.mcp.json` + clone |
 | GET | `/claude/conversations/{id}` | detalhe + mensagens |
 | DELETE | `/claude/conversations/{id}` | remove + limpa workdir |
 | GET | `/claude/conversations/{id}/ws` | **WebSocket** de chat |
 | POST | `/claude/conversations/{id}/model` | troca modelo `{model}` |
 | POST | `/claude/conversations/{id}/compact` | compacta contexto |
 | POST | `/claude/conversations/{id}/clear` | zera contexto |
+| POST | `/claude/designs/{id}/preview-token` | emite token curto assinado (30min) pro iframe do preview |
+| GET | `/claude/designs/{id}/preview/{path...}` | **sem authGuard** — serve o workdir do projeto de design, autenticado pelo token da query `?t=` |
 | POST | `/claude/generate` | geração one-shot stateless `{task, brief, tone?}` → `{subject, html, text}` |
 | POST | `/claude/auth/login` | inicia OAuth (PTY) → `{state, authUrl}`; ou `{token}` direto |
 | POST | `/claude/auth/callback` | `{state, code}` → captura e cifra o token |
@@ -117,14 +136,16 @@ rate limit por rota+IP).
 
 **WebSocket** — cliente envia `{type:"prompt", text}` ou `{type:"interrupt"}`; servidor
 emite `init` · `delta` (texto ao vivo) · `tool_use` · `tool_result` · `result` ·
-`error` · `busy` · `done`.
+`error` · `busy` · `done` · `design_updated` · `design_no_change` (só em conversas `kind=design`).
 
 **Auth** — autentica via JWT de sessão (cookie/Bearer) **ou** Personal Access Token do auth
 (`Authorization: Bearer st_…`, validado na tabela `api_keys` compartilhada). As rotas
 privilegiadas (conversas, controle, OAuth) exigem **admin**. **Exceção:** `POST /claude/generate`
 aceita **qualquer usuário autenticado** — é **stateless** e roda o Claude em sandbox: só o OAuth
 da assinatura, **sem** `--add-dir`, MCP, `--dangerously-skip-permissions` ou tokens de infra,
-então não precisa do papel admin.
+então não precisa do papel admin. **Segunda exceção:** `GET /claude/designs/{id}/preview/{path...}`
+roda **fora** do `authGuard` — vive num iframe de origem opaca, sem cookie, e é o token
+assinado da query `?t=` que autentica (ver a seção "Claude Design" acima).
 
 ## Rodar (local)
 

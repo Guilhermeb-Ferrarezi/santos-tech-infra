@@ -1,16 +1,22 @@
 -- name: InsertConversation :exec
-INSERT INTO claude_conversations (id, user_id, title, repo, workdir, model, status, session_id, session_started, tools_disabled, effort, web_search)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
+INSERT INTO claude_conversations (id, user_id, title, repo, kind, workdir, model, status, session_id, session_started, tools_disabled, effort, web_search)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
 
 -- name: GetConversation :one
-SELECT id::text, user_id, title, repo, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
+SELECT id::text, user_id, title, repo, kind, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
 FROM claude_conversations
 WHERE id = $1::uuid AND user_id = $2;
 
 -- name: ListConversations :many
-SELECT id::text, user_id, title, repo, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
+SELECT id::text, user_id, title, repo, kind, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
 FROM claude_conversations
-WHERE user_id = $1
+WHERE user_id = $1 AND kind = 'chat'
+ORDER BY updated_at DESC;
+
+-- name: ListConversationsByKind :many
+SELECT id::text, user_id, title, repo, kind, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
+FROM claude_conversations
+WHERE user_id = $1 AND kind = $2
 ORDER BY updated_at DESC;
 
 -- name: DeleteConversation :execrows
@@ -46,3 +52,8 @@ WHERE id = $1::uuid;
 UPDATE claude_conversations
 SET session_id = $1::uuid, session_started = false, updated_at = now()
 WHERE id = $2::uuid AND user_id = $3;
+
+-- name: GetConversationAny :one
+SELECT id::text, user_id, title, repo, kind, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
+FROM claude_conversations
+WHERE id = $1::uuid;

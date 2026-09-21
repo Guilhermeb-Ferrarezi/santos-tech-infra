@@ -30,7 +30,7 @@ func (q *Queries) DeleteConversation(ctx context.Context, arg DeleteConversation
 }
 
 const getConversation = `-- name: GetConversation :one
-SELECT id::text, user_id, title, repo, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
+SELECT id::text, user_id, title, repo, kind, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
 FROM claude_conversations
 WHERE id = $1::uuid AND user_id = $2
 `
@@ -45,6 +45,7 @@ type GetConversationRow struct {
 	UserID         int64
 	Title          *string
 	Repo           *string
+	Kind           string
 	Workdir        string
 	Model          string
 	Status         string
@@ -65,6 +66,54 @@ func (q *Queries) GetConversation(ctx context.Context, arg GetConversationParams
 		&i.UserID,
 		&i.Title,
 		&i.Repo,
+		&i.Kind,
+		&i.Workdir,
+		&i.Model,
+		&i.Status,
+		&i.SessionID,
+		&i.SessionStarted,
+		&i.ToolsDisabled,
+		&i.Effort,
+		&i.WebSearch,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getConversationAny = `-- name: GetConversationAny :one
+SELECT id::text, user_id, title, repo, kind, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
+FROM claude_conversations
+WHERE id = $1::uuid
+`
+
+type GetConversationAnyRow struct {
+	ID             string
+	UserID         int64
+	Title          *string
+	Repo           *string
+	Kind           string
+	Workdir        string
+	Model          string
+	Status         string
+	SessionID      string
+	SessionStarted bool
+	ToolsDisabled  bool
+	Effort         string
+	WebSearch      bool
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
+func (q *Queries) GetConversationAny(ctx context.Context, dollar_1 pgtype.UUID) (GetConversationAnyRow, error) {
+	row := q.db.QueryRow(ctx, getConversationAny, dollar_1)
+	var i GetConversationAnyRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Repo,
+		&i.Kind,
 		&i.Workdir,
 		&i.Model,
 		&i.Status,
@@ -80,8 +129,8 @@ func (q *Queries) GetConversation(ctx context.Context, arg GetConversationParams
 }
 
 const insertConversation = `-- name: InsertConversation :exec
-INSERT INTO claude_conversations (id, user_id, title, repo, workdir, model, status, session_id, session_started, tools_disabled, effort, web_search)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+INSERT INTO claude_conversations (id, user_id, title, repo, kind, workdir, model, status, session_id, session_started, tools_disabled, effort, web_search)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 `
 
 type InsertConversationParams struct {
@@ -89,6 +138,7 @@ type InsertConversationParams struct {
 	UserID         int64
 	Title          *string
 	Repo           *string
+	Kind           string
 	Workdir        string
 	Model          string
 	Status         string
@@ -105,6 +155,7 @@ func (q *Queries) InsertConversation(ctx context.Context, arg InsertConversation
 		arg.UserID,
 		arg.Title,
 		arg.Repo,
+		arg.Kind,
 		arg.Workdir,
 		arg.Model,
 		arg.Status,
@@ -118,9 +169,9 @@ func (q *Queries) InsertConversation(ctx context.Context, arg InsertConversation
 }
 
 const listConversations = `-- name: ListConversations :many
-SELECT id::text, user_id, title, repo, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
+SELECT id::text, user_id, title, repo, kind, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
 FROM claude_conversations
-WHERE user_id = $1
+WHERE user_id = $1 AND kind = 'chat'
 ORDER BY updated_at DESC
 `
 
@@ -129,6 +180,7 @@ type ListConversationsRow struct {
 	UserID         int64
 	Title          *string
 	Repo           *string
+	Kind           string
 	Workdir        string
 	Model          string
 	Status         string
@@ -155,6 +207,73 @@ func (q *Queries) ListConversations(ctx context.Context, userID int64) ([]ListCo
 			&i.UserID,
 			&i.Title,
 			&i.Repo,
+			&i.Kind,
+			&i.Workdir,
+			&i.Model,
+			&i.Status,
+			&i.SessionID,
+			&i.SessionStarted,
+			&i.ToolsDisabled,
+			&i.Effort,
+			&i.WebSearch,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConversationsByKind = `-- name: ListConversationsByKind :many
+SELECT id::text, user_id, title, repo, kind, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
+FROM claude_conversations
+WHERE user_id = $1 AND kind = $2
+ORDER BY updated_at DESC
+`
+
+type ListConversationsByKindParams struct {
+	UserID int64
+	Kind   string
+}
+
+type ListConversationsByKindRow struct {
+	ID             string
+	UserID         int64
+	Title          *string
+	Repo           *string
+	Kind           string
+	Workdir        string
+	Model          string
+	Status         string
+	SessionID      string
+	SessionStarted bool
+	ToolsDisabled  bool
+	Effort         string
+	WebSearch      bool
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
+func (q *Queries) ListConversationsByKind(ctx context.Context, arg ListConversationsByKindParams) ([]ListConversationsByKindRow, error) {
+	rows, err := q.db.Query(ctx, listConversationsByKind, arg.UserID, arg.Kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConversationsByKindRow
+	for rows.Next() {
+		var i ListConversationsByKindRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Title,
+			&i.Repo,
+			&i.Kind,
 			&i.Workdir,
 			&i.Model,
 			&i.Status,

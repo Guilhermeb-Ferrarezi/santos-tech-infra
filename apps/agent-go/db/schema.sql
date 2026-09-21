@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS claude_conversations (
   user_id         BIGINT NOT NULL,
   title           TEXT,
   repo            TEXT,
+  kind            TEXT NOT NULL DEFAULT 'chat',
   workdir         TEXT NOT NULL,
   model           TEXT NOT NULL DEFAULT 'sonnet',
   status          TEXT NOT NULL DEFAULT 'idle',
