@@ -107,6 +107,13 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if conv.Kind == designKind {
+		if err := s.bootstrapDesignWorkspace(conv); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+
 	if err := s.insertConversation(r.Context(), conv); err != nil {
 		writeErr(w, err)
 		return
