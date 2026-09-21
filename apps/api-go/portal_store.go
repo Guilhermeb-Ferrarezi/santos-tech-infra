@@ -709,7 +709,8 @@ func (s *Server) portalStudentsOverview(ctx context.Context, p portalPagination)
 		        WHERE ct.class_id = cl.id),
 		       e.individual, e.contracted_lessons, e.contrato_drive_file_id, cl.individual_class, e.contracted_content,
 		       e.contract_date, cl.start_date::date,
-		       EXISTS(SELECT 1 FROM course_doc cd WHERE cd.course_id = c.id AND cd.version > 0)
+		       EXISTS(SELECT 1 FROM course_doc cd WHERE cd.course_id = c.id AND cd.version > 0),
+		       NULLIF(c.duration_hours, 0)
 		FROM enrollment e
 		JOIN "user" u ON u.id = e.user_id AND u.role = %d %s
 		JOIN class cl ON cl.id = e.class_id
@@ -763,7 +764,8 @@ func (s *Server) portalMyOverview(ctx context.Context, email string) ([]portalSt
 		        WHERE ct.class_id = cl.id),
 		       e.individual, e.contracted_lessons, e.contrato_drive_file_id, cl.individual_class, e.contracted_content,
 		       e.contract_date, cl.start_date::date,
-		       EXISTS(SELECT 1 FROM course_doc cd WHERE cd.course_id = c.id AND cd.version > 0)
+		       EXISTS(SELECT 1 FROM course_doc cd WHERE cd.course_id = c.id AND cd.version > 0),
+		       NULLIF(c.duration_hours, 0)
 		FROM enrollment e
 		JOIN "user" u ON u.id = e.user_id AND u.email = $1
 		JOIN class cl ON cl.id = e.class_id
@@ -800,7 +802,7 @@ func portalScanStudentOverview(rows pgx.Rows) (portalStudentOverviewDTO, error) 
 		&dto.ClassID, &dto.ClassName, &dto.CourseID, &dto.CourseName,
 		&dto.TotalPhases, &dto.CompletedPhases, &dto.AulasDadas, &dto.Faltas, &dto.TeacherName, &dto.Individual, &dto.ContractedLessons,
 		&dto.ContratoDriveFileID, &dto.IndividualClass, &dto.ContractedContent,
-		&contractDate, &classStart, &dto.HasCourseDoc); err != nil {
+		&contractDate, &classStart, &dto.HasCourseDoc, &dto.CourseDurationHours); err != nil {
 		return dto, err
 	}
 	if dto.ClassName == "" {

@@ -29,6 +29,11 @@ func (s *Server) registerPortalRoutes(mux *http.ServeMux) {
 	// qualquer sessão autenticada (o aluno reescreve o próprio currículo).
 	mux.HandleFunc("POST /portal/curriculo/reescrever", s.rateLimit(10, min, s.authGuard(s.handleCurriculoPostReescrever)))
 	mux.HandleFunc("GET /portal/curriculo/reescrever/{id}", s.rateLimit(120, min, s.authGuard(s.handleCurriculoGetReescrever)))
+	// Modo Rápido: 5 respostas opcionais + dados do portal → a IA monta o
+	// currículo inteiro (curriculo_completo.go). 5/min: cada pedido é uma
+	// chamada ao Claude e o balde do agent-go é compartilhado.
+	mux.HandleFunc("POST /portal/curriculo/gerar", s.rateLimit(5, min, s.authGuard(s.handleCurriculoPostGerar)))
+	mux.HandleFunc("GET /portal/curriculo/gerar/{id}", s.rateLimit(120, min, s.authGuard(s.handleCurriculoGetGerar)))
 
 	// Cursos / módulos / fases → portal_cursos
 	mux.HandleFunc("GET /portal/courses", s.portalRead("portal_cursos", s.handlePortalListCourses))
