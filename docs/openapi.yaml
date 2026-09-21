@@ -3476,6 +3476,11 @@ paths:
         histórico de transição (`GET .../history`); mover pra `revisao` dispara
         email pra `SOCIAL_ALERT_EMAIL`. Mesma trava de confirmação de
         publicação de `PUT /social/posts/{id}` na transição pra `publicado`.
+        Transição pra `sem_recurso` exige `motivoSemRecurso` não-vazio — vindo
+        deste corpo (colaborador com só `social:execute` preenchendo no mesmo
+        passo) ou já salvo no post via `PUT` completo. `motivoSemRecurso`
+        ausente do corpo mantém o que já está salvo; presente (mesmo `""`)
+        sobrescreve.
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -3484,7 +3489,9 @@ paths:
           application/json:
             schema:
               type: object
-              properties: { status: { $ref: "#/components/schemas/SocialStatus" } }
+              properties:
+                status: { $ref: "#/components/schemas/SocialStatus" }
+                motivoSemRecurso: { type: string, description: "Opcional — só obrigatório (não-vazio) quando status=sem_recurso." }
               required: [status]
       responses:
         "200":

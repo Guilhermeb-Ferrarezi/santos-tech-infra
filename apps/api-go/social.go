@@ -526,7 +526,14 @@ func (s *Server) updateSocialPost(ctx context.Context, id string, in SocialPostI
 	return post, nil
 }
 
-func (s *Server) updateSocialPostStatus(ctx context.Context, id, status string) (*SocialPost, error) {
+// updateSocialPostStatus atualiza o status e, opcionalmente, o motivo (nil =
+// não mexe no que já está salvo — ver handleUpdateSocialPostStatus).
+func (s *Server) updateSocialPostStatus(ctx context.Context, id, status string, motivoSemRecurso *string) (*SocialPost, error) {
+	if motivoSemRecurso != nil {
+		return scanSocialPost(s.db.QueryRow(ctx, `
+			UPDATE social_posts SET status=$2, motivo_sem_recurso=$3, updated_at=now()
+			WHERE id=$1::uuid RETURNING `+socialPostCols, id, status, *motivoSemRecurso))
+	}
 	return scanSocialPost(s.db.QueryRow(ctx, `
 		UPDATE social_posts SET status=$2, updated_at=now()
 		WHERE id=$1::uuid RETURNING `+socialPostCols, id, status))

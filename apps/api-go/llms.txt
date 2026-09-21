@@ -888,7 +888,9 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
   de antes. Campos fora do schema de `SocialPostInput` (`driveFileId`, `publishConfirmations`,
   `createdAt` etc.) são simplesmente ignorados — não têm efeito no update.
 - `DELETE /social/posts/{id}` (admin-only) → 204
-- `PATCH /social/posts/{id}/status {status}` — registra histórico; `revisao` alerta o CEO
+- `PATCH /social/posts/{id}/status {status, motivoSemRecurso?}` — registra histórico; `revisao`
+  alerta o CEO. `motivoSemRecurso` ausente mantém o que já está salvo; obrigatório não-vazio
+  (deste corpo ou já salvo) quando status=sem_recurso. Feature de 21/09/2026.
 - `GET /social/posts/{id}/history` — `{history:[{oldStatus,newStatus,changedBy,changedAt}]}`
 - `GET|POST /social/posts/{id}/notes` — comentários internos
 - `POST /social/posts/{id}/publish {platforms?: string[]}` — **publicador universal**:

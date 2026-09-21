@@ -272,6 +272,11 @@ func (s *Server) handleUpdateSocialPostStatus(w http.ResponseWriter, r *http.Req
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var in struct {
 		Status string `json:"status"`
+		// Ponteiro pra distinguir "não mandou o campo" (nil — mantém o que já
+		// está salvo) de "mandou string vazia" (aplica vazio). Permite ao
+		// colaborador (permissão social:execute, sem acesso ao PUT completo)
+		// preencher o motivo no mesmo passo em que move pra "sem_recurso".
+		MotivoSemRecurso *string `json:"motivoSemRecurso"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
@@ -303,15 +308,23 @@ func (s *Server) handleUpdateSocialPostStatus(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	// Trava: "sem_recurso" exige motivoSemRecurso, mas esta rota só recebe
-	// {status} — o motivo tem que já estar preenchido no post (via PUT
-	// completo) antes de fazer essa transição por aqui.
-	if in.Status == "sem_recurso" && strings.TrimSpace(current.MotivoSemRecurso) == "" {
-		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Preencha motivoSemRecurso (editar o post) antes de mudar o status pra \"sem_recurso\""))
+	// "sem_recurso" exige motivoSemRecurso não-vazio — vindo desta requisição
+	// (colaborador preenchendo no mesmo passo) ou já salvo no post (admin
+	// preencheu antes, via PUT completo).
+	if in.MotivoSemRecurso != nil {
+		trimmed := strings.TrimSpace(*in.MotivoSemRecurso)
+		in.MotivoSemRecurso = &trimmed
+	}
+	motivoEfetivo := current.MotivoSemRecurso
+	if in.MotivoSemRecurso != nil {
+		motivoEfetivo = *in.MotivoSemRecurso
+	}
+	if in.Status == "sem_recurso" && motivoEfetivo == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Preencha motivoSemRecurso antes de mudar o status pra \"sem_recurso\""))
 		return
 	}
 
-	post, err := s.updateSocialPostStatus(r.Context(), id, in.Status)
+	post, err := s.updateSocialPostStatus(r.Context(), id, in.Status, in.MotivoSemRecurso)
 	if err != nil {
 		writeErr(w, err)
 		return
