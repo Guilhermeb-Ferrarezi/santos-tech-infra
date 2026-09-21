@@ -264,7 +264,16 @@ func gitRun(dir string, args ...string) (string, error) {
 }
 
 // inspectPrefixo é a primeira linha que buildPromptWithTarget (web/src/lib/design/
-// inspect.ts) coloca no prompt quando o usuário aponta um elemento no preview.
+// inspect.ts, repo dashboard) coloca no prompt quando o usuário aponta um elemento
+// no preview.
+//
+// CONTRATO SEM SCHEMA COMPARTILHADO: os dois lados (TS gera, Go interpreta) mantêm
+// esse formato em sincronia só por convenção — não há teste que rode os dois juntos.
+// Mudar este texto, a cerca de código ou a ordem das linhas SEM mudar o outro lado
+// quebra silenciosamente a extração do assunto do commit (volta a usar o seletor CSS
+// como assunto, o bug do achado original). Ao mexer aqui, atualize também:
+// buildPromptWithTarget e seu teste de formato exato (inspect.test.ts, repo
+// dashboard), e o fixture `comAlvo`/`multi` de TestResumoDoPrompt logo abaixo.
 const inspectPrefixo = "Elemento selecionado no preview: "
 
 // pedidoDepoisDoContexto extrai o pedido real de um prompt prefixado pelo inspetor.
