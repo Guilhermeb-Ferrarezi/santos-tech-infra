@@ -176,7 +176,7 @@ ALTER TABLE social_posts ADD CONSTRAINT social_posts_pilar_check
   CHECK (pilar IN ('educacional','institucional','captacao','prova_social','bastidores','tech_mundo_real'));
 ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_status_check;
 ALTER TABLE social_posts ADD CONSTRAINT social_posts_status_check
-  CHECK (status IN ('ideia','planejado','em_producao','revisao','aprovado','agendado','publicado','arquivado'));
+  CHECK (status IN ('ideia','planejado','em_producao','revisao','aprovado','agendado','publicado','arquivado','sem_recurso'));
 ALTER TABLE social_posts
   ADD COLUMN IF NOT EXISTS formato             text   NOT NULL DEFAULT 'estatico',
   ADD COLUMN IF NOT EXISTS objetivo            text   NOT NULL DEFAULT 'alcance',
@@ -1056,10 +1056,14 @@ CREATE INDEX IF NOT EXISTS idx_blog_categories_audience ON blog_categories(audie
 -- a justificativa em texto — obrigatória quando status=sem_recurso, validada em
 -- validateSocialPostInput (handlers_social.go), não aqui no schema (CHECK entre
 -- colunas exigiria trigger; mais simples e já é o padrão do repo validar no Go).
+-- O valor "sem_recurso" em si foi adicionado editando a constraint original
+-- (linha ~178 acima), não duplicando outro ALTER aqui — duplicar quebrou o
+-- boot em produção em 21/09: essa constraint dropa/recria a cada boot, então
+-- o bloco antigo (sem "sem_recurso") rodava DEPOIS de já existir post com
+-- esse status, e a revalidação contra a lista velha derrubava a migração
+-- inteira. Nunca duplicar um DROP/ADD CONSTRAINT pra uma coluna que já tem
+-- um bloco — editar o existente.
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS motivo_sem_recurso TEXT NOT NULL DEFAULT '';
-ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_status_check;
-ALTER TABLE social_posts ADD CONSTRAINT social_posts_status_check
-  CHECK (status IN ('ideia','planejado','em_producao','revisao','aprovado','agendado','publicado','arquivado','sem_recurso'));
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
