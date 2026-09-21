@@ -14,6 +14,13 @@ const (
 	StatusError   = "error"
 )
 
+// Tipo de conversa. 'chat' é o Claude admin genérico; 'design' é um projeto do
+// Claude Design, cujo workdir guarda o HTML servido pelo preview.
+const (
+	chatKind   = "chat"
+	designKind = "design"
+)
+
 // Conversation = uma sessão Claude isolada e retomável.
 // ID é o nosso PK estável (URLs, FK das mensagens). SessionID é o --session-id do
 // claude CLI, que pode ser rotacionado (/clear, /compact) sem perder o histórico.
@@ -22,6 +29,7 @@ type Conversation struct {
 	UserID         int64     `json:"userId"`
 	Title          *string   `json:"title"`
 	Repo           *string   `json:"repo"`
+	Kind           string    `json:"kind"`
 	Workdir        string    `json:"workdir"`
 	Model          string    `json:"model"`
 	Status         string    `json:"status"`
