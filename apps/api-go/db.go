@@ -202,7 +202,7 @@ ALTER TABLE social_posts ADD CONSTRAINT social_posts_programa_check
   CHECK (programa IN ('','create','jr','camps','academies'));
 ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_receita_check;
 ALTER TABLE social_posts ADD CONSTRAINT social_posts_receita_check
-  CHECK (receita IN ('','capa_gancho','hero_numero','versus','antes_depois','desenvolvimento','cta_fechamento','checklist','passo_a_passo','citacao_depoimento','poster_anuncio'));
+  CHECK (receita IN ('','capa_gancho','hero_numero','versus','antes_depois','desenvolvimento','cta_fechamento','checklist','passo_a_passo','citacao_depoimento','poster_anuncio','templatezao','ilustrativo'));
 CREATE TABLE IF NOT EXISTS ip_bans (
   id         BIGSERIAL PRIMARY KEY,
   ip         TEXT NOT NULL UNIQUE,
