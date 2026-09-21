@@ -233,6 +233,13 @@ const designStarterHTML = `<!doctype html>
 </html>
 `
 
+// designGitignore impede que segredos que não deveriam existir aqui — mas podem
+// aparecer por um bug futuro ou caminho não previsto — acabem versionados no git
+// local do workspace. .mcp.json carrega o PAT do GitHub em texto puro (mcp.go);
+// hoje kind=design nunca deveria ter esse arquivo (bloqueado na criação em
+// handlers_conv.go), mas isso é defesa em profundidade, não a única barreira.
+const designGitignore = ".mcp.json\n"
+
 type designManifest struct {
 	Title     string    `json:"title"`
 	Screen    string    `json:"screen"`
@@ -373,6 +380,9 @@ func (s *Server) bootstrapDesignWorkspace(conv *Conversation) error {
 		return err
 	}
 	if err := writeIfAbsent(designScreenRel(), designStarterHTML); err != nil {
+		return err
+	}
+	if err := writeIfAbsent(".gitignore", designGitignore); err != nil {
 		return err
 	}
 

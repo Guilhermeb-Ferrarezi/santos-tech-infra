@@ -64,6 +64,63 @@ func TestBootstrapDesignWorkspaceIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestBootstrapDesignWorkspaceGitignoraMcpJson é defesa em profundidade: mesmo que
+// um .mcp.json (com o PAT do GitHub em texto puro, ver mcp.go) acabe aparecendo no
+// workdir de design por um caminho não previsto hoje, o .gitignore escrito pelo
+// bootstrap garante que ele nunca entra no histórico git local.
+func TestBootstrapDesignWorkspaceGitignoraMcpJson(t *testing.T) {
+	dir := t.TempDir()
+	s := &Server{cfg: Config{}}
+	conv := &Conversation{ID: "c1", Kind: designKind, Workdir: dir}
+	if err := s.bootstrapDesignWorkspace(conv); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("ler .gitignore: %v", err)
+	}
+	if !strings.Contains(string(raw), ".mcp.json") {
+		t.Fatalf(".gitignore não cita .mcp.json: %q", raw)
+	}
+
+	// Simula um .mcp.json aparecendo no workdir por um caminho não previsto —
+	// ex. um bug futuro que reintroduza kind=design + repo juntos. Junto, uma
+	// mudança de verdade na tela, pra ter algo legítimo pra commitar no turno.
+	mcpPath := filepath.Join(dir, ".mcp.json")
+	if err := os.WriteFile(mcpPath, []byte(`"segredo"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tela := filepath.Join(dir, designScreenRel())
+	if err := os.WriteFile(tela, []byte("<!doctype html><title>mudou</title>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sha, err := s.commitDesignTurn(conv, "turno qualquer")
+	if err != nil {
+		t.Fatalf("commitDesignTurn: %v", err)
+	}
+	if sha == "" {
+		t.Fatal("esperava commit (a tela mudou de verdade)")
+	}
+
+	tracked, err := gitRun(dir, "ls-files")
+	if err != nil {
+		t.Fatalf("git ls-files: %v", err)
+	}
+	if strings.Contains(tracked, ".mcp.json") {
+		t.Fatalf(".mcp.json foi rastreado pelo git: %q", tracked)
+	}
+
+	status, err := gitRun(dir, "status", "--porcelain")
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if strings.Contains(status, ".mcp.json") {
+		t.Fatalf(".mcp.json aparece no git status (deveria estar ignorado): %q", status)
+	}
+}
+
 func TestPreviewTokenRoundTrip(t *testing.T) {
 	const secret = "segredo-de-teste"
 	tok := previewToken(secret, "conv-1", time.Minute)
