@@ -88,6 +88,23 @@ claude -p --output-format stream-json --verbose --include-partial-messages \
     *seed* (Redis) do próximo turno. Rejeita com `BUSY` (409) se há turno em andamento.
   - `/clear`: rotaciona a sessão (contexto zerado).
 
+## Claude Design (kind='design')
+
+Uma conversa com `kind='design'` é um projeto de design: o `workdir` guarda
+`CLAUDE.md` (o guia visual), `design.json` e `telas/index.html`, versionados por
+git. Quem commita é a API, ao fim de cada turno (`commitDesignTurn`), e o painel
+recebe `{"type":"design_updated","text":"<sha>"}` pelo WebSocket.
+
+O preview é servido por `GET /claude/designs/{id}/preview/{path...}`, fora do
+`authGuard`: quem autentica é o token assinado (`previewToken`), porque a URL vive
+num iframe de origem opaca, sem cookie. A resposta carrega CSP própria
+(`designCSP`) com `connect-src 'none'` e `img-src` sem `https:` — o HTML é gerado
+por um modelo e tratado como não confiável.
+
+⚠️ O painel embute esse iframe com `sandbox="allow-scripts allow-forms"`.
+**Nunca acrescente `allow-same-origin`**: é ele que impede o conteúdo gerado de
+alcançar cookie e storage de `api.santos-tech.com`.
+
 ## Stack
 
 `net/http` stdlib · `pgx/v5` (Postgres) · `go-redis/v9` (lock de turno, estado, rate
