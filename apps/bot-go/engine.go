@@ -102,6 +102,8 @@ type EngineDeps struct {
 	// agendamento continua funcionando sem eles.
 	GCal     *GCalClient
 	GCalRepo *GCalRepo
+	// Lembretes — os três avisos ao cliente antes da aula.
+	Lembretes *LembreteRepo
 	// ForceBotEnabled — força o bot ativo nas conversas deste engine (ex.: canal
 	// Evolution, cujo gate é o toggle externo, não o whitelist do tenant).
 	ForceBotEnabled bool
@@ -804,6 +806,7 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 	// O Notion é o controle; o Google Agenda é o alarme. Falhar aqui não
 	// desfaz a aula — ela existe e está avisada por WhatsApp.
 	e.poeNoGoogleAgenda(ctx, pageID, aluno, sr, inicio, dur)
+	e.agendaLembretesDoCliente(ctx, conv, inbound, pageID, aluno, inicio)
 }
 
 // avisaAdminsDoAgendamento manda o recado para quem opera a escola. É o que
@@ -1461,4 +1464,22 @@ func descricaoDoEvento(sr *SchedulingRequest) string {
 	}
 	b.WriteString("\nO controle continua no Notion.")
 	return b.String()
+}
+
+// agendaLembretesDoCliente cria os três avisos: véspera, 4 horas e 1 hora.
+//
+// Best-effort como o Google Agenda: a aula já está marcada e o cliente já foi
+// respondido. Falhar aqui custa um lembrete, não a aula.
+func (e *ConversationEngine) agendaLembretesDoCliente(ctx context.Context, conv Conversation, inbound InboundMessage, notionPageID, aluno string, aulaEm time.Time) {
+	if e.deps.Lembretes == nil || notionPageID == "" {
+		return
+	}
+	n, err := e.deps.Lembretes.Agendar(ctx, inbound.TenantID, notionPageID,
+		string(conv.ID), inbound.ExternalID, inbound.Channel, aluno, aulaEm, time.Now())
+	if err != nil {
+		e.deps.Logger.Error("lembretes: falha ao agendar", "err", err, "aula", notionPageID)
+		return
+	}
+	e.deps.Logger.Info("lembretes: agendados", "quantos", n, "aluno", aluno,
+		"aula_em", aulaEm.Format(time.RFC3339))
 }

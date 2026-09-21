@@ -41,6 +41,13 @@ type WorkerDeps struct {
 	Engine    *ConversationEngine
 	EvoEngine *ConversationEngine
 
+	// Lembretes da aula experimental para o CLIENTE, e as peças que a faxina
+	// da agenda precisa. Todos podem ser nil — o loop degrada em silêncio.
+	Lembretes *LembreteRepo
+	Notion    *NotionClient
+	GCal      *GCalClient
+	GCalRepo  *GCalRepo
+
 	// Atalhos derivados (populados em NewWorker se ausentes).
 	Scheduled *ScheduledContactRepo
 	Convs     *ConversationRepo
@@ -117,6 +124,12 @@ func (w *Worker) Start(ctx context.Context) {
 	go func() {
 		defer wg.Done()
 		w.retryLoop(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.lembretesLoop(ctx)
 	}()
 
 	// Consumidor do Redis Stream de retries (reprocesso quase em tempo real).
@@ -777,4 +790,141 @@ func (w *Worker) processFollowUp(ctx context.Context, row ScheduledContactRow) {
 	if err := w.deps.Scheduled.MarkFollowUpSent(ctx, row.ID); err != nil {
 		log.Error("processFollowUp: erro ao marcar follow-up como enviado", "err", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Lembretes da aula experimental (cliente) e faxina da agenda
+// ---------------------------------------------------------------------------
+
+// lembretesLoop manda os lembretes vencidos e, uma vez por dia, arquiva as
+// aulas que já passaram.
+//
+// Um minuto de tick é folgado para lembretes de hora cheia e barato: a consulta
+// é um índice parcial sobre pendentes.
+func (w *Worker) lembretesLoop(ctx context.Context) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	w.runLembretes(ctx)
+	ultimaFaxina := time.Time{}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case agora := <-ticker.C:
+			w.runLembretes(ctx)
+			// A faxina é diária: aula que passou hoje sai amanhã, não no mesmo
+			// minuto em que termina.
+			if agora.Sub(ultimaFaxina) >= 6*time.Hour {
+				ultimaFaxina = agora
+				w.runFaxinaAgenda(ctx)
+			}
+		}
+	}
+}
+
+func (w *Worker) runLembretes(ctx context.Context) {
+	if w.deps.Lembretes == nil {
+		return
+	}
+	log := w.deps.Logger
+	tenantID := TenantID(w.deps.Config.TenantID)
+
+	pendentes, err := w.deps.Lembretes.Vencidos(ctx, tenantID, 20)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Error("lembretes: falha ao buscar vencidos", "err", err)
+		}
+		return
+	}
+	for _, l := range pendentes {
+		texto := MensagemDoLembrete(l)
+		if texto == "" {
+			w.deps.Lembretes.MarcarFalha(ctx, l.ID, "tipo de lembrete desconhecido: "+string(l.Kind))
+			continue
+		}
+		if err := w.enviaLembrete(ctx, l, texto); err != nil {
+			log.Error("lembretes: falha ao enviar", "err", err, "tipo", l.Kind, "para", l.ClientPhone)
+			w.deps.Lembretes.MarcarFalha(ctx, l.ID, err.Error())
+			continue
+		}
+		w.deps.Lembretes.MarcarEnviado(ctx, l.ID)
+		log.Info("lembretes: enviado", "tipo", l.Kind, "aluno", l.Aluno, "aula_em", l.AulaEm.Format(time.RFC3339))
+	}
+}
+
+// enviaLembrete escolhe o canal pelo qual o cliente falou e manda o texto.
+func (w *Worker) enviaLembrete(ctx context.Context, l LembretePendente, texto string) error {
+	// Responde pelo MESMO canal por onde o cliente falou: quem chegou pelo
+	// número não-oficial não deve receber lembrete pelo oficial.
+	var sender ChatSender
+	if l.Channel == "evolution" && w.deps.EvolutionSender != nil {
+		sender = w.deps.EvolutionSender
+	} else if w.deps.Sender != nil {
+		sender = w.deps.Sender
+	}
+	if sender == nil {
+		return fmt.Errorf("nenhum sender disponível para o canal %q", l.Channel)
+	}
+	return sender.SendText(ctx, l.ClientPhone, texto)
+}
+
+// runFaxinaAgenda arquiva as aulas experimentais que já aconteceram.
+//
+// SÓ as do bot: ExperimentaisPassadas filtra pelo marcador no título e
+// ArquivarBooking confere de novo antes de mexer. O que Henrique e Rodrigo
+// lançam na mão fica onde está — arquivar compromisso de gente de verdade não
+// tem desfazer bom.
+//
+// Arquiva em vez de apagar: o Notion mantém na lixeira e dá para recuperar.
+func (w *Worker) runFaxinaAgenda(ctx context.Context) {
+	if w.deps.Notion == nil || !w.deps.Notion.Enabled() {
+		return
+	}
+	log := w.deps.Logger
+	// Ontem, não agora: a aula de hoje de manhã só sai amanhã, para quem quiser
+	// olhar durante o dia ainda encontrar.
+	corte := time.Now().In(brLocation).Truncate(24 * time.Hour)
+
+	passadas, err := w.deps.Notion.ExperimentaisPassadas(ctx, corte)
+	if err != nil {
+		log.Error("faxina: falha ao listar aulas passadas", "err", err)
+		return
+	}
+	if len(passadas) == 0 {
+		return
+	}
+	arquivadas := 0
+	for _, a := range passadas {
+		if err := w.deps.Notion.ArquivarBooking(ctx, a.PageID); err != nil {
+			log.Warn("faxina: não arquivou", "err", err, "aula", a.Aluno, "quando", a.Display)
+			continue
+		}
+		arquivadas++
+		if w.deps.Lembretes != nil {
+			_, _ = w.deps.Lembretes.CancelarDaAula(ctx, TenantID(w.deps.Config.TenantID), a.PageID)
+		}
+		w.limpaEventosDoGoogle(ctx, a.PageID)
+	}
+	log.Info("faxina: aulas passadas arquivadas", "arquivadas", arquivadas, "candidatas", len(passadas))
+}
+
+// limpaEventosDoGoogle tira a aula das agendas e esquece o vínculo.
+func (w *Worker) limpaEventosDoGoogle(ctx context.Context, notionPageID string) {
+	if w.deps.GCal == nil || !w.deps.GCal.Enabled() || w.deps.GCalRepo == nil {
+		return
+	}
+	tenantID := TenantID(w.deps.Config.TenantID)
+	eventos, err := w.deps.GCalRepo.EventosDaAula(ctx, tenantID, notionPageID)
+	if err != nil {
+		w.deps.Logger.Error("gcal: falha ao buscar eventos da aula", "err", err)
+		return
+	}
+	for _, ev := range eventos {
+		if err := w.deps.GCal.ApagarEvento(ctx, ev.Conta.RefreshToken, ev.Conta.CalendarID, ev.EventID); err != nil {
+			w.deps.Logger.Warn("gcal: falha ao apagar evento", "err", err, "conta", ev.Conta.Email)
+		}
+	}
+	w.deps.GCalRepo.EsquecerAula(ctx, tenantID, notionPageID)
 }
