@@ -256,6 +256,39 @@ func gitRun(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// resumoDoPrompt transforma o pedido do usuário no assunto do commit: uma linha,
+// no máximo 72 caracteres.
+func resumoDoPrompt(prompt string) string {
+	linha := strings.TrimSpace(strings.SplitN(prompt, "\n", 2)[0])
+	if linha == "" {
+		linha = "ajuste no design"
+	}
+	if len([]rune(linha)) > 72 {
+		linha = string([]rune(linha)[:69]) + "..."
+	}
+	return linha
+}
+
+// commitDesignTurn registra no git o estado do workdir ao fim de um turno. Devolve
+// o sha curto, ou "" quando o turno não mexeu em arquivo nenhum.
+//
+// Quem commita é a API, não o agente: pedir ao modelo que lembre de commitar é
+// combinar com quem esquece, e sem histórico não há como recuperar um design que
+// o turno seguinte estragou.
+func (s *Server) commitDesignTurn(conv *Conversation, prompt string) (string, error) {
+	if _, err := gitRun(conv.Workdir, "add", "-A"); err != nil {
+		return "", err
+	}
+	// --quiet + exit code: 0 = sem diferença, 1 = há o que commitar.
+	if _, err := gitRun(conv.Workdir, "diff", "--cached", "--quiet"); err == nil {
+		return "", nil
+	}
+	if _, err := gitRun(conv.Workdir, "commit", "-m", resumoDoPrompt(prompt)); err != nil {
+		return "", err
+	}
+	return gitRun(conv.Workdir, "rev-parse", "--short", "HEAD")
+}
+
 // bootstrapDesignWorkspace prepara o workdir de um projeto de design: guia, tela
 // inicial, manifesto e repositório git com o commit de origem. Idempotente — nunca
 // sobrescreve arquivo que já existe (pode rodar de novo numa conversa antiga).

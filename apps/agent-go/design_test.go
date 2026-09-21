@@ -129,6 +129,62 @@ func TestSafeDesignPath(t *testing.T) {
 	}
 }
 
+func TestCommitDesignTurn(t *testing.T) {
+	dir := t.TempDir()
+	s := &Server{cfg: Config{}}
+	conv := &Conversation{ID: "c1", Kind: designKind, Workdir: dir}
+	if err := s.bootstrapDesignWorkspace(conv); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	// Nada mudou desde o bootstrap: não commita e não inventa sha.
+	sha, err := s.commitDesignTurn(conv, "primeiro pedido")
+	if err != nil {
+		t.Fatalf("turno sem mudança devolveu erro: %v", err)
+	}
+	if sha != "" {
+		t.Fatalf("turno sem mudança não deveria commitar, veio %q", sha)
+	}
+
+	// Com mudança, commita e devolve o sha.
+	tela := filepath.Join(dir, designScreenRel())
+	if err := os.WriteFile(tela, []byte("<!doctype html><title>mudou</title>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, err = s.commitDesignTurn(conv, "deixa o título maior")
+	if err != nil || sha == "" {
+		t.Fatalf("commit falhou: %q %v", sha, err)
+	}
+
+	msg, err := gitRun(dir, "log", "-1", "--pretty=%s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(msg, "deixa o título maior") {
+		t.Fatalf("mensagem do commit não cita o pedido: %q", msg)
+	}
+}
+
+func TestCommitDesignTurnEncurtaPrompt(t *testing.T) {
+	dir := t.TempDir()
+	s := &Server{cfg: Config{}}
+	conv := &Conversation{ID: "c1", Kind: designKind, Workdir: dir}
+	if err := s.bootstrapDesignWorkspace(conv); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, designScreenRel()), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	longo := strings.Repeat("a", 500) + "\nsegunda linha"
+	if _, err := s.commitDesignTurn(conv, longo); err != nil {
+		t.Fatalf("commit com prompt longo falhou: %v", err)
+	}
+	msg, _ := gitRun(dir, "log", "-1", "--pretty=%s")
+	if len(msg) > 90 || strings.Contains(msg, "\n") {
+		t.Fatalf("assunto do commit não foi encurtado: %d chars", len(msg))
+	}
+}
+
 func TestInjectInspector(t *testing.T) {
 	out := string(injectInspector([]byte("<html><body><h1>oi</h1></body></html>")))
 	if !strings.Contains(out, "santos-design-inspect") {
