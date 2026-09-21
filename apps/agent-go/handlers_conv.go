@@ -76,6 +76,15 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 		writeErr(w, err)
 		return
 	}
+	// Design e repo são mutuamente exclusivos: prepareWorkspace escreve o PAT do
+	// GitHub em .mcp.json dentro do workdir e, se ali houvesse um clone real, o
+	// commit por turno do design levaria esse arquivo para o histórico do repo
+	// clonado (com origin configurado). O front nunca manda os dois juntos, mas
+	// um POST manual mandaria — então o backend recusa.
+	if kind == designKind && strings.TrimSpace(body.Repo) != "" {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "projeto de design não aceita repo"))
+		return
+	}
 
 	conv := &Conversation{
 		ID:            newUUID(),

@@ -199,3 +199,57 @@ func TestInjectInspector(t *testing.T) {
 		t.Fatal("documento sem </body> perdeu o inspetor")
 	}
 }
+
+func TestResumoDoPrompt(t *testing.T) {
+	// Prompt normal: primeira linha, como sempre foi.
+	if got := resumoDoPrompt("deixa o botão azul\ne aumenta a fonte"); got != "deixa o botão azul" {
+		t.Fatalf("prompt normal = %q", got)
+	}
+	if got := resumoDoPrompt("   \n\n"); got != "ajuste no design" {
+		t.Fatalf("prompt vazio = %q", got)
+	}
+	if got := resumoDoPrompt(strings.Repeat("a", 200)); len([]rune(got)) != 72 {
+		t.Fatalf("prompt longo não foi truncado: %d runas", len([]rune(got)))
+	}
+
+	// Prompt do inspetor: o assunto tem que ser o pedido, não o seletor.
+	comAlvo := strings.Join([]string{
+		"Elemento selecionado no preview: `main > button.btn`",
+		"```html",
+		`<button class="btn">Enviar</button>`,
+		"```",
+		"",
+		"deixa o botão azul",
+		"e aumenta a fonte",
+	}, "\n")
+	if got := resumoDoPrompt(comAlvo); got != "deixa o botão azul" {
+		t.Fatalf("prompt do inspetor = %q; queria o pedido, não o seletor", got)
+	}
+
+	// HTML multi-linha entre as cercas não confunde a extração.
+	multi := strings.Join([]string{
+		"Elemento selecionado no preview: `section#hero`",
+		"```html",
+		"<section id=\"hero\">",
+		"  <h1>Oi</h1>",
+		"</section>",
+		"```",
+		"",
+		"",
+		"troca o título",
+	}, "\n")
+	if got := resumoDoPrompt(multi); got != "troca o título" {
+		t.Fatalf("html multi-linha = %q", got)
+	}
+
+	// Formatos quebrados caem no comportamento antigo, sem travar.
+	for _, quebrado := range []string{
+		"Elemento selecionado no preview: `div`\n```html\n<div></div>",             // cerca não fechada
+		"Elemento selecionado no preview: `div`\n```html\n<div></div>\n```\n\n   ", // nada depois
+	} {
+		got := resumoDoPrompt(quebrado)
+		if got != "Elemento selecionado no preview: `div`" {
+			t.Fatalf("fallback do formato quebrado = %q", got)
+		}
+	}
+}

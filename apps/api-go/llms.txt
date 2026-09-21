@@ -320,7 +320,8 @@ Auth: sessão do auth central ou PAT (`st_...`).
   santos|notion|miro; imagem = captura do quadro, o modelo a lê via Read)
 - `GET|POST /claude/conversations?kind=chat|design` — filtro por tipo; sem o
   parâmetro, lista `kind=chat` (compat). `POST` aceita `kind` no corpo
-  (default `chat`) — projeto de design é uma conversa com `kind=design` ·
+  (default `chat`) — projeto de design é uma conversa com `kind=design`;
+  `kind=design` + `repo` juntos = 400 (mutuamente exclusivos) ·
   `GET|PATCH|DELETE /claude/conversations/{id}`
 - `POST /claude/designs/{id}/preview-token` — emite token curto assinado (30min)
   pro iframe do preview · `GET /claude/designs/{id}/preview/{path...}?t=&inspect=`

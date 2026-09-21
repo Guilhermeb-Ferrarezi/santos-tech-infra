@@ -103,7 +103,7 @@ func safeDesignPath(workdir, rel string) (string, error) {
 	if err != nil || info.IsDir() {
 		return "", notFound
 	}
-	return full, nil
+	return realFull, nil
 }
 
 // designCSP é a política do CONTEÚDO do preview (não do painel). Fecha tudo e abre
@@ -256,10 +256,57 @@ func gitRun(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// inspectPrefixo é a primeira linha que buildPromptWithTarget (web/src/lib/design/
+// inspect.ts) coloca no prompt quando o usuário aponta um elemento no preview.
+const inspectPrefixo = "Elemento selecionado no preview: "
+
+// pedidoDepoisDoContexto extrai o pedido real de um prompt prefixado pelo inspetor.
+// O formato produzido pelo front é:
+//
+//	Elemento selecionado no preview: `<seletor>`
+//	```html
+//	<html do elemento>
+//	```
+//
+//	<pedido do usuário>
+//
+// Sem isso o assunto de todo commit feito via "inspecionar" seria o seletor, e o
+// histórico — a razão de existir do commit por turno — não diria o que mudou.
+// Qualquer desvio do formato (bloco não fechado, nada depois dele) devolve false
+// para o chamador cair no comportamento antigo: primeira linha, sem erro.
+func pedidoDepoisDoContexto(prompt string) (string, bool) {
+	if !strings.HasPrefix(prompt, inspectPrefixo) {
+		return "", false
+	}
+	linhas := strings.Split(prompt, "\n")
+	fim := -1
+	for i := 1; i < len(linhas); i++ {
+		if strings.TrimSpace(linhas[i]) == "```" {
+			fim = i
+			break
+		}
+	}
+	if fim < 0 {
+		return "", false
+	}
+	for _, l := range linhas[fim+1:] {
+		if t := strings.TrimSpace(l); t != "" {
+			return t, true
+		}
+	}
+	return "", false
+}
+
 // resumoDoPrompt transforma o pedido do usuário no assunto do commit: uma linha,
 // no máximo 72 caracteres.
+//
+// Quando o prompt vem do inspetor ("Elemento selecionado no preview: ..."), o
+// assunto sai do pedido de verdade, não do seletor.
 func resumoDoPrompt(prompt string) string {
 	linha := strings.TrimSpace(strings.SplitN(prompt, "\n", 2)[0])
+	if pedido, ok := pedidoDepoisDoContexto(prompt); ok {
+		linha = pedido
+	}
 	if linha == "" {
 		linha = "ajuste no design"
 	}

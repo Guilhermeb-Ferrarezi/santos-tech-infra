@@ -113,19 +113,21 @@ limit, seed) · `golang-jwt/v5` (valida o JWT do auth central) · `coder/websock
 repouso) · `slog`. Mesmas convenções do `apps/api-go` (erros `{code,message}`, CORS,
 rate limit por rota+IP).
 
-## Endpoints (sob `/claude`, todos admin exceto health)
+## Endpoints (sob `/claude`, todos admin exceto health e o preview de design)
 
 | Método | Rota | Descrição |
 |--------|------|-----------|
 | GET | `/claude/health` | liveness (sem auth) |
-| GET | `/claude/conversations` | lista do usuário |
-| POST | `/claude/conversations` | cria `{title?, repo?, model?}` → workdir + `.mcp.json` + clone |
+| GET | `/claude/conversations?kind=chat\|design` | lista do usuário (filtra por tipo; sem o parâmetro, `kind=chat`) |
+| POST | `/claude/conversations` | cria `{title?, repo?, kind?, model?}` (kind=design bootstrap um workspace de design em vez de clonar repo — os dois são mutuamente exclusivos) → workdir + `.mcp.json` + clone |
 | GET | `/claude/conversations/{id}` | detalhe + mensagens |
 | DELETE | `/claude/conversations/{id}` | remove + limpa workdir |
 | GET | `/claude/conversations/{id}/ws` | **WebSocket** de chat |
 | POST | `/claude/conversations/{id}/model` | troca modelo `{model}` |
 | POST | `/claude/conversations/{id}/compact` | compacta contexto |
 | POST | `/claude/conversations/{id}/clear` | zera contexto |
+| POST | `/claude/designs/{id}/preview-token` | emite token curto assinado (30min) pro iframe do preview |
+| GET | `/claude/designs/{id}/preview/{path...}` | **sem authGuard** — serve o workdir do projeto de design, autenticado pelo token da query `?t=` |
 | POST | `/claude/generate` | geração one-shot stateless `{task, brief, tone?}` → `{subject, html, text}` |
 | POST | `/claude/auth/login` | inicia OAuth (PTY) → `{state, authUrl}`; ou `{token}` direto |
 | POST | `/claude/auth/callback` | `{state, code}` → captura e cifra o token |
@@ -134,14 +136,16 @@ rate limit por rota+IP).
 
 **WebSocket** — cliente envia `{type:"prompt", text}` ou `{type:"interrupt"}`; servidor
 emite `init` · `delta` (texto ao vivo) · `tool_use` · `tool_result` · `result` ·
-`error` · `busy` · `done`.
+`error` · `busy` · `done` · `design_updated` (só em conversas `kind=design`).
 
 **Auth** — autentica via JWT de sessão (cookie/Bearer) **ou** Personal Access Token do auth
 (`Authorization: Bearer st_…`, validado na tabela `api_keys` compartilhada). As rotas
 privilegiadas (conversas, controle, OAuth) exigem **admin**. **Exceção:** `POST /claude/generate`
 aceita **qualquer usuário autenticado** — é **stateless** e roda o Claude em sandbox: só o OAuth
 da assinatura, **sem** `--add-dir`, MCP, `--dangerously-skip-permissions` ou tokens de infra,
-então não precisa do papel admin.
+então não precisa do papel admin. **Segunda exceção:** `GET /claude/designs/{id}/preview/{path...}`
+roda **fora** do `authGuard` — vive num iframe de origem opaca, sem cookie, e é o token
+assinado da query `?t=` que autentica (ver a seção "Claude Design" acima).
 
 ## Rodar (local)
 
