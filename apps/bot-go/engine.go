@@ -98,6 +98,10 @@ type EngineDeps struct {
 	// AgendaAutoConfirm — o bot grava a aula no Notion sem esperar um humano.
 	// Desligado por padrão: ligar só depois das travas verificadas em produção.
 	AgendaAutoConfirm bool
+	// GCal / GCalRepo — Google Agenda. Nil quando não configurado; o
+	// agendamento continua funcionando sem eles.
+	GCal     *GCalClient
+	GCalRepo *GCalRepo
 	// ForceBotEnabled — força o bot ativo nas conversas deste engine (ex.: canal
 	// Evolution, cujo gate é o toggle externo, não o whitelist do tenant).
 	ForceBotEnabled bool
@@ -780,7 +784,7 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 	}
 
 	aluno := firstNonEmpty(sr.StudentName, contactName)
-	if err := e.deps.Notion.CreateBooking(ctx, Booking{
+	pageID, err := e.deps.Notion.CreateBooking(ctx, Booking{
 		Aluno:    aluno,
 		WhatsApp: inbound.ExternalID,
 		DataHora: iso,
@@ -789,13 +793,17 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 		Curso:    sr.Course,
 		Idade:    sr.Age,
 		Resumo:   sr.Notes,
-	}); err != nil {
+	})
+	if err != nil {
 		log.Error("agenda: falha ao gravar no Notion", "err", err, "quando", iso)
 		return
 	}
 
 	log.Info("agenda: aula marcada pelo bot", "aluno", aluno, "quando", iso, "conversa", conv.ID)
 	e.avisaAdminsDoAgendamento(ctx, conv, inbound, aluno, sr, iso)
+	// O Notion é o controle; o Google Agenda é o alarme. Falhar aqui não
+	// desfaz a aula — ela existe e está avisada por WhatsApp.
+	e.poeNoGoogleAgenda(ctx, pageID, aluno, sr, inicio, dur)
 }
 
 // avisaAdminsDoAgendamento manda o recado para quem opera a escola. É o que
@@ -1029,7 +1037,7 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 				if !resolved {
 					status = "Confirmar"
 				}
-				notionErr = e.deps.Notion.CreateBooking(ctx, Booking{
+				_, notionErr = e.deps.Notion.CreateBooking(ctx, Booking{
 					Aluno:    bookingAluno(*pb),
 					WhatsApp: pb.ClientPhone,
 					DataHora: dataHora,
@@ -1396,4 +1404,61 @@ func applyTransition(current ConversationState, output ResponderOutput) Conversa
 	default:
 		return current
 	}
+}
+
+// poeNoGoogleAgenda cria o evento na agenda de cada pessoa que autorizou.
+//
+// Best-effort de propósito: o Notion é o controle e o WhatsApp já avisou. Se o
+// Google falhar, a aula continua marcada e a falha fica registrada na conta —
+// o inverso (desfazer a aula porque a agenda não respondeu) seria pior.
+func (e *ConversationEngine) poeNoGoogleAgenda(ctx context.Context, notionPageID, aluno string, sr *SchedulingRequest, inicio time.Time, dur time.Duration) {
+	log := e.deps.Logger
+	if e.deps.GCal == nil || !e.deps.GCal.Enabled() || e.deps.GCalRepo == nil || notionPageID == "" {
+		return
+	}
+	contas, err := e.deps.GCalRepo.Ativas(ctx, e.deps.TenantID)
+	if err != nil {
+		log.Error("gcal: falha ao listar contas", "err", err)
+		return
+	}
+	if len(contas) == 0 {
+		return // ninguém autorizou ainda
+	}
+
+	ev := EventoAula{
+		Titulo:    TituloAgendamento(aluno),
+		Descricao: descricaoDoEvento(sr),
+		Inicio:    inicio,
+		Fim:       inicio.Add(dur),
+	}
+	for _, c := range contas {
+		eventID, err := e.deps.GCal.CriarEvento(ctx, c.RefreshToken, c.CalendarID, ev)
+		if err != nil {
+			log.Error("gcal: falha ao criar evento", "err", err, "conta", c.Email)
+			e.deps.GCalRepo.RegistrarErro(ctx, c.ID, err.Error())
+			continue
+		}
+		if err := e.deps.GCalRepo.VincularEvento(ctx, e.deps.TenantID, c.ID, notionPageID, eventID, inicio); err != nil {
+			log.Error("gcal: evento criado mas não vinculado", "err", err, "conta", c.Email)
+		}
+		log.Info("gcal: evento criado", "conta", c.Email, "aluno", aluno, "quando", inicio.Format(time.RFC3339))
+	}
+}
+
+// descricaoDoEvento — o que quem abrir o evento na agenda precisa saber antes
+// de dar a aula.
+func descricaoDoEvento(sr *SchedulingRequest) string {
+	var b strings.Builder
+	b.WriteString("Aula experimental marcada pelo bot.\n\n")
+	if sr.Course != "" {
+		fmt.Fprintf(&b, "Curso de interesse: %s\n", sr.Course)
+	}
+	if sr.Age > 0 {
+		fmt.Fprintf(&b, "Idade do aluno: %d\n", sr.Age)
+	}
+	if sr.Notes != "" {
+		fmt.Fprintf(&b, "\nResumo do atendimento:\n%s\n", sr.Notes)
+	}
+	b.WriteString("\nO controle continua no Notion.")
+	return b.String()
 }

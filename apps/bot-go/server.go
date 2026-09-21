@@ -140,6 +140,9 @@ type Server struct {
 	// audioClips — banco de áudios pré-gravados. Pode ser nil (AUDIO_CLIPS_DIR
 	// não configurado); nesse caso os endpoints de lacuna devolvem lista vazia.
 	audioClips *AudioClipStore
+	// Google Agenda — nil quando GOOGLE_CLIENT_ID/SECRET não estão configurados.
+	gcal     *GCalClient
+	gcalRepo *GCalRepo
 	// rdb pode ser nil — o dedupe de notificações cai pro fallback in-memory.
 	rdb         *redis.Client
 	notifDedupe *notifDedupe
@@ -177,6 +180,8 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		evoClient:   evoClient,
 		voice:       voice,
 		audioClips:  NewAudioClipStore(pool, cfg.AudioClipsDir),
+		gcal:        NewGCalClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL, logger),
+		gcalRepo:    NewGCalRepo(pool),
 		rdb:         rdb,
 		notifDedupe: newNotifDedupe(),
 		retryStream: NewRetryStream(rdb, cfg.RetryStreamKey, cfg.RetryStreamGroup, cfg.RetryStreamConsumer, logger),
@@ -197,6 +202,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+bp+"/webhooks/whatsapp", s.handleInbound)
 	mux.HandleFunc("POST "+bp+"/webhooks/evolution", s.handleEvolutionWebhook)
 	mux.HandleFunc("POST "+bp+"/webhooks/coolify", s.handleCoolifyWebhook)
+	// Autorização do Google Agenda: públicas por desenho (a pessoa abre no
+	// celular). O que protege é o state de uso único, não sessão.
+	mux.HandleFunc("GET "+bp+"/auth/google/start", s.handleGCalStart)
+	mux.HandleFunc("GET "+bp+"/auth/google/callback", s.handleGCalCallback)
 	mux.HandleFunc("GET "+bp+"/health", s.handleHealth)
 	mux.HandleFunc("GET "+bp+"/ready", s.handleReady)
 	mux.Handle("GET "+bp+"/metrics", promhttp.Handler())

@@ -140,6 +140,8 @@ func main() {
 		AudioMatchMaxMs:   cfg.AudioMatchMaxMs,
 		AudioMatchShadow:  cfg.AudioMatchShadow,
 		AgendaAutoConfirm: cfg.AgendaAutoConfirm,
+		GCal:              NewGCalClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL, logger),
+		GCalRepo:          NewGCalRepo(pool),
 	})
 
 	// 11b. Engine para o canal Evolution: mesmos repos, mas responde via Evolution.
