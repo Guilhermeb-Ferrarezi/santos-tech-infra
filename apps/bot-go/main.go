@@ -142,6 +142,7 @@ func main() {
 		AgendaAutoConfirm: cfg.AgendaAutoConfirm,
 		GCal:              NewGCalClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL, logger),
 		GCalRepo:          NewGCalRepo(pool),
+		Lembretes:         NewLembreteRepo(pool),
 	})
 
 	// 11b. Engine para o canal Evolution: mesmos repos, mas responde via Evolution.
@@ -187,6 +188,10 @@ func main() {
 		EvolutionSender:   evolutionClient,
 		Logger:            logger,
 		AgentGo:           agentClient,
+		Lembretes:         NewLembreteRepo(pool),
+		Notion:            notionClient,
+		GCal:              NewGCalClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL, logger),
+		GCalRepo:          NewGCalRepo(pool),
 	})
 
 	// 13. Instancia Server
