@@ -1,19 +1,61 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const designScreenSlug = "index"
+const previewTokenTTL = 30 * time.Minute
 
 // designScreenRel é o caminho (relativo ao workdir) da única tela da fatia 1.
 func designScreenRel() string { return filepath.Join("telas", designScreenSlug+".html") }
+
+// previewSig é o HMAC que amarra o token a uma conversa e a um vencimento.
+func previewSig(secret, convID string, exp int64) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	fmt.Fprintf(mac, "design-preview|%s|%d", convID, exp)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// previewToken emite um token curto para o iframe de preview. Não é JWT de propósito:
+// ele viaja na URL do iframe, então carrega o mínimo (vencimento + assinatura) e não
+// serve para nenhuma outra rota.
+func previewToken(secret, convID string, ttl time.Duration) string {
+	exp := time.Now().Add(ttl).Unix()
+	return fmt.Sprintf("%d.%s", exp, previewSig(secret, convID, exp))
+}
+
+func verifyPreviewToken(secret, convID, token string) error {
+	invalid := appErr(http.StatusNotFound, "NOT_FOUND", "Não encontrado")
+	expRaw, sig, ok := strings.Cut(token, ".")
+	if !ok {
+		return invalid
+	}
+	exp, err := strconv.ParseInt(expRaw, 10, 64)
+	if err != nil {
+		return invalid
+	}
+	want := previewSig(secret, convID, exp)
+	if subtle.ConstantTimeCompare([]byte(sig), []byte(want)) != 1 {
+		return invalid
+	}
+	if time.Now().Unix() > exp {
+		return invalid
+	}
+	return nil
+}
 
 // designGuide é o CLAUDE.md do workspace de design. É ele que dá coerência visual
 // entre gerações e informa as restrições do preview (origem opaca, CSP fechada).

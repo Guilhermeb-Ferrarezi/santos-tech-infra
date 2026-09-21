@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestBootstrapDesignWorkspace(t *testing.T) {
@@ -58,5 +59,33 @@ func TestBootstrapDesignWorkspaceIsIdempotent(t *testing.T) {
 	raw, _ := os.ReadFile(marca)
 	if string(raw) != "<!doctype html><title>editado</title>" {
 		t.Fatal("bootstrap sobrescreveu a tela existente")
+	}
+}
+
+func TestPreviewTokenRoundTrip(t *testing.T) {
+	const secret = "segredo-de-teste"
+	tok := previewToken(secret, "conv-1", time.Minute)
+	if err := verifyPreviewToken(secret, "conv-1", tok); err != nil {
+		t.Fatalf("token válido rejeitado: %v", err)
+	}
+	if err := verifyPreviewToken(secret, "conv-2", tok); err == nil {
+		t.Fatal("token de outra conversa deveria falhar")
+	}
+	if err := verifyPreviewToken("outro-segredo", "conv-1", tok); err == nil {
+		t.Fatal("token com outro segredo deveria falhar")
+	}
+	if err := verifyPreviewToken(secret, "conv-1", tok+"ff"); err == nil {
+		t.Fatal("token adulterado deveria falhar")
+	}
+	if err := verifyPreviewToken(secret, "conv-1", "lixo"); err == nil {
+		t.Fatal("token sem formato deveria falhar")
+	}
+}
+
+func TestPreviewTokenExpira(t *testing.T) {
+	const secret = "segredo-de-teste"
+	tok := previewToken(secret, "conv-1", -time.Second) // já nasceu vencido
+	if err := verifyPreviewToken(secret, "conv-1", tok); err == nil {
+		t.Fatal("token expirado deveria falhar")
 	}
 }
