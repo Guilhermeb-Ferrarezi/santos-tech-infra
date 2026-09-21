@@ -81,6 +81,53 @@ func (q *Queries) GetConversation(ctx context.Context, arg GetConversationParams
 	return i, err
 }
 
+const getConversationAny = `-- name: GetConversationAny :one
+SELECT id::text, user_id, title, repo, kind, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
+FROM claude_conversations
+WHERE id = $1::uuid
+`
+
+type GetConversationAnyRow struct {
+	ID             string
+	UserID         int64
+	Title          *string
+	Repo           *string
+	Kind           string
+	Workdir        string
+	Model          string
+	Status         string
+	SessionID      string
+	SessionStarted bool
+	ToolsDisabled  bool
+	Effort         string
+	WebSearch      bool
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
+func (q *Queries) GetConversationAny(ctx context.Context, dollar_1 pgtype.UUID) (GetConversationAnyRow, error) {
+	row := q.db.QueryRow(ctx, getConversationAny, dollar_1)
+	var i GetConversationAnyRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Repo,
+		&i.Kind,
+		&i.Workdir,
+		&i.Model,
+		&i.Status,
+		&i.SessionID,
+		&i.SessionStarted,
+		&i.ToolsDisabled,
+		&i.Effort,
+		&i.WebSearch,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const insertConversation = `-- name: InsertConversation :exec
 INSERT INTO claude_conversations (id, user_id, title, repo, kind, workdir, model, status, session_id, session_started, tools_disabled, effort, web_search)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)

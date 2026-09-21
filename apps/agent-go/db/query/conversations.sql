@@ -52,3 +52,8 @@ WHERE id = $1::uuid;
 UPDATE claude_conversations
 SET session_id = $1::uuid, session_started = false, updated_at = now()
 WHERE id = $2::uuid AND user_id = $3;
+
+-- name: GetConversationAny :one
+SELECT id::text, user_id, title, repo, kind, workdir, model, status, session_id::text, session_started, tools_disabled, effort, web_search, created_at, updated_at
+FROM claude_conversations
+WHERE id = $1::uuid;

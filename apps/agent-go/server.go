@@ -26,6 +26,9 @@ type Server struct {
 	rdb  *redis.Client
 	mgr  *SessionManager
 	auth *claudeAuth
+
+	// designWorkdirFor é injetável nos testes; nil em produção (usa o Postgres).
+	designWorkdirFor designWorkdirResolver
 }
 
 func NewServer(cfg Config, pool *pgxpool.Pool, rdb *redis.Client) *Server {

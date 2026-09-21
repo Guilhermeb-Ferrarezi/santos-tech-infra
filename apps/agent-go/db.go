@@ -172,6 +172,29 @@ func convFromGetRow(r agentdb.GetConversationRow) *Conversation {
 	}
 }
 
+// convFromGetAnyRow converte uma GetConversationAnyRow (cópia de GetConversationRow:
+// o sqlc gera uma struct própria por query, mesmo com as colunas idênticas) para
+// *Conversation.
+func convFromGetAnyRow(r agentdb.GetConversationAnyRow) *Conversation {
+	return &Conversation{
+		ID:             r.ID,
+		UserID:         r.UserID,
+		Title:          r.Title,
+		Repo:           r.Repo,
+		Kind:           r.Kind,
+		Workdir:        r.Workdir,
+		Model:          r.Model,
+		Status:         r.Status,
+		SessionID:      r.SessionID,
+		SessionStarted: r.SessionStarted,
+		ToolsDisabled:  r.ToolsDisabled,
+		Effort:         r.Effort,
+		WebSearch:      r.WebSearch,
+		CreatedAt:      r.CreatedAt.Time,
+		UpdatedAt:      r.UpdatedAt.Time,
+	}
+}
+
 // convFromListRow converte uma ListConversationsRow para Conversation.
 func convFromListRow(r agentdb.ListConversationsRow) Conversation {
 	return Conversation{
@@ -246,6 +269,19 @@ func (s *Server) conversationByID(ctx context.Context, id string, userID int64) 
 		return nil, err
 	}
 	return convFromGetRow(row), nil
+}
+
+// conversationByIDAny busca a conversa sem filtrar por dono. Só o preview usa —
+// lá a autorização é o token assinado, não o JWT.
+func (s *Server) conversationByIDAny(ctx context.Context, id string) (*Conversation, error) {
+	row, err := s.q.GetConversationAny(ctx, uuidFromStr(id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return convFromGetAnyRow(row), nil
 }
 
 func (s *Server) listConversations(ctx context.Context, userID int64) ([]Conversation, error) {

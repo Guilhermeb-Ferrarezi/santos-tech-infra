@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -87,5 +88,58 @@ func TestPreviewTokenExpira(t *testing.T) {
 	tok := previewToken(secret, "conv-1", -time.Second) // já nasceu vencido
 	if err := verifyPreviewToken(secret, "conv-1", tok); err == nil {
 		t.Fatal("token expirado deveria falhar")
+	}
+}
+
+func TestSafeDesignPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "telas"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alvo := filepath.Join(dir, "telas", "index.html")
+	if err := os.WriteFile(alvo, []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := safeDesignPath(dir, "telas/index.html")
+	if err != nil || got != alvo {
+		t.Fatalf("caminho válido = %q, %v", got, err)
+	}
+
+	for _, ruim := range []string{
+		"../../etc/passwd",
+		"telas/../../etc/passwd",
+		"/etc/passwd",
+		"telas/index.html/../../../etc/passwd",
+		".git/config",       // fora da whitelist de extensão
+		"CLAUDE.md",         // idem: o guia não é servido
+		"telas/index.html.", // extensão vazia
+	} {
+		if _, err := safeDesignPath(dir, ruim); err == nil {
+			t.Fatalf("deveria recusar %q", ruim)
+		}
+	}
+
+	// Symlink apontando para fora do workdir não pode ser servido.
+	link := filepath.Join(dir, "telas", "fuga.html")
+	if err := os.Symlink("/etc/hostname", link); err == nil {
+		if _, err := safeDesignPath(dir, "telas/fuga.html"); err == nil {
+			t.Fatal("symlink para fora do workdir deveria falhar")
+		}
+	}
+}
+
+func TestInjectInspector(t *testing.T) {
+	out := string(injectInspector([]byte("<html><body><h1>oi</h1></body></html>")))
+	if !strings.Contains(out, "santos-design-inspect") {
+		t.Fatal("script do inspetor não foi injetado")
+	}
+	if strings.Index(out, "santos-design-inspect") < strings.Index(out, "<h1>oi</h1>") {
+		t.Fatal("o script deve entrar depois do conteúdo")
+	}
+	// Sem </body> o script vai para o fim do documento, não some.
+	semBody := string(injectInspector([]byte("<h1>oi</h1>")))
+	if !strings.Contains(semBody, "santos-design-inspect") {
+		t.Fatal("documento sem </body> perdeu o inspetor")
 	}
 }

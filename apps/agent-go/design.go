@@ -57,6 +57,133 @@ func verifyPreviewToken(secret, convID, token string) error {
 	return nil
 }
 
+// previewTypes é a whitelist de extensões servíveis pelo preview, com o
+// Content-Type correspondente. O que não está aqui não existe para o preview —
+// inclusive CLAUDE.md, design.json e qualquer coisa dentro de .git.
+var previewTypes = map[string]string{
+	".html":  "text/html; charset=utf-8",
+	".css":   "text/css; charset=utf-8",
+	".js":    "text/javascript; charset=utf-8",
+	".svg":   "image/svg+xml",
+	".png":   "image/png",
+	".jpg":   "image/jpeg",
+	".jpeg":  "image/jpeg",
+	".webp":  "image/webp",
+	".gif":   "image/gif",
+	".ico":   "image/x-icon",
+	".woff":  "font/woff",
+	".woff2": "font/woff2",
+}
+
+// safeDesignPath resolve um caminho pedido pelo preview dentro do workdir. Recusa
+// tudo que escape do diretório (inclusive via symlink) e tudo fora da whitelist.
+func safeDesignPath(workdir, rel string) (string, error) {
+	notFound := appErr(http.StatusNotFound, "NOT_FOUND", "Não encontrado")
+
+	clean := filepath.Clean("/" + strings.TrimPrefix(rel, "/"))
+	if _, ok := previewTypes[strings.ToLower(filepath.Ext(clean))]; !ok {
+		return "", notFound
+	}
+	full := filepath.Join(workdir, clean)
+
+	// Resolve symlinks dos dois lados antes de comparar: sem isso um link dentro
+	// do workdir serviria qualquer arquivo do container.
+	realRoot, err := filepath.EvalSymlinks(workdir)
+	if err != nil {
+		return "", notFound
+	}
+	realFull, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		return "", notFound
+	}
+	if realFull != realRoot && !strings.HasPrefix(realFull, realRoot+string(os.PathSeparator)) {
+		return "", notFound
+	}
+	info, err := os.Stat(realFull)
+	if err != nil || info.IsDir() {
+		return "", notFound
+	}
+	return full, nil
+}
+
+// designCSP é a política do CONTEÚDO do preview (não do painel). Fecha tudo e abre
+// só o necessário para um mockup: estilo e script inline, Tailwind por CDN e fontes
+// do Google. connect-src 'none' e img-src sem https fecham os dois canais baratos de
+// exfiltração (fetch e URL de imagem) — o HTML aqui é gerado por um modelo e tratado
+// como não confiável.
+func designCSP(cfg Config) string {
+	ancestors := "'self'"
+	if len(cfg.CORSOrigins) > 0 {
+		ancestors = strings.Join(cfg.CORSOrigins, " ")
+	}
+	return strings.Join([]string{
+		"default-src 'none'",
+		"img-src 'self' data:",
+		"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+		"font-src 'self' data: https://fonts.gstatic.com",
+		"script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com",
+		"connect-src 'none'",
+		"form-action 'none'",
+		"base-uri 'none'",
+		"frame-ancestors " + ancestors,
+	}, "; ")
+}
+
+// inspectorScript roda DENTRO do preview quando ?inspect=1. Marca o elemento sob o
+// mouse e, no clique, manda para o painel um seletor estável e um trecho do HTML.
+// Vive aqui (servidor) e não no HTML gerado: o agente não precisa saber que existe.
+const inspectorScript = `<script id="santos-design-inspect">
+(function () {
+  var alvo = null;
+  var estilo = document.createElement("style");
+  estilo.textContent = "[data-stx-hover]{outline:2px solid #6366f1 !important;outline-offset:2px !important;cursor:crosshair !important}";
+  document.head.appendChild(estilo);
+
+  function seletor(el) {
+    var partes = [];
+    while (el && el.nodeType === 1 && partes.length < 5 && el !== document.body) {
+      var p = el.tagName.toLowerCase();
+      if (el.id) { partes.unshift(p + "#" + el.id); break; }
+      var cls = (el.getAttribute("class") || "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
+      if (cls.length) p += "." + cls.join(".");
+      var pai = el.parentElement;
+      if (pai) {
+        var irmaos = Array.prototype.filter.call(pai.children, function (c) { return c.tagName === el.tagName; });
+        if (irmaos.length > 1) p += ":nth-of-type(" + (irmaos.indexOf(el) + 1) + ")";
+      }
+      partes.unshift(p);
+      el = pai;
+    }
+    return partes.join(" > ");
+  }
+
+  document.addEventListener("mouseover", function (e) {
+    if (alvo) alvo.removeAttribute("data-stx-hover");
+    alvo = e.target;
+    if (alvo && alvo.setAttribute) alvo.setAttribute("data-stx-hover", "1");
+  }, true);
+
+  document.addEventListener("click", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var el = e.target;
+    if (!el || !el.tagName) return;
+    var html = (el.outerHTML || "").slice(0, 600);
+    parent.postMessage({ source: "santos-design-inspect", selector: seletor(el), html: html, tag: el.tagName.toLowerCase() }, "*");
+  }, true);
+})();
+</script>`
+
+// injectInspector coloca o script no fim do documento — depois do conteúdo, para
+// que os listeners encontrem a árvore montada.
+func injectInspector(html []byte) []byte {
+	s := string(html)
+	if i := strings.LastIndex(strings.ToLower(s), "</body>"); i >= 0 {
+		return []byte(s[:i] + inspectorScript + s[i:])
+	}
+	return []byte(s + inspectorScript)
+}
+
 // designGuide é o CLAUDE.md do workspace de design. É ele que dá coerência visual
 // entre gerações e informa as restrições do preview (origem opaca, CSP fechada).
 const designGuide = `# Projeto de design

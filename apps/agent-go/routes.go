@@ -51,4 +51,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// e ferramentas similares. URL base: https://api.santos-tech.com/claude
 	mux.HandleFunc("GET /claude/models", s.authGuardAdminOrInternal(s.handleOAIModels))
 	mux.HandleFunc("POST /claude/chat/completions", s.rateLimit(10, min, s.authGuardAdminOrInternal(s.handleOAIChatCompletions)))
+
+	// Claude Design: token de preview (admin) e o preview em si (autenticado pelo
+	// token assinado, porque a URL vive num iframe de origem opaca, sem cookie).
+	mux.HandleFunc("POST /claude/designs/{id}/preview-token", s.authGuard(s.handleDesignPreviewToken))
+	mux.HandleFunc("GET /claude/designs/{id}/preview/{path...}", s.rateLimit(600, min, s.handleDesignPreview))
 }
