@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -15,7 +17,7 @@ func depsFake(jevBody string, jevErr error, fbText string, fbErr error, chamadas
 			}
 			return []byte(jevBody), nil
 		},
-		fallback: func(ctx context.Context, prompt string) (string, error) {
+		fallback: func(ctx context.Context, prompt, imageB64, imageMime string) (string, error) {
 			*chamadas = append(*chamadas, "fallback")
 			if fbErr != nil {
 				return "", fbErr
@@ -194,5 +196,110 @@ func TestAnswerQuizAlternativasJaSeparadasForaDoLimite(t *testing.T) {
 	}
 	if len(chamadas) != 0 {
 		t.Errorf("chamadas = %v, queria nenhuma (não gastar API com entrada inválida)", chamadas)
+	}
+}
+
+// ── imagem ────────────────────────────────────────────────────────────────
+
+func reqExemploComImagem(mime string, tamanhoBytes int) quizRequest {
+	req := reqExemplo()
+	req.ImageBase64 = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", tamanhoBytes)))
+	req.ImageMime = mime
+	return req
+}
+
+func TestAnswerQuizComImagemNaoChamaJev(t *testing.T) {
+	var chamadas []string
+	req := reqExemploComImagem("image/png", 128)
+	got, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	// O Jev não lê imagem: chamá-lo às cegas só gastaria tempo e dinheiro.
+	for _, c := range chamadas {
+		if c == "jev" {
+			t.Errorf("chamadas = %v, não deveria chamar o jev quando há imagem", chamadas)
+		}
+	}
+	if got.Source != quizSourceClaude || !got.Escalated {
+		t.Errorf("source=%q escalated=%v, queria claude/true (visão só existe no fallback)", got.Source, got.Escalated)
+	}
+	if got.Answer != "A" {
+		t.Errorf("answer = %q, queria %q", got.Answer, "A")
+	}
+	// Sem veredito do Jev, não existe confiança/probabilidades pra publicar.
+	if got.Confidence != 0 {
+		t.Errorf("confidence = %v, queria 0 (jev não opinou)", got.Confidence)
+	}
+	if got.Probabilities != nil {
+		t.Errorf("probabilities = %+v, queria nil (jev não opinou)", got.Probabilities)
+	}
+}
+
+func TestAnswerQuizComImagemEFallbackFalhaDevolveErro(t *testing.T) {
+	var chamadas []string
+	req := reqExemploComImagem("image/png", 128)
+	_, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, "", errors.New("502"), &chamadas))
+	// Sem imagem haveria o palpite do Jev pra degradar; com imagem não há o
+	// que degradar (o Jev nem foi chamado), então isto tem que ser erro.
+	if !errors.Is(err, errQuizUpstream) {
+		t.Errorf("err = %v, queria errQuizUpstream (não há palpite do jev pra degradar)", err)
+	}
+	for _, c := range chamadas {
+		if c == "jev" {
+			t.Errorf("chamadas = %v, não deveria chamar o jev quando há imagem", chamadas)
+		}
+	}
+}
+
+func TestAnswerQuizSemImagemComportamentoIntacto(t *testing.T) {
+	// Sanidade: sem imagem, o fluxo continua idêntico ao anterior — Jev
+	// primeiro, sem qualquer menção a imagem na resposta.
+	var chamadas []string
+	got, err := answerQuiz(context.Background(), reqExemplo(), depsFake(jevConfiante, nil, fbOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Source != quizSourceJev || got.Escalated {
+		t.Errorf("source=%q escalated=%v", got.Source, got.Escalated)
+	}
+	if len(chamadas) != 1 || chamadas[0] != "jev" {
+		t.Errorf("chamadas = %v, queria só o jev", chamadas)
+	}
+}
+
+func TestAnswerQuizImagemMimeInvalidoNaoChamaUpstream(t *testing.T) {
+	casos := []struct {
+		nome string
+		mime string
+	}{
+		{"mime não suportado", "image/bmp"},
+		{"mime de outro tipo de arquivo", "text/plain"},
+		{"mime vazio com base64 presente", ""},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			var chamadas []string
+			req := reqExemploComImagem(c.mime, 128)
+			_, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbOK, nil, &chamadas))
+			if !errors.Is(err, errQuizImagemMimeInvalido) {
+				t.Errorf("err = %v, queria errQuizImagemMimeInvalido", err)
+			}
+			if len(chamadas) != 0 {
+				t.Errorf("chamadas = %v, queria nenhuma (mime inválido não deve gastar upstream)", chamadas)
+			}
+		})
+	}
+}
+
+func TestAnswerQuizImagemAcimaDoLimiteNaoChamaUpstream(t *testing.T) {
+	var chamadas []string
+	req := reqExemploComImagem("image/png", quizMaxImageBytes+1)
+	_, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbOK, nil, &chamadas))
+	if !errors.Is(err, errQuizImagemGrandeDemais) {
+		t.Errorf("err = %v, queria errQuizImagemGrandeDemais", err)
+	}
+	if len(chamadas) != 0 {
+		t.Errorf("chamadas = %v, queria nenhuma (imagem grande demais não deve gastar upstream)", chamadas)
 	}
 }

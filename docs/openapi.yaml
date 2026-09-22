@@ -107,9 +107,12 @@ tags:
       selecionada na página, para a extensão de navegador. O Jev (modelo
       rápido e barato, via roteador de chaves de API) responde primeiro;
       quando fica inseguro, escala para o Claude Code em container
-      (agent-go). Exige apenas sessão válida (qualquer papel) — rota
-      estreita de propósito, não alcança o roteador de chaves de API como
-      admin (`/auth/admin/api-router/.../proxy`).
+      (agent-go). Quando a questão depende de uma figura (gráfico, cupom,
+      tabela, figura geométrica), a extensão manda `imageBase64` e a rota
+      pula direto para o Claude com visão, sem passar pelo Jev. Exige apenas
+      sessão válida (qualquer papel) — rota estreita de propósito, não
+      alcança o roteador de chaves de API como admin
+      (`/auth/admin/api-router/.../proxy`).
 
 paths:
   /health:
@@ -2628,13 +2631,31 @@ paths:
         responder mas a escalada falha, a resposta volta a ser o palpite do
         Jev (`degraded: true`) em vez de erro.
 
+        **Com imagem** (`imageBase64`): parte das questões reais depende de
+        uma figura (gráfico, cupom, tabela, figura geométrica) que o texto
+        sozinho não carrega. Quando `imageBase64` vem preenchido, a rota
+        **pula o Jev** (ele não lê imagem — chamá-lo seria um palpite cego,
+        gastando tempo e dinheiro à toa) e vai direto para o Claude com
+        visão. Nesse caminho a resposta sempre vem com `source: claude` e
+        `escalated: true`, e `confidence`/`probabilities` ficam ausentes (não
+        existe veredito do Jev pra publicar). Se a escalada falhar, não há
+        palpite do Jev pra degradar — a rota devolve erro (502/504) em vez de
+        uma resposta cega.
+
         Exige sessão autenticada, qualquer papel (`authGuard`, não
         `adminGuard`): rota estreita de propósito, para a extensão não
         alcançar o roteador de chaves de API como admin
         (`/auth/admin/api-router/.../proxy`), que dispararia requisição
         arbitrária com as chaves da empresa.
 
-        Corpo limitado a 64KB. Rate limit: **30 req/min por IP**.
+        Corpo limitado a 8MB (acompanha o teto de imagem do agent-go,
+        `maxImageBytes` em `apps/agent-go/handlers_generate.go`) — protegido
+        por sessão válida (`authGuard`) + rate limit de 30/min, não é uma via
+        de negação de serviço anônima. Rate limit: **30 req/min por IP**.
+
+        Orçamento de tempo: ~25s no caminho de texto; ~50s quando há imagem
+        (visão é mais lenta — o agent-go grava a imagem em disco antes de
+        ler).
       requestBody:
         required: true
         content:
@@ -2662,6 +2683,19 @@ paths:
                 explain:
                   type: boolean
                   description: "Força o escalonamento para o Claude e pede justificativa (`reasoning` na resposta), mesmo se o Jev respondesse com confiança alta."
+                imageBase64:
+                  type: string
+                  format: byte
+                  description: >-
+                    Figura anexada à questão (gráfico, cupom, tabela, figura
+                    geométrica), em base64. Quando presente, a rota pula o
+                    Jev e vai direto para o Claude com visão — ver a
+                    descrição da rota. Exige `imageMime`. Tamanho decodificado
+                    limitado a 8MB.
+                imageMime:
+                  type: string
+                  description: "Mime da imagem em `imageBase64`. Obrigatório junto dela."
+                  enum: [image/png, image/jpeg, image/webp, image/gif]
       responses:
         "200":
           description: Resposta escolhida
@@ -2675,12 +2709,12 @@ paths:
                     description: 'Rótulo escolhido, preservando o rótulo original da prova (pode ser "B", "3" etc — não é normalizado).'
                     example: "B"
                   answerText: { type: string, description: "Texto da alternativa escolhida.", example: "Paris" }
-                  confidence: { type: number, description: "Confiança do Jev (0–1). Ausente/zero quando o Jev não chegou a responder — ver `source`/`degraded`." }
+                  confidence: { type: number, description: "Confiança do Jev (0–1). Ausente/zero quando o Jev não chegou a responder — inclui sempre que a requisição veio com `imageBase64` (o Jev é pulado nesse caminho) — ver `source`/`degraded`." }
                   probabilities:
                     type: object
                     additionalProperties: { type: number }
-                    description: "Probabilidade do Jev por rótulo. Presente só quando o Jev respondeu."
-                  source: { type: string, enum: [jev, claude], description: "De onde veio a resposta que está sendo lida agora." }
+                    description: "Probabilidade do Jev por rótulo. Presente só quando o Jev respondeu — nunca presente quando a requisição veio com `imageBase64`."
+                  source: { type: string, enum: [jev, claude], description: "De onde veio a resposta que está sendo lida agora. Sempre `claude` quando a requisição veio com `imageBase64`." }
                   escalated: { type: boolean, description: "true quando a resposta veio do estágio escalado (Claude)." }
                   degraded: { type: boolean, description: "true quando o Jev respondeu mas a escalada falhou — a resposta é o palpite de baixa confiança do Jev, não uma escalada bem-sucedida." }
                   reasoning: { type: string, description: "Justificativa da resposta. Só presente quando `source` é `claude`." }
@@ -2714,11 +2748,17 @@ paths:
                   options: { A: "Londres", B: "Paris", C: "Berlim", D: "Madri" }
                 timings: { jevMs: 720, claudeMs: 0, totalMs: 745 }
         "400":
-          description: "JSON inválido, ou `raw` e `options` ambos vazios"
+          description: "JSON inválido, `raw` e `options` ambos vazios, ou `imageBase64` com mime não suportado / tamanho decodificado acima de 8MB"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { code: INVALID_BODY, message: "informe `raw` ou `options`" }
+              examples:
+                corpoInvalido:
+                  summary: Corpo inválido
+                  value: { code: INVALID_BODY, message: "informe `raw` ou `options`" }
+                imagemInvalida:
+                  summary: Imagem inválida (mime ou tamanho)
+                  value: { code: INVALID_IMAGE, message: "Imagem inválida — mime não suportado (use png, jpeg, webp ou gif) ou tamanho acima do limite" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "422":
@@ -2730,7 +2770,7 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
         "502":
-          description: "Nenhum modelo conseguiu responder — o Jev falhou e a escalada para o Claude também falhou (ou não havia como escalar)"
+          description: "Nenhum modelo conseguiu responder — o Jev falhou e a escalada para o Claude também falhou (ou não havia como escalar); ou a requisição veio com `imageBase64` e a escalada falhou (sem Jev nesse caminho, não há palpite pra degradar)"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -2748,7 +2788,7 @@ paths:
                   summary: Provider sem chaves ativas
                   value: { code: NO_ACTIVE_KEYS, message: "Provider sem chaves ativas" }
         "504":
-          description: "Estourou o orçamento total da rota (~25s) antes de qualquer modelo responder"
+          description: "Estourou o orçamento total da rota antes de qualquer modelo responder (~25s no caminho de texto, ~50s quando há `imageBase64`)"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

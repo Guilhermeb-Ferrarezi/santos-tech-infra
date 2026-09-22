@@ -23,6 +23,8 @@ func quizErr(err error) *AppError {
 			"Não consegui separar as alternativas — selecione o enunciado e as alternativas")
 	case errors.Is(err, errQuizTimeout):
 		return appErr(http.StatusGatewayTimeout, "UPSTREAM_TIMEOUT", "Tempo esgotado ao consultar os modelos")
+	case errors.Is(err, errQuizImagemMimeInvalido), errors.Is(err, errQuizImagemGrandeDemais):
+		return appErr(http.StatusBadRequest, "INVALID_IMAGE", "Imagem inválida — mime não suportado (use png, jpeg, webp ou gif) ou tamanho acima do limite")
 	case errors.Is(err, errAPIRouterNoActiveKeys):
 		return appErr(http.StatusServiceUnavailable, "NO_ACTIVE_KEYS", "Provider sem chaves ativas")
 	default:
@@ -89,13 +91,18 @@ func (s *Server) quizJevCaller(provider db.ApiRouterProvider) func(context.Conte
 // provider e sem chave de API: o container roda com a assinatura da empresa,
 // e é o mesmo caminho que o Pós-aula usa (agent_client.go).
 //
-// claudeRawCom e não claudeRaw: o cliente padrão tem teto de 2 minutos, que
-// num overlay de questão seria uma eternidade. O orçamento aqui é o do
-// fallback (quizFallbackBudget), e o ctx que answerQuiz passa já o limita —
-// o timeout explícito garante que o cliente HTTP não fique esperando além
-// disso se o ctx for cancelado por outro motivo.
-func (s *Server) quizFallbackCaller() func(context.Context, string) (string, error) {
-	return func(ctx context.Context, prompt string) (string, error) {
+// claudeRawCom/claudeRawImagem e não claudeRaw: o cliente padrão tem teto de
+// 2 minutos, que num overlay de questão seria uma eternidade. O orçamento
+// aqui é o do fallback (quizFallbackBudget/quizVisionBudget), e o ctx que
+// answerQuiz passa já o limita — o timeout explícito garante que o cliente
+// HTTP não fique esperando além disso se o ctx for cancelado por outro
+// motivo. Sem imagem, continua em claudeRawCom (não paga o custo do caminho
+// de imagem à toa); com imagem, claudeRawImagem repassa base64+mime.
+func (s *Server) quizFallbackCaller() func(context.Context, string, string, string) (string, error) {
+	return func(ctx context.Context, prompt, imageB64, imageMime string) (string, error) {
+		if imageB64 != "" {
+			return s.claudeRawImagem(ctx, prompt, imageB64, imageMime, s.cfg.QuizFallbackModel, quizVisionBudget)
+		}
 		return s.claudeRawCom(ctx, prompt, s.cfg.QuizFallbackModel, quizFallbackBudget)
 	}
 }

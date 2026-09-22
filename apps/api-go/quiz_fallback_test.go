@@ -11,7 +11,7 @@ func TestBuildFallbackPromptListaAlternativasNaOrdem(t *testing.T) {
 		Options:  map[string]string{"A": "Astana", "B": "Ulan Bator"},
 		Order:    []string{"A", "B"},
 	}
-	got := buildFallbackPrompt(p)
+	got := buildFallbackPrompt(p, false)
 	if !strings.Contains(got, "Qual a capital da Mongólia?") {
 		t.Error("prompt sem o enunciado")
 	}
@@ -35,12 +35,36 @@ func TestBuildFallbackPromptExemploUsaPrimeiroRotuloReal(t *testing.T) {
 		Options:  map[string]string{"X": "primeira", "Y": "segunda"},
 		Order:    []string{"X", "Y"},
 	}
-	got := buildFallbackPrompt(p)
+	got := buildFallbackPrompt(p, false)
 	if !strings.Contains(got, `"X"`) {
 		t.Errorf("prompt não usa o primeiro rótulo real (X) no exemplo:\n%s", got)
 	}
 	if strings.Contains(got, "<rótulo exatamente como listado acima>") {
 		t.Error("prompt ainda usa o placeholder genérico ambíguo")
+	}
+}
+
+func TestBuildFallbackPromptComImagemMencionaAFigura(t *testing.T) {
+	p := quizParsed{
+		Question: "O que mostra o gráfico?",
+		Options:  map[string]string{"A": "alta", "B": "baixa"},
+		Order:    []string{"A", "B"},
+	}
+	got := buildFallbackPrompt(p, true)
+	if !strings.Contains(strings.ToLower(got), "imagem") {
+		t.Errorf("prompt com imagem não menciona a figura anexada:\n%s", got)
+	}
+}
+
+func TestBuildFallbackPromptSemImagemNaoMencionaAFigura(t *testing.T) {
+	p := quizParsed{
+		Question: "Pergunta comum, sem figura?",
+		Options:  map[string]string{"A": "x", "B": "y"},
+		Order:    []string{"A", "B"},
+	}
+	got := buildFallbackPrompt(p, false)
+	if strings.Contains(strings.ToLower(got), "imagem anexad") {
+		t.Errorf("prompt sem imagem não deveria mencionar figura anexada:\n%s", got)
 	}
 }
 

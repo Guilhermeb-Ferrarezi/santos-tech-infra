@@ -19,8 +19,12 @@ import (
 // roda o CLI com a assinatura da empresa. Mesmo caminho e mesmo contrato do
 // bot-go (apps/bot-go/agent_go.go): {task:"raw", brief, model} → {text}.
 //
-// Usado pelo Pós-aula (posaula_gerar.go) pra gerar as práticas e corrigir
-// resposta aberta. Só texto: anexo binário nunca passa por aqui.
+// Usado pelo Pós-aula (posaula_gerar.go, posaula_material.go) pra gerar as
+// práticas e corrigir resposta aberta — nesses o brief é sempre texto puro,
+// via claudeRaw/claudeRawCom. claudeRawImagem cobre o caminho com imagem
+// (usado por /quiz/answer, quiz.go): mesmo mecanismo de retentativa, mas o
+// corpo carrega também imageBase64/imageMime, que o agent-go já aceita
+// (apps/agent-go/handlers_generate.go).
 
 const (
 	// claudeRawTimeout: 2 min por chamada. Uma geração de 4 práticas com o
@@ -65,6 +69,12 @@ type claudeGenerateRequest struct {
 	Task  string `json:"task"`
 	Brief string `json:"brief"`
 	Model string `json:"model"`
+	// Imagem opcional (multimodal): mesmos campos que apps/agent-go espera em
+	// generateRequest (handlers_generate.go). Vazios pra quem já chama
+	// claudeRaw/claudeRawCom — não mudam o corpo enviado por eles. Só
+	// claudeRawImagem os preenche.
+	ImageBase64 string `json:"imageBase64,omitempty"`
+	ImageMime   string `json:"imageMime,omitempty"`
 }
 
 type claudeGenerateResponse struct {
@@ -83,17 +93,40 @@ func (s *Server) claudeRaw(ctx context.Context, brief, model string) (string, er
 // opus, que não cabem nos 2 min do padrão. O cliente extra compartilha o
 // transporte (pool de conexões) do padrão; só o Timeout muda.
 func (s *Server) claudeRawCom(ctx context.Context, brief, model string, timeout time.Duration) (string, error) {
+	return s.claudeRawDo(ctx, claudeGenerateRequest{Task: "raw", Brief: brief, Model: model}, timeout)
+}
+
+// claudeRawImagem é o caminho multimodal: mesmo mecanismo de retentativa de
+// claudeRawCom, mas o corpo carrega também a imagem (base64 + mime) que o
+// agent-go anexa à leitura do Claude. Usado só por /quiz/answer (quiz.go) —
+// o Pós-aula continua no caminho só-texto (claudeRaw/claudeRawCom), que este
+// helper não altera.
+func (s *Server) claudeRawImagem(ctx context.Context, brief, imageB64, imageMime, model string, timeout time.Duration) (string, error) {
+	return s.claudeRawDo(ctx, claudeGenerateRequest{
+		Task:        "raw",
+		Brief:       brief,
+		Model:       model,
+		ImageBase64: imageB64,
+		ImageMime:   imageMime,
+	}, timeout)
+}
+
+// claudeRawDo é o mecanismo compartilhado por claudeRawCom e claudeRawImagem:
+// monta o corpo, aplica o timeout por chamada e retenta em erro de rede, 5xx
+// ou 429. Extraído pra não duplicar a lógica de retentativa entre os dois
+// caminhos (texto e imagem).
+func (s *Server) claudeRawDo(ctx context.Context, reqBody claudeGenerateRequest, timeout time.Duration) (string, error) {
 	if strings.TrimSpace(s.cfg.AgentInternalSecret) == "" {
 		return "", errAgentSecretMissing
 	}
-	if model == "" {
-		model = "sonnet"
+	if reqBody.Model == "" {
+		reqBody.Model = "sonnet"
 	}
 	client := agentHTTPClient
 	if timeout > 0 && timeout != claudeRawTimeout {
 		client = &http.Client{Timeout: timeout, Transport: agentHTTPClient.Transport}
 	}
-	payload, err := json.Marshal(claudeGenerateRequest{Task: "raw", Brief: brief, Model: model})
+	payload, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("agent: marshal: %w", err)
 	}
@@ -114,7 +147,7 @@ func (s *Server) claudeRawCom(ctx context.Context, brief, model string, timeout 
 			return text, nil
 		}
 		lastErr, lastRetry = err, retry
-		slog.Warn("agent-go: chamada falhou", "tentativa", tentativa, "retry", retry, "retryAfter", retryAfter, "briefChars", len(brief), "err", err)
+		slog.Warn("agent-go: chamada falhou", "tentativa", tentativa, "retry", retry, "retryAfter", retryAfter, "briefChars", len(reqBody.Brief), "err", err)
 		if !retry {
 			break
 		}

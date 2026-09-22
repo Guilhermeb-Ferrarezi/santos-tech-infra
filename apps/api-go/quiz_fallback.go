@@ -18,9 +18,18 @@ type quizFallbackAnswer struct {
 	Reasoning string `json:"reasoning"`
 }
 
-func buildFallbackPrompt(p quizParsed) string {
+// buildFallbackPrompt monta o prompt do fallback. temImagem indica que uma
+// figura (gráfico, cupom, tabela, figura geométrica) foi anexada à
+// requisição — nesse caso o modelo precisa ser instruído a examiná-la, já
+// que o enunciado sozinho pode não bastar pra responder.
+func buildFallbackPrompt(p quizParsed, temImagem bool) string {
 	var b strings.Builder
 	b.WriteString("Responda a questão de múltipla escolha abaixo.\n\n")
+	if temImagem {
+		b.WriteString("Há uma imagem anexada a esta mensagem — examine-a com atenção antes de ")
+		b.WriteString("responder. O enunciado sozinho pode não bastar: a resposta pode depender de ")
+		b.WriteString("um gráfico, uma tabela, um cupom ou uma figura geométrica presente na imagem.\n\n")
+	}
 	b.WriteString(p.Question)
 	b.WriteString("\n\n")
 	for _, label := range p.Order {
