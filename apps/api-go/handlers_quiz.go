@@ -82,10 +82,29 @@ func (s *Server) handleQuizAnswer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, quizErr(err))
 		return
 	}
-	// Sem o enunciado no log: é conteúdo do usuário e não ajuda a operar.
-	slog.Info("quiz: resposta",
+	// A resposta saiu — a partir daqui a requisição REALMENTE consultou o
+	// upstream (Jev e/ou Claude), então é o único ponto onde uma chave de
+	// acesso (X-Quiz-Key) gasta cota. Corpo inválido e questão não separável
+	// retornam antes deste ponto (acima) e nunca chegam a incrementar.
+	logFields := []any{
 		"source", resp.Source, "escalated", resp.Escalated, "degraded", resp.Degraded,
-		"confidence", resp.Confidence, "total_ms", resp.Timings.TotalMs)
+		"confidence", resp.Confidence, "total_ms", resp.Timings.TotalMs,
+	}
+	if key := quizKeyFromContext(r.Context()); key != nil {
+		if err := s.incrementQuizKeyUsage(r.Context(), key.ID); err != nil {
+			// Não falha a resposta por causa disso: ela já foi calculada e já
+			// custou upstream — recusar aqui não devolve o gasto, só irritaria
+			// quem já recebeu a resposta certa.
+			slog.Error("quiz: falha ao incrementar contador da chave de acesso", "quiz_key_label", key.Label, "err", err)
+		}
+		// Pelo RÓTULO da chave, nunca pela chave nem pelo hash — a chave em si
+		// não vai pro log em hipótese nenhuma.
+		logFields = append(logFields, "quiz_key_label", key.Label)
+	}
+	// Sem o enunciado no log: é conteúdo do usuário e não ajuda a operar.
+	// Requisição por sessão (sem X-Quiz-Key) continua logando o usuário como
+	// hoje — via golog.SetUserID em authGuard, no log de acesso HTTP.
+	slog.Info("quiz: resposta", logFields...)
 	writeJSON(w, http.StatusOK, resp)
 }
 

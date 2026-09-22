@@ -1103,6 +1103,31 @@ UPDATE social_posts SET formato='video_curto' WHERE formato IN ('reel','short');
 ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_formato_check;
 ALTER TABLE social_posts ADD CONSTRAINT social_posts_formato_check
   CHECK (formato IN ('estatico','carrossel','video_curto','story','video_longo','thumbnail','card_link'));
+
+-- Chaves de acesso para quem usa a extensão do Jev (POST /quiz/answer) SEM
+-- conta santos-tech — alternativa à sessão via header X-Quiz-Key, ver
+-- quizAccessGuard em quiz_keys.go. Só o hash SHA-256 é guardado; o valor real
+-- (prefixo "qz_") só existe no momento da criação, entregue a quem vai usar —
+-- criação/listagem/revogação são só psql, sem rota admin (ver report da spec
+-- 2026-09-22-extensao-quiz-jev/task-chaves-report.md pelo SQL pronto).
+--
+-- Contagem de uso: contador + data NA PRÓPRIA linha da chave, não uma tabela
+-- separada de (chave, dia). Escolhido porque (a) o volume esperado é dezenas
+-- de chaves externas, não centenas de milhares de linhas por dia — uma tabela
+-- por dia cresceria em disco pra sempre, sem TTL/purga; usage_count+usage_date
+-- é um UPDATE atômico de uma linha só, sem crescimento nenhum; (b) o reset
+-- diário vira "usage_date != hoje ⇒ conta como zero", decidido sem agregação;
+-- (c) "listar chaves com uso do dia" é um SELECT direto nesta tabela, sem JOIN.
+CREATE TABLE IF NOT EXISTS quiz_access_keys (
+  id          BIGSERIAL PRIMARY KEY,
+  key_hash    TEXT NOT NULL UNIQUE,
+  label       TEXT NOT NULL,
+  daily_limit INTEGER NOT NULL DEFAULT 100,
+  usage_date  DATE NOT NULL DEFAULT '1970-01-01',
+  usage_count INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at  TIMESTAMPTZ
+);
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

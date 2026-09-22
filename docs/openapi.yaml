@@ -2688,20 +2688,43 @@ paths:
         palpite do Jev pra degradar — a rota devolve erro (502/504) em vez de
         uma resposta cega.
 
-        Exige sessão autenticada, qualquer papel (`authGuard`, não
-        `adminGuard`): rota estreita de propósito, para a extensão não
-        alcançar o roteador de chaves de API como admin
-        (`/auth/admin/api-router/.../proxy`), que dispararia requisição
-        arbitrária com as chaves da empresa.
+        Exige sessão autenticada, qualquer papel (`authGuard`), **ou** o
+        header `X-Quiz-Key` com uma chave de acesso (`qz_...`) — forma
+        alternativa pensada para quem usa a extensão sem conta santos-tech.
+        As duas formas convivem (`quizAccessGuard`): rota estreita de
+        propósito, para a extensão não alcançar o roteador de chaves de API
+        como admin (`/auth/admin/api-router/.../proxy`), que dispararia
+        requisição arbitrária com as chaves da empresa.
+
+        Chave de acesso (`X-Quiz-Key`): cada chave tem um limite diário de
+        questões (`daily_limit`, configurado na criação) que reseta à meia-noite
+        UTC. O contador só é incrementado por uma requisição que realmente
+        consultou o Jev/Claude — corpo inválido (`400`) ou questão impossível
+        de separar (`422`) não custam cota. Chave inexistente, revogada ou sem
+        o prefixo `qz_` devolve `401 INVALID_KEY` (mesma mensagem nas três
+        causas, para não revelar qual delas aconteceu); cota diária esgotada
+        devolve `429 QUOTA_EXCEEDED`. Chaves são criadas/revogadas só via
+        `psql` (sem rota admin) — fora do escopo deste contrato.
 
         Corpo limitado a 8MB (acompanha o teto de imagem do agent-go,
         `maxImageBytes` em `apps/agent-go/handlers_generate.go`) — protegido
-        por sessão válida (`authGuard`) + rate limit de 30/min, não é uma via
-        de negação de serviço anônima. Rate limit: **30 req/min por IP**.
+        por sessão válida ou chave de acesso válida + rate limit de 30/min,
+        não é uma via de negação de serviço anônima. Rate limit: **30
+        req/min por IP**, valendo para os dois caminhos de autenticação.
 
         Orçamento de tempo: ~25s no caminho de texto; ~50s quando há imagem
         (visão é mais lenta — o agent-go grava a imagem em disco antes de
         ler).
+      parameters:
+        - name: X-Quiz-Key
+          in: header
+          required: false
+          schema: { type: string }
+          description: >-
+            Forma alternativa de autenticação, para quem usa a extensão sem
+            conta santos-tech (prefixo `qz_`). Se ausente, a rota usa a
+            sessão de sempre (cookie `access_token` ou `Authorization:
+            Bearer`) — comportamento inalterado.
       requestBody:
         required: true
         content:
@@ -2898,7 +2921,21 @@ paths:
                   summary: Imagem — tamanho acima do limite
                   value: { code: INVALID_IMAGE, message: "Imagem inválida — tamanho acima do limite" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: >-
+            Sem sessão válida (`UNAUTHORIZED`) — cookie/Bearer ausente ou
+            expirado — ou, no caminho por `X-Quiz-Key`, chave malformada
+            (sem prefixo `qz_`), inexistente ou revogada (`INVALID_KEY`,
+            mesma mensagem para as três causas, de propósito).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                semSessao:
+                  summary: Sessão ausente ou expirada
+                  value: { code: UNAUTHORIZED, message: "Não autenticado" }
+                chaveInvalida:
+                  summary: X-Quiz-Key malformada, inexistente ou revogada
+                  value: { code: INVALID_KEY, message: "Chave de acesso inválida" }
         "422":
           description: >-
             Duas causas, dois códigos diferentes. `UNPARSEABLE`: **só**
@@ -2921,7 +2958,22 @@ paths:
                   summary: Texto vazio, curto ou longo demais para o modo aberto
                   value: { code: TEXTO_INSUFICIENTE, message: "Texto insuficiente para responder — selecione o enunciado completo da questão" }
         "429":
-          $ref: "#/components/responses/RateLimited"
+          description: >-
+            Duas causas, dois códigos diferentes. `RATE_LIMITED`: mais de 30
+            req/min do mesmo IP (vale para sessão e para `X-Quiz-Key`).
+            `QUOTA_EXCEEDED`: só no caminho por `X-Quiz-Key` — a chave já
+            gastou a cota diária (`daily_limit`); a mensagem diz quando
+            reseta (meia-noite UTC).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                rateLimited:
+                  summary: Mais de 30 req/min do mesmo IP
+                  value: { code: RATE_LIMITED, message: "Muitas tentativas. Tente novamente em instantes." }
+                quotaExcedida:
+                  summary: Cota diária da chave de acesso esgotada
+                  value: { code: QUOTA_EXCEEDED, message: "Limite diário desta chave atingido — tente novamente após 00:00 de 23/09 (UTC)" }
         "502":
           description: "Nenhum modelo conseguiu responder — o Jev falhou e a escalada para o Claude também falhou (ou não havia como escalar); ou a requisição veio com `imageBase64` e a escalada falhou (sem Jev nesse caminho, não há palpite pra degradar); ou a requisição está no modo aberto (`kind: aberta`) e a escalada falhou (sem Jev nesse modo, não há palpite pra degradar)"
           content:
