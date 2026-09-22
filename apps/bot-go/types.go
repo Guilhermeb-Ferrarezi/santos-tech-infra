@@ -139,6 +139,8 @@ type TenantConfig struct {
 	EscolaAbre     string // "08:00"
 	EscolaFecha    string // "22:00"
 	AulaDuracaoMin int    // 60
+	// AgendaAutoConfirm — muda o que o prompt manda o bot dizer sobre horário.
+	AgendaAutoConfirm bool
 }
 
 // ScheduleEntry — uma aula experimental já agendada, lida do data source

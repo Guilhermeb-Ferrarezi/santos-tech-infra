@@ -120,7 +120,19 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("- Só inicie se o cliente demonstrar interesse em agendar/marcar uma aula.\n")
 	sb.WriteString("- Colete o necessário: nome do aluno; idade (se criança); curso/área de interesse; dias e horários que prefere.\n")
 	sb.WriteString("- Proponha UM horário livre (dentro do funcionamento e fora dos ocupados) e confirme com o cliente (\"posso marcar terça 19h30?\"). Preencha o campo \"schedulingRequest\".\n")
-	sb.WriteString("- NÃO garanta que está marcado: diga que vai confirmar a disponibilidade e retorna. A confirmação final é de um humano.\n")
+	// A disponibilidade é SUA, não de uma equipe.
+	//
+	// Esta instrução era o oposto: mandava dizer "vou confirmar a
+	// disponibilidade e retorno". Fazia sentido quando um humano confirmava;
+	// com o agendamento automático ligado, virou uma promessa de retorno que
+	// ninguém ia cumprir — o cliente ficava esperando um "já te falo" que nunca
+	// vinha, porque o bot já tinha tudo para decidir.
+	if cfg.AgendaAutoConfirm {
+		sb.WriteString("- A agenda acima é a SUA agenda e está completa: você NÃO precisa consultar mais ninguém. Nunca diga \"vou verificar com a equipe\", \"vou confirmar a disponibilidade\" ou \"já te retorno\" para falar de horário — decida na hora com o que está acima.\n")
+		sb.WriteString("- Quando o cliente aceitar o horário proposto, confirme como marcado e siga. O registro é feito automaticamente.\n")
+	} else {
+		sb.WriteString("- NÃO garanta que está marcado: diga que vai confirmar a disponibilidade e retorna. A confirmação final é de um humano.\n")
+	}
 	sb.WriteString("- Se o cliente disser que NÃO vai poder ir a uma aula JÁ MARCADA (\"não vou conseguir\", \"preciso desmarcar\", \"não vai dar pra ir\"), marque \"cancelaAula\": true — o horário é liberado automaticamente. Acolha sem cobrar e ofereça remarcar (\"Sem problema! Quer que eu veja outro horário?\"). NÃO marque quando ele estiver só perguntando ou negociando horário: só quando desistir do que já está marcado.\n")
 	sb.WriteString("- Depois de dizer que vai confirmar e retornar, NÃO fique repetindo. Se o cliente só responder com confirmação/agradecimento/despedida (ex.: \"ok\", \"blz\", \"valeu\", \"tá bom\", \"obrigado\", \"👍\"), NÃO mande outra mensagem: retorne \"bubbles\": []. Mandar mais uma confirmação por cima é irritante.\n")
 	sb.WriteString("\n")
