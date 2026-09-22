@@ -209,6 +209,113 @@ func TestParseFallbackAnswerAlternativaComPalavraNaFrente(t *testing.T) {
 	}
 }
 
+// ── modo aberto ──────────────────────────────────────────────────────────
+
+func TestBuildOpenPromptMencionaLacunasEJSON(t *testing.T) {
+	got := buildOpenPrompt("Um cartaz instrucional tem como finalidade ___ o público", false)
+	if !strings.Contains(got, "Um cartaz instrucional tem como finalidade ___ o público") {
+		t.Error("prompt sem o texto da questão")
+	}
+	if !strings.Contains(got, "JSON") {
+		t.Error("prompt não pede JSON — o parse depende disso")
+	}
+	if !strings.Contains(strings.ToLower(got), "lacuna") {
+		t.Error("prompt não instrui sobre questões de preencher lacuna")
+	}
+	if strings.Contains(strings.ToLower(got), "imagem anexad") {
+		t.Error("prompt sem imagem não deveria mencionar imagem anexada")
+	}
+}
+
+func TestBuildOpenPromptComImagemMencionaAFigura(t *testing.T) {
+	got := buildOpenPrompt("O que a imagem mostra?", true)
+	if !strings.Contains(strings.ToLower(got), "imagem") {
+		t.Errorf("prompt com imagem não menciona a figura anexada:\n%s", got)
+	}
+}
+
+func TestParseOpenAnswerJSONSimples(t *testing.T) {
+	texto := `{"answer":"instruir; comportamentos; procedimentos","reasoning":"literal do enunciado"}`
+	got, err := parseOpenAnswer(texto)
+	if err != nil {
+		t.Fatalf("parseOpenAnswer: %v", err)
+	}
+	if got.Answer != "instruir; comportamentos; procedimentos" || got.Reasoning == "" {
+		t.Errorf("resposta = %+v", got)
+	}
+}
+
+func TestParseOpenAnswerJSONEmbrulhadoEmTexto(t *testing.T) {
+	texto := "Claro! Aqui está:\n```json\n{\"answer\": \"instruir; comportamentos; procedimentos\", \"reasoning\": \"literal\"}\n```"
+	got, err := parseOpenAnswer(texto)
+	if err != nil {
+		t.Fatalf("parseOpenAnswer: %v", err)
+	}
+	if got.Answer != "instruir; comportamentos; procedimentos" {
+		t.Errorf("answer = %q", got.Answer)
+	}
+}
+
+func TestParseOpenAnswerSemJSONUsaTextoCru(t *testing.T) {
+	// Diferente do modo múltipla (onde um rótulo inválido é inútil), no modo
+	// aberto texto solto ainda é uma resposta aproveitável.
+	texto := "A resposta é instruir o público sobre os procedimentos que devem ser seguidos."
+	got, err := parseOpenAnswer(texto)
+	if err != nil {
+		t.Fatalf("parseOpenAnswer: %v", err)
+	}
+	if got.Answer != texto {
+		t.Errorf("answer = %q, queria o texto cru como resposta", got.Answer)
+	}
+}
+
+func TestParseOpenAnswerJSONSemCampoAnswerUsaTextoCru(t *testing.T) {
+	texto := `{"reasoning":"esqueci o answer"}`
+	got, err := parseOpenAnswer(texto)
+	if err != nil {
+		t.Fatalf("parseOpenAnswer: %v", err)
+	}
+	if got.Answer != texto {
+		t.Errorf("answer = %q, queria o texto cru (JSON sem \"answer\" útil)", got.Answer)
+	}
+}
+
+func TestParseOpenAnswerTextoVazioErro(t *testing.T) {
+	if _, err := parseOpenAnswer(""); err == nil {
+		t.Error("queria erro para texto vazio")
+	}
+	if _, err := parseOpenAnswer("   "); err == nil {
+		t.Error("queria erro para texto só com espaço")
+	}
+}
+
+func TestParseOpenAnswerTruncaRespostaLonga(t *testing.T) {
+	longo := strings.Repeat("a", quizOpenAnswerMaxChars+50)
+	texto := `{"answer":"` + longo + `","reasoning":"x"}`
+	got, err := parseOpenAnswer(texto)
+	if err != nil {
+		t.Fatalf("parseOpenAnswer: %v", err)
+	}
+	r := []rune(got.Answer)
+	if len(r) != quizOpenAnswerMaxChars+1 { // +1 pra reticências
+		t.Errorf("len(answer) = %d, queria %d (%d chars + reticências)", len(r), quizOpenAnswerMaxChars+1, quizOpenAnswerMaxChars)
+	}
+	if !strings.HasSuffix(got.Answer, "…") {
+		t.Errorf("resposta truncada sem reticências: %q", got.Answer)
+	}
+}
+
+func TestParseOpenAnswerRespostaCurtaNaoTrunca(t *testing.T) {
+	texto := `{"answer":"resposta curta","reasoning":"x"}`
+	got, err := parseOpenAnswer(texto)
+	if err != nil {
+		t.Fatalf("parseOpenAnswer: %v", err)
+	}
+	if got.Answer != "resposta curta" {
+		t.Errorf("answer = %q, não deveria truncar resposta curta", got.Answer)
+	}
+}
+
 func TestParseFallbackAnswerRotuloInventadoNaoPassa(t *testing.T) {
 	// A tolerância de formato não pode virar invenção de rótulo: "Z" não está
 	// no conjunto enviado, e o erro precisa citar o que veio (truncado) pra

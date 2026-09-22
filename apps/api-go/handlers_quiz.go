@@ -21,6 +21,9 @@ func quizErr(err error) *AppError {
 	case errors.Is(err, errQuizUnparseable):
 		return appErr(http.StatusUnprocessableEntity, "UNPARSEABLE",
 			"Não consegui separar as alternativas — selecione o enunciado e as alternativas")
+	case errors.Is(err, errQuizTextoInsuficiente):
+		return appErr(http.StatusUnprocessableEntity, "TEXTO_INSUFICIENTE",
+			"Texto insuficiente para responder — selecione o enunciado completo da questão")
 	case errors.Is(err, errQuizTimeout):
 		return appErr(http.StatusGatewayTimeout, "UPSTREAM_TIMEOUT", "Tempo esgotado ao consultar os modelos")
 	// Mesmo código HTTP (400 INVALID_IMAGE) pras três causas — o que muda é

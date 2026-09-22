@@ -2616,27 +2616,47 @@ paths:
   /quiz/answer:
     post:
       tags: [Quiz]
-      summary: Responder questão de múltipla escolha (extensão de navegador)
+      summary: Responder questão de múltipla escolha ou aberta (extensão de navegador)
       description: |
         Recebe o bloco de questão selecionado na página (ou já separado em
-        `question`+`options`) e devolve a alternativa mais provável.
+        `question`+`options`) e devolve a resposta. O campo `kind` da
+        resposta diz qual dos dois modos abaixo foi usado.
 
-        Primeiro tenta o Jev (modelo rápido e barato, via roteador de chaves
-        de API — provider `QUIZ_JEV_PROVIDER_ID`). Quando ele responde com
-        confiança abaixo de `QUIZ_MIN_CONFIDENCE`, com margem entre as duas
-        alternativas mais prováveis abaixo de `QUIZ_MIN_MARGIN`, quando falha,
-        ou quando `explain=true` é pedido, a requisição escala para o Claude
-        Code rodando em container (agent-go — sem provider nem chave de API
-        nesse caminho, mesmo mecanismo que o Pós-aula usa). Se o Jev chegou a
+        **Modo múltipla escolha** (`kind: "multipla"`) — quando o texto tem
+        alternativas reconhecíveis: primeiro tenta o Jev (modelo rápido e
+        barato, via roteador de chaves de API — provider
+        `QUIZ_JEV_PROVIDER_ID`). Quando ele responde com confiança abaixo de
+        `QUIZ_MIN_CONFIDENCE`, com margem entre as duas alternativas mais
+        prováveis abaixo de `QUIZ_MIN_MARGIN`, quando falha, ou quando
+        `explain=true` é pedido, a requisição escala para o Claude Code
+        rodando em container (agent-go — sem provider nem chave de API nesse
+        caminho, mesmo mecanismo que o Pós-aula usa). Se o Jev chegou a
         responder mas a escalada falha, a resposta volta a ser o palpite do
-        Jev (`degraded: true`) em vez de erro.
+        Jev (`degraded: true`) em vez de erro. `answer` traz o rótulo
+        escolhido; `answerText`, o texto da alternativa.
+
+        **Modo aberto** (`kind: "aberta"`) — quando o texto **não** tem
+        alternativas reconhecíveis (questão dissertativa, ou de preencher
+        lacuna). Em vez dos 422 antigos, a rota manda o texto direto ao
+        Claude (mesmo caminho do Claude Code em container, sem Jev — ele só
+        sabe escolher entre opções, e aqui não há opções) e devolve a
+        resposta em texto livre. Nesse modo: `answer` vem **vazio** (não há
+        rótulo nenhum — não confundir com "não respondeu"), `answerText`
+        traz a resposta em si (truncada em 600 caracteres, com reticências,
+        se vier maior), `source` é sempre `claude`, `escalated` é sempre
+        `true`, e `confidence`/`probabilities` ficam ausentes (não existe
+        veredito do Jev nesse caminho). Um texto vazio ou curto demais
+        (menos de ~15 caracteres não-espaço) continua erro — ver `422`
+        abaixo — pra não gastar uma chamada ao Claude à toa.
 
         **Com imagem** (`imageBase64`): parte das questões reais depende de
         uma figura (gráfico, cupom, tabela, figura geométrica) que o texto
         sozinho não carrega. Quando `imageBase64` vem preenchido, a rota
         **pula o Jev** (ele não lê imagem — chamá-lo seria um palpite cego,
         gastando tempo e dinheiro à toa) e vai direto para o Claude com
-        visão. Nesse caminho a resposta sempre vem com `source: claude` e
+        visão — nos dois modos, múltipla ou aberto (uma questão sem
+        alternativas com imagem anexada vira modo aberto **com** imagem).
+        Nesse caminho a resposta sempre vem com `source: claude` e
         `escalated: true`, e `confidence`/`probabilities` ficam ausentes (não
         existe veredito do Jev pra publicar). Se a escalada falhar, não há
         palpite do Jev pra degradar — a rota devolve erro (502/504) em vez de
@@ -2704,23 +2724,49 @@ paths:
               schema:
                 type: object
                 properties:
+                  kind:
+                    type: string
+                    enum: [multipla, aberta]
+                    description: >-
+                      Formato da resposta. `multipla`: `answer` traz o
+                      rótulo, `answerText` o texto da alternativa. `aberta`:
+                      não há rótulo — `answer` vem vazio e `answerText` traz
+                      a resposta em texto livre. Sempre presente, nos dois
+                      modos, pra o cliente nunca precisar adivinhar por
+                      ausência de campo.
+                    example: "multipla"
                   answer:
                     type: string
-                    description: 'Rótulo escolhido, preservando o rótulo original da prova (pode ser "B", "3" etc — não é normalizado).'
+                    description: >-
+                      Rótulo escolhido, preservando o rótulo original da
+                      prova (pode ser "B", "3" etc — não é normalizado).
+                      **Vazio quando `kind` é `"aberta"`** — não existe
+                      rótulo no modo aberto, a resposta inteira mora em
+                      `answerText`.
                     example: "B"
-                  answerText: { type: string, description: "Texto da alternativa escolhida.", example: "Paris" }
-                  confidence: { type: number, description: "Confiança do Jev (0–1). Ausente/zero quando o Jev não chegou a responder — inclui sempre que a requisição veio com `imageBase64` (o Jev é pulado nesse caminho) — ver `source`/`degraded`." }
+                  answerText:
+                    type: string
+                    description: >-
+                      Modo múltipla: texto da alternativa escolhida. Modo
+                      aberto: a resposta em si, em texto livre (truncada em
+                      600 caracteres, com reticências, se vier maior).
+                    example: "Paris"
+                  confidence: { type: number, description: "Confiança do Jev (0–1). Ausente/zero quando o Jev não chegou a responder — inclui sempre que a requisição veio com `imageBase64` ou quando `kind` é `aberta` (o Jev é pulado nos dois casos) — ver `source`/`degraded`." }
                   probabilities:
                     type: object
                     additionalProperties: { type: number }
-                    description: "Probabilidade do Jev por rótulo. Presente só quando o Jev respondeu — nunca presente quando a requisição veio com `imageBase64`."
-                  source: { type: string, enum: [jev, claude], description: "De onde veio a resposta que está sendo lida agora. Sempre `claude` quando a requisição veio com `imageBase64`." }
-                  escalated: { type: boolean, description: "true quando a resposta veio do estágio escalado (Claude)." }
-                  degraded: { type: boolean, description: "true quando o Jev respondeu mas a escalada falhou — a resposta é o palpite de baixa confiança do Jev, não uma escalada bem-sucedida." }
+                    description: "Probabilidade do Jev por rótulo. Presente só quando o Jev respondeu — nunca presente quando a requisição veio com `imageBase64` nem quando `kind` é `aberta`."
+                  source: { type: string, enum: [jev, claude], description: "De onde veio a resposta que está sendo lida agora. Sempre `claude` quando a requisição veio com `imageBase64` ou quando `kind` é `aberta`." }
+                  escalated: { type: boolean, description: "true quando a resposta veio do estágio escalado (Claude). Sempre true quando `kind` é `aberta`." }
+                  degraded: { type: boolean, description: "true quando o Jev respondeu mas a escalada falhou — a resposta é o palpite de baixa confiança do Jev, não uma escalada bem-sucedida. Não se aplica ao modo aberto (sem Jev, não há o que degradar)." }
                   reasoning: { type: string, description: "Justificativa da resposta. Só presente quando `source` é `claude`." }
                   parsed:
                     type: object
-                    description: "O que o servidor entendeu da seleção — para diagnóstico do lado da extensão."
+                    description: >-
+                      O que o servidor entendeu da seleção — para
+                      diagnóstico do lado da extensão. No modo aberto,
+                      `question` é o texto enviado e `options` vem vazio
+                      (`{}` — não há alternativa nenhuma pra listar).
                     properties:
                       question: { type: string }
                       options:
@@ -2730,23 +2776,42 @@ paths:
                   timings:
                     type: object
                     properties:
-                      jevMs: { type: integer, description: "Tempo gasto no Jev, em ms." }
+                      jevMs: { type: integer, description: "Tempo gasto no Jev, em ms (0 no modo aberto — ele nunca é chamado)." }
                       claudeMs: { type: integer, description: "Tempo gasto no Claude, em ms (0 quando não escalou)." }
                       totalMs: { type: integer, description: "Tempo total da requisição, em ms." }
                     required: [jevMs, claudeMs, totalMs]
-                required: [answer, answerText, confidence, source, escalated, degraded, parsed, timings]
-              example:
-                answer: "B"
-                answerText: "Paris"
-                confidence: 0.98
-                probabilities: { A: 0.01, B: 0.98, C: 0.005, D: 0.005 }
-                source: jev
-                escalated: false
-                degraded: false
-                parsed:
-                  question: "Qual é a capital da França?"
-                  options: { A: "Londres", B: "Paris", C: "Berlim", D: "Madri" }
-                timings: { jevMs: 720, claudeMs: 0, totalMs: 745 }
+                required: [kind, answer, answerText, confidence, source, escalated, degraded, parsed, timings]
+              examples:
+                multiplaEscolha:
+                  summary: Múltipla escolha
+                  value:
+                    kind: multipla
+                    answer: "B"
+                    answerText: "Paris"
+                    confidence: 0.98
+                    probabilities: { A: 0.01, B: 0.98, C: 0.005, D: 0.005 }
+                    source: jev
+                    escalated: false
+                    degraded: false
+                    parsed:
+                      question: "Qual é a capital da França?"
+                      options: { A: "Londres", B: "Paris", C: "Berlim", D: "Madri" }
+                    timings: { jevMs: 720, claudeMs: 0, totalMs: 745 }
+                modoAberto:
+                  summary: Modo aberto (sem alternativas — dissertativa ou preencher lacuna)
+                  value:
+                    kind: aberta
+                    answer: ""
+                    answerText: "instruir; comportamentos; procedimentos"
+                    confidence: 0
+                    source: claude
+                    escalated: true
+                    degraded: false
+                    reasoning: "Preenche as três lacunas na ordem em que aparecem no enunciado."
+                    parsed:
+                      question: "Um cartaz instrucional é um material de função normativa porque tem como finalidade ___ o público sobre os ___ ou as ___ que devem ser seguidos"
+                      options: {}
+                    timings: { jevMs: 0, claudeMs: 3200, totalMs: 3210 }
         "400":
           description: "JSON inválido, `raw` e `options` ambos vazios, ou `imageBase64`/`imageMime` inválidos (mime fora da allowlist, base64 malformado, ou tamanho decodificado acima de 8MB — mesmo código `INVALID_IMAGE` para as três causas, mensagem diferente pra cada)"
           content:
@@ -2768,15 +2833,30 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "422":
-          description: "Menos de 2 alternativas reconhecidas no bloco cru (ou mais de 9)"
+          description: >-
+            Duas causas, dois códigos diferentes. `UNPARSEABLE`: **só**
+            quando `options` foi enviado já separado e está fora do limite
+            (menos de 2 ou mais de 9 alternativas) — desde a introdução do
+            modo aberto, um bloco `raw` **sem nenhuma alternativa
+            reconhecível já não cai mais aqui**: ele vira `200` no modo
+            aberto (`kind: "aberta"`), ver a descrição da rota. `TEXTO_INSUFICIENTE`:
+            o texto enviado (`raw`, no modo aberto) é vazio, curto demais
+            (menos de ~15 caracteres não-espaço) ou longo demais para ser
+            uma questão — não vale gastar uma chamada ao Claude.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { code: UNPARSEABLE, message: "Não consegui separar as alternativas — selecione o enunciado e as alternativas" }
+              examples:
+                optionsForaDoLimite:
+                  summary: "`options` já separado, fora do limite de 2–9"
+                  value: { code: UNPARSEABLE, message: "Não consegui separar as alternativas — selecione o enunciado e as alternativas" }
+                textoInsuficiente:
+                  summary: Texto vazio, curto ou longo demais para o modo aberto
+                  value: { code: TEXTO_INSUFICIENTE, message: "Texto insuficiente para responder — selecione o enunciado completo da questão" }
         "429":
           $ref: "#/components/responses/RateLimited"
         "502":
-          description: "Nenhum modelo conseguiu responder — o Jev falhou e a escalada para o Claude também falhou (ou não havia como escalar); ou a requisição veio com `imageBase64` e a escalada falhou (sem Jev nesse caminho, não há palpite pra degradar)"
+          description: "Nenhum modelo conseguiu responder — o Jev falhou e a escalada para o Claude também falhou (ou não havia como escalar); ou a requisição veio com `imageBase64` e a escalada falhou (sem Jev nesse caminho, não há palpite pra degradar); ou a requisição está no modo aberto (`kind: aberta`) e a escalada falhou (sem Jev nesse modo, não há palpite pra degradar)"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

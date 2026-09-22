@@ -10,12 +10,21 @@ import (
 	"encoding/base64"
 	"errors"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
 )
 
 const (
 	quizSourceJev    = "jev"
 	quizSourceClaude = "claude"
+
+	// quizKindMultipla/quizKindAberta identificam o formato da resposta no
+	// campo Kind: múltipla escolha (rótulo em Answer) ou modo aberto (texto
+	// livre em AnswerText, Answer vazio). Preenchido nos dois caminhos pra o
+	// cliente nunca precisar adivinhar por ausência de campo.
+	quizKindMultipla = "multipla"
+	quizKindAberta   = "aberta"
 
 	// Orçamentos próprios: o API Router tem tetos largos demais pra uso
 	// interativo (30s por tentativa, 60s de rotação — ver apirouter.go). O ctx
@@ -45,6 +54,16 @@ const (
 	// (não é importável entre os dois binários) — validar aqui evita gastar
 	// uma chamada ao agent-go só pra ele recusar por tamanho.
 	quizMaxImageBytes = 8 << 20
+
+	// quizOpenMinChars: mínimo de caracteres não-espaço pra valer a chamada
+	// ao Claude no modo aberto — abaixo disso não é uma questão, é ruído (um
+	// clique errado na seleção, por exemplo).
+	quizOpenMinChars = 15
+	// quizOpenMaxChars: teto coerente com uma questão real de prova — bem
+	// abaixo do teto de corpo (quizMaxBodyLen, 8MB), que existe pra caber
+	// imagem em base64, não texto solto. Acima disso é mais provável que a
+	// seleção tenha pego a página inteira do que uma questão.
+	quizOpenMaxChars = 4000
 )
 
 var (
@@ -60,6 +79,13 @@ var (
 	errQuizImagemMimeInvalido   = errors.New("quiz: mime de imagem não suportado (use png, jpeg, webp ou gif)")
 	errQuizImagemBase64Invalido = errors.New("quiz: base64 da imagem malformado")
 	errQuizImagemGrandeDemais   = errors.New("quiz: imagem decodificada maior que o limite")
+
+	// errQuizTextoInsuficiente: guarda do modo aberto — texto vazio, curto
+	// demais (ruído) ou longo demais (provavelmente a página inteira, não a
+	// questão) não vale gastar uma chamada ao Claude. Sentinela própria (não
+	// errQuizUnparseable): a causa aqui é tamanho de texto, não ausência de
+	// rótulos — misturar as duas confundiria quem depura pelo código do erro.
+	errQuizTextoInsuficiente = errors.New("quiz: texto insuficiente para responder no modo aberto")
 )
 
 // quizImagemMimesAceitos espelha imageExtFromMime de
@@ -103,6 +129,25 @@ func validateQuizImage(imageB64, mime string) error {
 	return nil
 }
 
+// validateQuizOpenText confere o texto do modo aberto ANTES de gastar uma
+// chamada ao Claude — mesma motivação de validateQuizImage: falhar na hora é
+// mais barato que deixar o upstream recusar depois.
+func validateQuizOpenText(raw string) error {
+	semEspaco := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, raw)
+	if len([]rune(semEspaco)) < quizOpenMinChars {
+		return errQuizTextoInsuficiente
+	}
+	if len([]rune(raw)) > quizOpenMaxChars {
+		return errQuizTextoInsuficiente
+	}
+	return nil
+}
+
 type quizTimings struct {
 	JevMs    int64 `json:"jevMs"`
 	ClaudeMs int64 `json:"claudeMs"`
@@ -110,6 +155,10 @@ type quizTimings struct {
 }
 
 type quizResponse struct {
+	// Kind: "multipla" (Answer traz o rótulo, AnswerText o texto da
+	// alternativa) ou "aberta" (Answer vazio — não há rótulo —, AnswerText
+	// traz a resposta em texto livre). Preenchido nos dois caminhos.
+	Kind          string             `json:"kind"`
 	Answer        string             `json:"answer"`
 	AnswerText    string             `json:"answerText"`
 	Confidence    float64            `json:"confidence"`
@@ -155,10 +204,19 @@ func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizRespon
 
 	parsed, err := resolveQuizParsed(req)
 	if err != nil {
+		// Modo aberto: só entra aqui quando a falha veio do bloco cru sem
+		// nenhuma alternativa reconhecível — texto de preencher lacuna ou
+		// questão aberta, que hoje tomava 422 à toa. `options` mal-formado
+		// (fora do limite de 2–9) continua erro: ali o cliente já tentou
+		// separar alternativas e errou o formato, não é o caso "sem
+		// alternativa nenhuma".
+		if len(req.Options) == 0 && errors.Is(err, errQuizUnparseable) {
+			return answerQuizAberto(ctx, req, deps, started, temImagem)
+		}
 		return quizResponse{}, err
 	}
 
-	resp := quizResponse{Parsed: parsed}
+	resp := quizResponse{Parsed: parsed, Kind: quizKindMultipla}
 
 	if temImagem {
 		// O Jev não lê imagem — chamá-lo às cegas só gastaria tempo e
@@ -297,5 +355,67 @@ func askFallback(ctx context.Context, p quizParsed, imageB64, imageMime string, 
 		return quizFallbackAnswer{}, elapsed, err
 	}
 	ans, err := parseFallbackAnswer(texto, p)
+	return ans, elapsed, err
+}
+
+// answerQuizAberto responde questões sem alternativas reconhecíveis (aberta
+// ou preencher lacuna): manda o texto direto ao Claude e devolve a resposta
+// em texto livre. Nunca chama o Jev — ele só sabe escolher entre opções, e
+// aqui não há opções pra escolher. Funciona com ou sem imagem (temImagem
+// controla o orçamento de tempo e se a imagem é repassada ao fallback).
+func answerQuizAberto(ctx context.Context, req quizRequest, deps quizDeps, started time.Time, temImagem bool) (quizResponse, error) {
+	texto := strings.TrimSpace(req.Raw)
+	if err := validateQuizOpenText(texto); err != nil {
+		return quizResponse{}, err
+	}
+
+	resp := quizResponse{
+		Kind: quizKindAberta,
+		// Options vazio (não nil): o contrato da rota exige o campo como
+		// objeto — ver docs/openapi.yaml — e não há alternativa nenhuma pra
+		// listar no modo aberto.
+		Parsed: quizParsed{Question: texto, Options: map[string]string{}},
+	}
+
+	var imageB64, imageMime string
+	if temImagem {
+		imageB64, imageMime = req.ImageBase64, req.ImageMime
+	}
+
+	ans, claudeMs, fbErr := askOpenFallback(ctx, texto, imageB64, imageMime, deps)
+	resp.Timings.ClaudeMs = claudeMs
+	if fbErr != nil {
+		// Sem Jev nesse caminho, não há palpite nenhum pra degradar — igual
+		// ao caminho com imagem da múltipla escolha.
+		if ctx.Err() != nil {
+			return quizResponse{}, errQuizTimeout
+		}
+		return quizResponse{}, errQuizUpstream
+	}
+	resp.Source = quizSourceClaude
+	resp.Escalated = true
+	// Answer fica vazio de propósito: não existe rótulo no modo aberto — a
+	// resposta inteira mora em AnswerText.
+	resp.AnswerText = ans.Answer
+	resp.Reasoning = ans.Reasoning
+	resp.Timings.TotalMs = time.Since(started).Milliseconds()
+	return resp, nil
+}
+
+func askOpenFallback(ctx context.Context, texto, imageB64, imageMime string, deps quizDeps) (quizOpenAnswer, int64, error) {
+	temImagem := imageB64 != ""
+	budget := quizFallbackBudget
+	if temImagem {
+		budget = quizVisionBudget
+	}
+	fbCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	started := time.Now()
+	resposta, err := deps.fallback(fbCtx, buildOpenPrompt(texto, temImagem), imageB64, imageMime)
+	elapsed := time.Since(started).Milliseconds()
+	if err != nil {
+		return quizOpenAnswer{}, elapsed, err
+	}
+	ans, err := parseOpenAnswer(resposta)
 	return ans, elapsed, err
 }

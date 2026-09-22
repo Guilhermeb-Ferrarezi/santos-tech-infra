@@ -22,6 +22,7 @@ func TestQuizErrStatus(t *testing.T) {
 		http_ int
 	}{
 		{errQuizUnparseable, "UNPARSEABLE", http.StatusUnprocessableEntity},
+		{errQuizTextoInsuficiente, "TEXTO_INSUFICIENTE", http.StatusUnprocessableEntity},
 		{errQuizTimeout, "UPSTREAM_TIMEOUT", http.StatusGatewayTimeout},
 		{errQuizUpstream, "UPSTREAM_FAILED", http.StatusBadGateway},
 		{errAPIRouterNoActiveKeys, "NO_ACTIVE_KEYS", http.StatusServiceUnavailable},

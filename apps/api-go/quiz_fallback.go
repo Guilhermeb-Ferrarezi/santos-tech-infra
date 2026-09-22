@@ -187,3 +187,79 @@ func quizFallbackFoldMatch(s string, options map[string]string) (string, bool) {
 	}
 	return "", false
 }
+
+// ── modo aberto ──────────────────────────────────────────────────────────
+//
+// Questão sem alternativas reconhecíveis (dissertativa, preencher lacuna):
+// em vez de recusar com 422, manda o texto direto ao Claude e devolve a
+// resposta em texto livre. buildOpenPrompt e parseOpenAnswer são irmãs de
+// buildFallbackPrompt e parseFallbackAnswer, mas sem rótulo — não há
+// alternativa nenhuma pra escolher, só texto pra responder.
+
+type quizOpenAnswer struct {
+	Answer    string `json:"answer"`
+	Reasoning string `json:"reasoning"`
+}
+
+// quizOpenAnswerMaxChars: teto pra resposta caber no overlay da extensão —
+// mesma motivação de quizLabelTruncateLen (não deixar o log/UI virar ruído
+// com um texto arbitrariamente longo), mas aplicado à resposta em si, não a
+// um rótulo cru citado num erro. 600 caracteres cobre um parágrafo curto de
+// verdade (1–3 frases, como o prompt pede) com folga.
+const quizOpenAnswerMaxChars = 600
+
+func truncateQuizOpenAnswer(s string) string {
+	r := []rune(s)
+	if len(r) <= quizOpenAnswerMaxChars {
+		return s
+	}
+	return string(r[:quizOpenAnswerMaxChars]) + "…"
+}
+
+// buildOpenPrompt monta o prompt do modo aberto. temImagem segue o mesmo
+// significado de buildFallbackPrompt: há uma figura anexada que o modelo
+// precisa considerar.
+func buildOpenPrompt(texto string, temImagem bool) string {
+	var b strings.Builder
+	b.WriteString("Responda a questão abaixo de forma DIRETA e CURTA, em 1 a 3 frases, em português do Brasil.\n\n")
+	b.WriteString("Se a questão for de preencher lacunas, devolva as palavras que preenchem as lacunas, ")
+	b.WriteString("na ordem em que aparecem no enunciado — não escreva uma dissertação.\n\n")
+	if temImagem {
+		b.WriteString("Há uma imagem anexada a esta mensagem — considere-a ao responder. O enunciado ")
+		b.WriteString("sozinho pode não bastar: a resposta pode depender de um gráfico, uma tabela, um ")
+		b.WriteString("cupom ou uma figura geométrica presente na imagem.\n\n")
+	}
+	b.WriteString(texto)
+	b.WriteString("\n\n")
+	b.WriteString("Responda SOMENTE com um objeto JSON estrito, sem nada fora dele: ")
+	b.WriteString(`{"answer": "<a resposta>", "reasoning": "<uma frase curta, opcional>"}`)
+	b.WriteString(".")
+	return b.String()
+}
+
+// parseOpenAnswer extrai a resposta do modo aberto. Diferente de
+// parseFallbackAnswer, não valida nada contra p.Options — não existem
+// opções no modo aberto, então não há rótulo pra checar. Tolerante de
+// propósito: se o modelo não devolver JSON nenhum, ou devolver um JSON mal
+// formado / sem o campo "answer", o texto cru ainda é aproveitado como
+// resposta — no modo aberto, texto solto é uma resposta útil; no modo
+// múltipla um rótulo inválido não seria (por isso parseFallbackAnswer
+// recusa e este não).
+func parseOpenAnswer(texto string) (quizOpenAnswer, error) {
+	limpo := strings.TrimSpace(texto)
+	if limpo == "" {
+		return quizOpenAnswer{}, fmt.Errorf("quiz: fallback não devolveu texto")
+	}
+	if match := primeiroObjetoJSON(texto); match != "" {
+		var ans quizOpenAnswer
+		if err := json.Unmarshal([]byte(match), &ans); err == nil {
+			if resposta := strings.TrimSpace(ans.Answer); resposta != "" {
+				ans.Answer = truncateQuizOpenAnswer(resposta)
+				return ans, nil
+			}
+		}
+	}
+	// Sem JSON utilizável (ausente, malformado, ou sem "answer"): o texto
+	// cru da resposta ainda serve.
+	return quizOpenAnswer{Answer: truncateQuizOpenAnswer(limpo)}, nil
+}

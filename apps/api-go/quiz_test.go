@@ -169,11 +169,18 @@ func TestAnswerQuizAceitaAlternativasJaSeparadas(t *testing.T) {
 	}
 }
 
-func TestAnswerQuizBlocoImpossivelDeSeparar(t *testing.T) {
+// TestAnswerQuizBlocoImpossivelDeSeparar cobria o comportamento ANTERIOR ao
+// modo aberto: bloco sem alternativas reconhecíveis → 422 direto. Agora o
+// bloco sem alternativas entra no modo aberto — "texto solto" (10
+// caracteres não-espaço) segue dando erro, mas por ser curto demais pro
+// modo aberto (errQuizTextoInsuficiente), não por ser "não separável". O
+// caso "sem alternativa nenhuma, mas texto suficiente" tem teste dedicado
+// (TestAnswerQuizSemAlternativasEntraNoModoAberto).
+func TestAnswerQuizBlocoImpossivelDeSepararEntraNoModoAbertoMasTextoECurtoDemais(t *testing.T) {
 	var chamadas []string
 	_, err := answerQuiz(context.Background(), quizRequest{Raw: "texto solto"}, depsFake(jevConfiante, nil, fbOK, nil, &chamadas))
-	if !errors.Is(err, errQuizUnparseable) {
-		t.Errorf("err = %v, queria errQuizUnparseable", err)
+	if !errors.Is(err, errQuizTextoInsuficiente) {
+		t.Errorf("err = %v, queria errQuizTextoInsuficiente", err)
 	}
 	if len(chamadas) != 0 {
 		t.Errorf("chamadas = %v, queria nenhuma (não gastar API com lixo)", chamadas)
@@ -310,6 +317,148 @@ func TestAnswerQuizImagemBase64InvalidoNaoChamaUpstream(t *testing.T) {
 	}
 	if len(chamadas) != 0 {
 		t.Errorf("chamadas = %v, queria nenhuma (base64 inválido não deve gastar upstream)", chamadas)
+	}
+}
+
+// ── modo aberto ──────────────────────────────────────────────────────────
+
+const fbAbertoOK = `{"answer":"instruir o público sobre os comportamentos, procedimentos ou normas que devem ser seguidos","reasoning":"literal do enunciado"}`
+
+func reqExemploAberto() quizRequest {
+	return quizRequest{Raw: "Um cartaz instrucional é um material de função normativa porque tem como finalidade ___ o público sobre os ___ ou as ___ que devem ser seguidos"}
+}
+
+func TestAnswerQuizSemAlternativasEntraNoModoAberto(t *testing.T) {
+	var chamadas []string
+	got, err := answerQuiz(context.Background(), reqExemploAberto(), depsFake(jevConfiante, nil, fbAbertoOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindAberta {
+		t.Errorf("kind = %q, queria %q", got.Kind, quizKindAberta)
+	}
+	if got.Source != quizSourceClaude || !got.Escalated {
+		t.Errorf("source=%q escalated=%v", got.Source, got.Escalated)
+	}
+	if got.Answer != "" {
+		t.Errorf("answer = %q, queria vazio no modo aberto (não há rótulo)", got.Answer)
+	}
+	if got.AnswerText == "" {
+		t.Error("answerText vazio no modo aberto")
+	}
+	if got.Confidence != 0 || got.Probabilities != nil {
+		t.Errorf("confidence/probabilities deveriam ficar zerados no modo aberto: %+v", got)
+	}
+	// Prova por contador de chamadas, não só pela asserção de source: o Jev
+	// só sabe escolher entre opções — sem opções não há o que escolher.
+	for _, c := range chamadas {
+		if c == "jev" {
+			t.Errorf("chamadas = %v, o jev não deveria ser chamado no modo aberto", chamadas)
+		}
+	}
+	if len(chamadas) != 1 || chamadas[0] != "fallback" {
+		t.Errorf("chamadas = %v, queria só o fallback", chamadas)
+	}
+}
+
+func TestAnswerQuizComAlternativasContinuaKindMultipla(t *testing.T) {
+	// Sanidade do contrato: o caminho de múltipla escolha (comportamento
+	// existente, intacto) agora também preenche Kind.
+	var chamadas []string
+	got, err := answerQuiz(context.Background(), reqExemplo(), depsFake(jevConfiante, nil, fbOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindMultipla {
+		t.Errorf("kind = %q, queria %q", got.Kind, quizKindMultipla)
+	}
+}
+
+func TestAnswerQuizAbertoComImagemNaoChamaJev(t *testing.T) {
+	var chamadas []string
+	req := reqExemploAberto()
+	req.ImageBase64 = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 128)))
+	req.ImageMime = "image/png"
+	got, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbAbertoOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindAberta || got.Source != quizSourceClaude || !got.Escalated {
+		t.Errorf("resposta = %+v", got)
+	}
+	if got.AnswerText == "" {
+		t.Error("answerText vazio no modo aberto com imagem")
+	}
+	for _, c := range chamadas {
+		if c == "jev" {
+			t.Errorf("chamadas = %v, não deveria chamar o jev no modo aberto com imagem", chamadas)
+		}
+	}
+}
+
+func TestAnswerQuizAbertoTextoCurtoDemaisNaoChamaUpstream(t *testing.T) {
+	var chamadas []string
+	_, err := answerQuiz(context.Background(), quizRequest{Raw: "curto"}, depsFake(jevConfiante, nil, fbAbertoOK, nil, &chamadas))
+	if !errors.Is(err, errQuizTextoInsuficiente) {
+		t.Errorf("err = %v, queria errQuizTextoInsuficiente", err)
+	}
+	if len(chamadas) != 0 {
+		t.Errorf("chamadas = %v, queria nenhuma (texto curto não deve gastar upstream)", chamadas)
+	}
+}
+
+func TestAnswerQuizAbertoTextoVazioNaoChamaUpstream(t *testing.T) {
+	var chamadas []string
+	_, err := answerQuiz(context.Background(), quizRequest{Raw: "   "}, depsFake(jevConfiante, nil, fbAbertoOK, nil, &chamadas))
+	if !errors.Is(err, errQuizTextoInsuficiente) {
+		t.Errorf("err = %v, queria errQuizTextoInsuficiente", err)
+	}
+	if len(chamadas) != 0 {
+		t.Errorf("chamadas = %v, queria nenhuma (texto vazio não deve gastar upstream)", chamadas)
+	}
+}
+
+func TestAnswerQuizAbertoTextoLongoDemaisNaoChamaUpstream(t *testing.T) {
+	var chamadas []string
+	raw := strings.Repeat("a bcd ", quizOpenMaxChars) // bem acima do teto
+	_, err := answerQuiz(context.Background(), quizRequest{Raw: raw}, depsFake(jevConfiante, nil, fbAbertoOK, nil, &chamadas))
+	if !errors.Is(err, errQuizTextoInsuficiente) {
+		t.Errorf("err = %v, queria errQuizTextoInsuficiente", err)
+	}
+	if len(chamadas) != 0 {
+		t.Errorf("chamadas = %v, queria nenhuma (texto longo demais não deve gastar upstream)", chamadas)
+	}
+}
+
+func TestAnswerQuizOptionsForaDoLimiteNaoEntraNoModoAberto(t *testing.T) {
+	// options mal-formado (fora do limite de 2–9) é um erro diferente de
+	// "sem alternativa nenhuma": o cliente já tentou separar e errou o
+	// formato — isso continua 422 UNPARSEABLE, não cai pro modo aberto.
+	var chamadas []string
+	req := quizRequest{Question: "Pergunta com uma alternativa só?", Options: map[string]string{"A": "única"}}
+	got, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbAbertoOK, nil, &chamadas))
+	if !errors.Is(err, errQuizUnparseable) {
+		t.Errorf("err = %v, queria errQuizUnparseable", err)
+	}
+	if got.Kind == quizKindAberta {
+		t.Error("não deveria ter entrado no modo aberto com options fora do limite")
+	}
+	if len(chamadas) != 0 {
+		t.Errorf("chamadas = %v, queria nenhuma", chamadas)
+	}
+}
+
+func TestAnswerQuizAbertoFallbackFalhaDevolveErro(t *testing.T) {
+	var chamadas []string
+	_, err := answerQuiz(context.Background(), reqExemploAberto(), depsFake(jevConfiante, nil, "", errors.New("502"), &chamadas))
+	// Sem Jev no modo aberto, não há palpite nenhum pra degradar.
+	if !errors.Is(err, errQuizUpstream) {
+		t.Errorf("err = %v, queria errQuizUpstream (não há palpite pra degradar no modo aberto)", err)
+	}
+	for _, c := range chamadas {
+		if c == "jev" {
+			t.Errorf("chamadas = %v, não deveria chamar o jev no modo aberto", chamadas)
+		}
 	}
 }
 
