@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Quiz Jev",
+  "version": "0.1.0",
+  "description": "Responde a questão de múltipla escolha selecionada na página.",
+  "browser_specific_settings": {
+    "gecko": { "id": "quiz-jev@santos-tech.com", "strict_min_version": "128.0" }
+  },
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": ["https://api.santos-tech.com/*"],
+  "background": { "scripts": ["src/background.js"] },
+  "options_ui": { "page": "src/options.html", "open_in_tab": true },
+  "commands": {
+    "answer-selection": {
+      "suggested_key": { "default": "Alt+Q" },
+      "description": "Responder a questão selecionada"
+    }
+  }
+}
