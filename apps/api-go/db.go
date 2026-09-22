@@ -1440,6 +1440,21 @@ func (s *Server) sessionByHash(ctx context.Context, hash string) (sessionID stri
 	return
 }
 
+// consumeSessionByHash busca E apaga a sessão atomicamente (DELETE...RETURNING)
+// para uso em rotação de refresh token: duas requisições concorrentes com o
+// MESMO refresh token não podem mais ambas "ver" a linha e ambas rotacionar —
+// só a que ganha a corrida do DELETE recebe a linha; a outra recebe
+// pgx.ErrNoRows, exatamente como se o token já tivesse sido rotacionado antes.
+// Isso fecha a race que existia com sessionByHash+deleteSession em dois passos
+// (ver tryGraceReplay/cacheGraceResponse em refresh_grace.go para o caso irmão:
+// retry de rede reenviando o mesmo token DEPOIS que a rotação já terminou).
+func (s *Server) consumeSessionByHash(ctx context.Context, hash string) (sessionID string, userID int64, expires time.Time, err error) {
+	err = s.db.QueryRow(ctx,
+		`DELETE FROM sessions WHERE refresh_token_hash=$1 RETURNING id::text, user_id, expires_at`, hash).
+		Scan(&sessionID, &userID, &expires)
+	return
+}
+
 func (s *Server) deleteSession(ctx context.Context, sessionID string) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM sessions WHERE id=$1`, sessionID)
 	return err

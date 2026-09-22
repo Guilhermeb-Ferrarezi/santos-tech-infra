@@ -397,21 +397,31 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Refresh token inválido"))
 		return
 	}
-	sid, _, expires, err := s.sessionByHash(r.Context(), hashRefreshToken(raw))
+	hash := hashRefreshToken(raw)
+	// consumeSessionByHash busca E apaga a sessão atomicamente (ver comentário
+	// em db.go), fechando a corrida de duas requisições concorrentes com o
+	// mesmo refresh token. O que sobra de reuso genuíno (retry de rede
+	// reenviando o token DEPOIS que ele já foi rotacionado com sucesso) é
+	// tratado abaixo pelo replay de graça, antes de presumir roubo.
+	sid, _, expires, err := s.consumeSessionByHash(r.Context(), hash)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if s.tryGraceReplay(r.Context(), w, hash) {
+			return
+		}
 		// JWT de refresh criptograficamente válido (verifyToken já passou) mas sem
-		// sessão correspondente no banco: a sessão já foi encerrada normalmente
-		// (logout/reset de senha/suspensão) OU este é um refresh token JÁ
-		// ROTACIONADO sendo reusado — indício de roubo (alguém copiou o token antes
-		// da rotação e está tentando usá-lo depois que o dono renovou). Não dá pra
-		// distinguir os dois casos aqui com certeza, então tratamos como suspeito
-		// por precaução: revoga TODAS as sessões do usuário, não só esta. Um
-		// logout/reset legítimo já não tem sessões pra revogar (no-op na prática);
-		// só o caso de roubo real paga o preço de perder as outras sessões —
-		// aceitável frente ao risco de acesso persistente indefinido. IMPORTANTE:
-		// só entra aqui em ErrNoRows (linha realmente ausente) — um erro de banco
-		// genérico (conexão instável, timeout) cai no ramo abaixo e NÃO revoga
-		// nada, pra não derrubar sessões legítimas por uma falha transitória.
+		// sessão correspondente no banco, e sem resposta de graça pra devolver: a
+		// sessão já foi encerrada normalmente (logout/reset de senha/suspensão) OU
+		// este é um refresh token JÁ ROTACIONADO sendo reusado fora da janela de
+		// graça — indício de roubo (alguém copiou o token antes da rotação e está
+		// tentando usá-lo bem depois que o dono renovou). Não dá pra distinguir os
+		// dois casos aqui com certeza, então tratamos como suspeito por precaução:
+		// revoga TODAS as sessões do usuário, não só esta. Um logout/reset
+		// legítimo já não tem sessões pra revogar (no-op na prática); só o caso de
+		// roubo real paga o preço de perder as outras sessões — aceitável frente
+		// ao risco de acesso persistente indefinido. IMPORTANTE: só entra aqui em
+		// ErrNoRows (linha realmente ausente) — um erro de banco genérico
+		// (conexão instável, timeout) cai no ramo abaixo e NÃO revoga nada, pra
+		// não derrubar sessões legítimas por uma falha transitória.
 		if delErr := s.deleteUserSessions(r.Context(), uid); delErr != nil {
 			slog.Error("refresh: falha ao revogar sessões após possível reuso de refresh token", "uid", uid, "err", delErr)
 		} else {
@@ -438,20 +448,19 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Token inválido ou expirado"))
 		return
 	}
-	// fail-closed: não emitir token novo se não conseguir revogar o anterior (evita dois refresh tokens simultâneos)
-	if err := s.deleteSession(r.Context(), sid); err != nil {
-		slog.Error("refresh: falha ao revogar sessão anterior", "sid", sid, "err", err)
-		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao renovar sessão"))
-		return
-	}
-	access, refresh, err := s.issueSession(r.Context(), w, r, u, sid)
+	rec := newRespRecorder()
+	access, refresh, err := s.issueSession(r.Context(), rec, r, u, sid)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	if viaCookie {
-		w.WriteHeader(http.StatusNoContent)
-		return
+		rec.WriteHeader(http.StatusNoContent)
+	} else {
+		writeJSON(rec, http.StatusOK, map[string]any{"accessToken": access, "refreshToken": refresh})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"accessToken": access, "refreshToken": refresh})
+	// Chegar até aqui já implica sucesso (issueSession com erro retorna acima,
+	// antes de tocar em rec) — sempre seguro guardar pra replay de graça.
+	s.cacheGraceResponse(r.Context(), hash, rec)
+	rec.flushTo(w)
 }

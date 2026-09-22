@@ -226,11 +226,21 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 	// devolveria um token sem aud (= sessão do painel) e desfaria a marcação.
 	// Vazio para refresh tokens emitidos antes desta mudança.
 	clientID := tokenAudience(refresh, s.cfg.JWTRefreshSecret)
-	sid, uid, expires, err := s.sessionByHash(r.Context(), hashRefreshToken(refresh))
+	hash := hashRefreshToken(refresh)
+	// consumeSessionByHash busca E apaga a sessão atomicamente — ver comentário
+	// em db.go. Isso fecha a corrida de duas requisições concorrentes com o
+	// mesmo refresh token; o que sobra de reuso genuíno (retry de rede reenviando
+	// o token DEPOIS que ele já foi rotacionado com sucesso) é tratado abaixo
+	// pelo replay de graça, antes de presumir roubo.
+	_, uid, expires, err := s.consumeSessionByHash(r.Context(), hash)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if s.tryGraceReplay(r.Context(), w, hash) {
+			return
+		}
 		// Mesma detecção de reuso de handleRefresh (ver comentário lá): JWT válido
-		// sem sessão correspondente é indício de token já rotacionado sendo
-		// reusado. Usamos tokenUID (do JWT), não o uid de sessionByHash — este
+		// sem sessão correspondente, e sem resposta de graça pra devolver, é
+		// indício de token já rotacionado sendo reusado fora da janela de graça.
+		// Usamos tokenUID (do JWT), não o uid de consumeSessionByHash — este
 		// último vem zerado quando a linha não existe. Só entra aqui em
 		// ErrNoRows; erro de banco genérico cai no ramo seguinte, sem revogar nada.
 		if delErr := s.deleteUserSessions(r.Context(), tokenUID); delErr != nil {
@@ -259,15 +269,15 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusForbidden, "ACCOUNT_SUSPENDED", "Conta indisponível"))
 		return
 	}
-	// fail-closed: não emitir token novo se não conseguir revogar o anterior
-	// (evita dois refresh tokens simultâneos ativos para a mesma sessão).
-	// Espelha o comportamento do handleRefresh para o fluxo cookie.
-	if err := s.deleteSession(r.Context(), sid); err != nil {
-		slog.Error("oauth_token_refresh: falha ao revogar sessão anterior", "sid", sid, "err", err)
-		writeErr(w, appErr(http.StatusInternalServerError, "INTERNAL_ERROR", "Erro ao renovar sessão"))
-		return
+	rec := newRespRecorder()
+	s.writeTokenResponse(rec, r, u, clientID)
+	// Só guarda pra replay se a rotação realmente deu certo — cachear uma
+	// resposta de erro (ex.: falha ao gerar token/gravar sessão) faria um
+	// retry legítimo do cliente repetir o mesmo erro em vez de tentar de novo.
+	if rec.status == http.StatusOK {
+		s.cacheGraceResponse(r.Context(), hash, rec)
 	}
-	s.writeTokenResponse(w, r, u, clientID)
+	rec.flushTo(w)
 }
 
 // GET /oauth/userinfo — OIDC UserInfo endpoint (OpenID Connect Core §5.3).
