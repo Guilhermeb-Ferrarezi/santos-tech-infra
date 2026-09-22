@@ -763,7 +763,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	// auto-confirm desligado — desmarcar não cria nada, só devolve o que já
 	// estava reservado.
 	if err == nil && !cfg.IsAdminConversation && output.CancelaAula {
-		e.cancelaAulaDoCliente(ctx, inbound)
+		e.cancelaAulaDoCliente(ctx, conv, inbound)
 	}
 
 	return err
@@ -825,20 +825,21 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 		log.Error("agenda: falha ao checar o horário; não vou marcar sozinho", "err", err)
 		return
 	} else if ocupado {
-		log.Info("agenda: horário ocupado na checagem final", "quando", iso, "conflito_com", outro.Aluno)
+		log.Info("agenda: horário ocupado na checagem final", "quando", iso, "conflito_com", outro.Display())
 		return
 	}
 
 	aluno := firstNonEmpty(sr.StudentName, contactName)
 	pageID, err := e.deps.Notion.CreateBooking(ctx, Booking{
-		Aluno:    aluno,
-		WhatsApp: inbound.ExternalID,
-		DataHora: iso,
-		Status:   "Agendada",
-		Tipo:     sr.Kind,
-		Curso:    sr.Course,
-		Idade:    sr.Age,
-		Resumo:   sr.Notes,
+		Aluno:      aluno,
+		WhatsApp:   inbound.ExternalID,
+		DataHora:   iso,
+		Status:     "Agendada",
+		Tipo:       sr.Kind,
+		Curso:      sr.Course,
+		Idade:      sr.Age,
+		Resumo:     sr.Notes,
+		DuracaoMin: cfg.AulaDuracaoMin,
 	})
 	if err != nil {
 		log.Error("agenda: falha ao gravar no Notion", "err", err, "quando", iso)
@@ -1542,59 +1543,33 @@ func (e *ConversationEngine) agendaLembretesDoCliente(ctx context.Context, conv 
 //
 // Só mexe no que tem o marcador. Se a aula foi lançada à mão por Henrique ou
 // Rodrigo, o bot avisa e não toca: quem marcou na mão desmarca na mão.
-func (e *ConversationEngine) cancelaAulaDoCliente(ctx context.Context, inbound InboundMessage) {
+func (e *ConversationEngine) cancelaAulaDoCliente(ctx context.Context, conv Conversation, inbound InboundMessage) {
 	log := e.deps.Logger
-	if e.deps.Notion == nil || !e.deps.Notion.Enabled() {
-		return
-	}
-	agenda, estado := e.deps.Notion.Schedule(ctx)
-	if estado == AgendaIndisponivel {
-		log.Warn("cancelamento: agenda indisponível; não vou mexer")
+	if e.deps.Notion == nil || !e.deps.Notion.Enabled() || e.deps.Lembretes == nil {
 		return
 	}
 
-	telefone := onlyDigits(inbound.ExternalID)
-	agora := time.Now()
-	var alvo *ScheduleEntry
-	for i := range agenda {
-		e2 := &agenda[i]
-		if onlyDigits(e2.WhatsApp) != telefone || e2.WhatsApp == "" {
-			continue
-		}
-		t, ok := parseNotionTime(e2.DataHora)
-		if !ok || !t.After(agora) {
-			continue
-		}
-		// A mais próxima no futuro é a que ele está desmarcando.
-		if alvo == nil {
-			alvo = e2
-			continue
-		}
-		if tAlvo, ok := parseNotionTime(alvo.DataHora); ok && t.Before(tAlvo) {
-			alvo = e2
-		}
-	}
-	if alvo == nil {
-		log.Info("cancelamento: nenhuma aula futura encontrada para este telefone", "de", inbound.ExternalID)
-		return
-	}
-	if !EhAulaExperimental(alvo.Aluno) {
-		log.Warn("cancelamento: a aula não é do bot; deixando como está",
-			"titulo", alvo.Aluno, "quando", alvo.Display)
+	// A aula é achada pelos registros DO BOT, não varrendo a agenda.
+	//
+	// A base da escola não tem campo de WhatsApp, então não dá para procurar
+	// pelo telefone. E mesmo que tivesse, procurar assim acharia aulas lançadas
+	// à mão — que o bot não pode mexer. Partir do que ele mesmo criou resolve
+	// as duas coisas de uma vez.
+	pageID, aulaEm, ok := e.deps.Lembretes.AulaDaConversa(ctx, inbound.TenantID, string(conv.ID))
+	if !ok {
+		log.Info("cancelamento: esta conversa não tem aula marcada pelo bot", "de", inbound.ExternalID)
 		return
 	}
 
-	if err := e.deps.Notion.ArquivarBooking(ctx, alvo.PageID); err != nil {
-		log.Error("cancelamento: falha ao arquivar", "err", err, "aula", alvo.Aluno)
+	if err := e.deps.Notion.ArquivarBooking(ctx, pageID); err != nil {
+		log.Error("cancelamento: falha ao arquivar", "err", err, "aula", pageID)
 		return
 	}
-	if e.deps.Lembretes != nil {
-		if n, err := e.deps.Lembretes.CancelarDaAula(ctx, inbound.TenantID, alvo.PageID); err == nil && n > 0 {
-			log.Info("cancelamento: lembretes cancelados", "quantos", n)
-		}
+	if n, err := e.deps.Lembretes.CancelarDaAula(ctx, inbound.TenantID, pageID); err == nil && n > 0 {
+		log.Info("cancelamento: lembretes cancelados", "quantos", n)
 	}
-	e.tiraDoGoogleAgenda(ctx, inbound.TenantID, alvo.PageID)
-	log.Info("cancelamento: horário liberado", "aula", alvo.Aluno, "quando", alvo.Display)
+	e.tiraDoGoogleAgenda(ctx, inbound.TenantID, pageID)
+	log.Info("cancelamento: horário liberado", "aula", pageID, "era_em", aulaEm.Format(time.RFC3339))
 }
 
 // tiraDoGoogleAgenda apaga os eventos da aula nas agendas e esquece o vínculo.

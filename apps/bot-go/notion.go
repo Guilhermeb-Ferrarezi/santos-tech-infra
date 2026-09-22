@@ -21,7 +21,7 @@ const notionVersion = "2025-09-03"
 // depender de tzdata, ausente na imagem distroless.
 var brLocation = time.FixedZone("BRT", -3*60*60)
 
-// NotionClient lê e grava no data source "Agenda — Aulas Experimentais" do Notion
+// NotionClient lê e grava no data source "Agenda de Aulas" do Notion
 // via API REST, com um token de integração escopado. O LLM NUNCA acessa o Notion —
 // só este código.
 type NotionClient struct {
@@ -131,26 +131,15 @@ func (c *NotionClient) Schedule(ctx context.Context) ([]ScheduleEntry, EstadoAge
 // Agora o Notion faz o recorte: só o intervalo que interessa, em ordem, e o
 // código segue o next_cursor até acabar.
 func (c *NotionClient) fetchSchedule(ctx context.Context) ([]ScheduleEntry, error) {
-	inicio := time.Now().In(brLocation).Truncate(24 * time.Hour)
-	fim := inicio.Add(c.janela)
-
-	filtro := map[string]any{
-		"filter": map[string]any{
-			"and": []any{
-				map[string]any{"property": "Data e hora", "date": map[string]any{"on_or_after": inicio.Format(time.RFC3339)}},
-				map[string]any{"property": "Data e hora", "date": map[string]any{"before": fim.Format(time.RFC3339)}},
-			},
-		},
-		"sorts":     []any{map[string]any{"property": "Data e hora", "direction": "ascending"}},
-		"page_size": 100,
-	}
+	// SEM filtro de data: a base não tem campo de data preenchido. É uma grade
+	// semanal — cada linha é um espaço tomado num dia da semana. Filtrar por
+	// "Data" aqui devolvia zero linhas e o bot enxergava a agenda vazia.
+	filtro := map[string]any{"page_size": 100}
 
 	url := fmt.Sprintf("https://api.notion.com/v1/data_sources/%s/query", c.dsID)
 	var entries []ScheduleEntry
 	cursor := ""
 
-	// Teto de páginas: 20 × 100 cobre qualquer agenda real de três semanas e
-	// impede que um next_cursor que nunca acaba prenda a goroutine.
 	for pagina := 0; pagina < 20; pagina++ {
 		if cursor != "" {
 			filtro["start_cursor"] = cursor
@@ -188,21 +177,26 @@ func (c *NotionClient) fetchSchedule(ctx context.Context) ([]ScheduleEntry, erro
 		}
 
 		for _, r := range out.Results {
-			// Faltou/Remarcou devolvem o horário para a grade — não ocupam nada.
-			status := notionStatus(r.Properties["Status"])
-			if status == "Faltou" || status == "Remarcou" {
+			e := ScheduleEntry{
+				PageID:    r.ID,
+				Titulo:    notionTitle(r.Properties["Aula"]),
+				Dia:       notionSelect(r.Properties["Dia"]),
+				Horario:   notionRichText(r.Properties["Horário"]),
+				Professor: notionSelect(r.Properties["Professor"]),
+				Conteudo:  notionSelect(r.Properties["Conteúdo"]),
+			}
+			// Linha sem dia nem horário não é aula — é cabeçalho ou rascunho.
+			if e.Dia == "" && e.Horario == "" {
 				continue
 			}
-			start := notionDateStart(r.Properties["Data e hora"])
-			entries = append(entries, ScheduleEntry{
-				PageID:    r.ID,
-				Aluno:     notionTitle(r.Properties["Aluno/Responsável"]),
-				DataHora:  start,
-				Display:   formatBRDateTime(start),
-				Status:    status,
-				Professor: notionPeopleNames(r.Properties["Professor(a)"]),
-				WhatsApp:  notionPhone(r.Properties["WhatsApp"]),
-			})
+			e.Intervalo, e.Ok = ParseIntervalo(e.Dia, e.Horario)
+			if !e.Ok && e.Horario != "" {
+				// Aparece no prompt, mas não bloqueia horário: melhor o modelo
+				// ver a linha e ficar em dúvida do que o código fingir que
+				// entendeu um texto que não entendeu.
+				c.log.Warn("notion: horário não interpretado", "aula", e.Titulo, "dia", e.Dia, "horario", e.Horario)
+			}
+			entries = append(entries, e)
 		}
 
 		if !out.HasMore || out.NextCursor == "" {
@@ -210,40 +204,81 @@ func (c *NotionClient) fetchSchedule(ctx context.Context) ([]ScheduleEntry, erro
 		}
 		cursor = out.NextCursor
 	}
-	// Chegou ao teto: melhor devolver o que se tem do que estourar em silêncio.
 	c.log.Warn("notion: agenda passou do teto de páginas", "lidas", len(entries))
 	return entries, nil
 }
 
-// CreateBooking grava uma nova aula experimental na agenda e devolve o ID da
-// página criada.
+// notionSelect lê uma propriedade do tipo select.
+func notionSelect(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var v struct {
+		Select *struct {
+			Name string `json:"name"`
+		} `json:"select"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil || v.Select == nil {
+		return ""
+	}
+	return v.Select.Name
+}
+
+// notionRichText junta o texto de uma propriedade rich_text.
+func notionRichText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var v struct {
+		RichText []struct {
+			PlainText string `json:"plain_text"`
+		} `json:"rich_text"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, t := range v.RichText {
+		sb.WriteString(t.PlainText)
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+// CreateBooking grava uma aula na grade e devolve o ID da página criada.
 //
-// O ID é o que amarra esta aula aos eventos do Google Agenda: quando ela for
-// cancelada ou remarcada, é por ele que se acham os eventos a mexer.
+// Escreve no formato da escola: título com o marcador do bot e a data, dia da
+// semana e horário no mesmo padrão das outras linhas. Uma linha que destoa faz
+// a grade parecer remendada.
+//
+// O campo Professor fica VAZIO de propósito: quem dá a aula é decisão da
+// escola, não do bot. Deixar em branco é um convite visível a preencher;
+// chutar um nome seria comprometer a agenda de alguém.
 func (c *NotionClient) CreateBooking(ctx context.Context, b Booking) (string, error) {
 	if !c.Enabled() {
 		return "", fmt.Errorf("notion: não configurado")
 	}
-
-	status := b.Status
-	if status == "" {
-		status = "Confirmar"
+	inicio, ok := parseNotionTime(b.DataHora)
+	if !ok {
+		return "", fmt.Errorf("notion: data/hora ilegível: %q", b.DataHora)
+	}
+	dur := time.Duration(b.DuracaoMin) * time.Minute
+	if dur <= 0 {
+		dur = time.Hour
 	}
 
-	// O título carrega o marcador. É o que permite, depois, distinguir o que o
-	// bot criou do que Henrique e Rodrigo lançaram na mão — e portanto o que ele
-	// pode remanejar ou arquivar. Ver EhAulaExperimental em agenda.go.
 	props := map[string]any{
-		"Aluno/Responsável": map[string]any{
-			"title": []any{map[string]any{"text": map[string]any{"content": TituloAgendamento(b.Aluno)}}},
+		"Aula": map[string]any{
+			"title": []any{map[string]any{"text": map[string]any{"content": TituloAulaBot(b.Aluno, inicio)}}},
 		},
-		"Status": map[string]any{"status": map[string]any{"name": status}},
+		"Dia": map[string]any{"select": map[string]any{"name": DiaDaSemanaPT(inicio)}},
+		"Horário": map[string]any{
+			"rich_text": []any{map[string]any{"text": map[string]any{"content": FormataIntervalo(inicio, dur)}}},
+		},
 	}
-	if b.WhatsApp != "" {
-		props["WhatsApp"] = map[string]any{"phone_number": b.WhatsApp}
-	}
-	if b.DataHora != "" {
-		props["Data e hora"] = map[string]any{"date": map[string]any{"start": b.DataHora}}
+	// Período é select com valores fixos; só preenche quando o horário cai
+	// claramente num deles.
+	if p := periodoDoDia(inicio); p != "" {
+		props["Período"] = map[string]any{"select": map[string]any{"name": p}}
 	}
 
 	body := map[string]any{
@@ -263,7 +298,6 @@ func (c *NotionClient) CreateBooking(ctx context.Context, b Booking) (string, er
 		return "", err
 	}
 	c.setHeaders(req)
-
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return "", err
@@ -273,19 +307,28 @@ func (c *NotionClient) CreateBooking(ctx context.Context, b Booking) (string, er
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("notion: create page status %d: %s", resp.StatusCode, string(raw))
 	}
-	// Invalida o cache pra o próximo Schedule() já refletir o novo agendamento.
 	c.invalidaCache()
 
 	var criada struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(raw, &criada); err != nil {
-		// A página foi criada; só não consegui ler o id. Não é erro fatal, mas
-		// sem ele a aula fica sem vínculo com o Google Agenda.
 		c.log.Warn("notion: página criada mas id ilegível", "err", err)
 		return "", nil
 	}
 	return criada.ID, nil
+}
+
+// periodoDoDia traduz a hora para o select que a escola usa.
+func periodoDoDia(t time.Time) string {
+	switch h := t.Hour(); {
+	case h < 12:
+		return "Manhã"
+	case h < 18:
+		return "Tarde"
+	default:
+		return "Noite"
+	}
 }
 
 // blocosDoAtendimento monta o CONTEÚDO da página do agendamento: a ficha do
@@ -660,61 +703,17 @@ func (c *NotionClient) SlotOcupado(ctx context.Context, inicio time.Time, dur ti
 	if !c.Enabled() {
 		return ScheduleEntry{}, false, fmt.Errorf("notion: não configurado")
 	}
-	// Margem generosa nos dois lados: pega aula que começa antes e invade o
-	// intervalo, não só a que começa dentro dele.
-	de := inicio.Add(-dur)
-	ate := inicio.Add(dur)
-
-	filtro := map[string]any{
-		"filter": map[string]any{"and": []any{
-			map[string]any{"property": "Data e hora", "date": map[string]any{"on_or_after": de.Format(time.RFC3339)}},
-			map[string]any{"property": "Data e hora", "date": map[string]any{"before": ate.Format(time.RFC3339)}},
-		}},
-		"page_size": 100,
-	}
-	corpo, err := json.Marshal(filtro)
+	// Relê a grade inteira, SEM cache. O cache de dois minutos serve para montar
+	// prompt; não serve para decidir gravar. Duas conversas simultâneas leem a
+	// mesma agenda cacheada, as duas acham o horário livre, e as duas marcam.
+	//
+	// A grade tem algumas dezenas de linhas — reler é barato, e é a última
+	// palavra antes de escrever.
+	entries, err := c.fetchSchedule(ctx)
 	if err != nil {
 		return ScheduleEntry{}, false, err
 	}
-	url := fmt.Sprintf("https://api.notion.com/v1/data_sources/%s/query", c.dsID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(corpo))
-	if err != nil {
-		return ScheduleEntry{}, false, err
-	}
-	c.setHeaders(req)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return ScheduleEntry{}, false, err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return ScheduleEntry{}, false, fmt.Errorf("notion: slot query status %d: %s", resp.StatusCode, string(raw))
-	}
-	var out struct {
-		Results []struct {
-			ID         string                     `json:"id"`
-			Properties map[string]json.RawMessage `json:"properties"`
-		} `json:"results"`
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return ScheduleEntry{}, false, err
-	}
-
-	vizinhos := make([]ScheduleEntry, 0, len(out.Results))
-	for _, r := range out.Results {
-		st := notionStatus(r.Properties["Status"])
-		if st == "Faltou" || st == "Remarcou" {
-			continue
-		}
-		vizinhos = append(vizinhos, ScheduleEntry{
-			PageID:   r.ID,
-			Aluno:    notionTitle(r.Properties["Aluno/Responsável"]),
-			DataHora: notionDateStart(r.Properties["Data e hora"]),
-			Status:   st,
-		})
-	}
-	e, bateu := Conflito(inicio, dur, vizinhos)
+	e, bateu := Conflito(inicio, dur, entries)
 	return e, bateu, nil
 }
 
@@ -733,8 +732,8 @@ func (c *NotionClient) ArquivarBooking(ctx context.Context, pageID string) error
 	if err != nil {
 		return fmt.Errorf("notion: não deu para conferir o título antes de arquivar: %w", err)
 	}
-	if !EhAulaExperimental(titulo) {
-		return fmt.Errorf("notion: recusado — %q não é agendamento do bot", titulo)
+	if !EhDoBot(titulo) {
+		return fmt.Errorf("notion: recusado — %q não foi criado pelo bot", titulo)
 	}
 
 	corpo, err := json.Marshal(map[string]any{"archived": true})
@@ -785,62 +784,36 @@ func (c *NotionClient) tituloDaPagina(ctx context.Context, pageID string) (strin
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return "", err
 	}
-	return notionTitle(out.Properties["Aluno/Responsável"]), nil
+	return notionTitle(out.Properties["Aula"]), nil
 }
 
 // ExperimentaisPassadas lista as aulas do bot que já aconteceram, para a
 // faxina. Só devolve as que têm o marcador — as lançadas à mão ficam de fora
 // da lista, então nem chegam perto do arquivamento.
+// ExperimentaisPassadas lista as aulas que O BOT criou e que já aconteceram.
+//
+// A base não tem campo de data, então a data vem do título que o próprio bot
+// escreveu ("🤖 23/09 Aula experimental — Caio"). Só títulos dele entram: ler
+// data de texto escrito à mão seria adivinhação, e adivinhar aqui significa
+// arquivar a aula de alguém.
 func (c *NotionClient) ExperimentaisPassadas(ctx context.Context, antesDe time.Time) ([]ScheduleEntry, error) {
 	if !c.Enabled() {
 		return nil, fmt.Errorf("notion: não configurado")
 	}
-	filtro := map[string]any{
-		"filter":    map[string]any{"property": "Data e hora", "date": map[string]any{"before": antesDe.Format(time.RFC3339)}},
-		"sorts":     []any{map[string]any{"property": "Data e hora", "direction": "ascending"}},
-		"page_size": 100,
-	}
-	corpo, err := json.Marshal(filtro)
+	entries, err := c.fetchSchedule(ctx)
 	if err != nil {
-		return nil, err
-	}
-	url := fmt.Sprintf("https://api.notion.com/v1/data_sources/%s/query", c.dsID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(corpo))
-	if err != nil {
-		return nil, err
-	}
-	c.setHeaders(req)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("notion: passadas status %d: %s", resp.StatusCode, string(raw))
-	}
-	var out struct {
-		Results []struct {
-			ID         string                     `json:"id"`
-			Properties map[string]json.RawMessage `json:"properties"`
-		} `json:"results"`
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}
 	var passadas []ScheduleEntry
-	for _, r := range out.Results {
-		titulo := notionTitle(r.Properties["Aluno/Responsável"])
-		if !EhAulaExperimental(titulo) {
-			continue // não é do bot: não é da conta dele
+	for _, e := range entries {
+		if !EhDoBot(e.Titulo) {
+			continue
 		}
-		passadas = append(passadas, ScheduleEntry{
-			PageID:   r.ID,
-			Aluno:    titulo,
-			DataHora: notionDateStart(r.Properties["Data e hora"]),
-			Display:  formatBRDateTime(notionDateStart(r.Properties["Data e hora"])),
-			Status:   notionStatus(r.Properties["Status"]),
-		})
+		data, ok := DataNoTitulo(e.Titulo, antesDe)
+		if !ok || !data.Before(antesDe) {
+			continue
+		}
+		passadas = append(passadas, e)
 	}
 	return passadas, nil
 }

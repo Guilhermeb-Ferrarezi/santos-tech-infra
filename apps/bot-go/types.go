@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -145,14 +146,37 @@ type TenantConfig struct {
 
 // ScheduleEntry — uma aula experimental já agendada, lida do data source
 // "Agenda — Aulas Experimentais" do Notion (horários ocupados).
+// ScheduleEntry — uma linha da grade semanal da escola.
+//
+// A agenda não guarda data: guarda DIA DA SEMANA e um intervalo escrito à mão
+// ("Quarta", "08:00 ~ 10:00"). Cada linha é um espaço tomado naquele dia.
 type ScheduleEntry struct {
-	PageID    string // id da página no Notion (para remarcar)
-	Aluno     string // Aluno/Responsável (title)
-	DataHora  string // ISO 8601 (start do campo "Data e hora")
-	Display   string // formatado pra humano, ex.: "ter 17/06 às 19:30"
-	Status    string // Agendada | Confirmar | Em andamento | Feita | Faltou | Remarcou
-	Professor string // Professor(a) (person) — best-effort, pode vir vazio
-	WhatsApp  string
+	PageID    string // id da página no Notion (para remarcar/arquivar)
+	Titulo    string // campo "Aula": nome do aluno, turma, ou o que a escola escreveu
+	Dia       string // "Segunda".."Sábado"
+	Horario   string // como está na base: "08:00 ~ 10:00", "16h00-17h00", ...
+	Professor string // "Rodrigo" | "Henrique" | vazio
+	Conteudo  string // matéria, quando preenchida
+	// Intervalo — Horario já interpretado. Ok=false quando o texto não deu para
+	// entender; nesse caso a linha aparece no prompt mas não bloqueia horário.
+	Intervalo IntervaloSemanal
+	Ok        bool
+}
+
+// Display escreve a linha do jeito que se lê numa grade.
+func (e ScheduleEntry) Display() string {
+	partes := []string{e.Dia, e.Horario, e.Titulo}
+	var vivos []string
+	for _, p := range partes {
+		if strings.TrimSpace(p) != "" {
+			vivos = append(vivos, strings.TrimSpace(p))
+		}
+	}
+	linha := strings.Join(vivos, " · ")
+	if e.Professor != "" {
+		linha += " (prof. " + e.Professor + ")"
+	}
+	return linha
 }
 
 // Booking — dados para gravar uma aula experimental na agenda do Notion.
@@ -169,6 +193,8 @@ type Booking struct {
 	Curso  string // curso/área de interesse
 	Idade  int    // 0 = adulto ou não informado
 	Resumo string // o que aconteceu no atendimento, escrito pelo bot
+	// DuracaoMin — usada para escrever o intervalo ("14:00 ~ 15:00") na grade.
+	DuracaoMin int
 }
 
 // SchedulingRequest — pedido de agendamento detectado pelo LLM na conversa do cliente.

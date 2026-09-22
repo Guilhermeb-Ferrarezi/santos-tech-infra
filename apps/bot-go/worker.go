@@ -898,7 +898,7 @@ func (w *Worker) runFaxinaAgenda(ctx context.Context) {
 	arquivadas := 0
 	for _, a := range passadas {
 		if err := w.deps.Notion.ArquivarBooking(ctx, a.PageID); err != nil {
-			log.Warn("faxina: não arquivou", "err", err, "aula", a.Aluno, "quando", a.Display)
+			log.Warn("faxina: não arquivou", "err", err, "aula", a.Titulo, "quando", a.Display())
 			continue
 		}
 		arquivadas++

@@ -213,3 +213,27 @@ func MensagemDoLembrete(l LembretePendente) string {
 	}
 	return strings.Replace(base, "a aula experimental", "a aula experimental do "+aluno, 1)
 }
+
+// AulaDaConversa devolve a próxima aula que O BOT marcou nesta conversa.
+//
+// Substitui a busca por telefone na agenda: a base real da escola não tem campo
+// de WhatsApp, e mesmo que tivesse, procurar por telefone acharia também aulas
+// lançadas à mão — que o bot não pode mexer. Aqui só aparece o que ele criou.
+func (r *LembreteRepo) AulaDaConversa(ctx context.Context, tenantID TenantID, convID string) (notionPageID string, aulaEm time.Time, ok bool) {
+	if convID == "" {
+		return "", time.Time{}, false
+	}
+	err := r.pool.QueryRow(ctx, `
+		SELECT notion_page_id, aula_em
+		FROM booking_reminder
+		WHERE tenant_id = $1 AND conversation_id = $2::uuid
+		  AND aula_em > now()
+		  AND status IN ('pendente', 'enviando', 'enviado')
+		ORDER BY aula_em
+		LIMIT 1
+	`, tenantID, convID).Scan(&notionPageID, &aulaEm)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	return notionPageID, aulaEm, notionPageID != ""
+}

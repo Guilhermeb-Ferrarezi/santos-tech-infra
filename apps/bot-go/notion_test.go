@@ -167,12 +167,12 @@ func TestPromptDizQuandoNaoConsegueLerAgenda(t *testing.T) {
 
 	comAgenda := base
 	comAgenda.EstadoAgenda = AgendaOK
-	comAgenda.Schedule = []ScheduleEntry{{Display: "ter 22/09 às 13:00", Aluno: "Fulano"}}
+	comAgenda.Schedule = []ScheduleEntry{{Titulo: "Fulano", Dia: "Terça", Horario: "13:00 ~ 14:00"}}
 	p2 := BuildPrompt(comAgenda, ConversationContext{}, "tem horário quinta?", agora)
 	if strings.Contains(p2, "NÃO consigo consultar") {
 		t.Error("com agenda fresca não deve haver aviso de indisponível")
 	}
-	if !strings.Contains(p2, "ter 22/09 às 13:00") {
+	if !strings.Contains(p2, "13:00 ~ 14:00") || !strings.Contains(p2, "Fulano") {
 		t.Error("a agenda lida deveria aparecer no prompt")
 	}
 
