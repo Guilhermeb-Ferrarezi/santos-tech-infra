@@ -50,6 +50,11 @@ func (in curriculoGerarGravado) validate() error {
 	if len(in.Contexto.CursosSantosTech) > 20 {
 		return validationErr("cursos demais")
 	}
+	for _, c := range in.Contexto.CursosSantosTech {
+		if len([]rune(c.Nome)) > 200 {
+			return validationErr("nome de curso muito longo")
+		}
+	}
 	return nil
 }
 
