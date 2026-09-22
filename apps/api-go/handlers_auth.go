@@ -39,8 +39,14 @@ func (s *Server) issueSession(ctx context.Context, w http.ResponseWriter, r *htt
 // o próprio browser quem o define). Por isso é seguro devolver os tokens no corpo
 // só quando Origin vem vazio: não abre uma via nova de vazamento pro fluxo web
 // normal (que continua só-cookie), apenas atende quem já não tinha cookie nenhum.
+//
+// `moz-extension://` entra na mesma lógica: é a extensão do quiz, o navegador
+// preenche esse header e uma página web não consegue forjá-lo, então aceitar
+// o prefixo não amplia quem pode autenticar — só muda o formato da resposta
+// pra um cliente que já provou a senha.
 func isNativeClient(r *http.Request) bool {
-	return r.Header.Get("Origin") == ""
+	o := r.Header.Get("Origin")
+	return o == "" || strings.HasPrefix(o, "moz-extension://")
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
