@@ -40,13 +40,18 @@ func (s *Server) issueSession(ctx context.Context, w http.ResponseWriter, r *htt
 // só quando Origin vem vazio: não abre uma via nova de vazamento pro fluxo web
 // normal (que continua só-cookie), apenas atende quem já não tinha cookie nenhum.
 //
-// `moz-extension://` entra na mesma lógica: é a extensão do quiz, o navegador
-// preenche esse header e uma página web não consegue forjá-lo, então aceitar
-// o prefixo não amplia quem pode autenticar — só muda o formato da resposta
-// pra um cliente que já provou a senha.
+// As origens de extensão entram na mesma lógica: `moz-extension://` no
+// Firefox/Zen e `chrome-extension://` no Chrome. O navegador é quem preenche
+// esse header e uma página web não consegue forjá-lo, então aceitar os
+// prefixos não amplia quem pode autenticar — só muda o formato da resposta
+// pra um cliente que já provou a senha. Sem isso a extensão loga com sucesso
+// e não recebe token nenhum (o corpo vem sem accessToken e os cookies são
+// httpOnly SameSite=Lax, que ela não consegue ler nem reenviar).
 func isNativeClient(r *http.Request) bool {
 	o := r.Header.Get("Origin")
-	return o == "" || strings.HasPrefix(o, "moz-extension://")
+	return o == "" ||
+		strings.HasPrefix(o, "moz-extension://") ||
+		strings.HasPrefix(o, "chrome-extension://")
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {

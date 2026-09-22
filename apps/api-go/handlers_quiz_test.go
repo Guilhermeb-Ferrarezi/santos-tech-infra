@@ -135,6 +135,33 @@ func TestIsNativeClientAceitaExtensaoFirefox(t *testing.T) {
 	}
 }
 
+func TestIsNativeClientAceitaExtensaoChrome(t *testing.T) {
+	// A extensão também roda no Chrome, onde a origem é chrome-extension://.
+	// Sem isso o login lá responde 200 sem accessToken e a extensão fica
+	// logada e sem sessão utilizável.
+	r := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	r.Header.Set("Origin", "chrome-extension://hkjjgbnfnignbnlkmpbkkhpocbnhgdii")
+	if !isNativeClient(r) {
+		t.Error("extensão do Chrome precisa receber os tokens no corpo")
+	}
+}
+
+func TestIsNativeClientRecusaOrigemQueApenasContemPrefixo(t *testing.T) {
+	// Uma página web não consegue forjar o header Origin, mas o teste trava a
+	// regra: o prefixo tem que estar no INÍCIO, não em qualquer posição.
+	for _, o := range []string{
+		"https://evil.com/chrome-extension://x",
+		"https://chrome-extension.evil.com",
+		"https://moz-extension.evil.com",
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+		r.Header.Set("Origin", o)
+		if isNativeClient(r) {
+			t.Errorf("origem %q não pode passar como cliente de extensão", o)
+		}
+	}
+}
+
 func TestIsNativeClientRecusaOrigemWeb(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
 	r.Header.Set("Origin", "https://santos-tech.com")
