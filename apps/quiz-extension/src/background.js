@@ -1,6 +1,8 @@
 // Background da extensão: guarda a sessão, fala com a api-go e dispara a
-// captura quando o atalho é pressionado. Nenhuma credencial de API passa por
-// aqui — a extensão só conhece o próprio login do usuário.
+// captura de conteúdo quando o atalho é pressionado. Também é quem tira o
+// print da aba (tabs.captureVisibleTab) a pedido do content script, que não
+// tem acesso a essa API. Nenhuma credencial de API passa por aqui — a
+// extensão só conhece o próprio login do usuário.
 
 const API = "https://api.santos-tech.com";
 
@@ -44,6 +46,9 @@ async function refreshTokens() {
   }
 }
 
+// Sem AbortController/timeout próprio aqui: o fetch() do navegador não tem
+// timeout implícito, então o orçamento de até 50s do servidor no caminho com
+// imagem já é acomodado sem precisar de ajuste — só espera a resposta chegar.
 async function apiFetch(path, body, { retried = false } = {}) {
   const tokens = await getTokens();
   if (!tokens?.accessToken) throw new Error("Faça login nas opções da extensão");
@@ -99,9 +104,26 @@ browser.commands.onCommand.addListener(async (command) => {
 
 browser.runtime.onMessage.addListener((msg) => {
   if (msg?.type === "ask") {
-    return apiFetch("/quiz/answer", { raw: msg.raw, explain: !!msg.explain })
+    const body = { raw: msg.raw, explain: !!msg.explain };
+    // imageBase64/imageMime só vêm quando o content script detectou conteúdo
+    // visual na seleção (gráfico, tabela, figura) — ver content.js. Sem
+    // imagem, o corpo é idêntico ao de antes e o fluxo rápido continua igual.
+    if (msg.imageBase64) {
+      body.imageBase64 = msg.imageBase64;
+      body.imageMime = msg.imageMime || "image/png";
+    }
+    return apiFetch("/quiz/answer", body)
       .then((data) => ({ ok: true, data }))
       .catch((e) => ({ ok: false, error: e.message }));
+  }
+  if (msg?.type === "print") {
+    // O content script não pode chamar tabs.captureVisibleTab — só o
+    // background tem acesso a essa API. activeTab (concedida pelo próprio
+    // atalho Alt+Q) já é suficiente; não precisa de permissão extra.
+    return browser.tabs
+      .captureVisibleTab(null, { format: "png" })
+      .then((dataUrl) => ({ ok: true, dataUrl }))
+      .catch((e) => ({ ok: false, error: e.message || "falha ao capturar a tela" }));
   }
   if (msg?.type === "login") {
     return login(msg.identifier, msg.password)

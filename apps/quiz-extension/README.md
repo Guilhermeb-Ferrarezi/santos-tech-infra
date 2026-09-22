@@ -2,6 +2,29 @@
 
 Seleciona a questão na página, `Alt+Q`, e a resposta aparece num overlay.
 
+## Captura de imagem
+
+Quando a seleção encosta em algo visual (`img`, `canvas`, `svg`, `table`,
+`math`, `picture`, `video`, `figure`, ou elemento com `background-image`),
+maior que 40×40px, a extensão recorta essa região da tela e manda junto com
+o texto — o backend usa o modelo com visão nesse caso.
+
+**Sem conteúdo visual na seleção, o comportamento é idêntico ao de hoje:**
+nenhum print é tirado, nenhuma requisição extra é feita. Esse filtro existe
+de propósito — sem ele, toda questão custaria 5-8s de visão em vez dos
+150-400ms de hoje, e a maioria das questões é puro texto.
+
+`tabs.captureVisibleTab` só fotografa o que está visível na viewport. Se a
+região a recortar (seleção + elementos visuais) não couber inteira na tela,
+a extensão **não manda imagem cortada** — mostra um aviso pedindo para rolar
+até a questão ficar totalmente visível e tentar de novo, sem gastar a
+chamada ao backend.
+
+Não foi preciso nenhuma permissão nova no `manifest.json` para isso:
+`tabs.captureVisibleTab` aceita a mesma `activeTab` que já é concedida pelo
+atalho `Alt+Q` (a mesma que permite o `scripting.executeScript` de hoje) —
+não precisa de `tabs` nem de `<all_urls>`.
+
 ## Instalar (Zen / Firefox)
 
 1. `about:debugging#/runtime/this-firefox`
