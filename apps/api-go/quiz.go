@@ -228,6 +228,19 @@ type quizDeps struct {
 	// usuário vê a probabilidade no card e desmarca; esconder uma
 	// alternativa que valia ponto é o erro mais caro dos dois.
 	minMultiAlt float64
+	// reserve: gasta atomicamente uma unidade de cota da chave de acesso
+	// (X-Quiz-Key) — nil quando a requisição é por sessão normal (sem chave,
+	// sem cota pra debitar). Chamada UMA vez, no instante em que a questão já
+	// foi validada como respondível (parseável, imagem ok, texto suficiente)
+	// e ANTES de qualquer chamada ao modelo — ver os dois pontos de chamada
+	// abaixo (answerQuiz e answerQuizAberto) e reserveQuizKeyUsage em
+	// quiz_keys.go pro porquê deste ser o instante certo: mais cedo (no
+	// guard, antes do corpo ser lido) cobraria 400/422 à toa; mais tarde
+	// (só depois de chamar o modelo, como era antes) reabre a janela de
+	// corrida que motivou esta mudança. Devolve *AppError (429 cota
+	// esgotada, ou nil) — handleQuizAnswer sabe reconhecer esse erro e não
+	// remapeá-lo via quizErr.
+	reserve func() error
 }
 
 func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizResponse, error) {
@@ -262,6 +275,16 @@ func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizRespon
 			return answerQuizAberto(ctx, req, deps, started, temImagem)
 		}
 		return quizResponse{}, err
+	}
+
+	// Questão validada (parseável, imagem ok se aplicável) — é AQUI que uma
+	// chave de acesso gasta cota, não antes (corpo inválido/questão não
+	// separável já retornaram acima) nem depois (chamar o modelo primeiro
+	// reabriria a janela de corrida). Ver quizDeps.reserve.
+	if deps.reserve != nil {
+		if err := deps.reserve(); err != nil {
+			return quizResponse{}, err
+		}
 	}
 
 	resp := quizResponse{Parsed: parsed, Kind: quizKindUnica}
@@ -432,6 +455,14 @@ func answerQuizAberto(ctx context.Context, req quizRequest, deps quizDeps, start
 	texto := strings.TrimSpace(req.Raw)
 	if err := validateQuizOpenText(texto); err != nil {
 		return quizResponse{}, err
+	}
+
+	// Mesma regra do caminho de escolha única (ver answerQuiz): texto já
+	// validado como suficiente, ANTES de chamar o modelo.
+	if deps.reserve != nil {
+		if err := deps.reserve(); err != nil {
+			return quizResponse{}, err
+		}
 	}
 
 	resp := quizResponse{

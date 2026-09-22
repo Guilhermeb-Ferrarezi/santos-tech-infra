@@ -471,3 +471,19 @@ CREATE TABLE IF NOT EXISTS agenda_feriados_municipais (
   nome       TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Chaves de acesso para quem usa a extensão do Jev (POST /quiz/answer) SEM
+-- conta santos-tech — alternativa à sessão via header X-Quiz-Key, ver
+-- quizAccessGuard em quiz_keys.go. Espelha a migração em db.go (não é a
+-- migração em si — a tabela real é criada por migrate(), este arquivo só
+-- existe pro sqlc conhecer as colunas).
+CREATE TABLE IF NOT EXISTS quiz_access_keys (
+  id          BIGSERIAL PRIMARY KEY,
+  key_hash    TEXT NOT NULL UNIQUE,
+  label       TEXT NOT NULL,
+  daily_limit INTEGER NOT NULL DEFAULT 100,
+  usage_date  DATE NOT NULL DEFAULT '1970-01-01',
+  usage_count INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at  TIMESTAMPTZ
+);

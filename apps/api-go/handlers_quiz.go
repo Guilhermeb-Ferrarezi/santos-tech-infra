@@ -71,32 +71,42 @@ func (s *Server) handleQuizAnswer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusServiceUnavailable, "NOT_CONFIGURED", "provider do Jev não encontrado"))
 		return
 	}
+	// key: nil quando a requisição é por sessão normal (sem X-Quiz-Key) — sem
+	// cota pra reservar nem pra logar. quizReserveFunc(ctx, nil) devolve nil,
+	// e answerQuiz pula a reserva quando deps.reserve é nil.
+	key := quizKeyFromContext(r.Context())
 	resp, err := answerQuiz(r.Context(), body, quizDeps{
 		jev:           s.quizJevCaller(jevProvider),
 		fallback:      s.quizFallbackCaller(),
 		minConfidence: s.cfg.QuizMinConfidence,
 		minMargin:     s.cfg.QuizMinMargin,
 		minMultiAlt:   s.cfg.QuizMultiMin,
+		reserve:       s.quizReserveFunc(r.Context(), key),
 	})
 	if err != nil {
+		// deps.reserve devolve um *AppError pronto (429 QUOTA_EXCEEDED) —
+		// diferente dos erros sentinela de quiz.go (errQuizUnparseable etc.),
+		// que quizErr traduz por código HTTP. Sem este desvio, quizErr cairia
+		// no default (502 UPSTREAM_FAILED) pra um erro de cota, escondendo o
+		// código certo.
+		var ae *AppError
+		if errors.As(err, &ae) {
+			writeErr(w, ae)
+			return
+		}
 		writeErr(w, quizErr(err))
 		return
 	}
-	// A resposta saiu — a partir daqui a requisição REALMENTE consultou o
-	// upstream (Jev e/ou Claude), então é o único ponto onde uma chave de
-	// acesso (X-Quiz-Key) gasta cota. Corpo inválido e questão não separável
-	// retornam antes deste ponto (acima) e nunca chegam a incrementar.
+	// A cota (quando a requisição usa X-Quiz-Key) já foi reservada ANTES da
+	// chamada ao modelo, dentro de answerQuiz — ver quizDeps.reserve e
+	// reserveQuizKeyUsage em quiz_keys.go. Não há incremento pós-sucesso
+	// aqui: se o erro acima não veio de deps.reserve, a vaga já está gasta;
+	// não sobrou nada pra fazer aqui além de logar.
 	logFields := []any{
 		"source", resp.Source, "escalated", resp.Escalated, "degraded", resp.Degraded,
 		"confidence", resp.Confidence, "total_ms", resp.Timings.TotalMs,
 	}
-	if key := quizKeyFromContext(r.Context()); key != nil {
-		if err := s.incrementQuizKeyUsage(r.Context(), key.ID); err != nil {
-			// Não falha a resposta por causa disso: ela já foi calculada e já
-			// custou upstream — recusar aqui não devolve o gasto, só irritaria
-			// quem já recebeu a resposta certa.
-			slog.Error("quiz: falha ao incrementar contador da chave de acesso", "quiz_key_label", key.Label, "err", err)
-		}
+	if key != nil {
 		// Pelo RÓTULO da chave, nunca pela chave nem pelo hash — a chave em si
 		// não vai pro log em hipótese nenhuma.
 		logFields = append(logFields, "quiz_key_label", key.Label)

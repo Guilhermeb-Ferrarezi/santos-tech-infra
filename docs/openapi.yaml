@@ -2697,11 +2697,19 @@ paths:
         requisição arbitrária com as chaves da empresa.
 
         Chave de acesso (`X-Quiz-Key`): cada chave tem um limite diário de
-        questões (`daily_limit`, configurado na criação) que reseta à meia-noite
-        UTC. O contador só é incrementado por uma requisição que realmente
-        consultou o Jev/Claude — corpo inválido (`400`) ou questão impossível
-        de separar (`422`) não custam cota. Chave inexistente, revogada ou sem
-        o prefixo `qz_` devolve `401 INVALID_KEY` (mesma mensagem nas três
+        questões (`daily_limit`, configurado na criação) que reseta à
+        meia-noite UTC (21:00 no horário de Brasília). A cota é reservada
+        ATOMICAMENTE (um único `UPDATE ... WHERE ... RETURNING` condicional,
+        sem SELECT prévio) no instante em que a questão do corpo já foi
+        validada como respondível — parseável, imagem válida, texto
+        suficiente — e ANTES de qualquer chamada ao Jev/Claude: corpo
+        inválido (`400`) ou questão impossível de separar/imagem
+        inválida/texto insuficiente (`422`/`400`) não custam cota, mas uma
+        falha do Jev/Claude DEPOIS deste ponto (timeout, sem chave ativa no
+        roteador) já gastou a vaga — sem estorno. Requisições concorrentes
+        pela mesma chave nunca reservam a mesma vaga (a reserva serializa no
+        lock de linha do Postgres). Chave inexistente, revogada ou sem o
+        prefixo `qz_` devolve `401 INVALID_KEY` (mesma mensagem nas três
         causas, para não revelar qual delas aconteceu); cota diária esgotada
         devolve `429 QUOTA_EXCEEDED`. Chaves são criadas/revogadas só via
         `psql` (sem rota admin) — fora do escopo deste contrato.
@@ -2963,7 +2971,8 @@ paths:
             req/min do mesmo IP (vale para sessão e para `X-Quiz-Key`).
             `QUOTA_EXCEEDED`: só no caminho por `X-Quiz-Key` — a chave já
             gastou a cota diária (`daily_limit`); a mensagem diz quando
-            reseta (meia-noite UTC).
+            reseta em horário de Brasília (reset em si continua sendo
+            meia-noite UTC, só a mensagem mostra convertido — 21:00).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -2973,7 +2982,7 @@ paths:
                   value: { code: RATE_LIMITED, message: "Muitas tentativas. Tente novamente em instantes." }
                 quotaExcedida:
                   summary: Cota diária da chave de acesso esgotada
-                  value: { code: QUOTA_EXCEEDED, message: "Limite diário desta chave atingido — tente novamente após 00:00 de 23/09 (UTC)" }
+                  value: { code: QUOTA_EXCEEDED, message: "Limite diário desta chave atingido — tente novamente após 21:00 de 22/09 (horário de Brasília)" }
         "502":
           description: "Nenhum modelo conseguiu responder — o Jev falhou e a escalada para o Claude também falhou (ou não havia como escalar); ou a requisição veio com `imageBase64` e a escalada falhou (sem Jev nesse caminho, não há palpite pra degradar); ou a requisição está no modo aberto (`kind: aberta`) e a escalada falhou (sem Jev nesse modo, não há palpite pra degradar)"
           content:
