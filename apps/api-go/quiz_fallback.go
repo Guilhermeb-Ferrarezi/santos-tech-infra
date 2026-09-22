@@ -7,7 +7,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -30,30 +29,52 @@ func buildFallbackPrompt(p quizParsed) string {
 	return b.String()
 }
 
-// quizJSONRe acha o primeiro objeto JSON do texto, mesmo embrulhado em cerca de
-// código ou precedido de conversa fiada.
-var quizJSONRe = regexp.MustCompile(`(?s)\{.*\}`)
-
-func parseFallbackAnswer(raw []byte, p quizParsed) (quizFallbackAnswer, error) {
-	var native struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(raw, &native); err != nil {
-		return quizFallbackAnswer{}, fmt.Errorf("quiz: resposta do fallback ilegível: %w", err)
-	}
-	text := ""
-	for _, c := range native.Content {
-		if c.Type == "text" {
-			text += c.Text
+// primeiroObjetoJSON devolve o primeiro objeto JSON completo do texto.
+// Uma regex gulosa não serve: ela casaria do primeiro "{" ao último "}",
+// e o prompt manda um exemplo de JSON que o modelo às vezes ecoa antes da
+// resposta — o match viraria os dois objetos com texto no meio.
+func primeiroObjetoJSON(texto string) string {
+	inicio, profundidade := -1, 0
+	emString, escape := false, false
+	for i, r := range texto {
+		if emString {
+			switch {
+			case escape:
+				escape = false
+			case r == '\\':
+				escape = true
+			case r == '"':
+				emString = false
+			}
+			continue
 		}
+		switch r {
+		case '"':
+			emString = true
+		case '{':
+			if profundidade == 0 {
+				inicio = i
+			}
+			profundidade++
+		case '}':
+			profundidade--
+			if profundidade == 0 && inicio >= 0 {
+				return texto[inicio : i+1]
+			}
+		}
+	}
+	return ""
+}
+
+func parseFallbackAnswer(adapter string, raw []byte, p quizParsed) (quizFallbackAnswer, error) {
+	text, err := parseChatResponse(adapter, raw)
+	if err != nil {
+		return quizFallbackAnswer{}, fmt.Errorf("quiz: %w", err)
 	}
 	if text == "" {
 		return quizFallbackAnswer{}, fmt.Errorf("quiz: fallback não devolveu texto")
 	}
-	match := quizJSONRe.FindString(text)
+	match := primeiroObjetoJSON(text)
 	if match == "" {
 		return quizFallbackAnswer{}, fmt.Errorf("quiz: fallback não devolveu JSON")
 	}
