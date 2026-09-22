@@ -4390,7 +4390,7 @@ paths:
         - { in: query, name: range, description: "7d (default) | 30d | 90d", schema: { type: string } }
       responses:
         "200":
-          description: Ranking do dimension escolhido, mais frequente primeiro. Em `country`, `key` é o código ISO alpha-2 (ex.: BR).
+          description: "Ranking do dimension escolhido, mais frequente primeiro. Em `country`, `key` é o código ISO alpha-2 (ex.: BR)."
           content:
             application/json:
               schema:
@@ -4427,7 +4427,7 @@ paths:
         - { in: query, name: limit, schema: { type: integer, default: 30, maximum: 100 } }
       responses:
         "200":
-          description: Envelope da PostHog — `{ results: SessionRecording[] }`.
+          description: "Envelope da PostHog — `{ results: SessionRecording[] }`."
           content:
             application/json:
               schema: { type: object }
