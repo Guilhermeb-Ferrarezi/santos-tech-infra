@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Quiz Jev — opções</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 380px; margin: 32px auto; padding: 0 16px; }
+  label { display: block; margin: 12px 0 4px; font-size: 13px; color: #52525b; }
+  input { width: 100%; padding: 8px; border: 1px solid #d4d4d8; border-radius: 6px; font-size: 14px; }
+  button { margin-top: 16px; padding: 9px 16px; border: 0; border-radius: 6px;
+           background: #2563eb; color: #fff; font-size: 14px; cursor: pointer; }
+  #status { margin-top: 14px; font-size: 13px; }
+  .ok { color: #15803d; } .erro { color: #b91c1c; }
+</style>
+
+<h1>Quiz Jev</h1>
+<p id="sessao">…</p>
+
+<form id="form">
+  <label for="identifier">E-mail ou usuário</label>
+  <input id="identifier" name="identifier" autocomplete="username" required>
+  <label for="password">Senha</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+  <button type="submit">Entrar</button>
+</form>
+
+<p id="status"></p>
+<p style="margin-top:24px;font-size:13px;color:#71717a">
+  Atalho: <code>Alt+Q</code> com a questão selecionada. Para mudar, use
+  <code>about:addons</code> → engrenagem → "Gerenciar atalhos de extensões".
+</p>
+
+<script src="options.js"></script>
