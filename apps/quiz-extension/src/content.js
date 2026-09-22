@@ -17,9 +17,14 @@ if (!window.__quizJevCarregado) {
       background: #fff; border: 1px solid #d4d4d8; border-radius: 10px;
       box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 12px 14px;
     }
+    .card.aberta { max-width: 420px; }
     .linha { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
     .letra { font-size: 28px; font-weight: 700; line-height: 1; }
     .texto { flex: 1; }
+    /* Resposta de questão sem alternativas: sem letra, então o texto vira o
+       conteúdo principal — flex-basis 100% derruba badge(s) pra linha de
+       baixo, e a entrelinha maior ajuda num parágrafo de até ~600 chars. */
+    .texto-aberta { flex-basis: 100%; line-height: 1.55; }
     .badge { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
              padding: 2px 6px; border-radius: 999px; background: #e4e4e7; }
     .badge.claude { background: #ddd6fe; }
@@ -133,11 +138,23 @@ if (!window.__quizJevCarregado) {
 
   function mostrarResposta(card, d, rect, comImagem) {
     limpar(card);
+    // Questão sem alternativas: `kind === "aberta"` é o sinal oficial, mas
+    // também cobrimos `answer` vazio — cinturão e suspensório pro caso de
+    // alguém recarregar a extensão antes do backend novo subir.
+    const aberta = d.kind === "aberta" || !d.answer;
+    card.classList.toggle("aberta", aberta);
     const badge = d.source === "claude" ? "claude" : "jev";
     const linha = el("div", "linha");
-    linha.append(el("span", "letra", d.answer));
-    linha.append(el("span", "texto", d.answerText || ""));
-    linha.append(el("span", `badge ${badge}`, badge));
+    if (aberta) {
+      // Sem letra — não há alternativa nenhuma, e um traço no lugar só
+      // confundiria. O texto da resposta é o conteúdo principal aqui.
+      linha.append(el("span", "texto texto-aberta", d.answerText || ""));
+      linha.append(el("span", `badge ${badge}`, badge));
+    } else {
+      linha.append(el("span", "letra", d.answer));
+      linha.append(el("span", "texto", d.answerText || ""));
+      linha.append(el("span", `badge ${badge}`, badge));
+    }
     // Resposta com imagem não traz probabilities (não houve veredito do
     // modelo rápido) — badge extra deixa claro que a figura foi considerada,
     // já que o usuário não tem outro sinal disso no card.

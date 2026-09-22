@@ -1,6 +1,8 @@
 # Quiz Jev — extensão
 
 Seleciona a questão na página, `Alt+Q`, e a resposta aparece num overlay.
+Questão sem alternativas (preencher lacuna, dissertativa) também é respondida —
+nesse caso o card mostra a resposta em texto corrido, sem a letra em destaque.
 
 ## Captura de imagem
 
