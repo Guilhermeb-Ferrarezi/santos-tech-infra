@@ -32,10 +32,14 @@ if (!window.__quizJevCarregado) {
        conteúdo principal — flex-basis 100% derruba badge(s) pra linha de
        baixo, e a entrelinha maior ajuda num parágrafo de até ~600 chars. */
     .texto-aberta { flex-basis: 100%; line-height: 1.55; }
+    /* Cada badge define fundo E cor juntos. Definir só o fundo deixa a cor do
+       texto herdada do .card, que muda com o tema — foi o que deixou o badge
+       "claude" ilegível no escuro (lilás claro com letra branca). */
     .badge { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-             padding: 2px 6px; border-radius: 999px; background: #e4e4e7; }
-    .badge.claude { background: #ddd6fe; }
-    .badge.imagem { background: #bbf7d0; }
+             padding: 2px 6px; border-radius: 999px;
+             background: #e4e4e7; color: #3f3f46; }
+    .badge.claude { background: #ede9fe; color: #5b21b6; }
+    .badge.imagem { background: #dcfce7; color: #166534; }
     .aviso { margin-top: 8px; font-size: 12px; color: #92400e; }
     .motivo { margin-top: 8px; font-size: 13px; color: #3f3f46; }
     .barras { margin-top: 10px; display: grid; gap: 3px; }
@@ -46,7 +50,11 @@ if (!window.__quizJevCarregado) {
     .erro { color: #b91c1c; }
     @media (prefers-color-scheme: dark) {
       .card { background: #18181b; color: #fafafa; border-color: #3f3f46; }
-      .badge { background: #3f3f46; } .motivo { color: #d4d4d8; }
+      .motivo { color: #d4d4d8; }
+      /* Um par fundo+cor por badge, na mesma especificidade das regras claras
+         acima (.badge.x), senão a regra clara vence e o texto some. */
+      .badge { background: #3f3f46; color: #e4e4e7; }
+      .badge.claude { background: #4c1d95; color: #ddd6fe; }
       .badge.imagem { background: #14532d; color: #bbf7d0; }
     }
   `;
