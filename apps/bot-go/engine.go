@@ -98,6 +98,11 @@ type EngineDeps struct {
 	// AgendaAutoConfirm — o bot grava a aula no Notion sem esperar um humano.
 	// Desligado por padrão: ligar só depois das travas verificadas em produção.
 	AgendaAutoConfirm bool
+	// Funcionamento e duração da aula. Vêm do ambiente e são copiados para o
+	// TenantConfig a cada mensagem — tenant_config não tem colunas para eles.
+	EscolaAbre     string
+	EscolaFecha    string
+	AulaDuracaoMin int
 	// GCal / GCalRepo — Google Agenda. Nil quando não configurado; o
 	// agendamento continua funcionando sem eles.
 	GCal     *GCalClient
@@ -192,6 +197,17 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			return fmt.Errorf("TenantConfig.Get: %w", err)
 		}
 		cfg = *tenantCfg
+		// Funcionamento e duração da aula vêm do AMBIENTE, não da linha do
+		// tenant — não existe coluna para eles em tenant_config.
+		//
+		// Sem esta cópia, o TenantConfig carregado do banco chega com os campos
+		// vazios e o agendamento automático aborta em TODA tentativa com
+		// "ESCOLA_ABRE inválido". Foi exatamente o que aconteceu em produção:
+		// a variável estava configurada na Coolify e nunca chegava aqui.
+		cfg.EscolaAbre = e.deps.EscolaAbre
+		cfg.EscolaFecha = e.deps.EscolaFecha
+		cfg.AulaDuracaoMin = e.deps.AulaDuracaoMin
+		cfg.AgendaAutoConfirm = e.deps.AgendaAutoConfirm
 
 		// b) Resolve contact + channel identity
 		contact, chIdentity, err := e.deps.Contacts.FindByChannelIdentity(ctx, tx, inbound.Channel, inbound.ExternalID)
@@ -398,7 +414,6 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	// -----------------------------------------------------------------------
 
 	wamid := inbound.ProviderMessageID
-	prevText := ""
 
 	// Serializa o output do LLM para armazenar como reasoning no primeiro balão.
 	var reasoningJSON *string
@@ -421,8 +436,9 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	// carregam o conteúdo específico daquele atendimento, que gravação nenhuma
 	// diz. Mandar a primeira em voz e o resto em texto é o que o atendente faz.
 	bolhasEmVoz := 0
+	var duracaoAudio time.Duration
 	if shouldReplyAsAudio(e.deps.Voice, cfg, inbound) && len(output.Bubbles) > 0 {
-		bolhasEmVoz = e.trySendVoice(ctx, conv, inbound, output, reasoningJSON, cfg)
+		bolhasEmVoz, duracaoAudio = e.trySendVoice(ctx, conv, inbound, output, reasoningJSON, cfg)
 		if bolhasEmVoz == 0 {
 			log.Info("voz falhou; caindo para texto", "wamid", wamid)
 		}
@@ -431,19 +447,41 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	if bolhasEmVoz < len(output.Bubbles) {
 		// O que saiu em voz também conta para a pausa: quem acabou de ouvir uma
 		// nota de voz não deve receber o texto seguinte no mesmo instante.
-		if bolhasEmVoz > 0 {
-			prevText = output.Bubbles[bolhasEmVoz-1]
-		}
+		primeiraDepoisDoAudio := bolhasEmVoz > 0
 		for i, bubble := range output.Bubbles {
 			if i < bolhasEmVoz {
 				continue // já saiu como nota de voz
 			}
-			// Calcula delay de humanização
+			// O delay é o tempo de ESCREVER o balão que vem — por isso a conta
+			// é sobre `bubble`, não sobre o anterior.
 			var delay time.Duration
-			if i == 0 {
+			switch {
+			case primeiraDepoisDoAudio:
+				// Quem acabou de gravar um áudio não começa a digitar no mesmo
+				// segundo. Sem esta pausa os dois chegam juntos e o conjunto
+				// denuncia automação mais do que o áudio gravado ajuda.
+				delay = DepoisDoAudioDelayMs(duracaoAudio, bubble)
+				primeiraDepoisDoAudio = false
+			case i == 0:
 				delay = FirstBubbleDelayMs(bubble)
-			} else {
-				delay = BetweenBubblesDelayMs(prevText)
+			default:
+				delay = BetweenBubblesDelayMs(bubble)
+			}
+
+			// "digitando…" durante a espera.
+			//
+			// O indicador do WhatsApp morre quando uma mensagem é enviada, então
+			// depois do áudio ele sumiu e a pausa vira silêncio — que parece
+			// conversa travada, não alguém escrevendo. Reexibir antes de cada
+			// balão devolve o sinal de vida.
+			//
+			// O Cloud API só tem "digitando"; "gravando áudio" não existe na
+			// API (testado: type=audio e type=recording violam o enum). Então a
+			// nota de voz sai sem indicador nenhum — não há o que fazer daqui.
+			if inbound.ProviderMessageID != "" {
+				if err := e.deps.Sender.SendTypingIndicator(ctx, inbound.ProviderMessageID); err != nil {
+					log.Debug("typing: não exibiu o indicador", "err", err)
+				}
 			}
 
 			// Sleep acontece fora de qualquer transação
@@ -491,7 +529,6 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 				e.deps.Broadcast(WSEvent{Type: "message.outbound", ConversationID: conv.ID})
 			}
 
-			prevText = bubble
 		}
 	}
 
@@ -1235,10 +1272,12 @@ func shouldReplyAsAudio(v *VoiceClient, cfg TenantConfig, inbound InboundMessage
 
 // trySendVoice gera UMA nota de voz com a resposta inteira e envia pelo Meta.
 // Retorna false (com log) em qualquer falha → chamador cai no texto.
-func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation, inbound InboundMessage, output ResponderOutput, reasoningJSON *string, cfg TenantConfig) int {
+// Devolve quantas bolhas viraram áudio e a DURAÇÃO do que foi enviado — a
+// duração alimenta a pausa antes do texto seguinte.
+func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation, inbound InboundMessage, output ResponderOutput, reasoningJSON *string, cfg TenantConfig) (int, time.Duration) {
 	log := e.deps.Logger
 	if _, ok := e.deps.Sender.(*WhatsAppSender); !ok {
-		return 0 // só Meta suporta upload de mídia
+		return 0, 0 // só Meta suporta upload de mídia
 	}
 	text := joinBubbles(output.Bubbles)
 	sel := VoiceSelection{Provider: cfg.VoiceProvider, VoiceID: cfg.VoiceID, Model: cfg.VoiceModel}
@@ -1255,7 +1294,7 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 		}
 		if e.deps.AudioClips == nil || !e.deps.AudioClips.Enabled() {
 			log.Warn("clips: banco de áudios não configurado; caindo para texto")
-			return 0
+			return 0, 0
 		}
 
 		// Casa contra a PRIMEIRA bolha, não contra a resposta inteira.
@@ -1275,7 +1314,7 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 		})
 		if cerr != nil {
 			log.Error("clips: casamento", "err", cerr)
-			return 0
+			return 0, 0
 		}
 
 		// Modo sombra: decide e registra, mas ainda responde em texto. É como se
@@ -1284,7 +1323,7 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 			log.Info("clips: SOMBRA — casaria e não enviou",
 				"voice", voice, "intent", clip.IntentKey, "variante", clip.Variant,
 				"score", info.Score, "candidatos", info.Candidatos)
-			return 0
+			return 0, 0
 		}
 
 		if clip == nil {
@@ -1299,22 +1338,23 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 			log.Info("clips: nenhuma gravação diz isto; respondendo em texto",
 				"voice", voice, "near_miss", info.NearMiss, "melhor_score", info.Score,
 				"considerados", info.Considerados)
-			return 0
+			return 0, 0
 		}
 
 		data, rerr := e.deps.AudioClips.Read(clip)
 		if rerr != nil {
 			log.Error("clips: leitura do arquivo", "err", rerr, "file", clip.FilePath)
-			return 0
+			return 0, 0
 		}
 		log.Info("clips: nota de voz enviada",
 			"voice", voice, "intent", clip.IntentKey, "variante", clip.Variant,
 			"score", info.Score, "candidatos", info.Candidatos,
 			"bolhas_restantes", len(output.Bubbles)-1)
 		if !e.sendVoiceBytes(ctx, conv, inbound, data, clip.Transcript, reasoningJSON) {
-			return 0
+			return 0, 0
 		}
-		return 1 // só a primeira bolha; o resto segue em texto
+		// só a primeira bolha; o resto segue em texto
+		return 1, time.Duration(clip.DurationMs) * time.Millisecond
 	}
 
 	ogg, err := e.deps.Voice.Synthesize(ctx, text, sel)
@@ -1329,14 +1369,16 @@ func (e *ConversationEngine) trySendVoice(ctx context.Context, conv Conversation
 	}
 	if err != nil {
 		log.Error("tts: synthesize", "err", err)
-		return 0
+		return 0, 0
 	}
 	// O TTS sintetiza a resposta INTEIRA numa nota só — diferente dos clipes,
 	// ele não depende do que já existe gravado. Consome todas as bolhas.
 	if !e.sendVoiceBytes(ctx, conv, inbound, ogg, text, reasoningJSON) {
-		return 0
+		return 0, 0
 	}
-	return len(output.Bubbles)
+	// O TTS sintetiza tudo numa nota só; não há texto depois, então a duração
+	// não é usada.
+	return len(output.Bubbles), 0
 }
 
 // sendVoiceBytes faz o upload do OGG e envia como nota de voz, gravando a

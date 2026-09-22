@@ -88,6 +88,22 @@ func main() {
 	bookings := NewPendingBookingRepo(pool)
 	notionClient := NewNotionClient(cfg.NotionToken, cfg.NotionExperimentalDSID, logger)
 
+	// Funcionamento da escola: valida no BOOT, não na hora de marcar.
+	//
+	// Já aconteceu de a variável estar certa na Coolify e chegar vazia aqui por
+	// um erro de ligação. O sintoma era um erro por tentativa de agendamento,
+	// perdido no meio do log, e o bot nunca marcava — sem ninguém entender por
+	// quê. Falhar alto no boot torna isso impossível de passar despercebido.
+	if cfg.AgendaAutoConfirm {
+		if _, err := ParseFuncionamento(cfg.EscolaAbre, cfg.EscolaFecha); err != nil {
+			logger.Error("agenda: AGENDA_AUTO_CONFIRM ligado mas o funcionamento está inválido — o bot NÃO vai marcar sozinho",
+				"err", err, "ESCOLA_ABRE", cfg.EscolaAbre, "ESCOLA_FECHA", cfg.EscolaFecha)
+		} else {
+			logger.Info("agenda: agendamento automático ligado",
+				"abre", cfg.EscolaAbre, "fecha", cfg.EscolaFecha, "duracao_min", cfg.AulaDuracaoMin)
+		}
+	}
+
 	// 8. Instancia AgentGoClient (Responder)
 	sitemapCache := NewSitemapCache(cfg.SiteURL)
 	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret, sitemapCache, notionClient)
@@ -140,6 +156,9 @@ func main() {
 		AudioMatchMaxMs:   cfg.AudioMatchMaxMs,
 		AudioMatchShadow:  cfg.AudioMatchShadow,
 		AgendaAutoConfirm: cfg.AgendaAutoConfirm,
+		EscolaAbre:        cfg.EscolaAbre,
+		EscolaFecha:       cfg.EscolaFecha,
+		AulaDuracaoMin:    cfg.AulaDuracaoMin,
 		GCal:              NewGCalClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL, logger),
 		GCalRepo:          NewGCalRepo(pool),
 		Lembretes:         NewLembreteRepo(pool),

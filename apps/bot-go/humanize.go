@@ -20,12 +20,40 @@ func FirstBubbleDelayMs(text string) time.Duration {
 }
 
 // BetweenBubblesDelayMs calcula o delay entre balões consecutivos.
-// base=400ms, +30ms por palavra, máx 2500ms.
+//
+// O tempo é o de ESCREVER o balão que vem a seguir, não o de ler o anterior —
+// por isso a conta é sobre o texto que está prestes a sair. Uma pessoa digitando
+// no celular faz uns 25 a 30 caracteres por segundo quando já sabe o que vai
+// dizer; abaixo disso a conversa parece robô respondendo em lote, acima disso
+// parece que a pessoa sumiu.
+//
+// Base de 900ms porque existe o tempo de pensar antes de começar a digitar, e
+// teto de 6s porque ninguém espera mais que isso sem achar que a conversa
+// travou.
 func BetweenBubblesDelayMs(text string) time.Duration {
-	words := len(strings.Fields(text))
-	ms := 400 + words*30
-	if ms > 2500 {
-		ms = 2500
+	ms := 900 + len([]rune(text))*35
+	if ms > 6000 {
+		ms = 6000
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// DepoisDoAudioDelayMs é a pausa entre a nota de voz e o texto que a segue.
+//
+// Maior que a pausa entre dois textos de propósito: quem acabou de gravar um
+// áudio não começa a digitar no mesmo segundo — ouve o próprio áudio sair,
+// respira, e aí escreve. Sem isso, os dois chegam praticamente juntos e o
+// conjunto denuncia automação mais do que o áudio gravado ajuda.
+//
+// Ainda soma o tempo de digitar o texto que vem: um parágrafo longo depois do
+// áudio precisa do tempo de ser escrito.
+func DepoisDoAudioDelayMs(duracaoAudio time.Duration, proximoTexto string) time.Duration {
+	// A pessoa "ouve" o próprio áudio sair antes de digitar — uma fração da
+	// duração basta para dar o ritmo, sem fazer o cliente esperar o áudio
+	// inteiro de novo.
+	ms := 1200 + int(duracaoAudio.Milliseconds())/3 + len([]rune(proximoTexto))*35
+	if ms > 9000 {
+		ms = 9000
 	}
 	return time.Duration(ms) * time.Millisecond
 }
