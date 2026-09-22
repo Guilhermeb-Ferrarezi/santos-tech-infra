@@ -1,8 +1,9 @@
 package main
 
-// Escalonamento: quando o Jev fica inseguro, a questão vai para um LLM de
-// texto pelo adapter `anthropic` do API Router. O prompt pede JSON estrito
-// porque a resposta precisa virar uma alternativa, não um parágrafo.
+// Escalonamento: quando o Jev fica inseguro, a questão vai para o Claude Code
+// rodando em container (apps/agent-go), via apps/api-go/agent_client.go — sem
+// chave de API, o container usa a assinatura da empresa. O prompt pede JSON
+// estrito porque a resposta precisa virar uma alternativa, não um parágrafo.
 
 import (
 	"encoding/json"
@@ -66,15 +67,11 @@ func primeiroObjetoJSON(texto string) string {
 	return ""
 }
 
-func parseFallbackAnswer(adapter string, raw []byte, p quizParsed) (quizFallbackAnswer, error) {
-	text, err := parseChatResponse(adapter, raw)
-	if err != nil {
-		return quizFallbackAnswer{}, fmt.Errorf("quiz: %w", err)
-	}
-	if text == "" {
+func parseFallbackAnswer(texto string, p quizParsed) (quizFallbackAnswer, error) {
+	if strings.TrimSpace(texto) == "" {
 		return quizFallbackAnswer{}, fmt.Errorf("quiz: fallback não devolveu texto")
 	}
-	match := primeiroObjetoJSON(text)
+	match := primeiroObjetoJSON(texto)
 	if match == "" {
 		return quizFallbackAnswer{}, fmt.Errorf("quiz: fallback não devolveu JSON")
 	}

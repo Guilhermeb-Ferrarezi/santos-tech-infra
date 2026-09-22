@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func depsFake(jevBody string, jevErr error, fbBody string, fbErr error, chamadas *[]string) quizDeps {
+func depsFake(jevBody string, jevErr error, fbText string, fbErr error, chamadas *[]string) quizDeps {
 	return quizDeps{
 		jev: func(ctx context.Context, body []byte) ([]byte, error) {
 			*chamadas = append(*chamadas, "jev")
@@ -15,16 +15,15 @@ func depsFake(jevBody string, jevErr error, fbBody string, fbErr error, chamadas
 			}
 			return []byte(jevBody), nil
 		},
-		fallback: func(ctx context.Context, prompt string) ([]byte, error) {
+		fallback: func(ctx context.Context, prompt string) (string, error) {
 			*chamadas = append(*chamadas, "fallback")
 			if fbErr != nil {
-				return nil, fbErr
+				return "", fbErr
 			}
-			return []byte(fbBody), nil
+			return fbText, nil
 		},
-		fallbackAdapter: chatAdapterAnthropic,
-		minConfidence:   0.75,
-		minMargin:       0.15,
+		minConfidence: 0.75,
+		minMargin:     0.15,
 	}
 }
 
@@ -32,7 +31,7 @@ const (
 	jevConfiante = `{"answers":{"resposta":{"type":"choice","choice":"B","confidence":0.93,"probabilities":{"A":0.02,"B":0.93,"C":0.05}}}}`
 	jevInseguro  = `{"answers":{"resposta":{"type":"choice","choice":"B","confidence":0.41,"probabilities":{"A":0.39,"B":0.41,"C":0.20}}}}`
 	jevEmpatado  = `{"answers":{"resposta":{"type":"choice","choice":"B","confidence":0.90,"probabilities":{"A":0.88,"B":0.90}}}}`
-	fbOK         = `{"content":[{"type":"text","text":"{\"answer\":\"A\",\"reasoning\":\"porque sim\"}"}]}`
+	fbOK         = `{"answer":"A","reasoning":"porque sim"}`
 )
 
 func reqExemplo() quizRequest {
@@ -67,6 +66,15 @@ func TestAnswerQuizConfiancaBaixaEscala(t *testing.T) {
 	}
 	if got.Answer != "A" || got.Reasoning == "" {
 		t.Errorf("resposta = %+v", got)
+	}
+	// O Jev respondeu (com baixa confiança) antes de escalar: a confiança e as
+	// probabilidades dele devem acompanhar a resposta final mesmo vindo do
+	// Claude, porque ele de fato opinou.
+	if got.Confidence != 0.41 {
+		t.Errorf("confidence = %v, queria 0.41 (a do jev)", got.Confidence)
+	}
+	if len(got.Probabilities) == 0 {
+		t.Errorf("probabilities vazio, queria as do jev: %+v", got)
 	}
 }
 
@@ -103,6 +111,15 @@ func TestAnswerQuizJevFalhaVaiDiretoNoFallback(t *testing.T) {
 	if got.Source != quizSourceClaude || got.Answer != "A" {
 		t.Errorf("resposta = %+v", got)
 	}
+	// O Jev nem chegou a opinar: confidence/probabilities são dele, e
+	// publicá-los aqui seria inventar dado que não existe. 0/nil é o valor
+	// deliberado, não um zero-value vazando por acidente.
+	if got.Confidence != 0 {
+		t.Errorf("confidence = %v, queria 0 (jev não respondeu)", got.Confidence)
+	}
+	if got.Probabilities != nil {
+		t.Errorf("probabilities = %+v, queria nil (jev não respondeu)", got.Probabilities)
+	}
 }
 
 func TestAnswerQuizFallbackFalhaDevolveJevDegradado(t *testing.T) {
@@ -115,6 +132,12 @@ func TestAnswerQuizFallbackFalhaDevolveJevDegradado(t *testing.T) {
 	// tela de erro.
 	if got.Source != quizSourceJev || !got.Degraded || got.Answer != "B" {
 		t.Errorf("resposta = %+v", got)
+	}
+	// Escalated fica false de propósito: o campo diz de onde veio a resposta
+	// que está sendo lida, e esta veio do Jev (estágio não-escalado). Quem
+	// sinaliza a tentativa frustrada de escalar é Degraded.
+	if got.Escalated {
+		t.Error("escalated deveria ficar false no caminho degradado (a resposta é a do jev)")
 	}
 }
 
@@ -152,5 +175,24 @@ func TestAnswerQuizBlocoImpossivelDeSeparar(t *testing.T) {
 	}
 	if len(chamadas) != 0 {
 		t.Errorf("chamadas = %v, queria nenhuma (não gastar API com lixo)", chamadas)
+	}
+}
+
+func TestAnswerQuizAlternativasJaSeparadasForaDoLimite(t *testing.T) {
+	// resolveQuizParsed tem que respeitar os mesmos limites de
+	// quizMinOptions/quizMaxOptions que parseQuizBlock aplica no caminho do
+	// bloco cru — senão dá pra mandar 1 ou 15 alternativas pelo caminho
+	// "já separado" sem nenhuma validação.
+	var chamadas []string
+	req := quizRequest{
+		Question: "Pergunta com uma alternativa só?",
+		Options:  map[string]string{"A": "única"},
+	}
+	_, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbOK, nil, &chamadas))
+	if !errors.Is(err, errQuizUnparseable) {
+		t.Errorf("err = %v, queria errQuizUnparseable", err)
+	}
+	if len(chamadas) != 0 {
+		t.Errorf("chamadas = %v, queria nenhuma (não gastar API com entrada inválida)", chamadas)
 	}
 }

@@ -60,13 +60,13 @@ type quizResponse struct {
 }
 
 type quizDeps struct {
-	jev      func(ctx context.Context, body []byte) ([]byte, error)
-	fallback func(ctx context.Context, prompt string) ([]byte, error)
-	// fallbackAdapter é o ChatAdapter do provider de fallback: o parse da
-	// resposta depende do formato nativo dele, e o provider vem de env.
-	fallbackAdapter string
-	minConfidence   float64
-	minMargin       float64
+	jev func(ctx context.Context, body []byte) ([]byte, error)
+	// fallback devolve o texto cru do Claude Code (apps/agent-go via
+	// agent_client.go), não envelope de provider — sem chave de API, o
+	// container roda com a assinatura da empresa.
+	fallback      func(ctx context.Context, prompt string) (string, error)
+	minConfidence float64
+	minMargin     float64
 }
 
 func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizResponse, error) {
@@ -102,11 +102,20 @@ func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizRespon
 		resp.Answer = ans.Label
 		resp.AnswerText = parsed.Options[ans.Label]
 		resp.Reasoning = ans.Reasoning
-		resp.Confidence = verdict.Confidence
-		resp.Probabilities = verdict.Probabilities
+		// Confiança e probabilidades são do Jev: só fazem sentido se ele
+		// chegou a responder. Quando ele falhou, copiá-las publicaria o
+		// zero-value como se fosse "0% de confiança" numa resposta que o
+		// fallback acertou.
+		if jevErr == nil {
+			resp.Confidence = verdict.Confidence
+			resp.Probabilities = verdict.Probabilities
+		}
 	case jevErr == nil:
 		// Degradação: o fallback morreu, mas o palpite do Jev existe. Devolver
 		// palpite fraco é melhor que devolver erro no meio de uma questão.
+		// Escalated fica false: o campo descreve de onde veio a resposta lida
+		// agora (o Jev, estágio não-escalado), não se uma tentativa de
+		// escalar aconteceu — isso é o que Degraded sinaliza.
 		fillFromJev(&resp, verdict, parsed)
 		resp.Degraded = true
 	default:
@@ -131,6 +140,12 @@ func fillFromJev(resp *quizResponse, v quizVerdict, p quizParsed) {
 // normal) ou alternativas já separadas pelo cliente.
 func resolveQuizParsed(req quizRequest) (quizParsed, error) {
 	if len(req.Options) > 0 {
+		// Mesmos limites que parseQuizBlock aplica no bloco cru: sem isso, o
+		// caminho "alternativas já separadas" aceitaria 1 ou 15 alternativas
+		// sem reclamar.
+		if len(req.Options) < quizMinOptions || len(req.Options) > quizMaxOptions {
+			return quizParsed{}, errQuizUnparseable
+		}
 		order := make([]string, 0, len(req.Options))
 		for label := range req.Options {
 			order = append(order, label)
@@ -164,11 +179,11 @@ func askFallback(ctx context.Context, p quizParsed, deps quizDeps) (quizFallback
 	fbCtx, cancel := context.WithTimeout(ctx, quizFallbackBudget)
 	defer cancel()
 	started := time.Now()
-	raw, err := deps.fallback(fbCtx, buildFallbackPrompt(p))
+	texto, err := deps.fallback(fbCtx, buildFallbackPrompt(p))
 	elapsed := time.Since(started).Milliseconds()
 	if err != nil {
 		return quizFallbackAnswer{}, elapsed, err
 	}
-	ans, err := parseFallbackAnswer(deps.fallbackAdapter, raw, p)
+	ans, err := parseFallbackAnswer(texto, p)
 	return ans, elapsed, err
 }
