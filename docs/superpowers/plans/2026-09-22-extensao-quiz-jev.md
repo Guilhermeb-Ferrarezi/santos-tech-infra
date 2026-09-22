@@ -12,7 +12,8 @@
 
 ## Global Constraints
 
-- **Nunca** colocar chave de API, token ou senha em arquivo do repositório. As chaves do Jev e da Anthropic são cadastradas pela UI admin do API Router, que as cifra no banco.
+- **Nunca** colocar chave de API, token ou senha em arquivo do repositório.
+- **Alterou rotas ou handlers?** Atualize `docs/openapi.yaml` **no mesmo commit** — é a fonte de verdade dos endpoints, e o `CLAUDE.md` do repositório (linha 326) exige isso. Regra descoberta durante a Task 5; as tasks anteriores não tocaram em rotas. As chaves do Jev e da Anthropic são cadastradas pela UI admin do API Router, que as cifra no banco.
 - Antes de **qualquer** commit, push ou deploy que toque Go: `gofmt -l .` (saída vazia) · `go vet ./...` · `go build ./...` · `go test ./...`. Regra do `CLAUDE.md` do repositório — build quebrado é deploy quebrado.
 - Mensagens de erro, comentários e nomes de teste em **português**, como o resto do `apps/api-go`.
 - Testes em `package main`, com `testing` da stdlib. Sem testify, sem mocks gerados.
