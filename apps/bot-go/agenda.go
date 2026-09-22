@@ -145,3 +145,21 @@ func PodeMarcar(inicio time.Time, dur time.Duration, agora time.Time, j JanelaFu
 	}
 	return ""
 }
+
+// semAPagina devolve a agenda sem uma linha específica.
+//
+// Serve para tirar a própria aula do cliente da conta quando ele remarca: sem
+// isso o bot olharia a aula que ele mesmo marcou para essa pessoa e recusaria
+// mover, alegando conflito consigo.
+func semAPagina(agenda []ScheduleEntry, pageID string) []ScheduleEntry {
+	if pageID == "" {
+		return agenda
+	}
+	out := make([]ScheduleEntry, 0, len(agenda))
+	for _, e := range agenda {
+		if e.PageID != pageID {
+			out = append(out, e)
+		}
+	}
+	return out
+}

@@ -699,7 +699,9 @@ func notionTitle(raw json.RawMessage) string {
 // Ainda é TOCTOU — entre a checagem e a gravação cabe uma corrida. Mas reduz a
 // janela de dois minutos para alguns milissegundos, e o Notion não oferece
 // transação para fechar isso de vez.
-func (c *NotionClient) SlotOcupado(ctx context.Context, inicio time.Time, dur time.Duration) (ScheduleEntry, bool, error) {
+// ignorarPageID sai da grade ANTES da checagem — é como o cliente consegue
+// remarcar sem esbarrar na própria aula.
+func (c *NotionClient) SlotOcupadoExceto(ctx context.Context, inicio time.Time, dur time.Duration, ignorarPageID string) (ScheduleEntry, bool, error) {
 	if !c.Enabled() {
 		return ScheduleEntry{}, false, fmt.Errorf("notion: não configurado")
 	}
@@ -713,7 +715,11 @@ func (c *NotionClient) SlotOcupado(ctx context.Context, inicio time.Time, dur ti
 	if err != nil {
 		return ScheduleEntry{}, false, err
 	}
-	e, bateu := Conflito(inicio, dur, entries)
+	// A exclusão entra ANTES do Conflito, nunca depois: Conflito devolve só o
+	// PRIMEIRO choque, e perdoar o resultado deixaria passar um segundo
+	// compromisso no mesmo horário — uma aula de aluno real escondida atrás da
+	// aula do próprio cliente.
+	e, bateu := Conflito(inicio, dur, semAPagina(entries, ignorarPageID))
 	return e, bateu, nil
 }
 

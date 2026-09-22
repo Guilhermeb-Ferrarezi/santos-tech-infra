@@ -208,6 +208,19 @@ type SchedulingRequest struct {
 	ProposedTime   string
 	ProposedPeriod string
 	Notes          string
+
+	// ClienteConfirmou — o CLIENTE aceitou este horário, com estas palavras.
+	//
+	// Existe porque propor e marcar eram a mesma coisa, e o bot marcava o
+	// horário que ele próprio tinha acabado de oferecer. Na leitura seguinte
+	// ele encontrava a aula ocupada, pedia desculpa pela "confusão" e oferecia
+	// outra — que também marcava. Três aulas fantasma numa conversa só, e o
+	// cliente nunca chegou a ter um horário de verdade.
+	//
+	// Zero é false de propósito: ausente, malformado ou modelo antigo que não
+	// conhece o campo => NÃO marca. A falha cai para o lado de não escrever
+	// nada na agenda da escola.
+	ClienteConfirmou bool
 }
 
 // BookingAction — ação do admin sobre um agendamento pendente.

@@ -333,9 +333,16 @@ func (w *Worker) notificaAdmin(ctx context.Context, ev DomainEvent) error {
 			question,
 		)
 	default:
-		if ntype, _ := ev.Payload["type"].(string); ntype == "BOOKING" {
+		switch ntype, _ := ev.Payload["type"].(string); ntype {
+		case "BOOKING":
 			texto = "📅 *Novo pedido de agendamento:*\n\n" + question
-		} else {
+		case "BOOKING_CONFIRMED":
+			// Já vem escrito inteiro, com emoji próprio ("✅ Aula marcada",
+			// "🚨 Remarcação incompleta"). Sem este case caía no genérico e o
+			// aviso de aula marcada chegava como "Cliente aguardando
+			// atendimento humano" — dizendo o oposto do que aconteceu.
+			texto = question
+		default:
 			texto = fmt.Sprintf("🔔 *Cliente aguardando atendimento humano:*\n\n_%s_", question)
 		}
 	}

@@ -104,6 +104,10 @@ func parseSchedulingRequest(raw json.RawMessage) *SchedulingRequest {
 		ProposedTime   string `json:"proposedTime"`
 		ProposedPeriod string `json:"proposedPeriod"`
 		Notes          string `json:"notes"`
+		// Ponteiro para distinguir "o modelo disse false" de "o modelo nem
+		// escreveu o campo". Os dois acabam em false, mas só o segundo merece
+		// log — é o sintoma de um prompt desatualizado em produção.
+		ClienteConfirmou *bool `json:"clienteConfirmou"`
 	}
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return nil
@@ -125,15 +129,16 @@ func parseSchedulingRequest(raw json.RawMessage) *SchedulingRequest {
 		}
 	}
 	return &SchedulingRequest{
-		Kind:           kind,
-		StudentName:    s.StudentName,
-		Age:            s.Age,
-		Course:         s.Course,
-		ProposedDay:    s.ProposedDay,
-		ProposedDate:   proposedDate,
-		ProposedTime:   s.ProposedTime,
-		ProposedPeriod: s.ProposedPeriod,
-		Notes:          s.Notes,
+		Kind:             kind,
+		StudentName:      s.StudentName,
+		Age:              s.Age,
+		Course:           s.Course,
+		ProposedDay:      s.ProposedDay,
+		ProposedDate:     proposedDate,
+		ProposedTime:     s.ProposedTime,
+		ProposedPeriod:   s.ProposedPeriod,
+		Notes:            s.Notes,
+		ClienteConfirmou: s.ClienteConfirmou != nil && *s.ClienteConfirmou,
 	}
 }
 
