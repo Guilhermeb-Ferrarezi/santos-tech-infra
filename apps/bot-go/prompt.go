@@ -129,7 +129,15 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("Fluxo de agendamento:\n")
 	sb.WriteString("- Só inicie se o cliente demonstrar interesse em agendar/marcar uma aula.\n")
 	sb.WriteString("- Colete o necessário: nome do aluno; idade (se criança); curso/área de interesse; dias e horários que prefere.\n")
-	sb.WriteString("- Proponha UM horário livre (dentro do funcionamento e fora dos ocupados) e confirme com o cliente (\"posso marcar terça 19h30?\"). Preencha o campo \"schedulingRequest\".\n")
+	sb.WriteString("- Proponha UM horário livre (dentro do funcionamento e fora dos ocupados) e pergunte se serve (\"posso marcar terça 19h30?\").\n")
+	// Propor não é marcar.
+	//
+	// A instrução antiga mandava preencher o schedulingRequest junto com a
+	// proposta. O bot então marcava o horário que tinha acabado de oferecer,
+	// e na mensagem seguinte lia a própria aula como ocupada: "me corrigindo,
+	// às 10h também já está preenchido". Três aulas fantasma numa conversa,
+	// nenhuma pedida pelo cliente.
+	sb.WriteString("- ENQUANTO o cliente não tiver aceitado um horário, NÃO preencha \"schedulingRequest\". Propor um horário não é marcar. Só depois que ele aceitar aquele horário específico (\"pode marcar\", \"pode ser\", \"fechado\", \"esse tá bom\") é que você preenche o campo, com \"clienteConfirmou\": true.\n")
 	// A disponibilidade é SUA, não de uma equipe.
 	//
 	// Esta instrução era o oposto: mandava dizer "vou confirmar a
@@ -164,7 +172,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("  \"handoff\": false,\n")
 	sb.WriteString("  \"smalltalk\": false,\n")
 	sb.WriteString("  \"cancelaAula\": false,\n")
-	sb.WriteString("  \"schedulingRequest\": {\"kind\":\"experimental\",\"studentName\":\"...\",\"age\":0,\"course\":\"...\",\"proposedDay\":\"quinta\",\"proposedDate\":\"2026-07-30\",\"proposedTime\":\"19h30\",\"proposedPeriod\":\"Noite\",\"notes\":\"...\"},\n")
+	sb.WriteString("  \"schedulingRequest\": {\"kind\":\"experimental\",\"studentName\":\"...\",\"age\":0,\"course\":\"...\",\"proposedDay\":\"quinta\",\"proposedDate\":\"2026-07-30\",\"proposedTime\":\"19h30\",\"proposedPeriod\":\"Noite\",\"clienteConfirmou\":true,\"notes\":\"...\"},\n")
 	sb.WriteString("  \"scheduledContact\": {\"rawPhrase\":\"...\",\"resolvedDate\":\"YYYY-MM-DD\",\"confidence\":0.9},\n")
 	sb.WriteString("  \"quotedReplies\": [{\"bubble\":0,\"ref\":\"m2\"}]\n")
 	sb.WriteString("}\n")
@@ -181,7 +189,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("    • O problema está claramente além da sua capacidade de resolver.\n")
 	sb.WriteString("  Quando handoff=true, o último balão DEVE conter uma mensagem como: \"Não tenho essa informação agora, mas posso te conectar com nossa equipe. Posso ajudar com mais alguma coisa?\"\n")
 	sb.WriteString("- \"smalltalk\"    : true quando a mensagem do cliente for apenas saudação, agradecimento, despedida ou conversa fiada — SEM pergunta factual sobre o negócio (ex.: \"oi\", \"bom dia\", \"obrigado\", \"blz\"). false quando houver uma pergunta real. Serve para não registrar conversa fiada como lacuna de conhecimento.\n")
-	sb.WriteString("- \"schedulingRequest\": preencha SOMENTE quando o cliente quiser agendar e você já tiver um horário proposto. kind: \"experimental\" ou \"individual\". Inclua studentName, age (0 se adulto/não informado), course, proposedDay, proposedDate, proposedTime (ex.: \"19h30\"), proposedPeriod (Manhã/Tarde/Noite) e notes. Em \"notes\" escreva um RESUMO do atendimento em 2 a 4 frases, para quem for dar a aula chegar com contexto: o que a pessoa procura, para quem é, o que já sabe ou já tentou, o que a preocupa (preço, horário, distância) e o que foi combinado. Escreva para um colega ler, não para o cliente. CRÍTICO: \"proposedDate\" deve ser a DATA EXATA no formato YYYY-MM-DD que você está propondo — CALCULE a partir da data atual informada acima (ex.: cliente diz \"30 de julho\" → \"2026-07-30\"; \"sábado que vem\" → a data daquele sábado). SEMPRE preencha proposedDate; é ela que define o dia gravado. \"proposedDay\" é só o rótulo humano (\"quinta\"). Omita o campo inteiro se não for agendamento.\n")
+	sb.WriteString("- \"schedulingRequest\": preencha SOMENTE depois que o cliente ACEITAR um horário concreto. Enquanto você estiver propondo, negociando ou esperando resposta, OMITA o campo inteiro. \"clienteConfirmou\" é obrigatório e só pode ser true quando a última mensagem do cliente aceita aquele horário; se ele só perguntou, pediu outro, ou não respondeu ainda, não mande o campo. kind: \"experimental\" ou \"individual\". Inclua studentName, age (0 se adulto/não informado), course, proposedDay, proposedDate, proposedTime (ex.: \"19h30\"), proposedPeriod (Manhã/Tarde/Noite) e notes. Em \"notes\" escreva um RESUMO do atendimento em 2 a 4 frases, para quem for dar a aula chegar com contexto: o que a pessoa procura, para quem é, o que já sabe ou já tentou, o que a preocupa (preço, horário, distância) e o que foi combinado. Escreva para um colega ler, não para o cliente. CRÍTICO: \"proposedDate\" deve ser a DATA EXATA no formato YYYY-MM-DD que você está propondo — CALCULE a partir da data atual informada acima (ex.: cliente diz \"30 de julho\" → \"2026-07-30\"; \"sábado que vem\" → a data daquele sábado). SEMPRE preencha proposedDate; é ela que define o dia gravado. \"proposedDay\" é só o rótulo humano (\"quinta\"). Omita o campo inteiro se não for agendamento.\n")
 	sb.WriteString("- \"scheduledContact\": preencha SOMENTE se o cliente pediu para ser contatado numa data futura. Campos: rawPhrase (frase exata), resolvedDate (YYYY-MM-DD), confidence (0.0–1.0). Omita o campo inteiro se não aplicável.\n")
 	sb.WriteString("- \"quotedReplies\": array de {bubble: índice-0-based, ref: \"mN\"} quando um balão responde diretamente a uma mensagem anterior. Omita o campo inteiro se não aplicável.\n")
 	sb.WriteString("\n")

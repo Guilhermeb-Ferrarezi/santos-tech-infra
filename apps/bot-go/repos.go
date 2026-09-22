@@ -1114,6 +1114,23 @@ func (r *PendingBookingRepo) MarkStatus(ctx context.Context, tx pgx.Tx, tenantID
 	return nil
 }
 
+// FecharAbertasDaConversa dá baixa nas pendências de uma conversa.
+//
+// É o que evita a aula duplicada quando o bot marca sozinho: a pendência nasce
+// no mesmo turno (ela é a rede de segurança para quando o bot NÃO consegue
+// marcar), e ficando aberta depois do sucesso, o admin que a confirmasse no
+// painel criaria uma segunda aula no horário que o cliente já abandonou.
+func (r *PendingBookingRepo) FecharAbertasDaConversa(ctx context.Context, tx pgx.Tx, tenantID TenantID, convID ConversationID, status string) (int64, error) {
+	tag, err := tx.Exec(ctx, `
+		UPDATE pending_booking SET status = $3, updated_at = now()
+		WHERE tenant_id = $1 AND conversation_id = $2 AND status = 'open'
+	`, tenantID, convID, status)
+	if err != nil {
+		return 0, fmt.Errorf("PendingBookingRepo.FecharAbertasDaConversa: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // UpdateProposed reescreve o horário proposto de um agendamento aberto (remarcação
 // pelo dashboard). Mantém o status. Zera proposed_day para o display usar a data exata.
 func (r *PendingBookingRepo) UpdateProposed(ctx context.Context, tx pgx.Tx, tenantID TenantID, id, date, tm string) error {

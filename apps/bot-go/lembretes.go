@@ -180,12 +180,23 @@ func (r *LembreteRepo) MarcarFalha(ctx context.Context, id, msg string) {
 		 WHERE id = $1::uuid`, id, msg)
 }
 
-// CancelarDaAula apaga os lembretes pendentes de uma aula — usado quando a aula
-// é cancelada ou remarcada.
+// CancelarDaAula tira de cena TODOS os lembretes de uma aula — usado quando a
+// aula é cancelada ou remarcada.
+//
+// Inclui os já 'enviado', e isso é essencial: esta tabela é o livro-razão de
+// quais aulas são do bot, e AulaDaConversa lê dela. Deixar viva a linha
+// 'enviado' de uma aula arquivada fazia a conversa continuar "tendo" aquela
+// aula — a remarcação seguinte mexia numa página que não existe mais, e o
+// cancelamento arquivava a página morta enquanto a aula de verdade seguia na
+// agenda.
+//
+// O gatilho mais comum de remarcação é justamente o lembrete de véspera ("está
+// tudo certo pra você?"), que deixa a linha exatamente nesse estado. Era o
+// caminho mais provável, não um canto raro.
 func (r *LembreteRepo) CancelarDaAula(ctx context.Context, tenantID TenantID, notionPageID string) (int64, error) {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE booking_reminder SET status = 'cancelado'
-		WHERE tenant_id = $1 AND notion_page_id = $2 AND status IN ('pendente', 'enviando')
+		WHERE tenant_id = $1 AND notion_page_id = $2 AND status <> 'cancelado'
 	`, tenantID, notionPageID)
 	if err != nil {
 		return 0, fmt.Errorf("LembreteRepo.CancelarDaAula: %w", err)
@@ -219,21 +230,54 @@ func MensagemDoLembrete(l LembretePendente) string {
 // Substitui a busca por telefone na agenda: a base real da escola não tem campo
 // de WhatsApp, e mesmo que tivesse, procurar por telefone acharia também aulas
 // lançadas à mão — que o bot não pode mexer. Aqui só aparece o que ele criou.
-func (r *LembreteRepo) AulaDaConversa(ctx context.Context, tenantID TenantID, convID string) (notionPageID string, aulaEm time.Time, ok bool) {
+func (r *LembreteRepo) AulaDaConversa(ctx context.Context, tenantID TenantID, convID string) (AulaMarcada, bool) {
+	var a AulaMarcada
 	if convID == "" {
-		return "", time.Time{}, false
+		return AulaMarcada{}, false
 	}
+	// 'cancelado' é o único estado excluído: é o que marca aula arquivada.
+	// Filtrar por 'pendente'/'enviando'/'enviado' deixava passar aula morta
+	// cujo lembrete já tinha saído.
 	err := r.pool.QueryRow(ctx, `
-		SELECT notion_page_id, aula_em
+		SELECT notion_page_id, aula_em, coalesce(aluno, '')
 		FROM booking_reminder
 		WHERE tenant_id = $1 AND conversation_id = $2::uuid
 		  AND aula_em > now()
-		  AND status IN ('pendente', 'enviando', 'enviado')
+		  AND status <> 'cancelado'
 		ORDER BY aula_em
 		LIMIT 1
-	`, tenantID, convID).Scan(&notionPageID, &aulaEm)
+	`, tenantID, convID).Scan(&a.PageID, &a.Em, &a.Aluno)
 	if err != nil {
-		return "", time.Time{}, false
+		return AulaMarcada{}, false
 	}
-	return notionPageID, aulaEm, notionPageID != ""
+	return a, a.PageID != ""
+}
+
+// AulaMarcada — a aula que o bot marcou nesta conversa.
+//
+// O nome do aluno anda junto porque é o que separa REMARCAR de marcar a aula do
+// segundo filho. "Uma conversa, uma aula" está certo para a mesma pessoa e
+// errado para uma família com dois filhos: sem o nome, confirmar a aula do
+// segundo arquivaria a do primeiro.
+type AulaMarcada struct {
+	PageID string
+	Em     time.Time
+	Aluno  string
+}
+
+// MesmoAluno compara nomes com tolerância: maiúsculas, espaço sobrando e o
+// título do bot ("🤖 23/09 Aula experimental — Caio") não podem virar pessoas
+// diferentes.
+//
+// Nome vazio nunca casa. Na dúvida sobre quem é, o certo é criar outra aula —
+// duplicar dá para desfazer, arquivar a aula de alguém não.
+func MesmoAluno(a, b string) bool {
+	norm := func(s string) string {
+		if i := strings.Index(s, "—"); i >= 0 {
+			s = s[i+len("—"):]
+		}
+		return strings.ToLower(strings.Join(strings.Fields(s), " "))
+	}
+	na, nb := norm(a), norm(b)
+	return na != "" && na == nb
 }

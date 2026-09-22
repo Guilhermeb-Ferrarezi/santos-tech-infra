@@ -629,7 +629,13 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		}
 
 		// q2) Pedido de agendamento do cliente → grava pendência + notifica admin.
-		if !cfg.IsAdminConversation && output.SchedulingRequest != nil && e.deps.Bookings != nil {
+		//
+		// Só vale com o cliente tendo ACEITADO o horário. Horário que o bot
+		// apenas ofereceu não é pedido de ninguém: gerava uma pendência por
+		// proposta e enchia o painel da escola de aulas que o cliente nunca
+		// pediu — quatro numa conversa só.
+		if !cfg.IsAdminConversation && output.SchedulingRequest != nil &&
+			output.SchedulingRequest.ClienteConfirmou && e.deps.Bookings != nil {
 			sr := output.SchedulingRequest
 			pb := PendingBooking{
 				TenantID:       inbound.TenantID,
@@ -755,14 +761,24 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	// Fora da transação de propósito: gravar no Notion é efeito externo, e se a
 	// transação desse rollback a página ficaria lá, órfã, sem pendência no banco
 	// para explicá-la.
+	marcouAgora := false
 	if err == nil && !cfg.IsAdminConversation && output.SchedulingRequest != nil {
-		e.autoConfirmarAgendamento(ctx, conv, inbound, cfg, output.SchedulingRequest, contactName)
+		marcouAgora = e.autoConfirmarAgendamento(ctx, conv, inbound, cfg, output.SchedulingRequest, contactName)
 	}
 
 	// Cliente desistiu: libera o horário para outra pessoa. Vale mesmo com o
 	// auto-confirm desligado — desmarcar não cria nada, só devolve o que já
 	// estava reservado.
-	if err == nil && !cfg.IsAdminConversation && output.CancelaAula {
+	//
+	// MAS não quando o bot acabou de marcar nesta mesma mensagem. "Não vou
+	// conseguir quarta, pode ser quinta 17h?" aciona as duas coisas de uma vez:
+	// o modelo marca cancelaAula (desistiu do que estava marcado) e manda o
+	// pedido do horário novo (o cliente aceitou). Rodando os dois em sequência,
+	// o cancelamento achava a aula RECÉM-CRIADA — a antiga já tinha saído — e
+	// arquivava também. O cliente lia "remarcado para quinta" e ficava sem aula
+	// nenhuma. Remarcar já é cancelar e marcar; fazer o cancelamento de novo por
+	// cima só destrói.
+	if err == nil && !cfg.IsAdminConversation && output.CancelaAula && !marcouAgora {
 		e.cancelaAulaDoCliente(ctx, conv, inbound)
 	}
 
@@ -779,16 +795,28 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 // de prompt em agendamento arbitrário: bastaria o cliente mandar uma mensagem
 // fingindo ser instrução de sistema. Aqui, quem decide é o código — o modelo
 // só propõe data e hora, e todas as travas são verificadas em Go.
-func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv Conversation, inbound InboundMessage, cfg TenantConfig, sr *SchedulingRequest, contactName string) {
+func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv Conversation, inbound InboundMessage, cfg TenantConfig, sr *SchedulingRequest, contactName string) (marcou bool) {
 	log := e.deps.Logger
 	if !e.deps.AgendaAutoConfirm || e.deps.Notion == nil || !e.deps.Notion.Enabled() {
-		return
+		return false
+	}
+
+	// Trava 0: o cliente precisa ter aceitado.
+	//
+	// É a trava que faltava. Sem ela, propor e marcar eram a mesma coisa: o bot
+	// gravava o horário que tinha acabado de oferecer, lia a própria aula como
+	// ocupada na mensagem seguinte e pedia desculpa pela "confusão" — de novo e
+	// de novo, três aulas fantasma, e o cliente sem horário nenhum no fim.
+	if !sr.ClienteConfirmou {
+		log.Info("agenda: cliente ainda não aceitou o horário; não marco",
+			"proposto", sr.ProposedDay+" "+sr.ProposedTime, "conversa", conv.ID)
+		return false
 	}
 
 	janela, err := ParseFuncionamento(cfg.EscolaAbre, cfg.EscolaFecha)
 	if err != nil {
 		log.Error("agenda: funcionamento mal configurado; não vou marcar sozinho", "err", err)
-		return
+		return false
 	}
 	dur := time.Duration(cfg.AulaDuracaoMin) * time.Minute
 	if dur <= 0 {
@@ -801,35 +829,99 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 	if !ok {
 		log.Info("agenda: não consegui resolver a data proposta; fica a pendência",
 			"dia", sr.ProposedDay, "data", sr.ProposedDate, "hora", sr.ProposedTime)
-		return
+		return false
 	}
 	inicio, ok := parseNotionTime(iso)
 	if !ok {
 		log.Error("agenda: data resolvida ilegível", "iso", iso)
-		return
+		return false
+	}
+
+	aluno := firstNonEmpty(sr.StudentName, contactName)
+
+	// Uma conversa, uma aula POR ALUNO.
+	//
+	// Se este aluno já tem aula marcada pelo bot nesta conversa, a segunda
+	// confirmação é REMARCAÇÃO, não uma aula a mais. Sem isto, "na verdade
+	// prefiro quinta" deixaria as duas de pé: a escola veria duas aulas para a
+	// mesma família e o horário antigo ficaria bloqueado para sempre.
+	//
+	// "Por aluno" não é detalhe: numa família com dois filhos as duas aulas
+	// saem da MESMA conversa, e tratar a segunda como remarcação arquivaria a
+	// aula do primeiro. Nome diferente => aula nova, sem mexer no que existe.
+	var anterior AulaMarcada
+	temAnterior := false
+	if e.deps.Lembretes != nil {
+		if a, ok := e.deps.Lembretes.AulaDaConversa(ctx, inbound.TenantID, string(conv.ID)); ok {
+			if MesmoAluno(a.Aluno, aluno) {
+				anterior, temAnterior = a, true
+			} else {
+				log.Info("agenda: a conversa já tem aula de outro aluno; esta é adicional",
+					"ja_tem", a.Aluno, "agora", aluno)
+			}
+		}
+	}
+	if temAnterior && anterior.Em.Equal(inicio) {
+		log.Info("agenda: esta aula já está marcada; nada a fazer",
+			"aula", anterior.PageID, "quando", iso, "conversa", conv.ID)
+		return false
 	}
 
 	// Trava 1: agenda fresca. Cache não vale para decidir gravar.
 	agenda, estado := e.deps.Notion.Schedule(ctx)
 	if estado != AgendaOK {
 		log.Warn("agenda: leitura não confiável; não vou marcar sozinho", "estado", estado)
-		return
+		return false
+	}
+	if temAnterior {
+		agenda = semAPagina(agenda, anterior.PageID)
 	}
 	if motivo := PodeMarcar(inicio, dur, time.Now(), janela, agenda); motivo != "" {
 		log.Info("agenda: horário recusado pelas travas", "motivo", string(motivo), "quando", iso)
-		return
+		return false
 	}
 
 	// Trava 2: última palavra, sem cache, imediatamente antes de gravar.
-	if outro, ocupado, err := e.deps.Notion.SlotOcupado(ctx, inicio, dur); err != nil {
+	//
+	// A aula anterior sai da agenda ANTES da checagem, não depois. Escrito ao
+	// contrário — checar tudo e depois perdoar se o conflito devolvido for o
+	// dela — o bot marcava em cima de aluno real sempre que DOIS compromissos
+	// pegassem o horário: Conflito() devolve só o primeiro, e bastava ele ser
+	// a aula do próprio cliente para o segundo passar despercebido.
+	ignorar := ""
+	if temAnterior {
+		ignorar = anterior.PageID
+	}
+	if outro, ocupado, err := e.deps.Notion.SlotOcupadoExceto(ctx, inicio, dur, ignorar); err != nil {
 		log.Error("agenda: falha ao checar o horário; não vou marcar sozinho", "err", err)
-		return
+		return false
 	} else if ocupado {
 		log.Info("agenda: horário ocupado na checagem final", "quando", iso, "conflito_com", outro.Display())
-		return
+		return false
 	}
 
-	aluno := firstNonEmpty(sr.StudentName, contactName)
+	// A aula velha só sai DEPOIS de o horário novo passar por todas as travas.
+	// Arquivar antes deixaria o cliente sem aula nenhuma se o novo fosse
+	// recusado — perder a aula que existia é pior que não conseguir remarcar.
+	if temAnterior {
+		if err := e.deps.Notion.ArquivarBooking(ctx, anterior.PageID); err != nil {
+			log.Error("agenda: falha ao tirar a aula anterior; não vou criar a nova",
+				"err", err, "aula", anterior.PageID)
+			return false
+		}
+		// Se este UPDATE falhar, a conversa continua "tendo" uma aula que já
+		// foi arquivada — e é dele que sai a decisão de remarcar da próxima
+		// vez. Engolir o erro em silêncio escondia justamente isso.
+		if n, err := e.deps.Lembretes.CancelarDaAula(ctx, inbound.TenantID, anterior.PageID); err != nil {
+			log.Error("agenda: aula anterior arquivada mas os lembretes dela continuam vivos",
+				"err", err, "aula", anterior.PageID)
+		} else if n > 0 {
+			log.Info("agenda: lembretes da aula anterior cancelados", "quantos", n)
+		}
+		e.tiraDoGoogleAgenda(ctx, inbound.TenantID, anterior.PageID)
+		log.Info("agenda: remarcando", "de", anterior.Em.Format(time.RFC3339), "para", iso)
+	}
+
 	pageID, err := e.deps.Notion.CreateBooking(ctx, Booking{
 		Aluno:      aluno,
 		WhatsApp:   inbound.ExternalID,
@@ -843,15 +935,71 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 	})
 	if err != nil {
 		log.Error("agenda: falha ao gravar no Notion", "err", err, "quando", iso)
-		return
+		// Remarcação que morre no meio é o pior caso da função: a aula antiga
+		// já saiu e a nova não entrou, então o cliente acha que tem horário e
+		// não tem. Não dá para desarquivar, então isso vira recado humano —
+		// alguém precisa ligar para essa família hoje.
+		if temAnterior {
+			e.avisaAdminsDeRemarcacaoQuebrada(ctx, conv, inbound, aluno, anterior.Em, iso)
+		}
+		return false
 	}
 
 	log.Info("agenda: aula marcada pelo bot", "aluno", aluno, "quando", iso, "conversa", conv.ID)
+
+	// A pendência cumpriu o papel dela: existe para o caso de o bot NÃO
+	// conseguir marcar. Marcou, então some do painel — deixada aberta, um admin
+	// confirmando por lá criaria uma segunda aula no horário abandonado.
+	if e.deps.Bookings != nil {
+		if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+			n, err := e.deps.Bookings.FecharAbertasDaConversa(ctx, tx, inbound.TenantID, conv.ID, "confirmed")
+			if err == nil && n > 0 {
+				log.Info("agenda: pendências fechadas pelo agendamento automático", "quantas", n)
+			}
+			return err
+		}); err != nil {
+			log.Error("agenda: aula marcada mas a pendência continua aberta no painel",
+				"err", err, "conversa", conv.ID)
+		}
+	}
+
 	e.avisaAdminsDoAgendamento(ctx, conv, inbound, aluno, sr, iso)
 	// O Notion é o controle; o Google Agenda é o alarme. Falhar aqui não
 	// desfaz a aula — ela existe e está avisada por WhatsApp.
 	e.poeNoGoogleAgenda(ctx, pageID, aluno, sr, inicio, dur)
 	e.agendaLembretesDoCliente(ctx, conv, inbound, pageID, aluno, inicio)
+	return true
+}
+
+// avisaAdminsDeRemarcacaoQuebrada grita quando a remarcação morre no meio.
+//
+// A aula antiga já foi arquivada e a nova não entrou. O Notion não desarquiva
+// por API, então não existe desfazer automático: o que dá para fazer é avisar
+// quem pode ligar para a família antes que ela apareça num horário que não
+// existe mais.
+func (e *ConversationEngine) avisaAdminsDeRemarcacaoQuebrada(ctx context.Context, conv Conversation, inbound InboundMessage, aluno string, de time.Time, paraISO string) {
+	if e.deps.Emitter == nil {
+		return
+	}
+	msg := fmt.Sprintf("🚨 REMARCAÇÃO INCOMPLETA — %s ficou SEM aula. Tirei a de %s e não consegui criar a de %s. Precisa lançar na mão e avisar o cliente: %s",
+		aluno, formatBRDateTime(de.Format(time.RFC3339)), formatBRDateTime(paraISO), inbound.ExternalID)
+	ev := DomainEvent{
+		TenantID:    inbound.TenantID,
+		AggregateID: conv.ID,
+		Type:        "notification.requested",
+		Payload: map[string]any{
+			"type":            "BOOKING_CONFIRMED",
+			"conversation_id": conv.ID,
+			"channel":         inbound.Channel,
+			"message":         msg,
+		},
+		OccurredAt: time.Now(),
+	}
+	if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+		return e.deps.Emitter.Emit(ctx, tx, ev)
+	}); err != nil {
+		e.deps.Logger.Error("agenda: falha ao avisar da remarcação quebrada", "err", err)
+	}
 }
 
 // avisaAdminsDoAgendamento manda o recado para quem opera a escola. É o que
@@ -1555,21 +1703,27 @@ func (e *ConversationEngine) cancelaAulaDoCliente(ctx context.Context, conv Conv
 	// pelo telefone. E mesmo que tivesse, procurar assim acharia aulas lançadas
 	// à mão — que o bot não pode mexer. Partir do que ele mesmo criou resolve
 	// as duas coisas de uma vez.
-	pageID, aulaEm, ok := e.deps.Lembretes.AulaDaConversa(ctx, inbound.TenantID, string(conv.ID))
+	aula, ok := e.deps.Lembretes.AulaDaConversa(ctx, inbound.TenantID, string(conv.ID))
 	if !ok {
 		log.Info("cancelamento: esta conversa não tem aula marcada pelo bot", "de", inbound.ExternalID)
 		return
 	}
 
-	if err := e.deps.Notion.ArquivarBooking(ctx, pageID); err != nil {
-		log.Error("cancelamento: falha ao arquivar", "err", err, "aula", pageID)
+	if err := e.deps.Notion.ArquivarBooking(ctx, aula.PageID); err != nil {
+		log.Error("cancelamento: falha ao arquivar", "err", err, "aula", aula.PageID)
 		return
 	}
-	if n, err := e.deps.Lembretes.CancelarDaAula(ctx, inbound.TenantID, pageID); err == nil && n > 0 {
+	// Erro aqui não pode passar batido: sem cancelar as linhas, o cliente
+	// continua recebendo "confirma sua aula de amanhã?" de uma aula que ele
+	// acabou de desmarcar.
+	if n, err := e.deps.Lembretes.CancelarDaAula(ctx, inbound.TenantID, aula.PageID); err != nil {
+		log.Error("cancelamento: aula arquivada mas os lembretes continuam vivos",
+			"err", err, "aula", aula.PageID)
+	} else if n > 0 {
 		log.Info("cancelamento: lembretes cancelados", "quantos", n)
 	}
-	e.tiraDoGoogleAgenda(ctx, inbound.TenantID, pageID)
-	log.Info("cancelamento: horário liberado", "aula", pageID, "era_em", aulaEm.Format(time.RFC3339))
+	e.tiraDoGoogleAgenda(ctx, inbound.TenantID, aula.PageID)
+	log.Info("cancelamento: horário liberado", "aula", aula.PageID, "era_em", aula.Em.Format(time.RFC3339))
 }
 
 // tiraDoGoogleAgenda apaga os eventos da aula nas agendas e esquece o vínculo.
