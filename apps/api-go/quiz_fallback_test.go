@@ -316,6 +316,28 @@ func TestBuildOpenPromptComImagemMencionaAFigura(t *testing.T) {
 	}
 }
 
+// TestBuildOpenPromptInstruiPreferirTermosDoTexto cobre o caso de produção:
+// questão de completar lacunas com gabarito "orientar / procedimentos /
+// regras", mas a rota respondeu com sinônimos semanticamente corretos
+// ("informar; regulamentos; normas") que não batem com o texto de apoio — e
+// numa correção objetiva de lacunas o sinônimo costuma não valer ponto. O
+// prompt precisa instruir o modelo a preferir a palavra que já está no
+// texto, só recorrendo a conhecimento externo quando o texto não oferece a
+// resposta.
+func TestBuildOpenPromptInstruiPreferirTermosDoTexto(t *testing.T) {
+	got := buildOpenPrompt("Um cartaz instrucional tem como finalidade ___ o público", false)
+	baixo := strings.ToLower(got)
+	if !strings.Contains(baixo, "prefira") && !strings.Contains(baixo, "preferir") {
+		t.Errorf("prompt não instrui a preferir os termos do próprio texto:\n%s", got)
+	}
+	if !strings.Contains(baixo, "sinônimo") {
+		t.Errorf("prompt não menciona explicitamente evitar sinônimo:\n%s", got)
+	}
+	if !strings.Contains(baixo, "conhecimento externo") {
+		t.Errorf("prompt não delimita quando usar conhecimento externo (só quando o texto não oferecer a resposta):\n%s", got)
+	}
+}
+
 func TestParseOpenAnswerJSONSimples(t *testing.T) {
 	texto := `{"answer":"instruir; comportamentos; procedimentos","reasoning":"literal do enunciado"}`
 	got, err := parseOpenAnswer(texto)

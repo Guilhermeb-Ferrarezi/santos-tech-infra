@@ -340,6 +340,16 @@ func buildOpenPrompt(texto string, temImagem bool) string {
 	b.WriteString("Responda a questão abaixo de forma DIRETA e CURTA, em 1 a 3 frases, em português do Brasil.\n\n")
 	b.WriteString("Se a questão for de preencher lacunas, devolva as palavras que preenchem as lacunas, ")
 	b.WriteString("na ordem em que aparecem no enunciado — não escreva uma dissertação.\n\n")
+	// Correção de produção: numa questão de completar lacunas ou de apontar
+	// informação do texto, a correção costuma exigir a palavra exata do
+	// texto de apoio, não um sinônimo semanticamente equivalente — mesmo um
+	// sinônimo correto ("informar" no lugar de "orientar") perde ponto numa
+	// prova objetiva. Instrui explicitamente essa preferência: usar
+	// conhecimento externo só quando o próprio texto não oferecer a resposta.
+	b.WriteString("Se a questão for de completar lacunas ou de identificar uma informação presente no ")
+	b.WriteString("texto selecionado, PREFIRA as palavras que já aparecem nesse texto em vez de ")
+	b.WriteString("sinônimos — mesmo um sinônimo correto costuma não valer ponto numa correção objetiva. ")
+	b.WriteString("Só recorra a conhecimento externo quando o texto não oferecer a resposta.\n\n")
 	if temImagem {
 		b.WriteString("Há uma imagem anexada a esta mensagem — considere-a ao responder. O enunciado ")
 		b.WriteString("sozinho pode não bastar: a resposta pode depender de um gráfico, uma tabela, um ")

@@ -309,7 +309,7 @@ func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizRespon
 			// zona cinzenta — nesse segundo caso só faz sentido checar zona
 			// cinzenta de alternativa se a questão É múltipla mesmo.
 			escalar := multiplaAmbigua || (provavelMultipla && algumaAltNaZonaCinzenta(verdict.AltProbs, deps.minMultiAlt))
-			return answerQuizMultipla(ctx, parsed, verdict, deps, started, escalar)
+			return answerQuizMultipla(ctx, parsed, verdict, jevMs, deps, started, escalar)
 		}
 	}
 
@@ -476,8 +476,16 @@ func answerQuizAberto(ctx context.Context, req quizRequest, deps quizDeps, start
 // limiar sobre AltProbs em vez de escolher uma única alternativa, e não
 // chama o Jev de novo (o mesmo veredito já tem tudo: multipla e alt_X vêm da
 // mesma chamada que "resposta").
-func answerQuizMultipla(ctx context.Context, p quizParsed, verdict quizVerdict, deps quizDeps, started time.Time, escalar bool) (quizResponse, error) {
+//
+// jevMs vem já medido de answerQuiz (a chamada ao Jev que produziu verdict) —
+// answerQuizMultipla monta um quizResponse próprio (não reaproveita o do
+// caminho de escolha única), então precisa receber o valor por parâmetro e
+// gravá-lo aqui. Sem isso Timings.JevMs fica no zero-value nesta resposta
+// mesmo quando o Jev foi chamado e respondeu (bug de produção: totalMs > 0,
+// jevMs == 0 numa resposta source=jev).
+func answerQuizMultipla(ctx context.Context, p quizParsed, verdict quizVerdict, jevMs int64, deps quizDeps, started time.Time, escalar bool) (quizResponse, error) {
 	resp := quizResponse{Parsed: p, Kind: quizKindMultipla}
+	resp.Timings.JevMs = jevMs
 
 	if !escalar {
 		resp.Source = quizSourceJev

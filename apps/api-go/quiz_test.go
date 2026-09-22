@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func depsFake(jevBody string, jevErr error, fbText string, fbErr error, chamadas *[]string) quizDeps {
@@ -240,6 +241,12 @@ func TestAnswerQuizComImagemNaoChamaJev(t *testing.T) {
 	}
 	if got.Probabilities != nil {
 		t.Errorf("probabilities = %+v, queria nil (jev não opinou)", got.Probabilities)
+	}
+	// No caminho com imagem o Jev nunca é chamado — jevMs zero É o valor
+	// certo aqui (diferente do bug do modo múltipla resposta, onde jevMs
+	// zerava mesmo com o Jev tendo sido chamado e respondido).
+	if got.Timings.JevMs != 0 {
+		t.Errorf("timings.jevMs = %d, queria 0 (jev não foi chamado no caminho com imagem)", got.Timings.JevMs)
 	}
 }
 
@@ -648,6 +655,95 @@ func TestAnswerQuizMultiplaFallbackFalhaDevolveJevDegradado(t *testing.T) {
 	// roda no degradado.
 	if len(got.Answers) == 0 {
 		t.Error("answers vazio no caminho degradado — nunca deveria devolver lista vazia")
+	}
+}
+
+// quizJevMsDelayTeste: atraso artificial injetado no fake do Jev pra medir
+// Timings.JevMs de verdade — sem atraso a chamada ao fake é rápida demais
+// (frações de milissegundo) e time.Since(...).Milliseconds() arredondaria
+// pra 0 mesmo num caminho correto, dando falso positivo/negativo no teste.
+const quizJevMsDelayTeste = 5 * time.Millisecond
+
+// depsComDelayNoJev envolve deps com um jev que demora "atraso" antes de
+// devolver a mesma resposta do deps original — usado pra confirmar que
+// Timings.JevMs reflete a duração real da chamada em vez de ficar preso no
+// zero-value.
+func depsComDelayNoJev(d quizDeps, atraso time.Duration) quizDeps {
+	original := d.jev
+	d.jev = func(ctx context.Context, body []byte) ([]byte, error) {
+		time.Sleep(atraso)
+		return original(ctx, body)
+	}
+	return d
+}
+
+// TestAnswerQuizMultiplaJevMsRefleteChamadaReal cobre o bug de produção:
+// resposta real do Jev em modo múltipla resposta veio com
+// {"source":"jev","answers":["A","C","D"],"timings":{"jevMs":0,"claudeMs":0,"totalMs":302}}
+// — totalMs>0 e source=jev, mas jevMs zerado. Causa raiz: answerQuizMultipla
+// monta um quizResponse PRÓPRIO (não reaproveita o `resp` de answerQuiz), e o
+// jevMs medido em askJev nunca era passado pra dentro dele — ficava preso no
+// zero-value de quizTimings mesmo com o Jev tendo respondido de verdade. Um
+// fake que demora um tempo mensurável (quizJevMsDelayTeste) expõe isso: sem
+// a correção este teste falha com jevMs <= 0.
+func TestAnswerQuizMultiplaJevMsRefleteChamadaReal(t *testing.T) {
+	var chamadas []string
+	deps := depsComDelayNoJev(depsFakeMulti(jevMultiplaAltaSemZonaCinzenta, nil, fbOK, nil, &chamadas), quizJevMsDelayTeste)
+	got, err := answerQuiz(context.Background(), reqExemploMultipla(), deps)
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindMultipla || got.Source != quizSourceJev {
+		t.Fatalf("kind=%q source=%q, pré-condição do teste (múltipla, não escalada)", got.Kind, got.Source)
+	}
+	if got.Timings.JevMs <= 0 {
+		t.Errorf("timings.jevMs = %d, queria > 0 (o jev foi chamado e demorou pelo menos %s)", got.Timings.JevMs, quizJevMsDelayTeste)
+	}
+}
+
+// TestAnswerQuizMultiplaEscaladaJevMsRefleteChamadaReal cobre o mesmo bug no
+// sub-caminho escalado de answerQuizMultipla (zona cinzenta → Claude) — a
+// correção grava jevMs uma única vez logo após criar o resp, então precisa
+// valer em TODOS os retornos da função, não só no não-escalado.
+func TestAnswerQuizMultiplaEscaladaJevMsRefleteChamadaReal(t *testing.T) {
+	jevBody := `{"answers":{
+		"resposta":{"type":"choice","choice":"A","confidence":0.5,"probabilities":{"A":0.5,"B":0.3,"C":0.2}},
+		"multipla":{"type":"noul","noul":0.70},
+		"alt_A":{"type":"noul","noul":0.86},
+		"alt_B":{"type":"noul","noul":0.50},
+		"alt_C":{"type":"noul","noul":0.10}
+	}}`
+	fbMultiplaOK := `{"answers":["A","C"],"reasoning":"porque sim"}`
+	var chamadas []string
+	deps := depsComDelayNoJev(depsFakeMulti(jevBody, nil, fbMultiplaOK, nil, &chamadas), quizJevMsDelayTeste)
+	got, err := answerQuiz(context.Background(), reqExemplo(), deps)
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindMultipla || !got.Escalated {
+		t.Fatalf("kind=%q escalated=%v, pré-condição do teste (múltipla, escalada)", got.Kind, got.Escalated)
+	}
+	if got.Timings.JevMs <= 0 {
+		t.Errorf("timings.jevMs = %d, queria > 0 mesmo escalado (o jev respondeu antes de escalar)", got.Timings.JevMs)
+	}
+}
+
+// TestAnswerQuizUnicaJevMsRefleteChamadaReal confirma que o caminho de
+// escolha única (que já estava correto) continua propagando jevMs de
+// verdade — não só "maior que zero por acaso", com atraso mensurável de
+// propósito.
+func TestAnswerQuizUnicaJevMsRefleteChamadaReal(t *testing.T) {
+	var chamadas []string
+	deps := depsComDelayNoJev(depsFake(jevConfiante, nil, fbOK, nil, &chamadas), quizJevMsDelayTeste)
+	got, err := answerQuiz(context.Background(), reqExemplo(), deps)
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindUnica || got.Source != quizSourceJev {
+		t.Fatalf("kind=%q source=%q, pré-condição do teste", got.Kind, got.Source)
+	}
+	if got.Timings.JevMs <= 0 {
+		t.Errorf("timings.jevMs = %d, queria > 0 (o jev foi chamado e demorou pelo menos %s)", got.Timings.JevMs, quizJevMsDelayTeste)
 	}
 }
 
