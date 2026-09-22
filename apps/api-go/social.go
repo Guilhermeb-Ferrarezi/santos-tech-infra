@@ -57,11 +57,15 @@ type SocialPost struct {
 	Hashtags           []string        `json:"hashtags"`
 	ConceitoVisual     string          `json:"conceitoVisual"`
 	Paleta             json.RawMessage `json:"paleta"`
-	PromptIA           string          `json:"promptIa"`
-	Specs              json.RawMessage `json:"specs"`
-	MasterURL          string          `json:"masterUrl"`
-	Mandatorios        string          `json:"mandatorios"`
-	ResponsavelID      *int64          `json:"responsavelId"`
+	// Roteiro de fala — texto corrido único por post, só usado em formato de
+	// vídeo (reel/short/video_longo). Prompt de IA agora é por slide, dentro
+	// de CopyArte (json.RawMessage, opaco aqui — ver CopyArteSlide no
+	// dashboard).
+	Roteiro       string          `json:"roteiro"`
+	Specs         json.RawMessage `json:"specs"`
+	MasterURL     string          `json:"masterUrl"`
+	Mandatorios   string          `json:"mandatorios"`
+	ResponsavelID *int64          `json:"responsavelId"`
 	// Justificativa obrigatória quando Status=="sem_recurso" (ver
 	// validateSocialPostInput) — o que falta pra produzir a peça (aluno, turma,
 	// sala etc.). Vazia pra qualquer outro status.
@@ -148,7 +152,7 @@ type SocialPostInput struct {
 	Hashtags           []string        `json:"hashtags"`
 	ConceitoVisual     string          `json:"conceitoVisual"`
 	Paleta             json.RawMessage `json:"paleta"`
-	PromptIA           string          `json:"promptIa"`
+	Roteiro            string          `json:"roteiro"`
 	Specs              json.RawMessage `json:"specs"`
 	MasterURL          string          `json:"masterUrl"`
 	Mandatorios        string          `json:"mandatorios"`
@@ -236,7 +240,7 @@ func socialPostInputFromCurrent(p *SocialPost) SocialPostInput {
 		Hashtags:           p.Hashtags,
 		ConceitoVisual:     p.ConceitoVisual,
 		Paleta:             p.Paleta,
-		PromptIA:           p.PromptIA,
+		Roteiro:            p.Roteiro,
 		Specs:              p.Specs,
 		MasterURL:          p.MasterURL,
 		Mandatorios:        p.Mandatorios,
@@ -293,7 +297,7 @@ func mergeSocialPostInput(in *SocialPostInput, raw map[string]json.RawMessage) e
 		"hashtags":           &in.Hashtags,
 		"conceitoVisual":     &in.ConceitoVisual,
 		"paleta":             &in.Paleta,
-		"promptIa":           &in.PromptIA,
+		"roteiro":            &in.Roteiro,
 		"specs":              &in.Specs,
 		"masterUrl":          &in.MasterURL,
 		"mandatorios":        &in.Mandatorios,
@@ -363,7 +367,7 @@ const socialPostCols = `id::text, title, caption, platform, pilar, status,
 	scheduled_at, media_url, reference_url, drive_folder_id::text, drive_file_id, drive_file_name,
 	drive_cover_folder_id::text, drive_cover_file_id, drive_cover_file_name, alt_text, carousel_items,
 	formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
-	conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios,
+	conceito_visual, paleta, roteiro, specs, master_url, mandatorios,
 	responsavel_id, motivo_sem_recurso, funil_etapa, COALESCE((SELECT name FROM users WHERE id = responsavel_id), ''),
 	COALESCE((SELECT array_agg(sa.user_id ORDER BY sa.added_at) FROM social_post_assignees sa WHERE sa.post_id = social_posts.id), '{}'),
 	serie_id, (SELECT nome FROM social_series WHERE id = social_posts.serie_id),
@@ -379,7 +383,7 @@ func scanSocialPost(row pgx.Row) (*SocialPost, error) {
 		&p.ScheduledAt, &p.MediaURL, &p.ReferenceURL, &p.DriveFolderID, &p.DriveFileID, &p.DriveFileName,
 		&p.DriveCoverFolderID, &p.DriveCoverFileID, &p.DriveCoverFileName, &p.AltText, &p.CarouselItems,
 		&p.Formato, &p.Objetivo, &p.Programa, &p.Receita, &p.PlataformasDestino, &p.CopyArte, &p.Hashtags,
-		&p.ConceitoVisual, &p.Paleta, &p.PromptIA, &p.Specs, &p.MasterURL, &p.Mandatorios,
+		&p.ConceitoVisual, &p.Paleta, &p.Roteiro, &p.Specs, &p.MasterURL, &p.Mandatorios,
 		&p.ResponsavelID, &p.MotivoSemRecurso, &p.FunilEtapa, &p.ResponsavelNome, &p.AssigneeIDs,
 		&serieID, &serieNome,
 		&p.Conta.ID, &contaNome,
@@ -466,7 +470,7 @@ func (s *Server) insertSocialPost(ctx context.Context, in SocialPostInput, creat
 			drive_folder_id, drive_file_id, drive_file_name,
 			drive_cover_folder_id, drive_cover_file_id, drive_cover_file_name, alt_text, carousel_items,
 			formato, objetivo, programa, receita, plataformas_destino, copy_arte, hashtags,
-			conceito_visual, paleta, prompt_ia, specs, master_url, mandatorios, responsavel_id, motivo_sem_recurso, funil_etapa, serie_id, conta_id, created_by)
+			conceito_visual, paleta, roteiro, specs, master_url, mandatorios, responsavel_id, motivo_sem_recurso, funil_etapa, serie_id, conta_id, created_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12::uuid,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)
 		RETURNING id::text`,
 		in.Title, in.Caption, in.Platform, in.Pilar, in.Status, in.ScheduledAt, in.MediaURL, in.ReferenceURL,
@@ -475,7 +479,7 @@ func (s *Server) insertSocialPost(ctx context.Context, in SocialPostInput, creat
 		in.AltText, jsonbOrDefault(in.CarouselItems, "[]"),
 		in.Formato, in.Objetivo, in.Programa, in.Receita, sliceOrEmpty(in.PlataformasDestino),
 		jsonbOrDefault(in.CopyArte, "[]"), sliceOrEmpty(in.Hashtags),
-		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.PromptIA, jsonbOrDefault(in.Specs, "{}"),
+		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.Roteiro, jsonbOrDefault(in.Specs, "{}"),
 		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.MotivoSemRecurso, in.FunilEtapa, in.SerieID, in.ContaID, createdBy).Scan(&id)
 	if err != nil {
 		return nil, portalDBErr(err)
@@ -505,7 +509,7 @@ func (s *Server) updateSocialPost(ctx context.Context, id string, in SocialPostI
 			drive_folder_id=$10::uuid, drive_file_id=$11, drive_file_name=$12,
 			drive_cover_folder_id=$13::uuid, drive_cover_file_id=$14, drive_cover_file_name=$15, alt_text=$16, carousel_items=$17,
 			formato=$18, objetivo=$19, programa=$20, receita=$21, plataformas_destino=$22, copy_arte=$23, hashtags=$24,
-			conceito_visual=$25, paleta=$26, prompt_ia=$27, specs=$28, master_url=$29, mandatorios=$30, responsavel_id=$31, motivo_sem_recurso=$32, funil_etapa=$33, serie_id=$34, conta_id=$35, updated_at=now()
+			conceito_visual=$25, paleta=$26, roteiro=$27, specs=$28, master_url=$29, mandatorios=$30, responsavel_id=$31, motivo_sem_recurso=$32, funil_etapa=$33, serie_id=$34, conta_id=$35, updated_at=now()
 		WHERE id=$1::uuid`,
 		id, in.Title, in.Caption, in.Platform, in.Pilar, in.Status, in.ScheduledAt, in.MediaURL, in.ReferenceURL,
 		in.DriveFolderID, in.DriveFileID, in.DriveFileName,
@@ -513,7 +517,7 @@ func (s *Server) updateSocialPost(ctx context.Context, id string, in SocialPostI
 		in.AltText, jsonbOrDefault(in.CarouselItems, "[]"),
 		in.Formato, in.Objetivo, in.Programa, in.Receita, sliceOrEmpty(in.PlataformasDestino),
 		jsonbOrDefault(in.CopyArte, "[]"), sliceOrEmpty(in.Hashtags),
-		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.PromptIA, jsonbOrDefault(in.Specs, "{}"),
+		in.ConceitoVisual, jsonbOrDefault(in.Paleta, "{}"), in.Roteiro, jsonbOrDefault(in.Specs, "{}"),
 		in.MasterURL, in.Mandatorios, in.ResponsavelID, in.MotivoSemRecurso, in.FunilEtapa, in.SerieID, in.ContaID); err != nil {
 		return nil, portalDBErr(err)
 	}

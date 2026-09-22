@@ -1064,6 +1064,27 @@ CREATE INDEX IF NOT EXISTS idx_blog_categories_audience ON blog_categories(audie
 -- inteira. Nunca duplicar um DROP/ADD CONSTRAINT pra uma coluna que já tem
 -- um bloco — editar o existente.
 ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS motivo_sem_recurso TEXT NOT NULL DEFAULT '';
+
+-- Roteiro de fala (texto corrido único por post) — só usado em formato de
+-- vídeo (reel/short/video_longo); ver PostDialog.tsx no dashboard.
+ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS roteiro TEXT NOT NULL DEFAULT '';
+
+-- prompt_ia (1 string por post) migra para copy_arte[0].promptIa (1 prompt
+-- por slide — carrossel de N imagens precisa de N prompts gerados em
+-- sequência, um por vez, referenciando a imagem anterior; ver spec
+-- 2026-09-22-roteiro-video-prompt-ia-calendario-editorial). Idempotente:
+-- só roda enquanto a coluna antiga existir (mesmo padrão de
+-- blog_heatmap_clicks acima) — senão o boot seguinte quebra tentando
+-- referenciar uma coluna já dropada.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='social_posts' AND column_name='prompt_ia') THEN
+    UPDATE social_posts SET
+      copy_arte = jsonb_set(copy_arte, '{0,promptIa}', to_jsonb(prompt_ia), true)
+    WHERE prompt_ia <> '' AND jsonb_array_length(copy_arte) > 0;
+    ALTER TABLE social_posts DROP COLUMN prompt_ia;
+  END IF;
+END $$;
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

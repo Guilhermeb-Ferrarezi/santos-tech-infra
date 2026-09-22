@@ -1024,8 +1024,8 @@ carrossel — o item 1 é o trio `driveFolderId`/`driveFileId`/`driveFileName` d
 `objetivo` (alcance|engajamento|conversao|autoridade),
 `programa` (''|create|jr|camps|academies), `receita` (catálogo de composição:
 ''|capa_gancho|hero_numero|versus|antes_depois|desenvolvimento|cta_fechamento|checklist|passo_a_passo|citacao_depoimento|poster_anuncio),
-`plataformasDestino[]` (repurposing), `copyArte[]` ({slide,headline,subtitulo,corpo,cta,hookOnScreen}),
-`hashtags[]`, `conceitoVisual`, `paleta` ({fundo,destaque,corPrograma}), `promptIa`,
+`plataformasDestino[]` (repurposing), `copyArte[]` ({slide,headline,subtitulo,corpo,cta,hookOnScreen,promptIa}),
+`hashtags[]`, `conceitoVisual`, `paleta` ({fundo,destaque,corPrograma}), `roteiro` (texto corrido único, só vídeo: reel/short/video_longo),
 `specs` ({proporcao,largura,altura,safeZone,formatoArquivo,duracaoSeg}), `masterUrl`, `mandatorios`,
 `responsavelId` (nullable, FK users — quem executa o post; settable via POST/PUT, um por post),
 `responsavelNome` (denormalizado, só leitura, vazio se sem responsável ou usuário removido),

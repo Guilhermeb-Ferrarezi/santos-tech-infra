@@ -7051,6 +7051,7 @@ components:
         corpo: { type: string }
         cta: { type: string }
         hookOnScreen: { type: string }
+        promptIa: { type: string, description: "Prompt de geração de imagem por IA (ex.: Gemini Nano Banana/ChatGPT Images) pra este slide — 1 por imagem, gerados em sequência." }
       required: [slide, headline]
 
     SocialPaleta:
@@ -7109,7 +7110,7 @@ components:
         hashtags: { type: array, items: { type: string } }
         conceitoVisual: { type: string }
         paleta: { $ref: "#/components/schemas/SocialPaleta" }
-        promptIa: { type: string }
+        roteiro: { type: string, description: "Roteiro de fala — só usado em formato de vídeo (reel/short/video_longo)." }
         specs: { $ref: "#/components/schemas/SocialSpecs" }
         masterUrl: { type: string }
         mandatorios: { type: string }
@@ -7174,7 +7175,7 @@ components:
         hashtags: { type: array, items: { type: string } }
         conceitoVisual: { type: string }
         paleta: { $ref: "#/components/schemas/SocialPaleta" }
-        promptIa: { type: string }
+        roteiro: { type: string, description: "Roteiro de fala — só usado em formato de vídeo (reel/short/video_longo)." }
         specs: { $ref: "#/components/schemas/SocialSpecs" }
         masterUrl: { type: string }
         mandatorios: { type: string }
