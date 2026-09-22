@@ -111,6 +111,11 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// request nativo via provider.opAdapter e devolve o resultado extraído —
 	// AssemblyAI/Replicate rodam com polling interno do job.
 	mux.HandleFunc("POST /auth/admin/api-router/providers/{id}/op/{op}", s.rateLimit(10, min, s.adminGuard(s.handleAPIRouterOp)))
+
+	// Extensão de questões: rota estreita, authGuard (qualquer usuário logado),
+	// não adminGuard — ver handlers_quiz.go.
+	mux.HandleFunc("POST /quiz/answer", s.rateLimit(30, min, s.authGuard(s.handleQuizAnswer)))
+
 	// Gestão admin de cargos personalizados
 	mux.HandleFunc("GET /auth/admin/custom-roles", s.adminGuard(s.handleListCustomRoles))
 	mux.HandleFunc("POST /auth/admin/custom-roles", s.rateLimit(10, min, s.adminGuard(s.handleCreateCustomRole)))

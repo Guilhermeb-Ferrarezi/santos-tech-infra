@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -187,6 +188,16 @@ type Config struct {
 	SecretsSyncURL      string // base, ex: https://api.santos-tech.com/secrets
 	SecretsSyncToken    string // mesmo valor de INTERNAL_SYNC_TOKEN no secrets-go
 	SecretsSyncInterval time.Duration
+
+	// Rota POST /quiz/answer (extensão de questões). Provider por ID e não por
+	// nome: `name` é editável na UI admin, e renomear quebraria a extensão em
+	// silêncio. Zero = rota responde 503.
+	QuizJevProviderID int64
+	// QuizFallbackModel: modelo pedido ao agent-go (Claude Code em container)
+	// quando o Jev fica inseguro. Não há provider nem chave de API aqui.
+	QuizFallbackModel string
+	QuizMinConfidence float64 // abaixo disso, escala pro fallback
+	QuizMinMargin     float64 // p1−p2 abaixo disso = empate técnico, escala
 }
 
 func LoadConfig() Config {
@@ -267,6 +278,11 @@ func LoadConfig() Config {
 		SecretsSyncURL:      strings.TrimRight(getEnv("SECRETS_SYNC_URL", ""), "/"),
 		SecretsSyncToken:    getEnv("SECRETS_SYNC_TOKEN", ""),
 		SecretsSyncInterval: getEnvDuration("SECRETS_SYNC_INTERVAL", time.Hour),
+
+		QuizJevProviderID: getEnvInt64("QUIZ_JEV_PROVIDER_ID", 0),
+		QuizFallbackModel: getEnv("QUIZ_FALLBACK_MODEL", "sonnet"),
+		QuizMinConfidence: getEnvFloat("QUIZ_MIN_CONFIDENCE", 0.75),
+		QuizMinMargin:     getEnvFloat("QUIZ_MIN_MARGIN", 0.15),
 	}
 	if c.AuthWebOrigin == "" && len(c.CORSOrigins) > 0 {
 		c.AuthWebOrigin = c.CORSOrigins[0]
@@ -340,6 +356,24 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			return d
+		}
+	}
+	return fallback
+}
+
+func getEnvInt64(key string, fallback int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
 		}
 	}
 	return fallback

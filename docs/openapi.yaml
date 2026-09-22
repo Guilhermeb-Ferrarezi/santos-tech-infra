@@ -101,6 +101,15 @@ tags:
       posts, séries, donos de plataforma e configurações é **Admin-only**.
       Professor **não** tem acesso automático (diferente de outros módulos do
       painel) — só Admin ou cargo com a permissão explícita.
+  - name: Quiz
+    description: |
+      `POST /quiz/answer` — responde uma questão de múltipla escolha
+      selecionada na página, para a extensão de navegador. O Jev (modelo
+      rápido e barato, via roteador de chaves de API) responde primeiro;
+      quando fica inseguro, escala para o Claude Code em container
+      (agent-go). Exige apenas sessão válida (qualquer papel) — rota
+      estreita de propósito, não alcança o roteador de chaves de API como
+      admin (`/auth/admin/api-router/.../proxy`).
 
 paths:
   /health:
@@ -2600,6 +2609,151 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
               example: { code: NO_ACTIVE_KEYS, message: "provider sem chaves ativas" }
+
+  /quiz/answer:
+    post:
+      tags: [Quiz]
+      summary: Responder questão de múltipla escolha (extensão de navegador)
+      description: |
+        Recebe o bloco de questão selecionado na página (ou já separado em
+        `question`+`options`) e devolve a alternativa mais provável.
+
+        Primeiro tenta o Jev (modelo rápido e barato, via roteador de chaves
+        de API — provider `QUIZ_JEV_PROVIDER_ID`). Quando ele responde com
+        confiança abaixo de `QUIZ_MIN_CONFIDENCE`, com margem entre as duas
+        alternativas mais prováveis abaixo de `QUIZ_MIN_MARGIN`, quando falha,
+        ou quando `explain=true` é pedido, a requisição escala para o Claude
+        Code rodando em container (agent-go — sem provider nem chave de API
+        nesse caminho, mesmo mecanismo que o Pós-aula usa). Se o Jev chegou a
+        responder mas a escalada falha, a resposta volta a ser o palpite do
+        Jev (`degraded: true`) em vez de erro.
+
+        Exige sessão autenticada, qualquer papel (`authGuard`, não
+        `adminGuard`): rota estreita de propósito, para a extensão não
+        alcançar o roteador de chaves de API como admin
+        (`/auth/admin/api-router/.../proxy`), que dispararia requisição
+        arbitrária com as chaves da empresa.
+
+        Corpo limitado a 64KB. Rate limit: **30 req/min por IP**.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: "É obrigatório informar `raw` OU `options` (com pelo menos 2 alternativas)."
+              properties:
+                raw:
+                  type: string
+                  description: "Bloco cru selecionado na página (enunciado + alternativas) — caminho normal, o servidor separa as alternativas."
+                  example: |
+                    Qual é a capital da França?
+                    A) Londres
+                    B) Paris
+                    C) Berlim
+                    D) Madri
+                question:
+                  type: string
+                  description: "Alternativa a `raw`: enunciado já separado pelo cliente. Usado junto de `options`."
+                options:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: 'Alternativa a `raw`: mapa rótulo → texto, já separado pelo cliente (ex.: {"A": "Londres", "B": "Paris"}).'
+                explain:
+                  type: boolean
+                  description: "Força o escalonamento para o Claude e pede justificativa (`reasoning` na resposta), mesmo se o Jev respondesse com confiança alta."
+      responses:
+        "200":
+          description: Resposta escolhida
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer:
+                    type: string
+                    description: 'Rótulo escolhido, preservando o rótulo original da prova (pode ser "B", "3" etc — não é normalizado).'
+                    example: "B"
+                  answerText: { type: string, description: "Texto da alternativa escolhida.", example: "Paris" }
+                  confidence: { type: number, description: "Confiança do Jev (0–1). Ausente/zero quando o Jev não chegou a responder — ver `source`/`degraded`." }
+                  probabilities:
+                    type: object
+                    additionalProperties: { type: number }
+                    description: "Probabilidade do Jev por rótulo. Presente só quando o Jev respondeu."
+                  source: { type: string, enum: [jev, claude], description: "De onde veio a resposta que está sendo lida agora." }
+                  escalated: { type: boolean, description: "true quando a resposta veio do estágio escalado (Claude)." }
+                  degraded: { type: boolean, description: "true quando o Jev respondeu mas a escalada falhou — a resposta é o palpite de baixa confiança do Jev, não uma escalada bem-sucedida." }
+                  reasoning: { type: string, description: "Justificativa da resposta. Só presente quando `source` é `claude`." }
+                  parsed:
+                    type: object
+                    description: "O que o servidor entendeu da seleção — para diagnóstico do lado da extensão."
+                    properties:
+                      question: { type: string }
+                      options:
+                        type: object
+                        additionalProperties: { type: string }
+                    required: [question, options]
+                  timings:
+                    type: object
+                    properties:
+                      jevMs: { type: integer, description: "Tempo gasto no Jev, em ms." }
+                      claudeMs: { type: integer, description: "Tempo gasto no Claude, em ms (0 quando não escalou)." }
+                      totalMs: { type: integer, description: "Tempo total da requisição, em ms." }
+                    required: [jevMs, claudeMs, totalMs]
+                required: [answer, answerText, confidence, source, escalated, degraded, parsed, timings]
+              example:
+                answer: "B"
+                answerText: "Paris"
+                confidence: 0.98
+                probabilities: { A: 0.01, B: 0.98, C: 0.005, D: 0.005 }
+                source: jev
+                escalated: false
+                degraded: false
+                parsed:
+                  question: "Qual é a capital da França?"
+                  options: { A: "Londres", B: "Paris", C: "Berlim", D: "Madri" }
+                timings: { jevMs: 720, claudeMs: 0, totalMs: 745 }
+        "400":
+          description: "JSON inválido, ou `raw` e `options` ambos vazios"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: INVALID_BODY, message: "informe `raw` ou `options`" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: "Menos de 2 alternativas reconhecidas no bloco cru (ou mais de 9)"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: UNPARSEABLE, message: "Não consegui separar as alternativas — selecione o enunciado e as alternativas" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "502":
+          description: "Nenhum modelo conseguiu responder — o Jev falhou e a escalada para o Claude também falhou (ou não havia como escalar)"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: UPSTREAM_FAILED, message: "Nenhum modelo conseguiu responder" }
+        "503":
+          description: "QUIZ_JEV_PROVIDER_ID não configurado (ou o provider não existe mais), API_VAULT_SECRET não configurada, ou o provider do Jev está sem chaves ativas"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                naoConfigurado:
+                  summary: Provider do Jev não configurado
+                  value: { code: NOT_CONFIGURED, message: "QUIZ_JEV_PROVIDER_ID não configurado" }
+                semChavesAtivas:
+                  summary: Provider sem chaves ativas
+                  value: { code: NO_ACTIVE_KEYS, message: "Provider sem chaves ativas" }
+        "504":
+          description: "Estourou o orçamento total da rota (~25s) antes de qualquer modelo responder"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: UPSTREAM_TIMEOUT, message: "Tempo esgotado ao consultar os modelos" }
+
   # Serviço: apps/payments-go · prefixo em produção: /payments (via proxy reverso)
   # TODO: atualizar llms.txt central (api.santos-tech.com/llms.txt) com esta rota.
   /payments/statement:
@@ -4236,7 +4390,7 @@ paths:
         - { in: query, name: range, description: "7d (default) | 30d | 90d", schema: { type: string } }
       responses:
         "200":
-          description: Ranking do dimension escolhido, mais frequente primeiro. Em `country`, `key` é o código ISO alpha-2 (ex.: BR).
+          description: "Ranking do dimension escolhido, mais frequente primeiro. Em `country`, `key` é o código ISO alpha-2 (ex.: BR)."
           content:
             application/json:
               schema:
@@ -4273,7 +4427,7 @@ paths:
         - { in: query, name: limit, schema: { type: integer, default: 30, maximum: 100 } }
       responses:
         "200":
-          description: Envelope da PostHog — `{ results: SessionRecording[] }`.
+          description: "Envelope da PostHog — `{ results: SessionRecording[] }`."
           content:
             application/json:
               schema: { type: object }
