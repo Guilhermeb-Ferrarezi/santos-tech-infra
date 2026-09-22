@@ -649,9 +649,9 @@ Prompt e parse do escalonamento. Reaproveita o adapter `anthropic` que já exist
       Reasoning string `json:"reasoning"`
   }
   func buildFallbackPrompt(p quizParsed) string
-  func parseFallbackAnswer(raw []byte, p quizParsed) (quizFallbackAnswer, error)
+  func parseFallbackAnswer(adapter string, raw []byte, p quizParsed) (quizFallbackAnswer, error)
   ```
-  `parseFallbackAnswer` recebe o corpo **nativo da Anthropic** (o que `executeAPIRouterRequest` devolve), não o texto já extraído.
+  `parseFallbackAnswer` recebe o corpo **nativo do provider** (o que `executeAPIRouterRequest` devolve), não o texto já extraído, e delega a extração do texto a `parseChatResponse(adapter, raw)` (`apirouter_adapters.go:101`), que já trata o campo `error` do provider. O `adapter` é parâmetro e não constante porque o provider de fallback vem de `QUIZ_FALLBACK_PROVIDER_ID` — fixar Anthropic quebraria em silêncio se ele apontasse para outro provider.
 
 - [ ] **Step 1: Escrever os testes que falham**
 
@@ -847,10 +847,11 @@ O coração da rota, escrito como função pura com os dois upstreams injetados.
       TotalMs  int64 `json:"totalMs"`
   }
   type quizDeps struct {
-      jev           func(ctx context.Context, body []byte) ([]byte, error)
-      fallback      func(ctx context.Context, prompt string) ([]byte, error)
-      minConfidence float64
-      minMargin     float64
+      jev             func(ctx context.Context, body []byte) ([]byte, error)
+      fallback        func(ctx context.Context, prompt string) ([]byte, error)
+      fallbackAdapter string // provider.ChatAdapter do provider de fallback
+      minConfidence   float64
+      minMargin       float64
   }
   const (
       quizSourceJev    = "jev"
@@ -894,8 +895,9 @@ func depsFake(jevBody string, jevErr error, fbBody string, fbErr error, chamadas
 			}
 			return []byte(fbBody), nil
 		},
-		minConfidence: 0.75,
-		minMargin:     0.15,
+		fallbackAdapter: chatAdapterAnthropic,
+		minConfidence:   0.75,
+		minMargin:       0.15,
 	}
 }
 
@@ -1097,10 +1099,13 @@ type quizResponse struct {
 }
 
 type quizDeps struct {
-	jev           func(ctx context.Context, body []byte) ([]byte, error)
-	fallback      func(ctx context.Context, prompt string) ([]byte, error)
-	minConfidence float64
-	minMargin     float64
+	jev      func(ctx context.Context, body []byte) ([]byte, error)
+	fallback func(ctx context.Context, prompt string) ([]byte, error)
+	// fallbackAdapter é o ChatAdapter do provider de fallback: o parse da
+	// resposta depende do formato nativo dele, e o provider vem de env.
+	fallbackAdapter string
+	minConfidence   float64
+	minMargin       float64
 }
 
 func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizResponse, error) {
@@ -1203,7 +1208,7 @@ func askFallback(ctx context.Context, p quizParsed, deps quizDeps) (quizFallback
 	if err != nil {
 		return quizFallbackAnswer{}, elapsed, err
 	}
-	ans, err := parseFallbackAnswer(raw, p)
+	ans, err := parseFallbackAnswer(deps.fallbackAdapter, raw, p)
 	return ans, elapsed, err
 }
 ```
@@ -1433,10 +1438,11 @@ func (s *Server) handleQuizAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := answerQuiz(r.Context(), body, quizDeps{
-		jev:           s.quizJevCaller(jevProvider),
-		fallback:      s.quizFallbackCaller(fbProvider),
-		minConfidence: s.cfg.QuizMinConfidence,
-		minMargin:     s.cfg.QuizMinMargin,
+		jev:             s.quizJevCaller(jevProvider),
+		fallback:        s.quizFallbackCaller(fbProvider),
+		fallbackAdapter: fbProvider.ChatAdapter,
+		minConfidence:   s.cfg.QuizMinConfidence,
+		minMargin:       s.cfg.QuizMinMargin,
 	})
 	if err != nil {
 		writeErr(w, quizErr(err))
