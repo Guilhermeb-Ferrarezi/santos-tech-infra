@@ -5,6 +5,13 @@
 if (!window.__quizJevCarregado) {
   window.__quizJevCarregado = true;
 
+  // Shim mínimo: Firefox expõe `browser.*`, Chrome expõe só `chrome.*` (ambos
+  // aceitam promise quando o callback é omitido). Declarado DENTRO do guard:
+  // o atalho injeta este arquivo de novo a cada Alt+Q (não há
+  // content_scripts declarativo), e um `const` no topo do arquivo, fora do
+  // guard, quebraria com "already declared" na segunda injeção.
+  const api = globalThis.browser ?? globalThis.chrome;
+
   const ID = "__quiz-jev-overlay";
   // Shadow DOM + `all: initial`: sem isso o CSS da página deforma o card, e
   // site de prova costuma ter CSS agressivo.
@@ -260,8 +267,19 @@ if (!window.__quizJevCarregado) {
     throw new Error("não consegui reduzir a imagem o suficiente");
   }
 
-  browser.runtime.onMessage.addListener(async (msg) => {
-    if (msg?.type !== "start") return;
+  // Este listener nunca chama sendResponse (o background só espera a entrega
+  // da mensagem, não um resultado — ver background.js), então não precisa de
+  // `return true`: funciona igual nos dois navegadores. O trabalho async fica
+  // numa função separada (processarSelecao) em vez de tornar o próprio
+  // listener `async`, pra não depender de como cada navegador trata o valor
+  // de retorno (uma Promise) de uma função listener async.
+  api.runtime.onMessage.addListener((msg) => {
+    if (msg?.type !== "start") return false;
+    processarSelecao();
+    return false;
+  });
+
+  async function processarSelecao() {
     const sel = window.getSelection();
     const raw = sel ? sel.toString().trim() : "";
     if (!raw) return; // sem seleção não chama a API
@@ -287,7 +305,7 @@ if (!window.__quizJevCarregado) {
       }
       card.textContent = "Capturando a tela…";
       posicionar(card, rect);
-      const printResp = await browser.runtime.sendMessage({ type: "print" });
+      const printResp = await api.runtime.sendMessage({ type: "print" });
       if (!document.getElementById(ID)) return; // usuário fechou enquanto carregava
       if (!printResp?.ok) {
         mostrarErro(card, printResp?.error || "Não consegui capturar a tela.", rect);
@@ -306,9 +324,9 @@ if (!window.__quizJevCarregado) {
 
     card.textContent = imageBase64 ? "Analisando a imagem…" : "Consultando…";
     posicionar(card, rect);
-    const resp = await browser.runtime.sendMessage({ type: "ask", raw, imageBase64, imageMime });
+    const resp = await api.runtime.sendMessage({ type: "ask", raw, imageBase64, imageMime });
     if (!document.getElementById(ID)) return; // usuário fechou enquanto carregava
     if (resp?.ok) mostrarResposta(card, resp.data, rect, !!imageBase64);
     else mostrarErro(card, resp?.error, rect);
-  });
+  }
 }

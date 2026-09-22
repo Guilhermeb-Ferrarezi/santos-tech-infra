@@ -8,7 +8,10 @@
   },
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["https://api.santos-tech.com/*"],
-  "background": { "scripts": ["src/background.js"] },
+  "background": {
+    "scripts": ["src/background.js"],
+    "service_worker": "src/background.js"
+  },
   "options_ui": { "page": "src/options.html", "open_in_tab": true },
   "commands": {
     "answer-selection": {

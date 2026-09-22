@@ -4,15 +4,20 @@
 // tem acesso a essa API. Nenhuma credencial de API passa por aqui — a
 // extensão só conhece o próprio login do usuário.
 
+// Shim mínimo: Firefox expõe `browser.*` (promises nativas), Chrome expõe só
+// `chrome.*` (que também aceita promise quando o callback é omitido, desde
+// Chrome MV3). Sem isso o arquivo inteiro só funcionaria num dos dois.
+const api = globalThis.browser ?? globalThis.chrome;
+
 const API = "https://api.santos-tech.com";
 
 async function getTokens() {
-  const { tokens } = await browser.storage.local.get("tokens");
+  const { tokens } = await api.storage.local.get("tokens");
   return tokens || null;
 }
 
 async function setTokens(tokens) {
-  await browser.storage.local.set({ tokens });
+  await api.storage.local.set({ tokens });
 }
 
 // Fila de refresh: o refresh token é rotativo e fail-closed — reusar um token
@@ -30,7 +35,7 @@ async function refreshTokens() {
       headers: { Authorization: `Bearer ${tokens.refreshToken}` },
     });
     if (!res.ok) {
-      await browser.storage.local.remove("tokens");
+      await api.storage.local.remove("tokens");
       throw new Error("sessão expirada");
     }
     const data = await res.json();
@@ -82,27 +87,34 @@ async function login(identifier, password) {
     throw new Error("Sua conta pede 2FA e a extensão ainda não trata isso.");
   }
   if (!data.accessToken) {
-    // Acontece se o servidor não reconhecer a origem moz-extension:// como
-    // cliente nativo (ver isNativeClient no api-go): login funciona, tokens
-    // não vêm, e a extensão ficaria logada e inútil.
-    throw new Error("Servidor não devolveu tokens — api-go precisa do ajuste em isNativeClient.");
+    // Acontece se o servidor não reconhecer a origem da extensão (moz-extension://
+    // ou chrome-extension://) como cliente nativo (ver isNativeClient no
+    // api-go): login funciona, tokens não vêm, e a extensão ficaria logada e
+    // inútil. Sintoma exato de o servidor ainda não ter o ajuste pro navegador
+    // em uso.
+    throw new Error(
+      "Login OK, mas o servidor não devolveu tokens — o servidor não reconheceu a origem da extensão (api-go precisa do ajuste em isNativeClient para este navegador)."
+    );
   }
   await setTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken });
 }
 
-browser.commands.onCommand.addListener(async (command) => {
+api.commands.onCommand.addListener(async (command) => {
   if (command !== "answer-selection") return;
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  const [tab] = await api.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
   try {
-    await browser.scripting.executeScript({ target: { tabId: tab.id }, files: ["src/content.js"] });
-    await browser.tabs.sendMessage(tab.id, { type: "start" });
+    await api.scripting.executeScript({ target: { tabId: tab.id }, files: ["src/content.js"] });
+    await api.tabs.sendMessage(tab.id, { type: "start" });
   } catch (e) {
     console.error("quiz-jev: não consegui injetar na aba", e);
   }
 });
 
-browser.runtime.onMessage.addListener((msg) => {
+// Padrão sendResponse + `return true`: funciona em Firefox E Chrome. O padrão
+// anterior (`return apiFetch(...).then(...)`, uma Promise) é só Firefox — no
+// Chrome a mensagem nunca é respondida e quem espera (content.js) trava.
+api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "ask") {
     const body = { raw: msg.raw, explain: !!msg.explain };
     // imageBase64/imageMime só vêm quando o content script detectou conteúdo
@@ -112,26 +124,31 @@ browser.runtime.onMessage.addListener((msg) => {
       body.imageBase64 = msg.imageBase64;
       body.imageMime = msg.imageMime || "image/png";
     }
-    return apiFetch("/quiz/answer", body)
-      .then((data) => ({ ok: true, data }))
-      .catch((e) => ({ ok: false, error: e.message }));
+    apiFetch("/quiz/answer", body)
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
   }
   if (msg?.type === "print") {
     // O content script não pode chamar tabs.captureVisibleTab — só o
     // background tem acesso a essa API. activeTab (concedida pelo próprio
-    // atalho Alt+Q) já é suficiente; não precisa de permissão extra.
-    return browser.tabs
+    // atalho Alt+Q) já é suficiente nos dois navegadores; não precisa de
+    // permissão extra nem no Chrome.
+    api.tabs
       .captureVisibleTab(null, { format: "png" })
-      .then((dataUrl) => ({ ok: true, dataUrl }))
-      .catch((e) => ({ ok: false, error: e.message || "falha ao capturar a tela" }));
+      .then((dataUrl) => sendResponse({ ok: true, dataUrl }))
+      .catch((e) => sendResponse({ ok: false, error: e.message || "falha ao capturar a tela" }));
+    return true;
   }
   if (msg?.type === "login") {
-    return login(msg.identifier, msg.password)
-      .then(() => ({ ok: true }))
-      .catch((e) => ({ ok: false, error: e.message }));
+    login(msg.identifier, msg.password)
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
   }
   if (msg?.type === "status") {
-    return getTokens().then((t) => ({ loggedIn: !!t?.accessToken }));
+    getTokens().then((t) => sendResponse({ loggedIn: !!t?.accessToken }));
+    return true;
   }
   return false;
 });
