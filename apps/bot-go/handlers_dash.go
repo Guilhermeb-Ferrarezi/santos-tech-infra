@@ -879,14 +879,20 @@ type dashAgenda struct {
 }
 
 // dashUpcoming — aula experimental já agendada no Notion.
+// dashUpcoming — uma linha da grade semanal, como o painel mostra.
+//
+// Acompanha a base real: dia da semana e horário em texto, não data-e-hora. O
+// painel exibe a mesma coisa que a escola vê no Notion.
 type dashUpcoming struct {
 	PageID    string `json:"pageId"`
-	Aluno     string `json:"aluno"`
-	DataHora  string `json:"dataHora"`
+	Titulo    string `json:"titulo"`
+	Dia       string `json:"dia"`
+	Horario   string `json:"horario"`
 	Display   string `json:"display"`
-	Status    string `json:"status"`
 	Professor string `json:"professor"`
-	WhatsApp  string `json:"whatsapp"`
+	Conteudo  string `json:"conteudo"`
+	// DoBot — a escola precisa distinguir, de relance, o que o bot marcou.
+	DoBot bool `json:"doBot"`
 }
 
 // dashPending — agendamento aguardando confirmação do admin (ainda não no Notion).
@@ -913,9 +919,10 @@ func (s *Server) handleDashBookings(w http.ResponseWriter, r *http.Request) {
 		agenda, _ := n.Schedule(ctx)
 		for _, e := range agenda {
 			out.Upcoming = append(out.Upcoming, dashUpcoming{
-				PageID: e.PageID,
-				Aluno:  e.Aluno, DataHora: e.DataHora, Display: e.Display,
-				Status: e.Status, Professor: e.Professor, WhatsApp: e.WhatsApp,
+				PageID: e.PageID, Titulo: e.Titulo,
+				Dia: e.Dia, Horario: e.Horario, Display: e.Display(),
+				Professor: e.Professor, Conteudo: e.Conteudo,
+				DoBot: EhDoBot(e.Titulo),
 			})
 		}
 	}

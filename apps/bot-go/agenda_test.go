@@ -84,12 +84,12 @@ func TestDentroDoFuncionamentoValidaOFim(t *testing.T) {
 	}
 }
 
+// A grade da escola guarda dia da semana e intervalo em texto, não data.
 func TestConflitoDetectaSobreposicao(t *testing.T) {
-	dia := time.Date(2026, 9, 22, 0, 0, 0, 0, brLocation)
-	hora := func(h, m int) time.Time { return dia.Add(time.Duration(h)*time.Hour + time.Duration(m)*time.Minute) }
-	agenda := []ScheduleEntry{
-		{Aluno: "Aula experimental — Ana", DataHora: hora(19, 0).Format(time.RFC3339)},
-	}
+	iv, _ := ParseIntervalo("Quarta", "19:00 ~ 20:00")
+	agenda := []ScheduleEntry{{Titulo: "Jackson", Dia: "Quarta", Horario: "19:00 ~ 20:00", Intervalo: iv, Ok: true}}
+	// 23/09/2026 é quarta-feira.
+	hora := func(h, m int) time.Time { return time.Date(2026, 9, 23, h, m, 0, 0, brLocation) }
 
 	casos := []struct {
 		nome     string
@@ -97,8 +97,7 @@ func TestConflitoDetectaSobreposicao(t *testing.T) {
 		conflita bool
 	}{
 		{"mesmo horário", hora(19, 0), true},
-		// O que o código antigo não pegava: tratava cada aula como um instante,
-		// então 19h30 não conflitava com uma aula de uma hora começando às 19h.
+		// O que o código antigo não pegava: tratava cada aula como um instante.
 		{"começa no meio da outra", hora(19, 30), true},
 		{"termina dentro da outra", hora(18, 30), true},
 		{"logo antes, sem encostar", hora(18, 0), false},
@@ -110,14 +109,21 @@ func TestConflitoDetectaSobreposicao(t *testing.T) {
 			t.Errorf("%s: conflito=%v, queria %v", c.nome, bateu, c.conflita)
 		}
 	}
-}
 
+	// Linha cujo horário não deu para interpretar NÃO bloqueia: o código não
+	// finge que entendeu um texto que não entendeu.
+	ilegivel := []ScheduleEntry{{Titulo: "X", Dia: "Quarta", Horario: "de manhã", Ok: false}}
+	if _, bateu := Conflito(hora(9, 0), time.Hour, ilegivel); bateu {
+		t.Error("horário ilegível não deveria bloquear")
+	}
+}
 func TestPodeMarcarReuneAsTravas(t *testing.T) {
 	j, _ := ParseFuncionamento("08:00", "22:00")
-	agora := time.Date(2026, 9, 22, 10, 0, 0, 0, brLocation)
+	agora := time.Date(2026, 9, 22, 10, 0, 0, 0, brLocation) // 22/09/2026 é terça
 	dia := time.Date(2026, 9, 22, 0, 0, 0, 0, brLocation)
 	hora := func(h, m int) time.Time { return dia.Add(time.Duration(h)*time.Hour + time.Duration(m)*time.Minute) }
-	agenda := []ScheduleEntry{{DataHora: hora(19, 0).Format(time.RFC3339)}}
+	iv, _ := ParseIntervalo("Terça", "19:00 ~ 20:00")
+	agenda := []ScheduleEntry{{Dia: "Terça", Horario: "19:00 ~ 20:00", Intervalo: iv, Ok: true}}
 
 	casos := []struct {
 		nome   string

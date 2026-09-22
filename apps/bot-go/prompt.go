@@ -98,23 +98,33 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	}
 
 	if len(cfg.Schedule) > 0 {
-		sb.WriteString("Aulas experimentais JÁ AGENDADAS (não proponha estes horários):\n")
-		for _, e := range cfg.Schedule {
-			line := "- "
-			if e.Display != "" {
-				line += e.Display + " "
+		// A grade vai AGRUPADA POR DIA DA SEMANA, que é como a escola pensa a
+		// agenda e como o Notion guarda. Uma lista solta de horários obriga o
+		// modelo a reorganizar de cabeça, e é aí que ele erra.
+		sb.WriteString("GRADE DA SEMANA — estes horários estão OCUPADOS. Nunca proponha um horário que caia dentro de um destes:\n")
+		for _, dia := range []string{"Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"} {
+			var doDia []ScheduleEntry
+			for _, e := range cfg.Schedule {
+				if strings.EqualFold(e.Dia, dia) {
+					doDia = append(doDia, e)
+				}
 			}
-			if e.Aluno != "" {
-				line += "— " + e.Aluno + " "
+			if len(doDia) == 0 {
+				continue
 			}
-			if e.Professor != "" {
-				line += "(prof. " + e.Professor + ") "
+			fmt.Fprintf(&sb, "%s:\n", dia)
+			for _, e := range doDia {
+				linha := "  - " + e.Horario
+				if e.Titulo != "" {
+					linha += " — " + e.Titulo
+				}
+				if e.Professor != "" {
+					linha += " (prof. " + e.Professor + ")"
+				}
+				sb.WriteString(linha + "\n")
 			}
-			if e.Status != "" {
-				line += "[" + e.Status + "]"
-			}
-			sb.WriteString(strings.TrimRight(line, " ") + "\n")
 		}
+		sb.WriteString("A aula ocupa o intervalo INTEIRO: quem tem aula das 8h às 10h também está ocupado às 9h.\n")
 	}
 	sb.WriteString("Fluxo de agendamento:\n")
 	sb.WriteString("- Só inicie se o cliente demonstrar interesse em agendar/marcar uma aula.\n")

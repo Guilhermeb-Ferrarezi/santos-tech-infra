@@ -176,8 +176,12 @@ func LoadConfig() Config {
 		SiteURL: strings.TrimRight(getEnv("SITE_URL", "https://santos-tech.com"), "/"),
 
 		NotionToken: getEnv("NOTION_TOKEN", ""),
-		// Data source "Agenda — Aulas Experimentais" (database multi-source 37ef7f42…80bc).
-		NotionExperimentalDSID: getEnv("NOTION_EXPERIMENTAL_AGENDA_DS_ID", "37ef7f42-1ce5-8044-bcd2-000b3efd7f76"),
+		// Data source "Agenda de Aulas" — a agenda que a escola realmente usa.
+		//
+		// O padrão anterior apontava para "Agenda — Aulas Experimentais", uma
+		// base paralela com UMA linha de junho. O bot lia ela e marcava em cima
+		// das 33 aulas reais, que estavam aqui o tempo todo.
+		NotionExperimentalDSID: getEnv("NOTION_AGENDA_DS_ID", "fcbd4d0c-5173-462a-96a5-c8d05340ed14"),
 
 		EvolutionWebhookSecret: getEnv("EVOLUTION_WEBHOOK_SECRET", ""),
 		EvolutionAPIURL:        strings.TrimRight(getEnv("EVOLUTION_API_URL", ""), "/"),

@@ -95,22 +95,18 @@ func (j JanelaFuncionamento) DentroDoFuncionamento(inicio time.Time, dur time.Du
 
 // ── conflito ─────────────────────────────────────────────────────────────────
 
-// Conflito procura, na agenda lida, alguma aula que se sobreponha ao intervalo
+// Conflito procura, na grade da semana, alguma aula que ocupe o horário
 // pedido. Devolve a que conflita, para o log e a mensagem dizerem qual.
 //
-// Sobreposição de INTERVALO, não igualdade de horário: o código antes tratava
-// cada agendamento como um instante, então 19h e 19h30 não conflitavam nem com
-// aulas de uma hora.
+// Compara DIA DA SEMANA e SOBREPOSIÇÃO de intervalo. Linha cujo horário não
+// deu para interpretar não bloqueia: o código não finge que entendeu um texto
+// que não entendeu — mas a linha continua visível no prompt, e o modelo vê.
 func Conflito(inicio time.Time, dur time.Duration, agenda []ScheduleEntry) (ScheduleEntry, bool) {
-	fim := inicio.Add(dur)
 	for _, e := range agenda {
-		t, ok := parseNotionTime(e.DataHora)
-		if !ok {
-			continue // sem data legível não ocupa horário nenhum
+		if !e.Ok {
+			continue
 		}
-		outroFim := t.Add(dur)
-		// [inicio, fim) invade [t, outroFim)?
-		if inicio.Before(outroFim) && t.Before(fim) {
+		if e.Intervalo.Ocupa(inicio, dur) {
 			return e, true
 		}
 	}
