@@ -198,6 +198,11 @@ type Config struct {
 	QuizFallbackModel string
 	QuizMinConfidence float64 // abaixo disso, escala pro fallback
 	QuizMinMargin     float64 // p1−p2 abaixo disso = empate técnico, escala
+	// QuizMultiMin (QUIZ_MULTI_MIN): piso de probabilidade pra marcar uma
+	// alternativa no modo múltipla resposta. Default baixo (0.45) de
+	// propósito — decisão do dono do projeto: na dúvida, marcar a mais (o
+	// usuário vê a probabilidade e desmarca). Não subir sem essa decisão.
+	QuizMultiMin float64
 }
 
 func LoadConfig() Config {
@@ -283,6 +288,7 @@ func LoadConfig() Config {
 		QuizFallbackModel: getEnv("QUIZ_FALLBACK_MODEL", "sonnet"),
 		QuizMinConfidence: getEnvFloat("QUIZ_MIN_CONFIDENCE", 0.75),
 		QuizMinMargin:     getEnvFloat("QUIZ_MIN_MARGIN", 0.15),
+		QuizMultiMin:      getEnvFloat("QUIZ_MULTI_MIN", 0.45),
 	}
 	if c.AuthWebOrigin == "" && len(c.CORSOrigins) > 0 {
 		c.AuthWebOrigin = c.CORSOrigins[0]

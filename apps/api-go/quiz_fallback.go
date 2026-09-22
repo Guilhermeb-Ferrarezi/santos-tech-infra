@@ -108,6 +108,122 @@ func parseFallbackAnswer(texto string, p quizParsed) (quizFallbackAnswer, error)
 	return ans, nil
 }
 
+// ── modo múltipla resposta ("marque todas que se aplicam") ────────────────
+//
+// buildFallbackPromptMultipla e parseFallbackAnswerMultipla são irmãs de
+// buildFallbackPrompt/parseFallbackAnswer, mas pedem/aceitam uma LISTA de
+// rótulos em vez de um só. Funções separadas (não um parâmetro a mais nas
+// existentes) de propósito: os testes de buildFallbackPrompt/parseFallbackAnswer
+// continuam chamando as funções originais sem editar assinatura nenhuma.
+
+// quizFallbackAnswerMultipla: resposta do Claude no modo múltipla resposta.
+// Labels vem de "answers" (o formato pedido no prompt); Answer é um alias de
+// compatibilidade pro campo singular "answer" — um modelo às vezes devolve
+// isso mesmo quando o prompt pede lista, e a regra é aceitar como lista de
+// um elemento em vez de recusar a resposta inteira.
+type quizFallbackAnswerMultipla struct {
+	Labels    []string `json:"answers"`
+	Answer    string   `json:"answer"`
+	Reasoning string   `json:"reasoning"`
+}
+
+// buildFallbackPromptMultipla monta o prompt do modo múltipla resposta.
+// temImagem segue o mesmo significado de buildFallbackPrompt.
+func buildFallbackPromptMultipla(p quizParsed, temImagem bool) string {
+	var b strings.Builder
+	b.WriteString("Responda a questão de MÚLTIPLA RESPOSTA abaixo — marque TODAS as alternativas ")
+	b.WriteString("corretas, pode ser mais de uma.\n\n")
+	if temImagem {
+		b.WriteString("Há uma imagem anexada a esta mensagem — examine-a com atenção antes de ")
+		b.WriteString("responder. O enunciado sozinho pode não bastar: a resposta pode depender de ")
+		b.WriteString("um gráfico, uma tabela, um cupom ou uma figura geométrica presente na imagem.\n\n")
+	}
+	b.WriteString(p.Question)
+	b.WriteString("\n\n")
+	for _, label := range p.Order {
+		fmt.Fprintf(&b, "%s) %s\n", label, p.Options[label])
+	}
+	// Mesmo cuidado de buildFallbackPrompt (ver o comentário lá, Hotfix
+	// produção): exemplificar com rótulos REAIS da questão, nunca um
+	// placeholder genérico que um modelo possa ler como "a linha inteira".
+	ex1, ex2 := "A", "C"
+	switch len(p.Order) {
+	case 0:
+		// sem alternativas não deveria acontecer aqui (mode múltipla exige
+		// alternativas), mas mantém os placeholders genéricos por segurança.
+	case 1:
+		ex1, ex2 = p.Order[0], p.Order[0]
+	default:
+		ex1, ex2 = p.Order[0], p.Order[len(p.Order)-1]
+	}
+	b.WriteString("\nResponda SOMENTE com um objeto JSON. O campo \"answers\" é uma LISTA com TODOS ")
+	b.WriteString("os rótulos corretos (a letra ou número de cada alternativa, nunca o texto dela). ")
+	b.WriteString("Exemplo, usando rótulos desta questão: ")
+	fmt.Fprintf(&b, "{\"answers\": [%q, %q], \"reasoning\": \"<uma frase curta>\"}", ex1, ex2)
+	b.WriteString(".\nNão repita o texto das alternativas em \"answers\" nem escreva nada fora do JSON.")
+	return b.String()
+}
+
+// parseFallbackAnswerMultipla extrai a lista de rótulos corretos. Cada
+// rótulo passa por resolveFallbackLabel (mesma tolerância de formato do modo
+// escolha única — "C) texto…", caixa diferente etc). Um rótulo inválido é
+// DESCARTADO, não invalida a resposta inteira: melhor devolver os válidos
+// que jogar tudo fora por causa de um só ruim (decisão explícita da spec,
+// diferente de parseFallbackAnswer no modo escolha única, onde um único
+// rótulo TEM que ser válido). Nunca devolve lista vazia com sucesso: sem
+// nenhum rótulo válido, é erro (equivalente a "fallback não respondeu").
+func parseFallbackAnswerMultipla(texto string, p quizParsed) (quizFallbackAnswerMultipla, error) {
+	if strings.TrimSpace(texto) == "" {
+		return quizFallbackAnswerMultipla{}, fmt.Errorf("quiz: fallback não devolveu texto")
+	}
+	match := primeiroObjetoJSON(texto)
+	if match == "" {
+		return quizFallbackAnswerMultipla{}, fmt.Errorf("quiz: fallback não devolveu JSON")
+	}
+	var ans quizFallbackAnswerMultipla
+	if err := json.Unmarshal([]byte(match), &ans); err != nil {
+		return quizFallbackAnswerMultipla{}, fmt.Errorf("quiz: JSON do fallback inválido: %w", err)
+	}
+	brutos := ans.Labels
+	if len(brutos) == 0 && ans.Answer != "" {
+		// Modelo devolveu "answer" string em vez de "answers" lista — aceita
+		// como lista de um elemento.
+		brutos = []string{ans.Answer}
+	}
+	validos := make([]string, 0, len(brutos))
+	for _, bruto := range brutos {
+		label, ok := resolveFallbackLabel(bruto, p.Options)
+		if !ok {
+			continue // descartado, não invalida a resposta inteira
+		}
+		duplicado := false
+		for _, v := range validos {
+			if v == label {
+				duplicado = true
+				break
+			}
+		}
+		if !duplicado {
+			validos = append(validos, label)
+		}
+	}
+	if len(validos) == 0 {
+		return quizFallbackAnswerMultipla{}, fmt.Errorf("quiz: fallback não devolveu nenhum rótulo válido")
+	}
+	// Reordena por p.Order (não pela ordem em que o modelo escreveu) — o
+	// card mostra os rótulos nessa ordem, e a ordem do LLM não é confiável.
+	ordenados := make([]string, 0, len(validos))
+	for _, label := range p.Order {
+		for _, v := range validos {
+			if v == label {
+				ordenados = append(ordenados, label)
+				break
+			}
+		}
+	}
+	return quizFallbackAnswerMultipla{Labels: ordenados, Reasoning: ans.Reasoning}, nil
+}
+
 // quizLabelTruncateLen é o teto de caracteres do rótulo cru citado na
 // mensagem de erro. O caso de produção que motivou isso devolveu o texto
 // inteiro da alternativa no campo "answer" — sem teto, o log vira ruído.

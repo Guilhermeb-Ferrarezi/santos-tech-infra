@@ -85,6 +85,86 @@ func TestParseJevResponseRotuloDesconhecido(t *testing.T) {
 	}
 }
 
+func TestBuildJevRequestIncluiPerguntaMultiplaEAltPorAlternativa(t *testing.T) {
+	body, err := buildJevRequest(exemploParsed())
+	if err != nil {
+		t.Fatalf("buildJevRequest: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("corpo inválido: %v", err)
+	}
+	questions := got["questions"].(map[string]any)
+	multipla, ok := questions["multipla"].(map[string]any)
+	if !ok {
+		t.Fatal("questions não tem a chave 'multipla'")
+	}
+	if multipla["type"] != "noul" {
+		t.Errorf("multipla.type = %v, queria noul", multipla["type"])
+	}
+	for _, label := range []string{"A", "B", "C"} {
+		alt, ok := questions["alt_"+label].(map[string]any)
+		if !ok {
+			t.Fatalf("questions não tem a chave 'alt_%s'", label)
+		}
+		if alt["type"] != "noul" {
+			t.Errorf("alt_%s.type = %v, queria noul", label, alt["type"])
+		}
+	}
+}
+
+// TestParseJevResponseExtraiMultiplaEAltProbs usa os números medidos em
+// produção (ver a spec da Task): multipla=0.91, alt_A=0.86, alt_B=0.03,
+// alt_C=0.87, alt_D=0.82. O formato "noul" é um FLOAT, não booleano, e não
+// traz confidence nem probabilities.
+func TestParseJevResponseExtraiMultiplaEAltProbs(t *testing.T) {
+	raw := []byte(`{"answers":{
+		"resposta":{"type":"choice","choice":"A","confidence":0.5},
+		"multipla":{"type":"noul","noul":0.91},
+		"alt_A":{"type":"noul","noul":0.86},
+		"alt_B":{"type":"noul","noul":0.03},
+		"alt_C":{"type":"noul","noul":0.87}
+	}}`)
+	p := quizParsed{
+		Question: "Pergunta?",
+		Options:  map[string]string{"A": "x", "B": "y", "C": "z"},
+		Order:    []string{"A", "B", "C"},
+	}
+	v, err := parseJevResponse(raw, p)
+	if err != nil {
+		t.Fatalf("parseJevResponse: %v", err)
+	}
+	if v.MultiplaProb < 0.90 || v.MultiplaProb > 0.92 {
+		t.Errorf("multiplaProb = %v, queria ~0.91", v.MultiplaProb)
+	}
+	if len(v.AltProbs) != 3 {
+		t.Fatalf("altProbs = %v, queria as 3 alternativas", v.AltProbs)
+	}
+	if v.AltProbs["A"] < 0.85 || v.AltProbs["A"] > 0.87 {
+		t.Errorf("altProbs[A] = %v, queria ~0.86", v.AltProbs["A"])
+	}
+	if v.AltProbs["B"] < 0.02 || v.AltProbs["B"] > 0.04 {
+		t.Errorf("altProbs[B] = %v, queria ~0.03", v.AltProbs["B"])
+	}
+}
+
+// TestParseJevResponseSemMultiplaNemAltProbsFicaZerado cobre respostas
+// antigas do Jev (fixture da Task 0, por exemplo) sem as chaves novas — tem
+// que decidir "não é múltipla" (zero), não erro.
+func TestParseJevResponseSemMultiplaNemAltProbsFicaZerado(t *testing.T) {
+	raw := []byte(`{"answers":{"resposta":{"type":"choice","choice":"B","confidence":0.93}}}`)
+	v, err := parseJevResponse(raw, exemploParsed())
+	if err != nil {
+		t.Fatalf("parseJevResponse: %v", err)
+	}
+	if v.MultiplaProb != 0 {
+		t.Errorf("multiplaProb = %v, queria 0 (resposta antiga sem a chave)", v.MultiplaProb)
+	}
+	if v.AltProbs != nil {
+		t.Errorf("altProbs = %v, queria nil", v.AltProbs)
+	}
+}
+
 func TestMarginComUmaProbabilidade(t *testing.T) {
 	v := quizVerdict{Label: "A", Probabilities: map[string]float64{"A": 0.8}}
 	if v.margin() != 1 {

@@ -76,6 +76,7 @@ func (s *Server) handleQuizAnswer(w http.ResponseWriter, r *http.Request) {
 		fallback:      s.quizFallbackCaller(),
 		minConfidence: s.cfg.QuizMinConfidence,
 		minMargin:     s.cfg.QuizMinMargin,
+		minMultiAlt:   s.cfg.QuizMultiMin,
 	})
 	if err != nil {
 		writeErr(w, quizErr(err))

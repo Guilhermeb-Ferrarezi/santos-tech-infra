@@ -361,16 +361,20 @@ func TestAnswerQuizSemAlternativasEntraNoModoAberto(t *testing.T) {
 	}
 }
 
-func TestAnswerQuizComAlternativasContinuaKindMultipla(t *testing.T) {
-	// Sanidade do contrato: o caminho de múltipla escolha (comportamento
-	// existente, intacto) agora também preenche Kind.
+func TestAnswerQuizComAlternativasContinuaKindUnica(t *testing.T) {
+	// Sanidade do contrato: o caminho de escolha única (comportamento
+	// existente, intacto) preenche Kind com "unica" — renomeado de
+	// "multipla", que agora nomeia o modo de múltipla resposta.
 	var chamadas []string
 	got, err := answerQuiz(context.Background(), reqExemplo(), depsFake(jevConfiante, nil, fbOK, nil, &chamadas))
 	if err != nil {
 		t.Fatalf("answerQuiz: %v", err)
 	}
-	if got.Kind != quizKindMultipla {
-		t.Errorf("kind = %q, queria %q", got.Kind, quizKindMultipla)
+	if got.Kind != quizKindUnica {
+		t.Errorf("kind = %q, queria %q", got.Kind, quizKindUnica)
+	}
+	if len(got.Answers) != 0 || got.AnswerProbs != nil {
+		t.Errorf("answers/answerProbs deveriam ficar ausentes no modo único: %+v", got)
 	}
 }
 
@@ -460,6 +464,203 @@ func TestAnswerQuizAbertoFallbackFalhaDevolveErro(t *testing.T) {
 			t.Errorf("chamadas = %v, não deveria chamar o jev no modo aberto", chamadas)
 		}
 	}
+}
+
+// ── modo múltipla resposta ("marque todas que se aplicam") ────────────────
+
+// depsFakeMulti é depsFake com minMultiAlt preenchido (QUIZ_MULTI_MIN,
+// default 0.45) — as demais funções fake continuam devolvendo jevBody/fbText
+// crus, ignorando o corpo da chamada.
+func depsFakeMulti(jevBody string, jevErr error, fbText string, fbErr error, chamadas *[]string) quizDeps {
+	d := depsFake(jevBody, jevErr, fbText, fbErr, chamadas)
+	d.minMultiAlt = 0.45
+	return d
+}
+
+func reqExemploMultipla() quizRequest {
+	return quizRequest{Raw: "Assinale as alternativas corretas sobre o tema.\nA) primeira\nB) segunda\nC) terceira\nD) quarta"}
+}
+
+// jevMultiplaAltaSemZonaCinzenta: números medidos em produção contra uma
+// questão real de múltipla resposta (gabarito A, C, D) — ver a spec da
+// Task. Nenhuma alternativa fica entre QUIZ_MULTI_MIN (0.45) e 0.65
+// (quizMultiploAltGrayHigh), logo não escala.
+const jevMultiplaAltaSemZonaCinzenta = `{"answers":{
+	"resposta":{"type":"choice","choice":"A","confidence":0.5,"probabilities":{"A":0.5,"B":0.1,"C":0.2,"D":0.2}},
+	"multipla":{"type":"noul","noul":0.91},
+	"alt_A":{"type":"noul","noul":0.86},
+	"alt_B":{"type":"noul","noul":0.03},
+	"alt_C":{"type":"noul","noul":0.87},
+	"alt_D":{"type":"noul","noul":0.82}
+}}`
+
+func TestAnswerQuizMultiplaAltaMarcaAsAcimaDoLimiarNaOrdem(t *testing.T) {
+	var chamadas []string
+	got, err := answerQuiz(context.Background(), reqExemploMultipla(), depsFakeMulti(jevMultiplaAltaSemZonaCinzenta, nil, fbOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindMultipla {
+		t.Errorf("kind = %q, queria %q", got.Kind, quizKindMultipla)
+	}
+	if want := []string{"A", "C", "D"}; !slicesEqual(got.Answers, want) {
+		t.Errorf("answers = %v, queria %v (na ordem de p.Order)", got.Answers, want)
+	}
+	if len(got.AnswerProbs) != 4 {
+		t.Errorf("answerProbs = %v, queria as 4 alternativas (não só as marcadas)", got.AnswerProbs)
+	}
+	if got.Source != quizSourceJev || got.Escalated {
+		t.Errorf("source=%q escalated=%v, queria jev/false (nada na zona cinzenta)", got.Source, got.Escalated)
+	}
+	if got.Answer != "" || got.AnswerText != "" {
+		t.Errorf("answer/answerText deveriam ficar vazios no modo múltipla: %+v", got)
+	}
+	// Escalar à toa custa dinheiro e tempo: nada na zona cinzenta, então só o
+	// jev deveria ser chamado.
+	if len(chamadas) != 1 || chamadas[0] != "jev" {
+		t.Errorf("chamadas = %v, queria só o jev", chamadas)
+	}
+}
+
+func TestAnswerQuizMultiplaBaixaSegueCaminhoDeHoje(t *testing.T) {
+	jevBody := `{"answers":{
+		"resposta":{"type":"choice","choice":"B","confidence":0.93,"probabilities":{"A":0.02,"B":0.93,"C":0.05}},
+		"multipla":{"type":"noul","noul":0.05}
+	}}`
+	var chamadas []string
+	got, err := answerQuiz(context.Background(), reqExemplo(), depsFakeMulti(jevBody, nil, fbOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindUnica {
+		t.Errorf("kind = %q, queria %q (multipla=0.05, bem abaixo do limiar)", got.Kind, quizKindUnica)
+	}
+	if len(got.Answers) != 0 || got.AnswerProbs != nil {
+		t.Errorf("answers/answerProbs deveriam ficar ausentes: %+v", got)
+	}
+}
+
+func TestAnswerQuizMultiplaNenhumaAlternativaAcimaDoLimiarCaiParaAMaior(t *testing.T) {
+	jevBody := `{"answers":{
+		"resposta":{"type":"choice","choice":"A","confidence":0.5,"probabilities":{"A":0.3,"B":0.2,"C":0.25,"D":0.1}},
+		"multipla":{"type":"noul","noul":0.70},
+		"alt_A":{"type":"noul","noul":0.30},
+		"alt_B":{"type":"noul","noul":0.20},
+		"alt_C":{"type":"noul","noul":0.25},
+		"alt_D":{"type":"noul","noul":0.10}
+	}}`
+	var chamadas []string
+	got, err := answerQuiz(context.Background(), reqExemploMultipla(), depsFakeMulti(jevBody, nil, fbOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	// Nenhuma das quatro passa de QUIZ_MULTI_MIN (0.45) — nunca devolve
+	// lista vazia numa questão de múltipla resposta: cai pra maior (A, 0.30).
+	if want := []string{"A"}; !slicesEqual(got.Answers, want) {
+		t.Errorf("answers = %v, queria %v (a de maior probabilidade)", got.Answers, want)
+	}
+	if got.Escalated {
+		t.Error("nada na zona cinzenta (todas abaixo de 0.45) — não deveria escalar")
+	}
+}
+
+func TestAnswerQuizMultiplaZonaCinzentaEscalaParaClaude(t *testing.T) {
+	jevBody := `{"answers":{
+		"resposta":{"type":"choice","choice":"A","confidence":0.5,"probabilities":{"A":0.5,"B":0.3,"C":0.2}},
+		"multipla":{"type":"noul","noul":0.70},
+		"alt_A":{"type":"noul","noul":0.86},
+		"alt_B":{"type":"noul","noul":0.50},
+		"alt_C":{"type":"noul","noul":0.10}
+	}}`
+	fbMultiplaOK := `{"answers":["A","C"],"reasoning":"porque sim"}`
+	var chamadas []string
+	got, err := answerQuiz(context.Background(), reqExemplo(), depsFakeMulti(jevBody, nil, fbMultiplaOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	// alt_B (0.50) está entre QUIZ_MULTI_MIN (0.45) e 0.65 — zona cinzenta de
+	// UMA alternativa específica, questão já classificada múltipla (0.70).
+	if !got.Escalated || got.Source != quizSourceClaude {
+		t.Errorf("source=%q escalated=%v, queria claude/true (alt_B na zona cinzenta)", got.Source, got.Escalated)
+	}
+	if want := []string{"A", "C"}; !slicesEqual(got.Answers, want) {
+		t.Errorf("answers = %v, queria %v (resposta do claude)", got.Answers, want)
+	}
+	if len(got.AnswerProbs) != 3 {
+		t.Errorf("answerProbs = %v, queria as probabilidades do jev mesmo escalado", got.AnswerProbs)
+	}
+	if len(chamadas) != 2 || chamadas[0] != "jev" || chamadas[1] != "fallback" {
+		t.Errorf("chamadas = %v, queria jev depois fallback", chamadas)
+	}
+}
+
+func TestAnswerQuizMultiplaAmbiguaEscalaParaClaude(t *testing.T) {
+	// multipla em 0.50 — nem uma coisa nem outra (faixa 0.40–0.60): incerto
+	// demais pro Jev decidir sozinho se é única ou múltipla resposta.
+	jevBody := `{"answers":{
+		"resposta":{"type":"choice","choice":"A","confidence":0.9,"probabilities":{"A":0.9,"B":0.05,"C":0.05}},
+		"multipla":{"type":"noul","noul":0.50},
+		"alt_A":{"type":"noul","noul":0.90},
+		"alt_B":{"type":"noul","noul":0.05},
+		"alt_C":{"type":"noul","noul":0.05}
+	}}`
+	fbMultiplaOK := `{"answers":["A"],"reasoning":"só a A está certa"}`
+	var chamadas []string
+	got, err := answerQuiz(context.Background(), reqExemplo(), depsFakeMulti(jevBody, nil, fbMultiplaOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindMultipla {
+		t.Errorf("kind = %q, queria %q (mesmo ambígua, a resposta escalada vira lista)", got.Kind, quizKindMultipla)
+	}
+	if !got.Escalated || got.Source != quizSourceClaude {
+		t.Errorf("source=%q escalated=%v, queria claude/true", got.Source, got.Escalated)
+	}
+	if want := []string{"A"}; !slicesEqual(got.Answers, want) {
+		t.Errorf("answers = %v, queria %v", got.Answers, want)
+	}
+}
+
+func TestAnswerQuizMultiplaFallbackFalhaDevolveJevDegradado(t *testing.T) {
+	// Precisa de uma escalada de verdade (zona cinzenta em alt_B) pra
+	// exercitar o caminho de degradação — sem escalada não há fallback pra
+	// falhar.
+	jevBody := `{"answers":{
+		"resposta":{"type":"choice","choice":"A","confidence":0.5,"probabilities":{"A":0.5,"B":0.3,"C":0.2}},
+		"multipla":{"type":"noul","noul":0.70},
+		"alt_A":{"type":"noul","noul":0.86},
+		"alt_B":{"type":"noul","noul":0.50},
+		"alt_C":{"type":"noul","noul":0.10}
+	}}`
+	var chamadas []string
+	got, err := answerQuiz(context.Background(), reqExemplo(), depsFakeMulti(jevBody, nil, "", errors.New("502"), &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Source != quizSourceJev || !got.Degraded {
+		t.Errorf("source=%q degraded=%v, queria jev/true (fallback falhou, mas o jev tem palpite)", got.Source, got.Degraded)
+	}
+	if got.Escalated {
+		t.Error("escalated deveria ficar false no caminho degradado (a resposta é a do jev)")
+	}
+	// A) 0.86 e nada mais acima de 0.45 (B fica em 0.50... na verdade B
+	// também passa do limiar 0.45) — confere que a seleção por limiar ainda
+	// roda no degradado.
+	if len(got.Answers) == 0 {
+		t.Error("answers vazio no caminho degradado — nunca deveria devolver lista vazia")
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestAnswerQuizImagemAcimaDoLimiteNaoChamaUpstream(t *testing.T) {

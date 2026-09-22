@@ -2616,24 +2616,47 @@ paths:
   /quiz/answer:
     post:
       tags: [Quiz]
-      summary: Responder questão de múltipla escolha ou aberta (extensão de navegador)
+      summary: Responder questão de escolha única, múltipla resposta ou aberta (extensão de navegador)
       description: |
         Recebe o bloco de questão selecionado na página (ou já separado em
         `question`+`options`) e devolve a resposta. O campo `kind` da
-        resposta diz qual dos dois modos abaixo foi usado.
+        resposta diz qual dos três modos abaixo foi usado.
 
-        **Modo múltipla escolha** (`kind: "multipla"`) — quando o texto tem
-        alternativas reconhecíveis: primeiro tenta o Jev (modelo rápido e
-        barato, via roteador de chaves de API — provider
-        `QUIZ_JEV_PROVIDER_ID`). Quando ele responde com confiança abaixo de
-        `QUIZ_MIN_CONFIDENCE`, com margem entre as duas alternativas mais
-        prováveis abaixo de `QUIZ_MIN_MARGIN`, quando falha, ou quando
-        `explain=true` é pedido, a requisição escala para o Claude Code
-        rodando em container (agent-go — sem provider nem chave de API nesse
-        caminho, mesmo mecanismo que o Pós-aula usa). Se o Jev chegou a
-        responder mas a escalada falha, a resposta volta a ser o palpite do
-        Jev (`degraded: true`) em vez de erro. `answer` traz o rótulo
-        escolhido; `answerText`, o texto da alternativa.
+        **Modo escolha única** (`kind: "unica"`) — quando o texto tem
+        alternativas reconhecíveis e a questão pede só uma correta: primeiro
+        tenta o Jev (modelo rápido e barato, via roteador de chaves de API —
+        provider `QUIZ_JEV_PROVIDER_ID`). Quando ele responde com confiança
+        abaixo de `QUIZ_MIN_CONFIDENCE`, com margem entre as duas
+        alternativas mais prováveis abaixo de `QUIZ_MIN_MARGIN`, quando
+        falha, ou quando `explain=true` é pedido, a requisição escala para o
+        Claude Code rodando em container (agent-go — sem provider nem chave
+        de API nesse caminho, mesmo mecanismo que o Pós-aula usa). Se o Jev
+        chegou a responder mas a escalada falha, a resposta volta a ser o
+        palpite do Jev (`degraded: true`) em vez de erro. `answer` traz o
+        rótulo escolhido; `answerText`, o texto da alternativa.
+
+        **Modo múltipla resposta** (`kind: "multipla"`) — "assinale as
+        alternativas", quando a própria questão pede pra marcar mais de uma.
+        Na mesma chamada ao Jev usada no modo escolha única, uma pergunta
+        extra (`multipla`) decide se é esse o caso, e uma pergunta por
+        alternativa (`alt_<rótulo>`) decide a probabilidade de CADA uma estar
+        correta. `answers` traz os rótulos marcados (em ordem de exibição da
+        prova); `answerProbs` traz a probabilidade de cada alternativa —
+        inclusive as não marcadas, pro card mostrar o número e o usuário
+        decidir se confia. Alternativas com probabilidade acima de
+        `QUIZ_MULTI_MIN` (default **0,45** — deliberadamente baixo: na
+        dúvida, marcar a mais, o usuário vê o número e desmarca) são
+        marcadas; se nenhuma passar do limiar, a de maior probabilidade é
+        marcada sozinha (nunca uma lista vazia). A requisição escala para o
+        Claude quando o sinal `multipla` fica indeciso (entre 0,40 e 0,60)
+        ou quando alguma alternativa fica na zona cinzenta (entre
+        `QUIZ_MULTI_MIN` e 0,65) — nesse caso `answers` vem da resposta do
+        Claude (JSON com a lista completa de rótulos corretos) e
+        `answerProbs` continua vindo do Jev (só ele calcula probabilidade por
+        alternativa). Se o Jev respondeu mas a escalada falha, a resposta
+        volta a ser o palpite por limiar do Jev (`degraded: true`). Nesse
+        modo `answer` e `answerText` vêm **vazios** — a resposta inteira mora
+        em `answers`/`answerProbs`.
 
         **Modo aberto** (`kind: "aberta"`) — quando o texto **não** tem
         alternativas reconhecíveis (questão dissertativa, ou de preencher
@@ -2654,8 +2677,11 @@ paths:
         sozinho não carrega. Quando `imageBase64` vem preenchido, a rota
         **pula o Jev** (ele não lê imagem — chamá-lo seria um palpite cego,
         gastando tempo e dinheiro à toa) e vai direto para o Claude com
-        visão — nos dois modos, múltipla ou aberto (uma questão sem
-        alternativas com imagem anexada vira modo aberto **com** imagem).
+        visão — no modo escolha única ou aberto (uma questão sem
+        alternativas com imagem anexada vira modo aberto **com** imagem). O
+        modo múltipla resposta **não** tem caminho com imagem: sem o Jev,
+        não há sinal `multipla`/`alt_X` pra decidir nada — uma questão desse
+        tipo com imagem cai no modo escolha única com imagem, como antes.
         Nesse caminho a resposta sempre vem com `source: claude` e
         `escalated: true`, e `confidence`/`probabilities` ficam ausentes (não
         existe veredito do Jev pra publicar). Se a escalada falhar, não há
@@ -2726,39 +2752,64 @@ paths:
                 properties:
                   kind:
                     type: string
-                    enum: [multipla, aberta]
+                    enum: [unica, multipla, aberta]
                     description: >-
-                      Formato da resposta. `multipla`: `answer` traz o
-                      rótulo, `answerText` o texto da alternativa. `aberta`:
-                      não há rótulo — `answer` vem vazio e `answerText` traz
-                      a resposta em texto livre. Sempre presente, nos dois
-                      modos, pra o cliente nunca precisar adivinhar por
-                      ausência de campo.
-                    example: "multipla"
+                      Formato da resposta. `unica`: `answer` traz o rótulo,
+                      `answerText` o texto da alternativa. `multipla`:
+                      `answer`/`answerText` vêm vazios — `answers` traz os
+                      rótulos marcados e `answerProbs` a probabilidade de
+                      cada alternativa. `aberta`: não há rótulo — `answer`
+                      vem vazio e `answerText` traz a resposta em texto
+                      livre. Sempre presente, nos três modos, pra o cliente
+                      nunca precisar adivinhar por ausência de campo.
+                    example: "unica"
                   answer:
                     type: string
                     description: >-
                       Rótulo escolhido, preservando o rótulo original da
                       prova (pode ser "B", "3" etc — não é normalizado).
-                      **Vazio quando `kind` é `"aberta"`** — não existe
-                      rótulo no modo aberto, a resposta inteira mora em
-                      `answerText`.
+                      **Vazio quando `kind` é `"multipla"` ou `"aberta"`** —
+                      não existe rótulo único nesses dois modos (a resposta
+                      mora em `answers` ou `answerText`, respectivamente).
                     example: "B"
                   answerText:
                     type: string
                     description: >-
-                      Modo múltipla: texto da alternativa escolhida. Modo
-                      aberto: a resposta em si, em texto livre (truncada em
-                      600 caracteres, com reticências, se vier maior).
+                      Modo único: texto da alternativa escolhida. Modo
+                      múltipla: vazio (ver `answers`). Modo aberto: a
+                      resposta em si, em texto livre (truncada em 600
+                      caracteres, com reticências, se vier maior).
                     example: "Paris"
-                  confidence: { type: number, description: "Confiança do Jev (0–1). Ausente/zero quando o Jev não chegou a responder — inclui sempre que a requisição veio com `imageBase64` ou quando `kind` é `aberta` (o Jev é pulado nos dois casos) — ver `source`/`degraded`." }
+                  answers:
+                    type: array
+                    items: { type: string }
+                    description: >-
+                      Só presente quando `kind` é `"multipla"` — rótulos
+                      marcados, na ordem de exibição da prova (não a ordem em
+                      que o Jev ou o Claude os devolveram). Nunca vazio
+                      quando presente: sem nenhuma alternativa acima de
+                      `QUIZ_MULTI_MIN`, a de maior probabilidade é marcada
+                      sozinha.
+                    example: ["A", "C", "D"]
+                  answerProbs:
+                    type: object
+                    additionalProperties: { type: number }
+                    description: >-
+                      Só presente quando `kind` é `"multipla"` — probabilidade
+                      (0–1) de CADA alternativa estar correta, calculada pelo
+                      Jev (perguntas `alt_<rótulo>`), inclusive as que não
+                      entraram em `answers` — o card mostra o número mesmo da
+                      que ficou de fora. Presente mesmo quando a resposta
+                      escalou para o Claude (só o Jev calcula esse número).
+                    example: { A: 0.86, B: 0.03, C: 0.87, D: 0.82 }
+                  confidence: { type: number, description: "Confiança do Jev (0–1) pra escolha única. Ausente/zero quando o Jev não chegou a responder, quando `kind` é `multipla` (ver `answerProbs`) ou `aberta`, ou quando a requisição veio com `imageBase64` — ver `source`/`degraded`." }
                   probabilities:
                     type: object
                     additionalProperties: { type: number }
-                    description: "Probabilidade do Jev por rótulo. Presente só quando o Jev respondeu — nunca presente quando a requisição veio com `imageBase64` nem quando `kind` é `aberta`."
+                    description: "Probabilidade do Jev por rótulo, modo escolha única. Presente só quando o Jev respondeu nesse modo — nunca presente quando `kind` é `multipla` (ver `answerProbs`) ou `aberta`, nem quando a requisição veio com `imageBase64`."
                   source: { type: string, enum: [jev, claude], description: "De onde veio a resposta que está sendo lida agora. Sempre `claude` quando a requisição veio com `imageBase64` ou quando `kind` é `aberta`." }
                   escalated: { type: boolean, description: "true quando a resposta veio do estágio escalado (Claude). Sempre true quando `kind` é `aberta`." }
-                  degraded: { type: boolean, description: "true quando o Jev respondeu mas a escalada falhou — a resposta é o palpite de baixa confiança do Jev, não uma escalada bem-sucedida. Não se aplica ao modo aberto (sem Jev, não há o que degradar)." }
+                  degraded: { type: boolean, description: "true quando o Jev respondeu (escolha única ou múltipla resposta) mas a escalada falhou — a resposta é o palpite de baixa confiança/limiar do Jev, não uma escalada bem-sucedida. Não se aplica ao modo aberto (sem Jev, não há o que degradar)." }
                   reasoning: { type: string, description: "Justificativa da resposta. Só presente quando `source` é `claude`." }
                   parsed:
                     type: object
@@ -2782,10 +2833,10 @@ paths:
                     required: [jevMs, claudeMs, totalMs]
                 required: [kind, answer, answerText, confidence, source, escalated, degraded, parsed, timings]
               examples:
-                multiplaEscolha:
-                  summary: Múltipla escolha
+                escolhaUnica:
+                  summary: Escolha única
                   value:
-                    kind: multipla
+                    kind: unica
                     answer: "B"
                     answerText: "Paris"
                     confidence: 0.98
@@ -2797,6 +2848,22 @@ paths:
                       question: "Qual é a capital da França?"
                       options: { A: "Londres", B: "Paris", C: "Berlim", D: "Madri" }
                     timings: { jevMs: 720, claudeMs: 0, totalMs: 745 }
+                multiplaResposta:
+                  summary: Múltipla resposta (assinale as alternativas)
+                  value:
+                    kind: multipla
+                    answer: ""
+                    answerText: ""
+                    answers: ["A", "C", "D"]
+                    answerProbs: { A: 0.86, B: 0.03, C: 0.87, D: 0.82 }
+                    confidence: 0
+                    source: jev
+                    escalated: false
+                    degraded: false
+                    parsed:
+                      question: "Assinale as alternativas corretas sobre o tema."
+                      options: { A: "primeira", B: "segunda", C: "terceira", D: "quarta" }
+                    timings: { jevMs: 635, claudeMs: 0, totalMs: 650 }
                 modoAberto:
                   summary: Modo aberto (sem alternativas — dissertativa ou preencher lacuna)
                   value:

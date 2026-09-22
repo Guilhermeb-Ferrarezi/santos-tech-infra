@@ -209,6 +209,88 @@ func TestParseFallbackAnswerAlternativaComPalavraNaFrente(t *testing.T) {
 	}
 }
 
+// ── modo múltipla resposta ──────────────────────────────────────────────
+
+func TestBuildFallbackPromptMultiplaPedeTodasAsCorretas(t *testing.T) {
+	p := quizParsed{
+		Question: "Assinale as corretas.",
+		Options:  map[string]string{"A": "primeira", "B": "segunda", "C": "terceira"},
+		Order:    []string{"A", "B", "C"},
+	}
+	got := buildFallbackPromptMultipla(p, false)
+	if !strings.Contains(got, "Assinale as corretas.") {
+		t.Error("prompt sem o enunciado")
+	}
+	if !strings.Contains(strings.ToUpper(got), "MÚLTIPLA") || !strings.Contains(got, "TODAS") {
+		t.Errorf("prompt não deixa claro que é pra marcar todas as corretas:\n%s", got)
+	}
+	if !strings.Contains(got, `"answers"`) {
+		t.Error("prompt não pede o campo \"answers\" (lista) — o parse depende disso")
+	}
+}
+
+func TestParseFallbackAnswerMultiplaListaSimples(t *testing.T) {
+	texto := `{"answers":["A","C"],"reasoning":"porque sim"}`
+	p := quizParsed{Options: map[string]string{"A": "x", "B": "y", "C": "z"}, Order: []string{"A", "B", "C"}}
+	got, err := parseFallbackAnswerMultipla(texto, p)
+	if err != nil {
+		t.Fatalf("parseFallbackAnswerMultipla: %v", err)
+	}
+	if want := []string{"A", "C"}; len(got.Labels) != 2 || got.Labels[0] != want[0] || got.Labels[1] != want[1] {
+		t.Errorf("labels = %v, queria %v", got.Labels, want)
+	}
+}
+
+// Rótulo inválido junto de válidos: mantém os válidos, não descarta a
+// resposta inteira (regra explícita da spec — diferente do modo único).
+func TestParseFallbackAnswerMultiplaRotuloInvalidoJuntoDeValidosMantemOsValidos(t *testing.T) {
+	texto := `{"answers":["A","Z","C"],"reasoning":"x"}`
+	p := quizParsed{Options: map[string]string{"A": "x", "B": "y", "C": "z"}, Order: []string{"A", "B", "C"}}
+	got, err := parseFallbackAnswerMultipla(texto, p)
+	if err != nil {
+		t.Fatalf("parseFallbackAnswerMultipla: %v", err)
+	}
+	if want := []string{"A", "C"}; len(got.Labels) != 2 || got.Labels[0] != want[0] || got.Labels[1] != want[1] {
+		t.Errorf("labels = %v, queria %v (Z descartado, A e C mantidos)", got.Labels, want)
+	}
+}
+
+// Modelo devolve "answer" string (formato do modo único) em vez de
+// "answers" lista — aceita como lista de um elemento.
+func TestParseFallbackAnswerMultiplaAnswerStringViraListaDeUm(t *testing.T) {
+	texto := `{"answer":"B","reasoning":"só essa"}`
+	p := quizParsed{Options: map[string]string{"A": "x", "B": "y", "C": "z"}, Order: []string{"A", "B", "C"}}
+	got, err := parseFallbackAnswerMultipla(texto, p)
+	if err != nil {
+		t.Fatalf("parseFallbackAnswerMultipla: %v", err)
+	}
+	if want := []string{"B"}; len(got.Labels) != 1 || got.Labels[0] != want[0] {
+		t.Errorf("labels = %v, queria %v", got.Labels, want)
+	}
+}
+
+func TestParseFallbackAnswerMultiplaTodosInvalidosDaErro(t *testing.T) {
+	texto := `{"answers":["Y","Z"],"reasoning":"x"}`
+	p := quizParsed{Options: map[string]string{"A": "x", "B": "y"}, Order: []string{"A", "B"}}
+	if _, err := parseFallbackAnswerMultipla(texto, p); err == nil {
+		t.Error("queria erro: nenhum rótulo do conjunto enviado")
+	}
+}
+
+func TestParseFallbackAnswerMultiplaReordenaPorPOrder(t *testing.T) {
+	// O modelo escreveu C antes de A — a resposta final segue p.Order, não a
+	// ordem em que o modelo escreveu.
+	texto := `{"answers":["C","A"],"reasoning":"x"}`
+	p := quizParsed{Options: map[string]string{"A": "x", "B": "y", "C": "z"}, Order: []string{"A", "B", "C"}}
+	got, err := parseFallbackAnswerMultipla(texto, p)
+	if err != nil {
+		t.Fatalf("parseFallbackAnswerMultipla: %v", err)
+	}
+	if want := []string{"A", "C"}; len(got.Labels) != 2 || got.Labels[0] != want[0] || got.Labels[1] != want[1] {
+		t.Errorf("labels = %v, queria %v (na ordem de p.Order)", got.Labels, want)
+	}
+}
+
 // ── modo aberto ──────────────────────────────────────────────────────────
 
 func TestBuildOpenPromptMencionaLacunasEJSON(t *testing.T) {

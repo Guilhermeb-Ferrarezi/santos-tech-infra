@@ -17,6 +17,16 @@ type quizVerdict struct {
 	Label         string
 	Confidence    float64
 	Probabilities map[string]float64
+	// MultiplaProb: probabilidade (0–1) de que a questão peça MAIS DE UMA
+	// alternativa — resposta da pergunta "noul" própria "multipla" (ver
+	// buildJevRequest). Zero quando o Jev não devolveu essa chave (respostas
+	// antigas, sem o campo) — o que decide corretamente como "não é
+	// múltipla" na falta de sinal.
+	MultiplaProb float64
+	// AltProbs: probabilidade de CADA alternativa estar correta, indexada
+	// pelo rótulo — respostas das perguntas "noul" "alt_<rótulo>", uma por
+	// alternativa de p.Order. Nil quando nenhuma delas veio na resposta.
+	AltProbs map[string]float64
 }
 
 func buildJevRequest(p quizParsed) ([]byte, error) {
@@ -24,16 +34,44 @@ func buildJevRequest(p quizParsed) ([]byte, error) {
 	for k, v := range p.Options {
 		criteria[k] = v
 	}
-	body, err := json.Marshal(map[string]any{
-		"state": p.Question,
-		"model": "jev-latest",
-		"questions": map[string]any{
-			"resposta": map[string]any{
-				"type":         "choice",
-				"instructions": "Qual alternativa responde corretamente à questão?",
-				"criteria":     criteria,
+	questions := map[string]any{
+		"resposta": map[string]any{
+			"type":         "choice",
+			"instructions": "Qual alternativa responde corretamente à questão?",
+			"criteria":     criteria,
+		},
+		// "multipla": pergunta "noul" (probabilidade de "true") própria,
+		// respondida na MESMA chamada que "resposta" — o Jev aceita várias
+		// perguntas por requisição. Decide se a questão pede marcar mais de
+		// uma alternativa (ver quizMultiploThreshold em quiz.go).
+		"multipla": map[string]any{
+			"type":         "noul",
+			"instructions": "A questão pede que MAIS DE UMA alternativa seja assinalada?",
+			"criteria": map[string]string{
+				"true":  "pede várias alternativas",
+				"false": "pede uma única alternativa correta",
 			},
 		},
+	}
+	// "alt_<rótulo>": uma pergunta "noul" por alternativa, usando os rótulos
+	// REAIS de p.Order (nunca A/B/C genérico — a prova pode rotular 1/2/3, ou
+	// letra minúscula). Cada uma pergunta se AQUELA alternativa específica
+	// está correta — é isso que vira AltProbs e decide o que marcar no modo
+	// múltipla resposta.
+	for _, label := range p.Order {
+		questions["alt_"+label] = map[string]any{
+			"type":         "noul",
+			"instructions": fmt.Sprintf("A alternativa %s está correta para esta questão?", label),
+			"criteria": map[string]string{
+				"true":  fmt.Sprintf("a alternativa «%s» é correta", p.Options[label]),
+				"false": fmt.Sprintf("a alternativa «%s» é incorreta", p.Options[label]),
+			},
+		}
+	}
+	body, err := json.Marshal(map[string]any{
+		"state":     p.Question,
+		"model":     "jev-latest",
+		"questions": questions,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("quiz: montar corpo do jev: %w", err)
@@ -82,7 +120,45 @@ func parseJevResponse(raw []byte, p quizParsed) (quizVerdict, error) {
 	if v.Confidence == 0 {
 		v.Confidence = v.Probabilities[v.Label]
 	}
+
+	// multipla/alt_X: sinais de múltipla resposta, OPCIONAIS na resposta —
+	// fixtures e respostas antigas do Jev não têm essas chaves, e a ausência
+	// tem que resultar em "não é múltipla resposta" (MultiplaProb zero), não
+	// erro. Formato medido em produção: {"type":"noul","noul":0.86} — o
+	// valor é um FLOAT (probabilidade de "true"), não booleano, e não traz
+	// confidence nem probabilities.
+	v.MultiplaProb = parseJevNoul(envelope.Answers["multipla"])
+	if len(p.Order) > 0 {
+		altProbs := make(map[string]float64, len(p.Order))
+		for _, label := range p.Order {
+			if item, ok := envelope.Answers["alt_"+label]; ok {
+				altProbs[label] = parseJevNoul(item)
+			}
+		}
+		if len(altProbs) > 0 {
+			v.AltProbs = altProbs
+		}
+	}
 	return v, nil
+}
+
+// parseJevNoul extrai o valor de uma resposta do tipo "noul" — probabilidade
+// de "true", nunca booleano. raw vazio (chave ausente) ou malformado devolve
+// zero: no caso de "multipla" isso decide corretamente como "não é múltipla"
+// na falta de sinal; no caso de "alt_X" o rótulo simplesmente não entra em
+// AltProbs (ver o guard de len(item)==0 no chamador — chave ausente nem
+// chega aqui).
+func parseJevNoul(raw json.RawMessage) float64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	var item struct {
+		Noul float64 `json:"noul"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return 0
+	}
+	return item.Noul
 }
 
 func (v quizVerdict) margin() float64 {

@@ -19,12 +19,45 @@ const (
 	quizSourceJev    = "jev"
 	quizSourceClaude = "claude"
 
-	// quizKindMultipla/quizKindAberta identificam o formato da resposta no
-	// campo Kind: múltipla escolha (rótulo em Answer) ou modo aberto (texto
-	// livre em AnswerText, Answer vazio). Preenchido nos dois caminhos pra o
-	// cliente nunca precisar adivinhar por ausência de campo.
+	// quizKindUnica/quizKindMultipla/quizKindAberta identificam o formato da
+	// resposta no campo Kind: escolha única (rótulo em Answer), múltipla
+	// resposta — marque todas que se aplicam (rótulos em Answers) — ou modo
+	// aberto (texto livre em AnswerText, Answer vazio). Preenchido nos três
+	// caminhos pra o cliente nunca precisar adivinhar por ausência de campo.
+	//
+	// quizKindUnica valia "multipla" antes da introdução do modo de múltipla
+	// resposta — renomeado porque o nome antigo ficou errado quando
+	// "multipla" passou a nomear outra coisa. Seguro: o campo subiu há pouco
+	// tempo, nenhum cliente depende do valor antigo.
+	quizKindUnica    = "unica"
 	quizKindMultipla = "multipla"
 	quizKindAberta   = "aberta"
+
+	// ── decisão de múltipla resposta ────────────────────────────────────────
+	//
+	// quizMultiploThreshold: o Jev responde uma pergunta "noul" própria
+	// (chave "multipla") perguntando se a questão pede mais de uma
+	// alternativa. multipla >= isto classifica a questão como de múltipla
+	// resposta. Abaixo disso segue o caminho de escolha única de sempre
+	// (pergunta "resposta", tipo choice) — EXCETO na zona ambígua abaixo.
+	quizMultiploThreshold = 0.60
+
+	// quizMultiploAmbiguoBaixo/quizMultiploAmbiguoAlto: quando "multipla" cai
+	// nessa faixa, "nem uma coisa nem outra" — a decisão única-vs-múltipla é
+	// incerta demais pro Jev resolver sozinho. Escala pro Claude em modo
+	// múltipla resposta (ele tolera devolver uma lista de um item quando a
+	// questão é, na prática, de escolha única — ver parseFallbackAnswerMultipla).
+	// Faixa se sobrepõe de propósito com o teto de quizMultiploThreshold: é a
+	// mesma incerteza vista de dois ângulos (classificação vs. escalonamento).
+	quizMultiploAmbiguoBaixo = 0.40
+	quizMultiploAmbiguoAlto  = quizMultiploThreshold
+
+	// quizMultiploAltGrayHigh: teto da zona cinzenta de UMA alternativa
+	// individual — o piso é QUIZ_MULTI_MIN (configurável, ver quizDeps).
+	// Zona cinzenta numa alternativa = "o Jev não tem certeza sobre esta
+	// alternativa específica" (não sobre a questão como um todo) → escala,
+	// mas só quando a questão já foi classificada como múltipla resposta.
+	quizMultiploAltGrayHigh = 0.65
 
 	// Orçamentos próprios: o API Router tem tetos largos demais pra uso
 	// interativo (30s por tentativa, 60s de rotação — ver apirouter.go). O ctx
@@ -155,12 +188,21 @@ type quizTimings struct {
 }
 
 type quizResponse struct {
-	// Kind: "multipla" (Answer traz o rótulo, AnswerText o texto da
-	// alternativa) ou "aberta" (Answer vazio — não há rótulo —, AnswerText
-	// traz a resposta em texto livre). Preenchido nos dois caminhos.
-	Kind          string             `json:"kind"`
-	Answer        string             `json:"answer"`
-	AnswerText    string             `json:"answerText"`
+	// Kind: "unica" (Answer traz o rótulo, AnswerText o texto da
+	// alternativa), "multipla" (Answer/AnswerText vazios, Answers traz os
+	// rótulos marcados e AnswerProbs a probabilidade de cada alternativa) ou
+	// "aberta" (Answer vazio — não há rótulo —, AnswerText traz a resposta em
+	// texto livre). Preenchido nos três caminhos.
+	Kind       string `json:"kind"`
+	Answer     string `json:"answer"`
+	AnswerText string `json:"answerText"`
+	// Answers/AnswerProbs: só preenchidos quando Kind é "multipla" — rótulos
+	// marcados (em ordem de p.Order) e a probabilidade de CADA alternativa
+	// (não só as marcadas), pra o card mostrar o número mesmo da que ficou de
+	// fora. Ausentes (omitempty) nos outros modos — Answer/AnswerText já
+	// cobrem o resultado ali, e publicar um map/slice vazio seria ruído.
+	Answers       []string           `json:"answers,omitempty"`
+	AnswerProbs   map[string]float64 `json:"answerProbs,omitempty"`
 	Confidence    float64            `json:"confidence"`
 	Probabilities map[string]float64 `json:"probabilities,omitempty"`
 	Source        string             `json:"source"`
@@ -180,6 +222,12 @@ type quizDeps struct {
 	fallback      func(ctx context.Context, prompt, imageB64, imageMime string) (string, error)
 	minConfidence float64
 	minMargin     float64
+	// minMultiAlt: piso de probabilidade (QUIZ_MULTI_MIN, default 0.45) pra
+	// marcar uma alternativa no modo múltipla resposta. Deliberadamente
+	// baixo — decisão do dono do projeto: na dúvida, marcar a mais. O
+	// usuário vê a probabilidade no card e desmarca; esconder uma
+	// alternativa que valia ponto é o erro mais caro dos dois.
+	minMultiAlt float64
 }
 
 func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizResponse, error) {
@@ -216,7 +264,7 @@ func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizRespon
 		return quizResponse{}, err
 	}
 
-	resp := quizResponse{Parsed: parsed, Kind: quizKindMultipla}
+	resp := quizResponse{Parsed: parsed, Kind: quizKindUnica}
 
 	if temImagem {
 		// O Jev não lê imagem — chamá-lo às cegas só gastaria tempo e
@@ -247,6 +295,23 @@ func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizRespon
 
 	verdict, jevMs, jevErr := askJev(ctx, parsed, deps)
 	resp.Timings.JevMs = jevMs
+
+	if jevErr == nil {
+		// provavelMultipla/multiplaAmbigua: ver o comentário de
+		// quizMultiploThreshold/quizMultiploAmbiguoBaixo — a faixa ambígua
+		// sobrepõe de propósito o teto da faixa "é múltipla".
+		provavelMultipla := verdict.MultiplaProb >= quizMultiploThreshold
+		multiplaAmbigua := verdict.MultiplaProb >= quizMultiploAmbiguoBaixo && verdict.MultiplaProb <= quizMultiploAmbiguoAlto
+		if provavelMultipla || multiplaAmbigua {
+			// Escala quando a decisão única-vs-múltipla está incerta
+			// (multiplaAmbigua) OU quando a questão já é claramente de
+			// múltipla resposta mas alguma alternativa específica está na
+			// zona cinzenta — nesse segundo caso só faz sentido checar zona
+			// cinzenta de alternativa se a questão É múltipla mesmo.
+			escalar := multiplaAmbigua || (provavelMultipla && algumaAltNaZonaCinzenta(verdict.AltProbs, deps.minMultiAlt))
+			return answerQuizMultipla(ctx, parsed, verdict, deps, started, escalar)
+		}
+	}
 
 	escalate := req.Explain || jevErr != nil ||
 		verdict.Confidence < deps.minConfidence ||
@@ -400,6 +465,105 @@ func answerQuizAberto(ctx context.Context, req quizRequest, deps quizDeps, start
 	resp.Reasoning = ans.Reasoning
 	resp.Timings.TotalMs = time.Since(started).Milliseconds()
 	return resp, nil
+}
+
+// ── modo múltipla resposta ("marque todas que se aplicam") ────────────────
+
+// answerQuizMultipla responde questões de múltipla resposta. Chamada só
+// quando o sinal "multipla" do Jev (verdict.MultiplaProb) indicou que a
+// questão é ou pode ser de múltipla resposta — ver a decisão em answerQuiz.
+// Espelha o fluxo de escolha única (fillFromJev/askFallback), mas decide por
+// limiar sobre AltProbs em vez de escolher uma única alternativa, e não
+// chama o Jev de novo (o mesmo veredito já tem tudo: multipla e alt_X vêm da
+// mesma chamada que "resposta").
+func answerQuizMultipla(ctx context.Context, p quizParsed, verdict quizVerdict, deps quizDeps, started time.Time, escalar bool) (quizResponse, error) {
+	resp := quizResponse{Parsed: p, Kind: quizKindMultipla}
+
+	if !escalar {
+		resp.Source = quizSourceJev
+		resp.Answers = selectQuizMultiplaAnswers(verdict.AltProbs, p.Order, deps.minMultiAlt)
+		resp.AnswerProbs = verdict.AltProbs
+		resp.Timings.TotalMs = time.Since(started).Milliseconds()
+		return resp, nil
+	}
+
+	ans, claudeMs, fbErr := askFallbackMultipla(ctx, p, "", "", deps)
+	resp.Timings.ClaudeMs = claudeMs
+	if fbErr != nil {
+		// Degradação: mesmo sem sucesso na escalada, o Jev tem um palpite (os
+		// alt_X já calculados) — um palpite fraco no meio de uma questão vale
+		// mais que uma tela de erro. Mesmo raciocínio do caminho de escolha
+		// única (fillFromJev + Degraded).
+		resp.Source = quizSourceJev
+		resp.Answers = selectQuizMultiplaAnswers(verdict.AltProbs, p.Order, deps.minMultiAlt)
+		resp.AnswerProbs = verdict.AltProbs
+		resp.Degraded = true
+		resp.Timings.TotalMs = time.Since(started).Milliseconds()
+		return resp, nil
+	}
+	resp.Source = quizSourceClaude
+	resp.Escalated = true
+	resp.Answers = ans.Labels
+	// AnswerProbs continua vindo do Jev mesmo escalado: só ele calcula
+	// probabilidade por alternativa — o Claude devolve só a lista marcada,
+	// sem número nenhum pra publicar no lugar.
+	resp.AnswerProbs = verdict.AltProbs
+	resp.Reasoning = ans.Reasoning
+	resp.Timings.TotalMs = time.Since(started).Milliseconds()
+	return resp, nil
+}
+
+// algumaAltNaZonaCinzenta confere se alguma alternativa está entre minAlt
+// (QUIZ_MULTI_MIN) e quizMultiploAltGrayHigh — "o Jev não tem certeza sobre
+// esta alternativa específica", motivo suficiente pra escalar mesmo com a
+// questão já classificada como múltipla resposta.
+func algumaAltNaZonaCinzenta(probs map[string]float64, minAlt float64) bool {
+	for _, p := range probs {
+		if p >= minAlt && p <= quizMultiploAltGrayHigh {
+			return true
+		}
+	}
+	return false
+}
+
+// selectQuizMultiplaAnswers marca as alternativas com AltProbs >= minAlt, na
+// ordem de p.Order. minAlt deliberadamente baixo (QUIZ_MULTI_MIN, default
+// 0.45) — ver o comentário de quizDeps.minMultiAlt. Nunca devolve lista
+// vazia: sem nenhuma alternativa acima do limiar, cai para a de maior
+// probabilidade (maxProbLabel, mesmo desempate determinístico de quiz_jev.go).
+func selectQuizMultiplaAnswers(probs map[string]float64, order []string, minAlt float64) []string {
+	var marcadas []string
+	for _, label := range order {
+		if probs[label] >= minAlt {
+			marcadas = append(marcadas, label)
+		}
+	}
+	if len(marcadas) > 0 {
+		return marcadas
+	}
+	melhor := maxProbLabel(probs)
+	if melhor == "" {
+		return nil
+	}
+	return []string{melhor}
+}
+
+func askFallbackMultipla(ctx context.Context, p quizParsed, imageB64, imageMime string, deps quizDeps) (quizFallbackAnswerMultipla, int64, error) {
+	temImagem := imageB64 != ""
+	budget := quizFallbackBudget
+	if temImagem {
+		budget = quizVisionBudget
+	}
+	fbCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	started := time.Now()
+	texto, err := deps.fallback(fbCtx, buildFallbackPromptMultipla(p, temImagem), imageB64, imageMime)
+	elapsed := time.Since(started).Milliseconds()
+	if err != nil {
+		return quizFallbackAnswerMultipla{}, elapsed, err
+	}
+	ans, err := parseFallbackAnswerMultipla(texto, p)
+	return ans, elapsed, err
 }
 
 func askOpenFallback(ctx context.Context, texto, imageB64, imageMime string, deps quizDeps) (quizOpenAnswer, int64, error) {
