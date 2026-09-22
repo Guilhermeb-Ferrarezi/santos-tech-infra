@@ -1237,8 +1237,8 @@ Liga a orquestração ao API Router e expõe a rota. Inclui o ajuste em `isNativ
 - Test: `apps/api-go/handlers_quiz_test.go`, `apps/api-go/config_test.go` (acrescentar)
 
 **Interfaces:**
-- Consumes: `answerQuiz`, `quizRequest`, `quizDeps`, `errQuizUpstream`, `errQuizTimeout`, `quizMaxBodyLen` (Task 4); `errQuizUnparseable` (Task 1); `quizJevPath` (Task 2); `buildChatRequest` (existente, `apirouter_adapters.go:33`); `executeAPIRouterRequest` (existente, `apirouter.go:265`).
-- Produces: `POST /quiz/answer`; `Config.QuizJevProviderID`, `Config.QuizFallbackProviderID`, `Config.QuizMinConfidence`, `Config.QuizMinMargin`.
+- Consumes: `answerQuiz`, `quizRequest`, `quizDeps`, `errQuizUpstream`, `errQuizTimeout`, `quizMaxBodyLen` (Task 4); `errQuizUnparseable` (Task 1); `quizJevPath` (Task 2); `executeAPIRouterRequest` (existente, `apirouter.go:265`); `claudeRawCom` (existente, `agent_client.go`).
+- Produces: `POST /quiz/answer`; `Config.QuizJevProviderID`, `Config.QuizFallbackModel`, `Config.QuizMinConfidence`, `Config.QuizMinMargin`.
 
 - [ ] **Step 1: Escrever o teste que falha (mapeamento de erro → HTTP, e isNativeClient)**
 
@@ -1327,17 +1327,19 @@ Em `config.go`, dentro da struct `Config`:
 	// Rota POST /quiz/answer (extensão de questões). Provider por ID e não por
 	// nome: `name` é editável na UI admin, e renomear quebraria a extensão em
 	// silêncio. Zero = rota responde 503.
-	QuizJevProviderID      int64
-	QuizFallbackProviderID int64
-	QuizMinConfidence      float64 // abaixo disso, escala pro fallback
-	QuizMinMargin          float64 // p1−p2 abaixo disso = empate técnico, escala
+	QuizJevProviderID int64
+	// QuizFallbackModel: modelo pedido ao agent-go (Claude Code em container)
+	// quando o Jev fica inseguro. Não há provider nem chave de API aqui.
+	QuizFallbackModel string
+	QuizMinConfidence float64 // abaixo disso, escala pro fallback
+	QuizMinMargin     float64 // p1−p2 abaixo disso = empate técnico, escala
 ```
 
 E em `loadConfig`, junto dos demais campos opcionais:
 
 ```go
 	c.QuizJevProviderID = getEnvInt64("QUIZ_JEV_PROVIDER_ID", 0)
-	c.QuizFallbackProviderID = getEnvInt64("QUIZ_FALLBACK_PROVIDER_ID", 0)
+	c.QuizFallbackModel = getEnv("QUIZ_FALLBACK_MODEL", "sonnet")
 	c.QuizMinConfidence = getEnvFloat("QUIZ_MIN_CONFIDENCE", 0.75)
 	c.QuizMinMargin = getEnvFloat("QUIZ_MIN_MARGIN", 0.15)
 ```
@@ -1407,9 +1409,9 @@ func (s *Server) handleQuizAnswer(w http.ResponseWriter, r *http.Request) {
 	if s.apiRouterNotConfigured(w) {
 		return
 	}
-	if s.cfg.QuizJevProviderID == 0 || s.cfg.QuizFallbackProviderID == 0 {
+	if s.cfg.QuizJevProviderID == 0 {
 		writeErr(w, appErr(http.StatusServiceUnavailable, "NOT_CONFIGURED",
-			"QUIZ_JEV_PROVIDER_ID/QUIZ_FALLBACK_PROVIDER_ID não configurados"))
+			"QUIZ_JEV_PROVIDER_ID não configurado"))
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, quizMaxBodyLen)
@@ -1428,18 +1430,11 @@ func (s *Server) handleQuizAnswer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusServiceUnavailable, "NOT_CONFIGURED", "provider do Jev não encontrado"))
 		return
 	}
-	fbProvider, err := s.q.GetAPIRouterProvider(r.Context(), s.cfg.QuizFallbackProviderID)
-	if err != nil {
-		writeErr(w, appErr(http.StatusServiceUnavailable, "NOT_CONFIGURED", "provider de fallback não encontrado"))
-		return
-	}
-
 	resp, err := answerQuiz(r.Context(), body, quizDeps{
-		jev:             s.quizJevCaller(jevProvider),
-		fallback:        s.quizFallbackCaller(fbProvider),
-		fallbackAdapter: fbProvider.ChatAdapter,
-		minConfidence:   s.cfg.QuizMinConfidence,
-		minMargin:       s.cfg.QuizMinMargin,
+		jev:           s.quizJevCaller(jevProvider),
+		fallback:      s.quizFallbackCaller(),
+		minConfidence: s.cfg.QuizMinConfidence,
+		minMargin:     s.cfg.QuizMinMargin,
 	})
 	if err != nil {
 		writeErr(w, quizErr(err))
@@ -1465,25 +1460,18 @@ func (s *Server) quizJevCaller(provider db.ApiRouterProvider) func(context.Conte
 	}
 }
 
-func (s *Server) quizFallbackCaller(provider db.ApiRouterProvider) func(context.Context, string) ([]byte, error) {
-	return func(ctx context.Context, prompt string) ([]byte, error) {
-		path, reqBody, headers, err := buildChatRequest(provider.ChatAdapter, provider.ChatModel, prompt)
-		if err != nil {
-			return nil, err
-		}
-		// chat_path do provider vence o default do adapter — mesmo critério do
-		// handleAPIRouterChat (handlers_apirouter.go:636).
-		if provider.ChatPath != "" {
-			path = provider.ChatPath
-		}
-		out, err := s.executeAPIRouterRequest(ctx, provider, http.MethodPost, path, reqBody, "", headers)
-		if err != nil {
-			return nil, err
-		}
-		if out.StatusCode >= 300 {
-			return nil, fmt.Errorf("quiz: fallback respondeu %d", out.StatusCode)
-		}
-		return out.Body, nil
+// quizFallbackCaller pede o texto ao agent-go (Claude Code em container). Sem
+// provider e sem chave de API: o container roda com a assinatura da empresa,
+// e é o mesmo caminho que o Pós-aula usa (agent_client.go).
+//
+// claudeRawCom e não claudeRaw: o cliente padrão tem teto de 2 minutos, que
+// num overlay de questão seria uma eternidade. O orçamento aqui é o do
+// fallback (quizFallbackBudget), e o ctx que answerQuiz passa já o limita —
+// o timeout explícito garante que o cliente HTTP não fique esperando além
+// disso se o ctx for cancelado por outro motivo.
+func (s *Server) quizFallbackCaller() func(context.Context, string) (string, error) {
+	return func(ctx context.Context, prompt string) (string, error) {
+		return s.claudeRawCom(ctx, prompt, s.cfg.QuizFallbackModel, quizFallbackBudget)
 	}
 }
 ```
