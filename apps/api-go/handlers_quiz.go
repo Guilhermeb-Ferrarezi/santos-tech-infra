@@ -23,8 +23,15 @@ func quizErr(err error) *AppError {
 			"Não consegui separar as alternativas — selecione o enunciado e as alternativas")
 	case errors.Is(err, errQuizTimeout):
 		return appErr(http.StatusGatewayTimeout, "UPSTREAM_TIMEOUT", "Tempo esgotado ao consultar os modelos")
-	case errors.Is(err, errQuizImagemMimeInvalido), errors.Is(err, errQuizImagemGrandeDemais):
-		return appErr(http.StatusBadRequest, "INVALID_IMAGE", "Imagem inválida — mime não suportado (use png, jpeg, webp ou gif) ou tamanho acima do limite")
+	// Mesmo código HTTP (400 INVALID_IMAGE) pras três causas — o que muda é
+	// a mensagem, pra quem depura no cliente ir atrás da causa certa (mime
+	// vs base64 malformado vs tamanho são problemas diferentes).
+	case errors.Is(err, errQuizImagemMimeInvalido):
+		return appErr(http.StatusBadRequest, "INVALID_IMAGE", "Imagem inválida — mime não suportado (use png, jpeg, webp ou gif)")
+	case errors.Is(err, errQuizImagemBase64Invalido):
+		return appErr(http.StatusBadRequest, "INVALID_IMAGE", "Imagem inválida — base64 malformado")
+	case errors.Is(err, errQuizImagemGrandeDemais):
+		return appErr(http.StatusBadRequest, "INVALID_IMAGE", "Imagem inválida — tamanho acima do limite")
 	case errors.Is(err, errAPIRouterNoActiveKeys):
 		return appErr(http.StatusServiceUnavailable, "NO_ACTIVE_KEYS", "Provider sem chaves ativas")
 	default:
@@ -43,7 +50,11 @@ func (s *Server) handleQuizAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, quizMaxBodyLen)
 	var body quizRequest
-	if err := decodeJSON(r, &body); err != nil {
+	// decodeJSONLimit, não decodeJSON: o teto padrão dele (maxJSONBody, 1MB
+	// fixo em server.go) aninharia OUTRO MaxBytesReader por cima do nosso —
+	// o menor prevalece, e uma imagem em base64 de alguns KB já estoura 1MB.
+	// Mesmo padrão de handlers_boards.go (corpo de cena acima do padrão).
+	if err := decodeJSONLimit(r, &body, quizMaxBodyLen); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "corpo inválido"))
 		return
 	}

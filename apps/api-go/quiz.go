@@ -51,11 +51,15 @@ var (
 	errQuizUpstream = errors.New("quiz: nenhum modelo conseguiu responder")
 	errQuizTimeout  = errors.New("quiz: tempo esgotado")
 
-	// errQuizImagemMimeInvalido e errQuizImagemGrandeDemais: validação da
-	// imagem ANTES de gastar uma chamada de rede — mime fora da allowlist do
-	// agent-go, ou tamanho decodificado acima do limite dele.
-	errQuizImagemMimeInvalido = errors.New("quiz: mime de imagem não suportado (use png, jpeg, webp ou gif)")
-	errQuizImagemGrandeDemais = errors.New("quiz: imagem decodificada maior que o limite")
+	// errQuizImagemMimeInvalido, errQuizImagemBase64Invalido e
+	// errQuizImagemGrandeDemais: validação da imagem ANTES de gastar uma
+	// chamada de rede — mime fora da allowlist do agent-go, base64
+	// malformado (não confundir com mime errado — são causas diferentes, e
+	// misturar as duas manda quem depura atrás do campo errado), ou tamanho
+	// decodificado acima do limite dele.
+	errQuizImagemMimeInvalido   = errors.New("quiz: mime de imagem não suportado (use png, jpeg, webp ou gif)")
+	errQuizImagemBase64Invalido = errors.New("quiz: base64 da imagem malformado")
+	errQuizImagemGrandeDemais   = errors.New("quiz: imagem decodificada maior que o limite")
 )
 
 // quizImagemMimesAceitos espelha imageExtFromMime de
@@ -91,7 +95,7 @@ func validateQuizImage(imageB64, mime string) error {
 	}
 	decoded, err := base64.StdEncoding.DecodeString(imageB64)
 	if err != nil {
-		return errQuizImagemMimeInvalido
+		return errQuizImagemBase64Invalido
 	}
 	if len(decoded) > quizMaxImageBytes {
 		return errQuizImagemGrandeDemais

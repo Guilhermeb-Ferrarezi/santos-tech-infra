@@ -2748,7 +2748,7 @@ paths:
                   options: { A: "Londres", B: "Paris", C: "Berlim", D: "Madri" }
                 timings: { jevMs: 720, claudeMs: 0, totalMs: 745 }
         "400":
-          description: "JSON inválido, `raw` e `options` ambos vazios, ou `imageBase64` com mime não suportado / tamanho decodificado acima de 8MB"
+          description: "JSON inválido, `raw` e `options` ambos vazios, ou `imageBase64`/`imageMime` inválidos (mime fora da allowlist, base64 malformado, ou tamanho decodificado acima de 8MB — mesmo código `INVALID_IMAGE` para as três causas, mensagem diferente pra cada)"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -2756,9 +2756,15 @@ paths:
                 corpoInvalido:
                   summary: Corpo inválido
                   value: { code: INVALID_BODY, message: "informe `raw` ou `options`" }
-                imagemInvalida:
-                  summary: Imagem inválida (mime ou tamanho)
-                  value: { code: INVALID_IMAGE, message: "Imagem inválida — mime não suportado (use png, jpeg, webp ou gif) ou tamanho acima do limite" }
+                imagemMimeInvalido:
+                  summary: Imagem — mime não suportado
+                  value: { code: INVALID_IMAGE, message: "Imagem inválida — mime não suportado (use png, jpeg, webp ou gif)" }
+                imagemBase64Invalido:
+                  summary: Imagem — base64 malformado
+                  value: { code: INVALID_IMAGE, message: "Imagem inválida — base64 malformado" }
+                imagemGrandeDemais:
+                  summary: Imagem — tamanho acima do limite
+                  value: { code: INVALID_IMAGE, message: "Imagem inválida — tamanho acima do limite" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "422":

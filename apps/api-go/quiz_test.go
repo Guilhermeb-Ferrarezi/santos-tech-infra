@@ -292,6 +292,27 @@ func TestAnswerQuizImagemMimeInvalidoNaoChamaUpstream(t *testing.T) {
 	}
 }
 
+// Base64 malformado com mime válido é um erro DIFERENTE de mime inválido —
+// confundir as duas manda quem depura no cliente atrás do campo errado
+// (achado da revisão: a versão anterior misturava as duas causas no mesmo
+// sentinela errQuizImagemMimeInvalido).
+func TestAnswerQuizImagemBase64InvalidoNaoChamaUpstream(t *testing.T) {
+	var chamadas []string
+	req := reqExemplo()
+	req.ImageMime = "image/png"
+	req.ImageBase64 = "não é base64 válido!!!"
+	_, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbOK, nil, &chamadas))
+	if !errors.Is(err, errQuizImagemBase64Invalido) {
+		t.Errorf("err = %v, queria errQuizImagemBase64Invalido", err)
+	}
+	if errors.Is(err, errQuizImagemMimeInvalido) {
+		t.Error("base64 malformado não deveria virar erro de mime — mime aqui é válido")
+	}
+	if len(chamadas) != 0 {
+		t.Errorf("chamadas = %v, queria nenhuma (base64 inválido não deve gastar upstream)", chamadas)
+	}
+}
+
 func TestAnswerQuizImagemAcimaDoLimiteNaoChamaUpstream(t *testing.T) {
 	var chamadas []string
 	req := reqExemploComImagem("image/png", quizMaxImageBytes+1)
