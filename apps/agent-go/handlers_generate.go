@@ -161,6 +161,29 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "brief obrigatório para task raw"))
 			return
 		}
+		// Com imagem anexada, generateOnceWithTrace não serve: ele não recebe
+		// nem usa imageB64/imageMime, então a imagem seria descartada em
+		// silêncio (era exatamente o bug — 200 OK com o modelo dizendo que não
+		// recebeu anexo nenhum). generateOnce já sabe tratar imagem (valida
+		// mime/tamanho, grava em dir temp, libera Read escopado); usamos o
+		// brief DIRETO como prompt (sem buildGeneratePrompt, cujo default é um
+		// prompt de redator de email que destruiria o sentido do "raw"). Sem
+		// imagem, o caminho continua idêntico ao de sempre (com trace).
+		if strings.TrimSpace(req.ImageBase64) != "" {
+			raw, err := s.generateOnce(r.Context(), req.Task, req.Brief, req.ImageBase64, req.ImageMime, req.Model, req.Web, nil)
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			// generateOnce não captura tool calls (só generateOnceWithTrace, que
+			// usa stream-json) — ToolCalls fica vazio neste caminho. Nenhum
+			// consumidor atual depende disso quando há imagem: api-go
+			// (agent_client.go) só lê o campo "text"; bot-go lê "toolCalls" mas
+			// nunca manda imagem em task "raw" (agentGoRequest não tem esses
+			// campos), então nunca cai aqui.
+			writeJSON(w, http.StatusOK, &generateResult{Text: raw})
+			return
+		}
 		raw, toolCalls, err := s.generateOnceWithTrace(r.Context(), req.Task, req.Brief, req.Model, req.Web)
 		if err != nil {
 			writeErr(w, err)
