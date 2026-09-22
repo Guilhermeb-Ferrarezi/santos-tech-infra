@@ -192,8 +192,15 @@ ALTER TABLE social_posts
   ADD COLUMN IF NOT EXISTS master_url          text   NOT NULL DEFAULT '',
   ADD COLUMN IF NOT EXISTS mandatorios         text   NOT NULL DEFAULT '';
 ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_formato_check;
+-- Esta constraint roda ANTES do backfill que unifica reel/short em
+-- video_curto (mais abaixo neste mesmo arquivo). Como a migração inteira é
+-- uma transação só, a lista aqui precisa aceitar os valores dos DOIS lados da
+-- transição: os antigos, que ainda estão na tabela no primeiro boot, e
+-- video_curto, que o UPDATE vai escrever. Sem isso o UPDATE viola esta
+-- constraint e o processo não sobe — foi o que derrubou a API em 22/09/2026.
+-- A lista final, sem reel/short, é aplicada depois do backfill.
 ALTER TABLE social_posts ADD CONSTRAINT social_posts_formato_check
-  CHECK (formato IN ('estatico','carrossel','reel','story','video_longo','short','thumbnail','card_link'));
+  CHECK (formato IN ('estatico','carrossel','reel','story','video_longo','short','thumbnail','card_link','video_curto'));
 ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_objetivo_check;
 ALTER TABLE social_posts ADD CONSTRAINT social_posts_objetivo_check
   CHECK (objetivo IN ('alcance','engajamento','conversao','autoridade'));
