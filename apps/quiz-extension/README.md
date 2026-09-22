@@ -16,32 +16,38 @@ A extensão não conhece Jev nem Claude: ela manda o texto selecionado para
 `POST /quiz/answer` da `api-go`, que decide qual modelo responde. Nenhuma chave
 de API vive aqui.
 
-## `activeTab` vs `<all_urls>` — PENDENTE de teste manual em navegador
+## `activeTab` confirmado suficiente — testado em 22/09/2026
 
 A injeção do content script usa `scripting.executeScript` sob demanda, com a
 permissão `activeTab` concedida pelo próprio atalho (`Alt+Q`) — sem
-`content_scripts` declarativo e sem `host_permissions` de página. Isso ainda
-**não foi testado em navegador real** (sem Firefox/Zen disponível nas sessões
-que implementaram e revisaram esta extensão até agora).
+`content_scripts` declarativo e sem permissão de página.
 
-Quem for testar: carregue a extensão (`about:debugging#/runtime/this-firefox`),
-selecione uma questão e aperte `Alt+Q`. Duas saídas possíveis:
+**Testado no Zen 1.22b (Flatpak) e funciona.** O atalho concede `activeTab`, o
+script é injetado e o card aparece. O `manifest.json` atual está correto; NÃO
+adicione `<all_urls>`.
 
-- **Funcionou** (card apareceu): `activeTab` basta. Não mexer em nada — o
-  `manifest.json` atual já está correto. Apagar esta seção ou trocar o título
-  por "`activeTab` confirmado suficiente — testado em DD/MM/AAAA".
-- **Falhou** com erro de permissão no console do background (botão
-  "Inspecionar" em `about:debugging`): trocar, em `manifest.json`, a linha
+## Zen via Flatpak: carregue o `.xpi`, não o `manifest.json`
 
-  ```
-  "host_permissions": ["https://api.santos-tech.com/*"],
-  ```
+Armadilha específica deste setup, e custa meia hora se ninguém avisar.
 
-  por
+Selecionar o `manifest.json` em `about:debugging` **carrega uma extensão
+quebrada**: o portal de documentos do Flatpak expõe ao navegador apenas o
+arquivo escolhido, então a pasta `src/` fica fora do sandbox e o background
+falha com
 
-  ```
-  "host_permissions": ["https://api.santos-tech.com/*", "<all_urls>"],
-  ```
+    Loading failed for the <script> with source "moz-extension://.../src/background.js"
 
-  recarregar a extensão e testar de novo. Se resolver, manter essa linha e
-  atualizar esta seção anotando que o plano B foi necessário.
+A extensão aparece na lista como se estivesse tudo certo — "Background script:
+Running" — mas nada funciona.
+
+Empacote a pasta inteira num arquivo só e carregue ele:
+
+```bash
+cd apps/quiz-extension && zip -r /tmp/quiz-jev.xpi manifest.json src/
+```
+
+Depois, em `about:debugging#/runtime/this-firefox` → "Carregar extensão
+temporária…" → escolha `/tmp/quiz-jev.xpi`.
+
+Firefox instalado nativamente (fora do Flatpak) não tem esse problema: ali o
+`manifest.json` funciona direto.
