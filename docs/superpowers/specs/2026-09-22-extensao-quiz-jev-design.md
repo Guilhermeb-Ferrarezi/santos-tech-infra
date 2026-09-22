@@ -46,7 +46,12 @@ Histórico de questões · cache de respostas repetidas · questão em imagem/pr
    MV3 com `browser.*`.
 5. **Credenciais:** via proxy próprio, nunca no cliente. Reaproveita o **API
    Router** que já existe no `api-go` em vez de criar serviço novo.
-6. **Superfície:** rota nova dedicada `POST /quiz/answer`, não a rota
+6. **Fallback pelo agent-go, não pelo API Router** (decidido em 2026-09-22,
+   durante a implementação): o Claude Code já roda em container no ecossistema
+   e o `api-go` já tem cliente para ele. Usar o API Router exigiria uma chave
+   de API da Anthropic que não existe cadastrada, e ainda duplicaria um caminho
+   que o Pós-aula já usa.
+7. **Superfície:** rota nova dedicada `POST /quiz/answer`, não a rota
    `/auth/admin/api-router/providers/{id}/proxy`. A rota admin permite disparar
    *qualquer* requisição contra *qualquer* provider com as chaves da empresa;
    uma extensão que roda em todo site que o usuário abrir não deve alcançar
@@ -227,17 +232,35 @@ método `POST`, path `/v1/systemone`:
 
 ### Chamada ao Claude
 
-Reaproveita `buildChatRequest(chatAdapterAnthropic, model, prompt)` que já
-existe em `apirouter_adapters.go`. O prompt pede resposta em JSON estrito
-(`{"answer": "B", "reasoning": "…"}`); o parse é tolerante (extrai o primeiro
-bloco JSON da resposta).
+**Não passa pelo API Router.** O ecossistema já roda o Claude Code em container
+(`apps/agent-go`), e o `api-go` já fala com ele por `claudeRaw`/`claudeRawCom`
+(`agent_client.go`), que manda `{task:"raw", brief, model}` para
+`POST {AGENT_URL}/claude/generate` e devolve **texto cru**. É assim que o
+Pós-aula gera práticas hoje.
+
+Consequências, todas simplificações:
+
+- Nenhuma chave de API da Anthropic é necessária — o container roda com a
+  assinatura da empresa. (O provider Anthropic do API Router está, de fato,
+  sem chave nenhuma cadastrada.)
+- Não existe `QUIZ_FALLBACK_PROVIDER_ID`; o modelo vem de `QUIZ_FALLBACK_MODEL`
+  (`sonnet` por padrão, como o resto do ecossistema).
+- `parseFallbackAnswer` recebe **texto**, não envelope nativo de provider, e
+  portanto não precisa de adapter nem de `parseChatResponse`.
+
+O prompt continua pedindo JSON estrito (`{"answer": "B", "reasoning": "…"}`), e
+a extração continua pegando o **primeiro** objeto JSON completo do texto.
+
+A chamada usa `claudeRawCom` com o orçamento de 15s do fallback, e não o teto
+padrão de 2 minutos do cliente — um overlay não pode ficar dois minutos
+"consultando".
 
 ### Configuração
 
 | Env | Para quê |
 |---|---|
-| `QUIZ_JEV_PROVIDER_ID` | id do provider Jev no API Router |
-| `QUIZ_FALLBACK_PROVIDER_ID` | id do provider Anthropic |
+| `QUIZ_JEV_PROVIDER_ID` | id do provider Jev no API Router (produção: 26) |
+| `QUIZ_FALLBACK_MODEL` | modelo pedido ao agent-go (default `sonnet`) |
 | `QUIZ_MIN_CONFIDENCE` | limiar de escalonamento (default 0.75) |
 | `QUIZ_MIN_MARGIN` | margem mínima p1−p2 (default 0.15) |
 
