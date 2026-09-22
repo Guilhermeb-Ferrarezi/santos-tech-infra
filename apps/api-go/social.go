@@ -337,8 +337,8 @@ var validSocialStatuses = map[string]bool{
 }
 
 var validSocialFormatos = map[string]bool{
-	"estatico": true, "carrossel": true, "reel": true, "story": true,
-	"video_longo": true, "short": true, "thumbnail": true, "card_link": true,
+	"estatico": true, "carrossel": true, "video_curto": true, "story": true,
+	"video_longo": true, "thumbnail": true, "card_link": true,
 }
 var validSocialObjetivos = map[string]bool{
 	"alcance": true, "engajamento": true, "conversao": true, "autoridade": true,

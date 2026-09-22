@@ -3973,7 +3973,7 @@ paths:
       summary: Atualiza a configuração do publicador
       description: |
         Admin-only. Rate limit 30/min. `instagramLocationId` marca local em
-        toda publicação de foto/vídeo/reel do Instagram; `facebookPlaceId`
+        toda publicação de foto/vídeo do Instagram; `facebookPlaceId`
         marca local em foto da Página do Facebook (vídeo não suporta). Ambos
         vazios = não marca local. São o ID de uma Page da Meta com
         latitude/longitude, não um endereço — não é validado contra a Meta
@@ -7221,7 +7221,7 @@ components:
       enum: [educacional, institucional, captacao, prova_social, bastidores, tech_mundo_real]
     SocialFormato:
       type: string
-      enum: [estatico, carrossel, reel, story, video_longo, short, thumbnail, card_link]
+      enum: [estatico, carrossel, video_curto, story, video_longo, thumbnail, card_link]
     SocialObjetivo:
       type: string
       enum: [alcance, engajamento, conversao, autoridade]
@@ -7270,7 +7270,6 @@ components:
         altura: { type: integer }
         safeZone: { type: string }
         formatoArquivo: { type: string }
-        duracaoSeg: { type: integer, description: "Só vídeo/reel." }
 
     SocialCarouselItem:
       type: object
@@ -7296,7 +7295,7 @@ components:
         driveFolderId: { type: string, format: uuid, nullable: true, description: "FK drive_folders — qualquer pasta cadastrada em Arquivos." }
         driveFileId: { type: string }
         driveFileName: { type: string, description: "Cache de exibição." }
-        driveCoverFolderId: { type: string, format: uuid, nullable: true, description: "Capa customizada de Reel — mesmo trio, outro arquivo." }
+        driveCoverFolderId: { type: string, format: uuid, nullable: true, description: "Capa customizada de vídeo curto — mesmo trio, outro arquivo." }
         driveCoverFileId: { type: string }
         driveCoverFileName: { type: string }
         altText: { type: string, description: "Texto alternativo de acessibilidade — só imagem estática." }
@@ -7310,7 +7309,7 @@ components:
         hashtags: { type: array, items: { type: string } }
         conceitoVisual: { type: string }
         paleta: { $ref: "#/components/schemas/SocialPaleta" }
-        roteiro: { type: string, description: "Roteiro de fala — só usado em formato de vídeo (reel/short/video_longo)." }
+        roteiro: { type: string, description: "Roteiro de fala — só usado em formato de vídeo (video_curto/video_longo)." }
         specs: { $ref: "#/components/schemas/SocialSpecs" }
         masterUrl: { type: string }
         mandatorios: { type: string }
@@ -7375,7 +7374,7 @@ components:
         hashtags: { type: array, items: { type: string } }
         conceitoVisual: { type: string }
         paleta: { $ref: "#/components/schemas/SocialPaleta" }
-        roteiro: { type: string, description: "Roteiro de fala — só usado em formato de vídeo (reel/short/video_longo)." }
+        roteiro: { type: string, description: "Roteiro de fala — só usado em formato de vídeo (video_curto/video_longo)." }
         specs: { $ref: "#/components/schemas/SocialSpecs" }
         masterUrl: { type: string }
         mandatorios: { type: string }

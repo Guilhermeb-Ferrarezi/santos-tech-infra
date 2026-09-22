@@ -923,16 +923,16 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
   longa duração, não expira sozinho — ver `facebook_client.go`); adaptador sem env
   configurada cai pro checklist manual, nunca erro. Feature de 18/08/2026.
   - **Localização automática** (opcional): `instagramLocationId` (`GET/PUT /social/settings`,
-    ver abaixo) marca local em toda publicação do Instagram (image/video/reel);
+    ver abaixo) marca local em toda publicação do Instagram (image/video);
     `facebookPlaceId` marca local em toda FOTO da Página (vídeo da Página não suporta
     `place` nesse endpoint). Ambos vazios por padrão — sem configurar, não marca local
     nenhum. Precisam ser o ID de uma Page da Meta com latitude/longitude, não um endereço
     solto. Config fixa (não por post, não é env var — editável em Configurações do
     Calendário Editorial, admin-only). Feature de 19/08/2026.
-  - **Capa de Reel** (opcional): `driveCoverFolderId`/`driveCoverFileId`/`driveCoverFileName`
+  - **Capa de vídeo curto** (opcional): `driveCoverFolderId`/`driveCoverFileId`/`driveCoverFileName`
     no post — mesmo trio de `driveFolderId`/`driveFileId`/`driveFileName`, só que aponta pra
     outro arquivo (a imagem de capa). Se preenchido, vira `cover_url` na Graph API do
-    Instagram (só vídeo/reel — sem capa, a Meta usa o frame 0). Facebook não recebe (o
+    Instagram (só vídeo — sem capa, a Meta usa o frame 0). Facebook não recebe (o
     endpoint `/videos` só aceita capa via upload binário, que não implementamos).
   - **Texto alternativo** (opcional): `altText` no post — vira `alt_text` (Instagram, só
     imagem estática) e `alt_text_custom` (Facebook, só foto).
@@ -1016,17 +1016,17 @@ não uma fixa), `driveFileId` (id do arquivo no Google Drive dentro dela), `driv
 (cache de exibição). Quando preenchidos, `POST .../publish` usa esse arquivo como mídia em
 vez de `mediaUrl`. Feature de 18/08/2026.
 `driveCoverFolderId`/`driveCoverFileId`/`driveCoverFileName` (mesmo trio, mas pra capa
-opcional de Reel — ver publish acima), `altText` (texto alternativo de acessibilidade, só
+opcional de vídeo curto — ver publish acima), `altText` (texto alternativo de acessibilidade, só
 imagem estática), `carouselItems[]` (`{folderId,fileId,fileName}`, itens 2..10 de um
 carrossel — o item 1 é o trio `driveFolderId`/`driveFileId`/`driveFileName` de cima; teto de
 9 itens aqui, validado no POST/PUT → 400 se passar). Feature de 19/08/2026.
-`formato` (estatico|carrossel|reel|story|video_longo|short|thumbnail|card_link),
+`formato` (estatico|carrossel|video_curto|story|video_longo|thumbnail|card_link),
 `objetivo` (alcance|engajamento|conversao|autoridade),
 `programa` (''|create|jr|camps|academies), `receita` (catálogo de composição:
 ''|capa_gancho|hero_numero|versus|antes_depois|desenvolvimento|cta_fechamento|checklist|passo_a_passo|citacao_depoimento|poster_anuncio),
 `plataformasDestino[]` (repurposing), `copyArte[]` ({slide,headline,subtitulo,corpo,cta,hookOnScreen,promptIa}),
-`hashtags[]`, `conceitoVisual`, `paleta` ({fundo,destaque,corPrograma}), `roteiro` (texto corrido único, só vídeo: reel/short/video_longo),
-`specs` ({proporcao,largura,altura,safeZone,formatoArquivo,duracaoSeg}), `masterUrl`, `mandatorios`,
+`hashtags[]`, `conceitoVisual`, `paleta` ({fundo,destaque,corPrograma}), `roteiro` (texto corrido único, só vídeo: video_curto/video_longo),
+`specs` ({proporcao,largura,altura,safeZone,formatoArquivo}), `masterUrl`, `mandatorios`,
 `responsavelId` (nullable, FK users — quem executa o post; settable via POST/PUT, um por post),
 `responsavelNome` (denormalizado, só leitura, vazio se sem responsável ou usuário removido),
 `assigneeIds[]` (responsáveis ADICIONAIS além de `responsavelId` — settable via POST/PUT,

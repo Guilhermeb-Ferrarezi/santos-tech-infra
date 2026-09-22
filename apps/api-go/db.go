@@ -1085,6 +1085,17 @@ BEGIN
     ALTER TABLE social_posts DROP COLUMN prompt_ia;
   END IF;
 END $$;
+
+-- Unificação Reel + Short num único formato "Vídeo curto" (video_curto) — os
+-- dois sempre significaram a mesma coisa na prática (vídeo vertical 9:16),
+-- só com um número de duração que não correspondia a regra real. Ver
+-- docs/superpowers/specs/2026-09-22-video-curto-calendario-editorial-design.md
+-- (repo dashboard). Idempotente: rodar de novo é no-op (já não há mais
+-- formato in ('reel','short') depois da primeira vez).
+UPDATE social_posts SET formato='video_curto' WHERE formato IN ('reel','short');
+ALTER TABLE social_posts DROP CONSTRAINT IF EXISTS social_posts_formato_check;
+ALTER TABLE social_posts ADD CONSTRAINT social_posts_formato_check
+  CHECK (formato IN ('estatico','carrossel','video_curto','story','video_longo','thumbnail','card_link'));
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

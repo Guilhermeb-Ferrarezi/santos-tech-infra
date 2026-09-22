@@ -19,7 +19,7 @@ const maxSocialPublishMediaSize = 100 << 20 // 100MB
 
 // publishOptions carrega os extras opcionais de uma publicação — cresce sem
 // precisar mudar a assinatura de publishMedia toda vez que a Meta libera um
-// parâmetro novo. coverURL só é usado em vídeo (capa custom do Reel);
+// parâmetro novo. coverURL só é usado em vídeo (capa custom do vídeo curto);
 // altText só em imagem estática (texto alternativo de acessibilidade).
 // locationID/placeID vêm de social_settings (config fixa, não por post — ver
 // GET/PUT /social/settings), cada client decide sozinho se/quando aplica
@@ -59,7 +59,7 @@ func (s *Server) socialPublishAdapters() map[string]socialPublisher {
 // diferentes) fica de fora do MVP: é reportado como "unsupported" em vez de
 // arriscar publicar errado. `carrossel` NÃO passa por aqui — tem despacho
 // próprio em publishCarouselPost (suporte real, só no Instagram).
-var socialVideoFormatos = map[string]bool{"reel": true, "short": true, "video_longo": true}
+var socialVideoFormatos = map[string]bool{"video_curto": true, "video_longo": true}
 var socialImageFormatos = map[string]bool{"estatico": true, "thumbnail": true, "card_link": true}
 
 func socialPostIsVideo(formato string) (isVideo, supported bool) {
@@ -442,7 +442,7 @@ func (s *Server) resolveSocialPostMediaURL(ctx context.Context, post *SocialPost
 }
 
 // resolveSocialPostCoverURL devolve a URL pública da capa customizada do
-// Reel, se o post tiver uma escolhida — cover_url é opcional, sem ela a Meta
+// vídeo curto, se o post tiver uma escolhida — cover_url é opcional, sem ela a Meta
 // usa o frame 0 do vídeo (que costuma sair borrado/no meio de um corte).
 func (s *Server) resolveSocialPostCoverURL(ctx context.Context, post *SocialPost) (coverURL string, cleanup func(), err error) {
 	if post.DriveCoverFileID == "" {

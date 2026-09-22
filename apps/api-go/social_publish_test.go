@@ -11,8 +11,7 @@ func TestSocialPostIsVideo(t *testing.T) {
 		wantVideo     bool
 		wantSupported bool
 	}{
-		{"reel", true, true},
-		{"short", true, true},
+		{"video_curto", true, true},
 		{"video_longo", true, true},
 		{"estatico", false, true},
 		{"thumbnail", false, true},
