@@ -170,14 +170,53 @@ func multipartDrive(metadados map[string]any, conteudo string) ([]byte, string, 
 	return buf.Bytes(), "multipart/related; boundary=" + w.Boundary(), nil
 }
 
-// TemEscopoDoDrive diz se esta conta autorizou a escrita no Drive.
+// TemEscopoDoDrive diz se esta conta pode — e DEVE — ser usada para escrever.
 //
-// Conta autorizada antes do escopo existir continua servindo para o Google
-// Agenda e falharia no Drive; perguntar antes evita erro a cada aula marcada.
+// Confere duas coisas, e a segunda é a que importa:
+//
+//  1. tem drive.file? senão, é conta de agenda e não serve aqui;
+//  2. tem drive COMPLETO? então RECUSA.
+//
+// O segundo caso não é hipótese: a conta da diretoria — onde moram os arquivos
+// sensíveis da empresa — devolveu um token com drive completo, porque já tinha
+// concedido esse acesso a este mesmo app no passado e o Google somou as
+// permissões antigas ao pedido novo. O bot passaria a enxergar os 5 TB.
+//
+// Recusar trava o espelhamento até alguém reautorizar limpo. É o certo: o
+// dossiê continua no banco e ninguém perde nada, enquanto operar com acesso
+// de sobra sobre arquivo sensível não tem desfazer.
 func (g *GCalClient) TemEscopoDoDrive(ctx context.Context, refreshToken string) bool {
-	access, err := g.accessToken(ctx, refreshToken)
+	escopos, err := g.escoposDoToken(ctx, refreshToken)
 	if err != nil {
 		return false
+	}
+	temFile, temTudo := false, false
+	for _, e := range escopos {
+		switch e {
+		case driveScope:
+			temFile = true
+		case "https://www.googleapis.com/auth/drive",
+			"https://www.googleapis.com/auth/drive.readonly":
+			temTudo = true
+		}
+	}
+	if temTudo {
+		g.log.Error("drive: token com acesso ao Drive INTEIRO; recusando usar",
+			"esperado", driveScope,
+			"acao", "revogue o app em myaccount.google.com/permissions e autorize de novo")
+		return false
+	}
+	return temFile
+}
+
+// escoposDoToken pergunta ao Google o que este token realmente permite.
+//
+// O que foi PEDIDO e o que foi CONCEDIDO podem divergir — e divergiram. A
+// única fonte confiável é o próprio Google.
+func (g *GCalClient) escoposDoToken(ctx context.Context, refreshToken string) ([]string, error) {
+	access, err := g.accessToken(ctx, refreshToken)
+	if err != nil {
+		return nil, err
 	}
 	var info struct {
 		Scope string `json:"scope"`
@@ -185,7 +224,7 @@ func (g *GCalClient) TemEscopoDoDrive(ctx context.Context, refreshToken string) 
 	if err := g.doJSON(ctx, http.MethodGet,
 		"https://www.googleapis.com/oauth2/v3/tokeninfo?access_token="+url.QueryEscape(access),
 		access, nil, &info); err != nil {
-		return false
+		return nil, err
 	}
-	return strings.Contains(info.Scope, driveScope)
+	return strings.Fields(info.Scope), nil
 }

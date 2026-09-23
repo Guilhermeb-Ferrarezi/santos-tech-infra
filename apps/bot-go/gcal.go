@@ -90,7 +90,15 @@ func (g *GCalClient) URLDeAutorizacao(state, uso string) string {
 	q.Set("scope", escopoDoUso(uso)+" https://www.googleapis.com/auth/userinfo.email")
 	q.Set("access_type", "offline")
 	q.Set("prompt", "consent")
-	q.Set("include_granted_scopes", "true")
+	// include_granted_scopes fica DE FORA de propósito.
+	//
+	// Ele faz o Google somar ao token tudo que aquela conta já tinha concedido
+	// a este mesmo app, em qualquer momento do passado. Numa conta que já tinha
+	// autorizado o Drive INTEIRO para outra ferramenta, pedir drive.file devolvia
+	// um token com drive completo — acesso a todos os arquivos, exatamente o que
+	// este desenho existe para evitar. Aconteceu com a conta da diretoria.
+	//
+	// Sem ele, cada autorização vale pelo que foi pedido, e só.
 	q.Set("state", state)
 	return "https://accounts.google.com/o/oauth2/v2/auth?" + q.Encode()
 }
