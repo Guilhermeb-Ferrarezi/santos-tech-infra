@@ -181,3 +181,49 @@ func DataNoTitulo(titulo string, agora time.Time) (time.Time, bool) {
 	}
 	return data, true
 }
+
+// NomeDoAluno escolhe o nome que vai para a agenda e para o Notion.
+//
+// O modelo às vezes escreve uma FRASE no lugar do nome — apareceu na agenda da
+// escola como "Aula experimental — Não informado (filho do responsável)". Quem
+// abre a grade quer ler um nome; quando ele não existe, o nome do responsável
+// serve melhor que uma explicação, porque é por ele que a escola vai chamar na
+// recepção.
+// A detecção olha o COMEÇO do texto, não procura palavra solta no meio.
+//
+// A primeira versão barrava qualquer coisa que contivesse "filho" ou
+// "responsável" em qualquer posição, e isso fazia duas coisas ruins:
+//
+//   - "Filho" é sobrenome de gente ("Antônio Barbosa Filho"). O aluno perdia o
+//     nome e virava o responsável na agenda.
+//   - Numa família com DOIS filhos, "filho mais novo" e "filho mais velho"
+//     colapsavam no mesmo nome — o do responsável. Como a remarcação compara o
+//     nome do aluno, marcar a aula do segundo ARQUIVAVA a do primeiro. O
+//     remédio era pior que a doença que ele curava.
+//
+// Um nome de verdade não COMEÇA com "filho do", "não informado" ou "a
+// confirmar"; uma descrição no lugar do nome, sim.
+func NomeDoAluno(informado, responsavel string) string {
+	n := strings.Join(strings.Fields(informado), " ")
+	baixo := strings.ToLower(n)
+	placeholder := n == ""
+	for _, p := range []string{
+		"não informado", "nao informado", "não informou", "nao informou",
+		"a confirmar", "não sei", "nao sei", "desconhecid", "sem nome",
+		"filho do", "filha do", "filho da", "filha da",
+		"filho de", "filha de", "filho(", "filha(",
+		"responsável", "responsavel",
+	} {
+		if strings.HasPrefix(baixo, p) {
+			placeholder = true
+			break
+		}
+	}
+	if !placeholder {
+		return n
+	}
+	if r := strings.Join(strings.Fields(responsavel), " "); r != "" {
+		return r
+	}
+	return "a confirmar"
+}

@@ -413,6 +413,15 @@ type ResponderOutput struct {
 	SchedulingRequest *SchedulingRequest // cliente: pedido de agendamento detectado
 	BookingActions    []BookingAction    // modo admin: confirmar/ajustar/rejeitar agendamentos
 
+	// ClienteEmail — Gmail que o cliente acabou de mandar.
+	//
+	// Vive AQUI, e não dentro do SchedulingRequest, porque o bot pede o e-mail
+	// DEPOIS de marcar a aula. Carregá-lo reemitindo o pedido de agendamento
+	// inteiro obrigava o modelo a repetir dia e hora numa mensagem que não fala
+	// de horário nenhum — e qualquer imprecisão ali (um "quinta" sem data) virava
+	// remarcação silenciosa da aula, pendência duplicada no painel e alarme falso
+	// para os admins. Um campo separado só convida na agenda e não toca na aula.
+	ClienteEmail string
 }
 
 // ScheduledContact — reativação pedida pelo cliente ("me chama em julho").

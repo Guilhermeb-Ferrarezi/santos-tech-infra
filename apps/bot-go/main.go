@@ -130,8 +130,18 @@ func main() {
 	hub := NewWSHub(logger, cfg.DashCORSOrigin)
 	go hub.Run(ctx)
 
-	// 11. Instancia ConversationEngine
-	engine := NewConversationEngine(EngineDeps{
+	// 11. Instancia os dois ConversationEngine.
+	//
+	// A base de capacidades é UMA só, montada aqui. Os dois motores só diferem
+	// em por onde a mensagem entra e sai — não no que o bot sabe fazer.
+	//
+	// Eram duas listas escritas à mão, e elas divergiram: o motor do Evolution
+	// ficou sem Google Agenda, sem lembretes, sem voz e com AgendaAutoConfirm
+	// zerado. Nada disso dava erro, porque cada caminho desses só faz `return`
+	// quando a dependência é nil — o cliente que entrasse por ali seria atendido
+	// por um bot mais burro, em silêncio. Uma base compartilhada torna esse tipo
+	// de esquecimento impossível: capacidade nova entra uma vez, vale nos dois.
+	depsBase := EngineDeps{
 		TenantID:          cfg.TenantID,
 		DB:                pool,
 		Contacts:          contacts,
@@ -140,7 +150,6 @@ func main() {
 		Leads:             leads,
 		Config:            tenantCfg,
 		Responder:         agentClient,
-		Sender:            sender,
 		EvolutionSender:   evolutionClient,
 		Emitter:           outbox,
 		Logger:            logger,
@@ -162,31 +171,18 @@ func main() {
 		GCal:              NewGCalClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL, logger),
 		GCalRepo:          NewGCalRepo(pool),
 		Lembretes:         NewLembreteRepo(pool),
-	})
+	}
 
-	// 11b. Engine para o canal Evolution: mesmos repos, mas responde via Evolution.
-	// ForceBotEnabled — o gate é o toggle (evolution_bot_reply_enabled), não o whitelist.
-	evoEngine := NewConversationEngine(EngineDeps{
-		TenantID:        cfg.TenantID,
-		DB:              pool,
-		Contacts:        contacts,
-		Convs:           convs,
-		Messages:        messages,
-		Leads:           leads,
-		Config:          tenantCfg,
-		Responder:       agentClient,
-		Sender:          evolutionClient,
-		EvolutionSender: evolutionClient,
-		Emitter:         outbox,
-		Logger:          logger,
-		Broadcast:       hub.Broadcast,
-		LogRepo:         logRepo,
-		TenantCfgRepo:   tenantCfg,
-		Pending:         pending,
-		Bookings:        bookings,
-		Notion:          notionClient,
-		ForceBotEnabled: true,
-	})
+	depsCloud := depsBase
+	depsCloud.Sender = sender
+	engine := NewConversationEngine(depsCloud)
+
+	// Evolution: mesma capacidade, outro remetente. ForceBotEnabled porque o
+	// gate ali é o toggle (evolution_bot_reply_enabled), não a allowlist.
+	depsEvo := depsBase
+	depsEvo.Sender = evolutionClient
+	depsEvo.ForceBotEnabled = true
+	evoEngine := NewConversationEngine(depsEvo)
 
 	// 12. Instancia Worker
 	// O consumidor do Redis Stream compartilha key/group com o produtor do

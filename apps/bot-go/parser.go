@@ -22,6 +22,7 @@ type rawResponderOutput struct {
 	ClientActions     json.RawMessage `json:"clientActions"`
 	SchedulingRequest json.RawMessage `json:"schedulingRequest"`
 	BookingActions    json.RawMessage `json:"bookingActions"`
+	ClienteEmail      string          `json:"clienteEmail"`
 }
 
 // ParseModelReply extrai e parseia o JSON de resposta do LLM.
@@ -59,6 +60,7 @@ func ParseModelReply(raw string) (ResponderOutput, error) {
 		Handoff:        r.Handoff,
 		Smalltalk:      r.Smalltalk,
 		CancelaAula:    r.CancelaAula,
+		ClienteEmail:   strings.TrimSpace(r.ClienteEmail),
 		KBEntry:        r.KBEntry,
 	}
 

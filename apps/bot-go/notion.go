@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -735,6 +736,15 @@ func (c *NotionClient) ArquivarBooking(ctx context.Context, pageID string) error
 		return fmt.Errorf("notion: não configurado")
 	}
 	titulo, err := c.tituloDaPagina(ctx, pageID)
+	if errors.Is(err, ErrPaginaSumiu) {
+		// Nada a arquivar, e nada destrutivo acontece: o fim desejado — aquele
+		// horário fora da grade — já está valendo. Tratar como erro travava a
+		// remarcação e o cliente ficava sem a aula nova por causa de uma aula
+		// velha que nem existe mais.
+		c.log.Info("notion: página não existe mais; nada a arquivar", "page", pageID)
+		c.invalidaCache()
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("notion: não deu para conferir o título antes de arquivar: %w", err)
 	}
@@ -759,6 +769,17 @@ func (c *NotionClient) ArquivarBooking(ctx context.Context, pageID string) error
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		// Página já arquivada não é falha: o fim desejado — aquele horário fora
+		// da grade — já está valendo. Tratar como erro travava a remarcação
+		// inteira, e o cliente ficava sem a aula nova por causa de uma aula
+		// velha que nem existe mais. Aconteceu em produção depois de uma
+		// limpeza manual na base.
+		if strings.Contains(string(raw), "is archived") ||
+			strings.Contains(string(raw), "archived block") {
+			c.log.Info("notion: agendamento já estava arquivado", "page", pageID, "titulo", titulo)
+			c.invalidaCache()
+			return nil
+		}
 		return fmt.Errorf("notion: archive status %d: %s", resp.StatusCode, string(raw))
 	}
 	c.invalidaCache()
@@ -781,6 +802,13 @@ func (c *NotionClient) tituloDaPagina(ctx context.Context, pageID string) (strin
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		// Página apagada de vez (lixeira esvaziada, ou "excluir permanentemente").
+		// Distinguir isso de "não consegui conferir" é o que permite ao chamador
+		// seguir em frente: não existe nada para proteger numa página que não
+		// existe mais.
+		return "", ErrPaginaSumiu
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("notion: get page status %d: %s", resp.StatusCode, string(raw))
 	}
@@ -829,3 +857,12 @@ func (c *NotionClient) invalidaCache() {
 	c.cacheOK = false
 	c.mu.Unlock()
 }
+
+// ErrPaginaSumiu — o Notion respondeu 404 para uma página que o bot esperava
+// encontrar.
+//
+// Sentinela e não erro genérico porque a resposta certa depende de quem
+// pergunta: para arquivar, página inexistente é sucesso (não há o que tirar);
+// para ler, é falta de dado. Sem separar os dois, uma faxina manual na base
+// paralisava o agendamento — foi o que aconteceu em produção.
+var ErrPaginaSumiu = errors.New("notion: página não existe mais")
