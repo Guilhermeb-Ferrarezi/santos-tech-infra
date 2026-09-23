@@ -206,14 +206,26 @@ type EventoAula struct {
 	Descricao string
 	Inicio    time.Time
 	Fim       time.Time
+	// ConvidarEmail — Gmail do cliente, quando ele informa.
+	//
+	// Convidado no evento, ele recebe os MESMOS lembretes na agenda dele, sem a
+	// escola precisar manter um segundo sistema. Só funciona com Gmail/Google
+	// Workspace; e-mail de outro provedor recebe o convite mas não ganha os
+	// lembretes, que é a razão de pedir Gmail especificamente.
+	ConvidarEmail string
 }
 
-// CriarEvento põe a aula na agenda da conta e devolve o id do evento.
+// lembretesDaAula — quando avisar, em minutos antes.
 //
-// Os lembretes são explícitos (24h e 4h antes) em vez de herdar o padrão de
-// cada um: 4h antes é o tempo de preparar a sala e remanejar PC; 1 dia antes é
-// o tempo de reorganizar a agenda se algo mudar. Depender do padrão de cada
-// conta faria o aviso chegar em hora diferente para cada pessoa.
+// 1 dia: dá tempo de reorganizar a agenda se algo mudar.
+// 4 horas: é quando se prepara a sala e se remaneja PC.
+// 1 hora: o empurrão final, para ninguém esquecer no meio do dia.
+//
+// Explícitos em vez de herdar o padrão de cada conta — senão o aviso chega em
+// hora diferente para cada pessoa.
+var lembretesDaAula = []int{24 * 60, 4 * 60, 60}
+
+// CriarEvento põe a aula na agenda da conta e devolve o id do evento.
 func (g *GCalClient) CriarEvento(ctx context.Context, refreshToken, calendarID string, ev EventoAula) (string, error) {
 	access, err := g.accessToken(ctx, refreshToken)
 	if err != nil {
@@ -223,24 +235,34 @@ func (g *GCalClient) CriarEvento(ctx context.Context, refreshToken, calendarID s
 		calendarID = "primary"
 	}
 
-	corpo, err := json.Marshal(map[string]any{
+	overrides := make([]any, 0, len(lembretesDaAula))
+	for _, m := range lembretesDaAula {
+		overrides = append(overrides, map[string]any{"method": "popup", "minutes": m})
+	}
+
+	evento := map[string]any{
 		"summary":     ev.Titulo,
 		"description": ev.Descricao,
 		"start":       map[string]any{"dateTime": ev.Inicio.Format(time.RFC3339), "timeZone": "America/Sao_Paulo"},
 		"end":         map[string]any{"dateTime": ev.Fim.Format(time.RFC3339), "timeZone": "America/Sao_Paulo"},
 		"reminders": map[string]any{
 			"useDefault": false,
-			"overrides": []any{
-				map[string]any{"method": "popup", "minutes": 24 * 60},
-				map[string]any{"method": "popup", "minutes": 4 * 60},
-			},
+			"overrides":  overrides,
 		},
-	})
+	}
+	if ev.ConvidarEmail != "" {
+		evento["attendees"] = []any{map[string]any{"email": ev.ConvidarEmail}}
+	}
+
+	corpo, err := json.Marshal(evento)
 	if err != nil {
 		return "", err
 	}
 
-	endpoint := fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events",
+	// sendUpdates=all faz o Google mandar o convite por e-mail ao cliente. Sem
+	// isso o evento entra na agenda dele calado, e um convite que ninguém viu
+	// não lembra ninguém de nada.
+	endpoint := fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events?sendUpdates=all",
 		url.PathEscape(calendarID))
 	var out struct {
 		ID string `json:"id"`
@@ -329,4 +351,62 @@ func (g *GCalClient) doJSON(ctx context.Context, metodo, endpoint, access string
 		return nil
 	}
 	return json.Unmarshal(raw, out)
+}
+
+// GmailValido devolve o e-mail normalizado quando dá para convidar na agenda,
+// ou "" quando não dá.
+//
+// Exige Gmail/Googlemail de propósito. Qualquer endereço recebe o convite por
+// e-mail, mas só uma conta Google ganha o evento NA AGENDA com os lembretes —
+// e é o lembrete que interessa. Aceitar hotmail daria a impressão de que o
+// cliente vai ser lembrado quando não vai.
+func GmailValido(email string) string {
+	e := strings.ToLower(strings.TrimSpace(email))
+	if e == "" {
+		return ""
+	}
+	at := strings.LastIndex(e, "@")
+	if at <= 0 || at == len(e)-1 {
+		return ""
+	}
+	usuario, dominio := e[:at], e[at+1:]
+	if dominio != "gmail.com" && dominio != "googlemail.com" {
+		return ""
+	}
+	// Um usuário com espaço ou vírgula é erro de transcrição do áudio, não
+	// endereço. Melhor não convidar do que convidar o endereço errado.
+	if strings.ContainsAny(usuario, " ,;:/\\\"'<>()[]") {
+		return ""
+	}
+	return e
+}
+
+// ConvidarNoEvento acrescenta o cliente a um evento que já existe.
+//
+// Serve para o caso normal do fluxo: a aula é marcada primeiro, o Gmail chega
+// na mensagem seguinte. Sem isto, quem desse o e-mail depois — que é todo mundo,
+// porque o bot só pergunta depois de confirmar — nunca entraria na agenda.
+//
+// PATCH de attendees SUBSTITUI a lista, então mandar o mesmo endereço de novo
+// é inofensivo: repetir não duplica convidado.
+func (g *GCalClient) ConvidarNoEvento(ctx context.Context, refreshToken, calendarID, eventID, email string) error {
+	if eventID == "" || email == "" {
+		return nil
+	}
+	access, err := g.accessToken(ctx, refreshToken)
+	if err != nil {
+		return err
+	}
+	if calendarID == "" {
+		calendarID = "primary"
+	}
+	corpo, err := json.Marshal(map[string]any{
+		"attendees": []any{map[string]any{"email": email}},
+	})
+	if err != nil {
+		return err
+	}
+	endpoint := fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events/%s?sendUpdates=all",
+		url.PathEscape(calendarID), url.PathEscape(eventID))
+	return g.doJSON(ctx, http.MethodPatch, endpoint, access, corpo, &struct{}{})
 }

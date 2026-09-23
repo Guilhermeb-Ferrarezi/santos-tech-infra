@@ -181,3 +181,33 @@ func DataNoTitulo(titulo string, agora time.Time) (time.Time, bool) {
 	}
 	return data, true
 }
+
+// NomeDoAluno escolhe o nome que vai para a agenda e para o Notion.
+//
+// O modelo às vezes escreve uma FRASE no lugar do nome — apareceu na agenda da
+// escola como "Aula experimental — Não informado (filho do responsável)". Quem
+// abre a grade quer ler um nome; quando ele não existe, o nome do responsável
+// serve melhor que uma explicação, porque é por ele que a escola vai chamar na
+// recepção.
+func NomeDoAluno(informado, responsavel string) string {
+	n := strings.TrimSpace(informado)
+	baixo := strings.ToLower(n)
+	placeholder := n == "" ||
+		strings.Contains(baixo, "não informado") ||
+		strings.Contains(baixo, "nao informado") ||
+		strings.Contains(baixo, "não informou") ||
+		strings.Contains(baixo, "a confirmar") ||
+		strings.Contains(baixo, "não sei") ||
+		strings.Contains(baixo, "desconhecid") ||
+		strings.Contains(baixo, "filho") ||
+		strings.Contains(baixo, "filha") ||
+		strings.Contains(baixo, "responsável") ||
+		strings.Contains(baixo, "responsavel")
+	if !placeholder {
+		return n
+	}
+	if r := strings.TrimSpace(responsavel); r != "" {
+		return r
+	}
+	return "a confirmar"
+}

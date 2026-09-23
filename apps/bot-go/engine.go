@@ -813,8 +813,23 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 		return false
 	}
 
+	// Daqui para baixo o cliente JÁ aceitou, e o bot muito provavelmente já
+	// disse a ele que está marcado — as bolhas saem antes desta função rodar.
+	// Então toda desistência daqui em diante é uma promessa quebrada, e alguém
+	// da escola precisa saber HOJE. Sem isto, a aula simplesmente não existia e
+	// ninguém ficava sabendo: foi assim que o cliente ouviu "tá marcado sim" de
+	// uma aula que nunca entrou na agenda.
+	motivoFalha := ""
+	defer func() {
+		if !marcou && motivoFalha != "" {
+			e.avisaAdminsDeAgendamentoFalho(ctx, conv, inbound,
+				NomeDoAluno(sr.StudentName, contactName), sr, motivoFalha)
+		}
+	}()
+
 	janela, err := ParseFuncionamento(cfg.EscolaAbre, cfg.EscolaFecha)
 	if err != nil {
+		motivoFalha = "o horário de funcionamento da escola está mal configurado no sistema"
 		log.Error("agenda: funcionamento mal configurado; não vou marcar sozinho", "err", err)
 		return false
 	}
@@ -827,17 +842,19 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 	// rótulo humano ("quinta") como último recurso.
 	iso, ok := ResolveBookingDateTime(firstNonEmpty(sr.ProposedDate, sr.ProposedDay), sr.ProposedTime, time.Now())
 	if !ok {
+		motivoFalha = "não consegui entender a data/hora combinada"
 		log.Info("agenda: não consegui resolver a data proposta; fica a pendência",
 			"dia", sr.ProposedDay, "data", sr.ProposedDate, "hora", sr.ProposedTime)
 		return false
 	}
 	inicio, ok := parseNotionTime(iso)
 	if !ok {
+		motivoFalha = "a data combinada saiu ilegível"
 		log.Error("agenda: data resolvida ilegível", "iso", iso)
 		return false
 	}
 
-	aluno := firstNonEmpty(sr.StudentName, contactName)
+	aluno := NomeDoAluno(sr.StudentName, contactName)
 
 	// Uma conversa, uma aula POR ALUNO.
 	//
@@ -862,7 +879,14 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 		}
 	}
 	if temAnterior && anterior.Em.Equal(inicio) {
-		log.Info("agenda: esta aula já está marcada; nada a fazer",
+		// Mesmo horário não quer dizer "nada mudou": é por aqui que passa o
+		// Gmail, que o bot só pede DEPOIS de confirmar a aula. Quem responde
+		// com o e-mail manda o mesmo dia e hora de novo — e sem este ramo o
+		// endereço chegava e era descartado.
+		if email := GmailValido(sr.ClienteEmail); email != "" {
+			e.convidaClienteNoEvento(ctx, anterior.PageID, email)
+		}
+		log.Info("agenda: esta aula já está marcada; nada a remarcar",
 			"aula", anterior.PageID, "quando", iso, "conversa", conv.ID)
 		return false
 	}
@@ -870,6 +894,7 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 	// Trava 1: agenda fresca. Cache não vale para decidir gravar.
 	agenda, estado := e.deps.Notion.Schedule(ctx)
 	if estado != AgendaOK {
+		motivoFalha = "não consegui ler a agenda do Notion na hora de gravar"
 		log.Warn("agenda: leitura não confiável; não vou marcar sozinho", "estado", estado)
 		return false
 	}
@@ -877,6 +902,7 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 		agenda = semAPagina(agenda, anterior.PageID)
 	}
 	if motivo := PodeMarcar(inicio, dur, time.Now(), janela, agenda); motivo != "" {
+		motivoFalha = "o horário combinado não passou nas travas (passado, fora do funcionamento ou pouca antecedência)"
 		log.Info("agenda: horário recusado pelas travas", "motivo", string(motivo), "quando", iso)
 		return false
 	}
@@ -893,9 +919,11 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 		ignorar = anterior.PageID
 	}
 	if outro, ocupado, err := e.deps.Notion.SlotOcupadoExceto(ctx, inicio, dur, ignorar); err != nil {
+		motivoFalha = "não consegui conferir se o horário estava livre"
 		log.Error("agenda: falha ao checar o horário; não vou marcar sozinho", "err", err)
 		return false
 	} else if ocupado {
+		motivoFalha = "o horário foi ocupado por outra aula antes de eu gravar"
 		log.Info("agenda: horário ocupado na checagem final", "quando", iso, "conflito_com", outro.Display())
 		return false
 	}
@@ -905,6 +933,7 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 	// recusado — perder a aula que existia é pior que não conseguir remarcar.
 	if temAnterior {
 		if err := e.deps.Notion.ArquivarBooking(ctx, anterior.PageID); err != nil {
+			motivoFalha = "não consegui tirar a aula anterior da agenda para remarcar"
 			log.Error("agenda: falha ao tirar a aula anterior; não vou criar a nova",
 				"err", err, "aula", anterior.PageID)
 			return false
@@ -939,8 +968,14 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 		// já saiu e a nova não entrou, então o cliente acha que tem horário e
 		// não tem. Não dá para desarquivar, então isso vira recado humano —
 		// alguém precisa ligar para essa família hoje.
+		//
+		// Com aula anterior, o aviso é o específico (conta o que se perdeu).
+		// Sem ela, cai no aviso geral pelo defer — nos dois casos alguém da
+		// escola fica sabendo, nunca os dois avisos ao mesmo tempo.
 		if temAnterior {
 			e.avisaAdminsDeRemarcacaoQuebrada(ctx, conv, inbound, aluno, anterior.Em, iso)
+		} else {
+			motivoFalha = "o Notion recusou a gravação"
 		}
 		return false
 	}
@@ -969,6 +1004,38 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 	e.poeNoGoogleAgenda(ctx, pageID, aluno, sr, inicio, dur)
 	e.agendaLembretesDoCliente(ctx, conv, inbound, pageID, aluno, inicio)
 	return true
+}
+
+// avisaAdminsDeAgendamentoFalho avisa quando o bot prometeu e não cumpriu.
+//
+// O cliente aceitou o horário e leu "está marcado" — as bolhas saem antes de
+// a gravação acontecer. Se a gravação falha, existe uma pessoa achando que tem
+// aula e uma agenda que não sabe disso. O silêncio é o pior desfecho: ninguém
+// descobre até a família aparecer na porta.
+func (e *ConversationEngine) avisaAdminsDeAgendamentoFalho(ctx context.Context, conv Conversation, inbound InboundMessage, aluno string, sr *SchedulingRequest, motivo string) {
+	if e.deps.Emitter == nil {
+		return
+	}
+	quando := strings.TrimSpace(firstNonEmpty(sr.ProposedDate, sr.ProposedDay) + " " + sr.ProposedTime)
+	msg := fmt.Sprintf("⚠️ NÃO consegui marcar a aula de %s (%s), mas JÁ DISSE AO CLIENTE que estava marcada. Motivo: %s. Precisa lançar na mão e confirmar com ele: %s",
+		aluno, quando, motivo, inbound.ExternalID)
+	ev := DomainEvent{
+		TenantID:    inbound.TenantID,
+		AggregateID: conv.ID,
+		Type:        "notification.requested",
+		Payload: map[string]any{
+			"type":            "BOOKING_CONFIRMED",
+			"conversation_id": conv.ID,
+			"channel":         inbound.Channel,
+			"message":         msg,
+		},
+		OccurredAt: time.Now(),
+	}
+	if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+		return e.deps.Emitter.Emit(ctx, tx, ev)
+	}); err != nil {
+		e.deps.Logger.Error("agenda: falha ao avisar do agendamento que não saiu", "err", err)
+	}
 }
 
 // avisaAdminsDeRemarcacaoQuebrada grita quando a remarcação morre no meio.
@@ -1614,7 +1681,17 @@ func applyTransition(current ConversationState, output ResponderOutput) Conversa
 // o inverso (desfazer a aula porque a agenda não respondeu) seria pior.
 func (e *ConversationEngine) poeNoGoogleAgenda(ctx context.Context, notionPageID, aluno string, sr *SchedulingRequest, inicio time.Time, dur time.Duration) {
 	log := e.deps.Logger
-	if e.deps.GCal == nil || !e.deps.GCal.Enabled() || e.deps.GCalRepo == nil || notionPageID == "" {
+	// Cada desistência daqui fala. Antes eram três `return` calados, e "a aula
+	// não apareceu na minha agenda" não tinha uma única linha de log para
+	// separar "o bot nem tentou" de "o Google recusou" — a diferença entre
+	// configurar uma variável e investigar uma integração.
+	if e.deps.GCal == nil || !e.deps.GCal.Enabled() {
+		log.Warn("gcal: integração desligada (faltam GOOGLE_CLIENT_ID/SECRET); a aula não vai para agenda nenhuma",
+			"aula", notionPageID)
+		return
+	}
+	if e.deps.GCalRepo == nil || notionPageID == "" {
+		log.Warn("gcal: sem repositório ou sem página do Notion; não dá para vincular o evento")
 		return
 	}
 	contas, err := e.deps.GCalRepo.Ativas(ctx, e.deps.TenantID)
@@ -1623,7 +1700,9 @@ func (e *ConversationEngine) poeNoGoogleAgenda(ctx context.Context, notionPageID
 		return
 	}
 	if len(contas) == 0 {
-		return // ninguém autorizou ainda
+		log.Warn("gcal: nenhuma agenda autorizada; ninguém vai ser avisado desta aula",
+			"aula", notionPageID)
+		return
 	}
 
 	ev := EventoAula{
@@ -1632,7 +1711,19 @@ func (e *ConversationEngine) poeNoGoogleAgenda(ctx context.Context, notionPageID
 		Inicio:    inicio,
 		Fim:       inicio.Add(dur),
 	}
+
+	// O cliente é convidado UMA vez, não uma por conta da escola. Convidado nos
+	// dois eventos, ele receberia dois convites da mesma aula e veria a agenda
+	// duplicada — parece desorganização logo no primeiro contato.
+	convite := GmailValido(sr.ClienteEmail)
+	if sr.ClienteEmail != "" && convite == "" {
+		log.Info("gcal: e-mail do cliente não é Gmail; não dá para convidar",
+			"email_informado", true, "aluno", aluno)
+	}
+
 	for _, c := range contas {
+		ev.ConvidarEmail = convite
+		convite = "" // só o primeiro evento leva o convidado
 		eventID, err := e.deps.GCal.CriarEvento(ctx, c.RefreshToken, c.CalendarID, ev)
 		if err != nil {
 			log.Error("gcal: falha ao criar evento", "err", err, "conta", c.Email)
@@ -1724,6 +1815,33 @@ func (e *ConversationEngine) cancelaAulaDoCliente(ctx context.Context, conv Conv
 	}
 	e.tiraDoGoogleAgenda(ctx, inbound.TenantID, aula.PageID)
 	log.Info("cancelamento: horário liberado", "aula", aula.PageID, "era_em", aula.Em.Format(time.RFC3339))
+}
+
+// convidaClienteNoEvento põe o cliente no evento que já existe.
+//
+// Convida em UM evento só, o primeiro. Os dois eventos (Rodrigo e Henrique)
+// representam a mesma aula; convidar nos dois mandaria dois convites da mesma
+// coisa para a mesma pessoa.
+func (e *ConversationEngine) convidaClienteNoEvento(ctx context.Context, notionPageID, email string) {
+	log := e.deps.Logger
+	if e.deps.GCal == nil || !e.deps.GCal.Enabled() || e.deps.GCalRepo == nil || notionPageID == "" {
+		return
+	}
+	eventos, err := e.deps.GCalRepo.EventosDaAula(ctx, e.deps.TenantID, notionPageID)
+	if err != nil {
+		log.Error("gcal: falha ao buscar o evento para convidar o cliente", "err", err)
+		return
+	}
+	if len(eventos) == 0 {
+		log.Info("gcal: aula sem evento na agenda; não dá para convidar", "aula", notionPageID)
+		return
+	}
+	ev := eventos[0]
+	if err := e.deps.GCal.ConvidarNoEvento(ctx, ev.Conta.RefreshToken, ev.Conta.CalendarID, ev.EventID, email); err != nil {
+		log.Error("gcal: falha ao convidar o cliente", "err", err, "conta", ev.Conta.Email)
+		return
+	}
+	log.Info("gcal: cliente convidado na agenda", "aula", notionPageID, "conta", ev.Conta.Email)
 }
 
 // tiraDoGoogleAgenda apaga os eventos da aula nas agendas e esquece o vínculo.

@@ -759,6 +759,17 @@ func (c *NotionClient) ArquivarBooking(ctx context.Context, pageID string) error
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		// Página já arquivada não é falha: o fim desejado — aquele horário fora
+		// da grade — já está valendo. Tratar como erro travava a remarcação
+		// inteira, e o cliente ficava sem a aula nova por causa de uma aula
+		// velha que nem existe mais. Aconteceu em produção depois de uma
+		// limpeza manual na base.
+		if strings.Contains(string(raw), "is archived") ||
+			strings.Contains(string(raw), "archived block") {
+			c.log.Info("notion: agendamento já estava arquivado", "page", pageID, "titulo", titulo)
+			c.invalidaCache()
+			return nil
+		}
 		return fmt.Errorf("notion: archive status %d: %s", resp.StatusCode, string(raw))
 	}
 	c.invalidaCache()

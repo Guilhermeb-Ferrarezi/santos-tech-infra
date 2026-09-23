@@ -221,6 +221,13 @@ type SchedulingRequest struct {
 	// conhece o campo => NÃO marca. A falha cai para o lado de não escrever
 	// nada na agenda da escola.
 	ClienteConfirmou bool
+
+	// ClienteEmail — Gmail do responsável, para convidar na agenda.
+	//
+	// Opcional: a aula é marcada com ou sem ele. Com o Gmail, o cliente recebe
+	// os mesmos três lembretes na própria agenda, além dos do WhatsApp — e
+	// quem vê o compromisso no celular falta menos.
+	ClienteEmail string
 }
 
 // BookingAction — ação do admin sobre um agendamento pendente.
