@@ -84,6 +84,9 @@ func TestPromptPedeGmailDepoisDeConfirmar(t *testing.T) {
 	if !strings.Contains(p, `"clienteEmail"`) {
 		t.Error("o schema do prompt não tem clienteEmail")
 	}
+	if !strings.Contains(p, "NÃO reemita") {
+		t.Error("o prompt não proíbe reemitir o agendamento junto com o e-mail — era assim que a aula era remarcada sem querer")
+	}
 	if !strings.Contains(p, "LOGO DEPOIS de confirmar") {
 		t.Error("o prompt não diz QUANDO pedir o e-mail — pedir antes do aceite vira obstáculo")
 	}
@@ -99,22 +102,22 @@ func TestPromptPedeGmailDepoisDeConfirmar(t *testing.T) {
 	}
 }
 
-func TestParserLeOEmailDoCliente(t *testing.T) {
+func TestParserLeOEmailNoNivelDeCima(t *testing.T) {
+	// O bot pede o Gmail DEPOIS de marcar, então ele chega numa mensagem que
+	// não fala de horário. O campo é de topo justamente para o modelo não
+	// precisar reemitir o agendamento — reemitir remarcava a aula sem querer.
 	out, err := ParseModelReply(`{"bubbles":["Anotado!"],"answered":true,"answeredFromKb":false,
-	  "schedulingRequest":{"kind":"experimental","studentName":"Caio",
-	    "proposedDate":"2026-10-01","proposedTime":"09h30",
-	    "clienteConfirmou":true,"clienteEmail":" Rodrigo@Gmail.com "}}`)
+	  "clienteEmail":" Rodrigo@Gmail.com "}`)
 	if err != nil {
 		t.Fatalf("erro: %v", err)
 	}
-	sr := out.SchedulingRequest
-	if sr == nil {
-		t.Fatal("schedulingRequest sumiu")
+	if out.ClienteEmail != "Rodrigo@Gmail.com" {
+		t.Errorf("clienteEmail = %q; o parser só apara as bordas", out.ClienteEmail)
 	}
-	if sr.ClienteEmail != "Rodrigo@Gmail.com" {
-		t.Errorf("clienteEmail = %q; o parser só apara as bordas", sr.ClienteEmail)
+	if out.SchedulingRequest != nil {
+		t.Error("mandar o e-mail NÃO pode virar pedido de agendamento")
 	}
-	if GmailValido(sr.ClienteEmail) != "rodrigo@gmail.com" {
+	if GmailValido(out.ClienteEmail) != "rodrigo@gmail.com" {
 		t.Error("a normalização para o convite acontece no GmailValido")
 	}
 
@@ -128,7 +131,7 @@ func TestParserLeOEmailDoCliente(t *testing.T) {
 	if out2.SchedulingRequest == nil || !out2.SchedulingRequest.ClienteConfirmou {
 		t.Error("sem e-mail o agendamento continua valendo")
 	}
-	if out2.SchedulingRequest.ClienteEmail != "" {
+	if out2.ClienteEmail != "" {
 		t.Error("campo ausente tem que chegar vazio")
 	}
 }
@@ -164,5 +167,63 @@ func TestNomeDoAlunoRecusaFrasesNoLugarDeNome(t *testing.T) {
 	titulo := TituloAulaBot(NomeDoAluno("Não informado (filho do responsável)", "Rodrigo"), quando)
 	if !strings.Contains(titulo, "Rodrigo") || strings.Contains(titulo, "informado") {
 		t.Errorf("título ficou %q", titulo)
+	}
+}
+
+// Endereço malformado não pode chegar ao Google: ele responde 400 e derruba a
+// criação do evento INTEIRO — a escola ficaria sem a aula na agenda por causa
+// de um e-mail que o cliente digitou errado.
+func TestGmailValidoBarraEnderecoQueDerrubariaOEvento(t *testing.T) {
+	for _, ruim := range []string{
+		"rodrigo@@gmail.com",
+		"rodrigo@gmail.com@gmail.com",
+		".rodrigo@gmail.com",
+		"rodrigo.@gmail.com",
+		"rodrigo..santos@gmail.com",
+		"@gmail.com",
+		"rodrigo!santos@gmail.com",
+		"rodrigo<santos@gmail.com",
+	} {
+		if got := GmailValido(ruim); got != "" {
+			t.Errorf("GmailValido(%q) = %q; deveria recusar", ruim, got)
+		}
+	}
+	// E os válidos continuam passando — recusar demais deixaria o cliente sem
+	// a agenda sem motivo.
+	for _, bom := range []string{
+		"rodrigo.santos@gmail.com",
+		"rodrigo_santos@gmail.com",
+		"rodrigo-santos@gmail.com",
+		"rodrigo+escola@gmail.com",
+		"rodrigo123@gmail.com",
+	} {
+		if GmailValido(bom) == "" {
+			t.Errorf("GmailValido(%q) recusou um endereço válido", bom)
+		}
+	}
+}
+
+// Dois filhos na mesma conversa não podem virar a mesma pessoa: a remarcação
+// compara o nome do aluno, então colapsar os dois no nome do responsável faria
+// a aula do segundo ARQUIVAR a do primeiro.
+func TestNomeDoAlunoNaoColapsaDoisFilhos(t *testing.T) {
+	primeiro := NomeDoAluno("Caio", "Rodrigo")
+	segundo := NomeDoAluno("Manuela", "Rodrigo")
+	if MesmoAluno(primeiro, segundo) {
+		t.Error("dois filhos viraram a mesma pessoa")
+	}
+
+	// "Filho" também é sobrenome. Barrar a palavra em qualquer posição apagava
+	// o nome de gente de verdade.
+	if got := NomeDoAluno("Antônio Barbosa Filho", "Rodrigo"); got != "Antônio Barbosa Filho" {
+		t.Errorf("sobrenome Filho virou %q", got)
+	}
+	if got := NomeDoAluno("Maria Filha de Souza", "Rodrigo"); got != "Maria Filha de Souza" {
+		t.Errorf("nome com 'Filha' no meio virou %q", got)
+	}
+
+	// Mas a descrição no lugar do nome continua sendo trocada.
+	if got := NomeDoAluno("filho do responsável", "Rodrigo"); got != "Rodrigo" {
+		t.Errorf("descrição no lugar do nome virou %q", got)
 	}
 }

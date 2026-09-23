@@ -782,7 +782,43 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		e.cancelaAulaDoCliente(ctx, conv, inbound)
 	}
 
+	// Gmail do cliente: caminho próprio, que NÃO toca na aula.
+	//
+	// O bot pede o e-mail depois de marcar, então ele chega numa mensagem que
+	// não fala de horário nenhum. A primeira versão fazia o modelo reemitir o
+	// pedido de agendamento inteiro só para carregar o endereço — e aí qualquer
+	// imprecisão na repetição ("quinta", sem data) virava remarcação silenciosa,
+	// pendência duplicada no painel e alarme falso para os admins. Convidar na
+	// agenda não precisa saber a data: a aula já existe e o bot sabe qual é.
+	if err == nil && !cfg.IsAdminConversation && output.ClienteEmail != "" {
+		e.convidaClienteDaConversa(ctx, conv, inbound, output.ClienteEmail)
+	}
+
 	return err
+}
+
+// convidaClienteDaConversa põe o cliente no evento da aula que ele já tem.
+func (e *ConversationEngine) convidaClienteDaConversa(ctx context.Context, conv Conversation, inbound InboundMessage, email string) {
+	log := e.deps.Logger
+	valido := GmailValido(email)
+	if valido == "" {
+		// Não é erro do sistema: o cliente mandou um endereço que não serve, ou
+		// a transcrição do áudio embaralhou. Fica no log para dar para ver que
+		// o pedido do Gmail está rendendo endereço ruim.
+		log.Info("gcal: endereço informado não serve para convite (precisa ser Gmail)",
+			"de", inbound.ExternalID)
+		return
+	}
+	if e.deps.Lembretes == nil {
+		return
+	}
+	aula, ok := e.deps.Lembretes.AulaDaConversa(ctx, inbound.TenantID, string(conv.ID))
+	if !ok {
+		log.Info("gcal: cliente mandou e-mail mas não tem aula marcada nesta conversa",
+			"de", inbound.ExternalID)
+		return
+	}
+	e.convidaClienteNoEvento(ctx, aula.PageID, valido)
 }
 
 // autoConfirmarAgendamento grava a aula no Notion sem esperar um humano.
@@ -879,13 +915,6 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 		}
 	}
 	if temAnterior && anterior.Em.Equal(inicio) {
-		// Mesmo horário não quer dizer "nada mudou": é por aqui que passa o
-		// Gmail, que o bot só pede DEPOIS de confirmar a aula. Quem responde
-		// com o e-mail manda o mesmo dia e hora de novo — e sem este ramo o
-		// endereço chegava e era descartado.
-		if email := GmailValido(sr.ClienteEmail); email != "" {
-			e.convidaClienteNoEvento(ctx, anterior.PageID, email)
-		}
 		log.Info("agenda: esta aula já está marcada; nada a remarcar",
 			"aula", anterior.PageID, "quando", iso, "conversa", conv.ID)
 		return false
@@ -1001,7 +1030,7 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 	e.avisaAdminsDoAgendamento(ctx, conv, inbound, aluno, sr, iso)
 	// O Notion é o controle; o Google Agenda é o alarme. Falhar aqui não
 	// desfaz a aula — ela existe e está avisada por WhatsApp.
-	e.poeNoGoogleAgenda(ctx, pageID, aluno, sr, inicio, dur)
+	e.poeNoGoogleAgenda(ctx, conv, inbound, pageID, aluno, sr, inicio, dur)
 	e.agendaLembretesDoCliente(ctx, conv, inbound, pageID, aluno, inicio)
 	return true
 }
@@ -1679,7 +1708,7 @@ func applyTransition(current ConversationState, output ResponderOutput) Conversa
 // Best-effort de propósito: o Notion é o controle e o WhatsApp já avisou. Se o
 // Google falhar, a aula continua marcada e a falha fica registrada na conta —
 // o inverso (desfazer a aula porque a agenda não respondeu) seria pior.
-func (e *ConversationEngine) poeNoGoogleAgenda(ctx context.Context, notionPageID, aluno string, sr *SchedulingRequest, inicio time.Time, dur time.Duration) {
+func (e *ConversationEngine) poeNoGoogleAgenda(ctx context.Context, conv Conversation, inbound InboundMessage, notionPageID, aluno string, sr *SchedulingRequest, inicio time.Time, dur time.Duration) {
 	log := e.deps.Logger
 	// Cada desistência daqui fala. Antes eram três `return` calados, e "a aula
 	// não apareceu na minha agenda" não tinha uma única linha de log para
@@ -1705,6 +1734,10 @@ func (e *ConversationEngine) poeNoGoogleAgenda(ctx context.Context, notionPageID
 		return
 	}
 
+	// A descrição do evento da ESCOLA é interna: leva o resumo que o bot
+	// escreveu para um colega ler ("mãe achou caro, pai não quer pagar"). Ela
+	// nunca pode ir para o evento onde o cliente é convidado — o convidado lê a
+	// descrição no app dele e no e-mail do convite.
 	ev := EventoAula{
 		Titulo:    TituloAgendamento(aluno),
 		Descricao: descricaoDoEvento(sr),
@@ -1712,28 +1745,55 @@ func (e *ConversationEngine) poeNoGoogleAgenda(ctx context.Context, notionPageID
 		Fim:       inicio.Add(dur),
 	}
 
-	// O cliente é convidado UMA vez, não uma por conta da escola. Convidado nos
-	// dois eventos, ele receberia dois convites da mesma aula e veria a agenda
-	// duplicada — parece desorganização logo no primeiro contato.
-	convite := GmailValido(sr.ClienteEmail)
-	if sr.ClienteEmail != "" && convite == "" {
-		log.Info("gcal: e-mail do cliente não é Gmail; não dá para convidar",
-			"email_informado", true, "aluno", aluno)
-	}
-
+	criados := 0
 	for _, c := range contas {
-		ev.ConvidarEmail = convite
-		convite = "" // só o primeiro evento leva o convidado
 		eventID, err := e.deps.GCal.CriarEvento(ctx, c.RefreshToken, c.CalendarID, ev)
 		if err != nil {
 			log.Error("gcal: falha ao criar evento", "err", err, "conta", c.Email)
 			e.deps.GCalRepo.RegistrarErro(ctx, c.ID, err.Error())
 			continue
 		}
+		criados++
 		if err := e.deps.GCalRepo.VincularEvento(ctx, e.deps.TenantID, c.ID, notionPageID, eventID, inicio); err != nil {
 			log.Error("gcal: evento criado mas não vinculado", "err", err, "conta", c.Email)
 		}
 		log.Info("gcal: evento criado", "conta", c.Email, "aluno", aluno, "quando", inicio.Format(time.RFC3339))
+	}
+
+	// Nenhum evento em nenhuma agenda é falha de verdade: a aula existe no
+	// Notion e ninguém vai ser avisado dela. Vira recado humano, não só log.
+	if criados == 0 {
+		log.Error("gcal: a aula não entrou em NENHUMA agenda", "aula", notionPageID, "contas", len(contas))
+		e.avisaAdminsDeAgendaMuda(ctx, conv, inbound, aluno, inicio)
+	}
+}
+
+// avisaAdminsDeAgendaMuda conta que a aula ficou só no Notion.
+//
+// O Notion é o registro; o Google Agenda é o alarme. Sem o alarme, a aula existe
+// e ninguém é lembrado dela — e o Notion não avisa ninguém sozinho.
+func (e *ConversationEngine) avisaAdminsDeAgendaMuda(ctx context.Context, conv Conversation, inbound InboundMessage, aluno string, inicio time.Time) {
+	if e.deps.Emitter == nil {
+		return
+	}
+	msg := fmt.Sprintf("⚠️ A aula de %s (%s) foi marcada no Notion mas NÃO entrou no Google Agenda de ninguém. Vocês não vão receber lembrete dela — vale conferir a autorização das contas.",
+		aluno, formatBRDateTime(inicio.Format(time.RFC3339)))
+	ev := DomainEvent{
+		TenantID:    inbound.TenantID,
+		AggregateID: conv.ID,
+		Type:        "notification.requested",
+		Payload: map[string]any{
+			"type":            "BOOKING_CONFIRMED",
+			"conversation_id": conv.ID,
+			"channel":         inbound.Channel,
+			"message":         msg,
+		},
+		OccurredAt: time.Now(),
+	}
+	if err := e.withTenant(ctx, func(tx pgx.Tx) error {
+		return e.deps.Emitter.Emit(ctx, tx, ev)
+	}); err != nil {
+		e.deps.Logger.Error("gcal: falha ao avisar que a agenda ficou muda", "err", err)
 	}
 }
 
@@ -1766,7 +1826,11 @@ func (e *ConversationEngine) agendaLembretesDoCliente(ctx context.Context, conv 
 	n, err := e.deps.Lembretes.Agendar(ctx, inbound.TenantID, notionPageID,
 		string(conv.ID), inbound.ExternalID, inbound.Channel, aluno, aulaEm, time.Now())
 	if err != nil {
-		e.deps.Logger.Error("lembretes: falha ao agendar", "err", err, "aula", notionPageID)
+		// Esta tabela é o livro-razão de quais aulas são do bot: sem a linha, a
+		// conversa "não tem" aula marcada, o cliente fica sem os três lembretes
+		// e a próxima confirmação cria uma SEGUNDA aula em vez de remarcar.
+		e.deps.Logger.Error("lembretes: a aula existe mas ficou sem registro; cliente não será lembrado e a remarcação vai duplicar",
+			"err", err, "aula", notionPageID, "aluno", aluno)
 		return
 	}
 	e.deps.Logger.Info("lembretes: agendados", "quantos", n, "aluno", aluno,
@@ -1837,7 +1901,7 @@ func (e *ConversationEngine) convidaClienteNoEvento(ctx context.Context, notionP
 		return
 	}
 	ev := eventos[0]
-	if err := e.deps.GCal.ConvidarNoEvento(ctx, ev.Conta.RefreshToken, ev.Conta.CalendarID, ev.EventID, email); err != nil {
+	if err := e.deps.GCal.ConvidarNoEvento(ctx, ev.Conta.RefreshToken, ev.Conta.CalendarID, ev.EventID, email, descricaoParaOCliente()); err != nil {
 		log.Error("gcal: falha ao convidar o cliente", "err", err, "conta", ev.Conta.Email)
 		return
 	}
@@ -1860,4 +1924,18 @@ func (e *ConversationEngine) tiraDoGoogleAgenda(ctx context.Context, tenantID Te
 		}
 	}
 	e.deps.GCalRepo.EsquecerAula(ctx, tenantID, notionPageID)
+}
+
+// descricaoParaOCliente é o que o convidado lê no app de agenda dele e no
+// e-mail do convite.
+//
+// Deliberadamente sem o resumo do atendimento. Aquele texto é escrito para um
+// colega da escola ler antes da aula — "mãe achou caro", "pai não quer pagar",
+// "já tentou outro curso e desistiu" — e é exatamente o tipo de anotação que
+// não pode chegar à pessoa de quem se está falando.
+func descricaoParaOCliente() string {
+	return "Aula experimental na Escola Santos Tech.\n\n" +
+		"Av. Nove de Julho, 1992 — Jardim América, Ribeirão Preto.\n" +
+		"Temos garagem própria, é só entrar.\n\n" +
+		"Qualquer coisa, é só chamar no WhatsApp."
 }

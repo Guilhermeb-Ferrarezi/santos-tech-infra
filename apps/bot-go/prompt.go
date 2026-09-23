@@ -153,7 +153,14 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 		// Pedido no meio da negociação, vira mais um obstáculo entre a pessoa e
 		// a aula. Depois do "está marcado", é um favor: o compromisso entra na
 		// agenda do celular dela com os mesmos avisos.
-		sb.WriteString("- LOGO DEPOIS de confirmar que está marcado, peça o Gmail do responsável numa mensagem curta, explicando para quê: colocar a aula na agenda dele com os lembretes. Precisa ser GMAIL — diga isso. Quando ele mandar, repita o pedido de agendamento com o endereço em \"clienteEmail\" e \"clienteConfirmou\": true, mantendo o MESMO dia e horário já combinados.\n")
+		sb.WriteString("- LOGO DEPOIS de confirmar que está marcado, peça o Gmail do responsável numa mensagem curta, explicando para quê: colocar a aula na agenda dele com os lembretes. Precisa ser GMAIL — diga isso.\n")
+		// O e-mail volta como campo de TOPO, não dentro do schedulingRequest.
+		//
+		// Fazer o modelo reemitir o pedido de agendamento só para carregar um
+		// endereço obrigava ele a repetir dia e hora numa mensagem que não fala
+		// de horário — e qualquer imprecisão ("quinta", sem data) virava
+		// remarcação silenciosa da aula que já estava certa.
+		sb.WriteString("- Quando ele mandar o endereço, devolva APENAS o campo \"clienteEmail\" no nível de cima do JSON, exatamente como ele escreveu. NÃO reemita \"schedulingRequest\": a aula já está marcada, e repetir o pedido pode remarcá-la sem querer.\n")
 		sb.WriteString("- Se o cliente não quiser dar o e-mail, não insista: a aula continua marcada e ele é lembrado pelo WhatsApp do mesmo jeito.\n")
 	} else {
 		sb.WriteString("- NÃO garanta que está marcado: diga que vai confirmar a disponibilidade e retorna. A confirmação final é de um humano.\n")
@@ -179,6 +186,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("  \"handoff\": false,\n")
 	sb.WriteString("  \"smalltalk\": false,\n")
 	sb.WriteString("  \"cancelaAula\": false,\n")
+	sb.WriteString("  \"clienteEmail\": \"\",\n")
 	sb.WriteString("  \"schedulingRequest\": {\"kind\":\"experimental\",\"studentName\":\"...\",\"age\":0,\"course\":\"...\",\"proposedDay\":\"quinta\",\"proposedDate\":\"2026-07-30\",\"proposedTime\":\"19h30\",\"proposedPeriod\":\"Noite\",\"clienteConfirmou\":true,\"clienteEmail\":\"...@gmail.com\",\"notes\":\"...\"},\n")
 	sb.WriteString("  \"scheduledContact\": {\"rawPhrase\":\"...\",\"resolvedDate\":\"YYYY-MM-DD\",\"confidence\":0.9},\n")
 	sb.WriteString("  \"quotedReplies\": [{\"bubble\":0,\"ref\":\"m2\"}]\n")

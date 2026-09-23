@@ -22,6 +22,7 @@ type rawResponderOutput struct {
 	ClientActions     json.RawMessage `json:"clientActions"`
 	SchedulingRequest json.RawMessage `json:"schedulingRequest"`
 	BookingActions    json.RawMessage `json:"bookingActions"`
+	ClienteEmail      string          `json:"clienteEmail"`
 }
 
 // ParseModelReply extrai e parseia o JSON de resposta do LLM.
@@ -59,6 +60,7 @@ func ParseModelReply(raw string) (ResponderOutput, error) {
 		Handoff:        r.Handoff,
 		Smalltalk:      r.Smalltalk,
 		CancelaAula:    r.CancelaAula,
+		ClienteEmail:   strings.TrimSpace(r.ClienteEmail),
 		KBEntry:        r.KBEntry,
 	}
 
@@ -107,8 +109,7 @@ func parseSchedulingRequest(raw json.RawMessage) *SchedulingRequest {
 		// Ponteiro para distinguir "o modelo disse false" de "o modelo nem
 		// escreveu o campo". Os dois acabam em false, mas só o segundo merece
 		// log — é o sintoma de um prompt desatualizado em produção.
-		ClienteConfirmou *bool  `json:"clienteConfirmou"`
-		ClienteEmail     string `json:"clienteEmail"`
+		ClienteConfirmou *bool `json:"clienteConfirmou"`
 	}
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return nil
@@ -140,7 +141,6 @@ func parseSchedulingRequest(raw json.RawMessage) *SchedulingRequest {
 		ProposedPeriod:   s.ProposedPeriod,
 		Notes:            s.Notes,
 		ClienteConfirmou: s.ClienteConfirmou != nil && *s.ClienteConfirmou,
-		ClienteEmail:     strings.TrimSpace(s.ClienteEmail),
 	}
 }
 

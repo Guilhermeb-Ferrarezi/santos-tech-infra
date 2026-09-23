@@ -373,10 +373,24 @@ func GmailValido(email string) string {
 	if dominio != "gmail.com" && dominio != "googlemail.com" {
 		return ""
 	}
-	// Um usuário com espaço ou vírgula é erro de transcrição do áudio, não
-	// endereço. Melhor não convidar do que convidar o endereço errado.
-	if strings.ContainsAny(usuario, " ,;:/\\\"'<>()[]") {
+	// Endereço malformado não pode chegar ao Google: ele responde 400 e derruba
+	// a criação do evento INTEIRO — a escola ficaria sem a aula na agenda por
+	// causa de um e-mail que o cliente digitou errado. Melhor não convidar.
+	if strings.Count(e, "@") != 1 {
 		return ""
+	}
+	if usuario == "" || strings.ContainsAny(usuario, " ,;:/\\\"'<>()[]") {
+		return ""
+	}
+	// Gmail não aceita ponto no começo/fim nem dois pontos seguidos.
+	if strings.HasPrefix(usuario, ".") || strings.HasSuffix(usuario, ".") || strings.Contains(usuario, "..") {
+		return ""
+	}
+	for _, r := range usuario {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' || r == '+'
+		if !ok {
+			return ""
+		}
 	}
 	return e
 }
@@ -389,7 +403,9 @@ func GmailValido(email string) string {
 //
 // PATCH de attendees SUBSTITUI a lista, então mandar o mesmo endereço de novo
 // é inofensivo: repetir não duplica convidado.
-func (g *GCalClient) ConvidarNoEvento(ctx context.Context, refreshToken, calendarID, eventID, email string) error {
+// ConvidarNoEvento é implementada em termos de ConvidarNoEventoComTexto, para
+// que o convite NUNCA saia sem trocar a descrição interna por uma limpa.
+func (g *GCalClient) ConvidarNoEvento(ctx context.Context, refreshToken, calendarID, eventID, email, descricaoParaOCliente string) error {
 	if eventID == "" || email == "" {
 		return nil
 	}
@@ -400,13 +416,45 @@ func (g *GCalClient) ConvidarNoEvento(ctx context.Context, refreshToken, calenda
 	if calendarID == "" {
 		calendarID = "primary"
 	}
-	corpo, err := json.Marshal(map[string]any{
-		"attendees": []any{map[string]any{"email": email}},
-	})
+	endpoint := fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events/%s",
+		url.PathEscape(calendarID), url.PathEscape(eventID))
+
+	// Lê os convidados que já estão no evento antes de mexer.
+	//
+	// PATCH de attendees SUBSTITUI a lista inteira. Mandar só o cliente
+	// DESCONVIDA quem um humano tivesse adicionado à mão — o professor que vai
+	// dar a aula, por exemplo, sumiria do próprio compromisso sem ninguém pedir.
+	var atual struct {
+		Attendees []struct {
+			Email string `json:"email"`
+		} `json:"attendees"`
+	}
+	if err := g.doJSON(ctx, http.MethodGet, endpoint, access, nil, &atual); err != nil {
+		return err
+	}
+	convidados := make([]any, 0, len(atual.Attendees)+1)
+	jaEsta := false
+	for _, a := range atual.Attendees {
+		if strings.EqualFold(strings.TrimSpace(a.Email), email) {
+			jaEsta = true
+		}
+		convidados = append(convidados, map[string]any{"email": a.Email})
+	}
+	if jaEsta {
+		// Repetir o convite dispararia outro e-mail para quem já foi convidado.
+		return nil
+	}
+	convidados = append(convidados, map[string]any{"email": email})
+
+	patch := map[string]any{"attendees": convidados}
+	// A descrição interna (o resumo escrito para a equipe) não pode ficar num
+	// evento que o cliente passa a enxergar.
+	if descricaoParaOCliente != "" {
+		patch["description"] = descricaoParaOCliente
+	}
+	corpo, err := json.Marshal(patch)
 	if err != nil {
 		return err
 	}
-	endpoint := fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events/%s?sendUpdates=all",
-		url.PathEscape(calendarID), url.PathEscape(eventID))
-	return g.doJSON(ctx, http.MethodPatch, endpoint, access, corpo, &struct{}{})
+	return g.doJSON(ctx, http.MethodPatch, endpoint+"?sendUpdates=all", access, corpo, &struct{}{})
 }
