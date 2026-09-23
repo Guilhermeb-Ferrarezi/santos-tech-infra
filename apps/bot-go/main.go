@@ -106,7 +106,7 @@ func main() {
 
 	// 8. Instancia AgentGoClient (Responder)
 	sitemapCache := NewSitemapCache(cfg.SiteURL)
-	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret, sitemapCache, notionClient)
+	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret, cfg.BotModel, sitemapCache, notionClient)
 
 	// 9. Instancia WhatsAppSender + cliente Evolution (canal não-oficial)
 	sender := NewWhatsAppSender(cfg.MetaAccessToken, cfg.MetaPhoneNumberID)

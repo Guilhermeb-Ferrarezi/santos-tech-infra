@@ -1334,3 +1334,39 @@ func (s *Server) handleDashQualificacoes(w http.ResponseWriter, r *http.Request)
 	})
 	jsonOK(w, map[string]any{"leads": out})
 }
+
+// GET /api/clientes/{telefone}.md — o dossiê de uma pessoa, em Markdown.
+//
+// Serve texto puro, não JSON: a ideia é abrir, ler, e colar num WhatsApp ou
+// num documento. Gerado do banco a cada chamada, então nunca está velho.
+func (s *Server) handleDossieMarkdown(w http.ResponseWriter, r *http.Request) {
+	if s.engine.deps.Qualificacoes == nil {
+		jsonErr(w, "qualificação não configurada", http.StatusServiceUnavailable)
+		return
+	}
+	telefone := strings.TrimSuffix(r.PathValue("telefone"), ".md")
+	telefone = soDigitos(telefone)
+	if telefone == "" {
+		jsonErr(w, "telefone inválido", http.StatusBadRequest)
+		return
+	}
+	d, ok := s.engine.deps.Qualificacoes.DossieDoTelefone(r.Context(), TenantID(s.cfg.TenantID), telefone)
+	if !ok {
+		http.Error(w, "# Não encontrei ninguém com esse número\n", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", "inline; filename=\""+d.NomeDoArquivo()+"\"")
+	_, _ = w.Write([]byte(d.Markdown(time.Now())))
+}
+
+// soDigitos tira tudo que não for número — o telefone chega de jeitos
+// diferentes conforme quem chama (com +, com espaço, com parêntese).
+func soDigitos(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, s)
+}

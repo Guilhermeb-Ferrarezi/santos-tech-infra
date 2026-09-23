@@ -17,17 +17,33 @@ type AgentGoClient struct {
 	http    *http.Client
 	sitemap *SitemapCache
 	notion  *NotionClient
+
+	// modelo — qual Claude atende o cliente.
+	//
+	// Era "opus" chumbado no código. A conversa do bot é seguir regras e devolver
+	// um JSON: Sonnet dá conta, por uma fração do preço, e o prompt é grande
+	// (a base de conhecimento inteira vai em toda mensagem), então a diferença
+	// pesa em cada atendimento.
+	//
+	// Configurável por ambiente para dar para trocar sem deploy: se a qualidade
+	// cair em algo — resolver "quinta que vem" na data certa é o mais sensível —
+	// volta-se a opus mexendo numa variável.
+	modelo string
 }
 
 // NewAgentGoClient cria um cliente com timeout de 120s (adequado para inferência).
 // sitemap fornece as URLs do site (WebFetch); notion fornece a agenda de aulas.
-func NewAgentGoClient(url, secret string, sitemap *SitemapCache, notion *NotionClient) *AgentGoClient {
+func NewAgentGoClient(url, secret, modelo string, sitemap *SitemapCache, notion *NotionClient) *AgentGoClient {
+	if modelo == "" {
+		modelo = "sonnet"
+	}
 	return &AgentGoClient{
 		url:     url,
 		secret:  secret,
 		http:    &http.Client{Timeout: 120 * time.Second},
 		sitemap: sitemap,
 		notion:  notion,
+		modelo:  modelo,
 	}
 }
 
@@ -58,7 +74,7 @@ func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx 
 	}
 	prompt := BuildPrompt(cfg, convCtx, inboundText, time.Now())
 
-	result, err := c.callAPI(ctx, agentGoRequest{Task: "raw", Brief: prompt, Model: "opus", Web: true})
+	result, err := c.callAPI(ctx, agentGoRequest{Task: "raw", Brief: prompt, Model: c.modelo, Web: true})
 	if err != nil {
 		return ResponderOutput{}, fmt.Errorf("agent_go: respond: %w", err)
 	}
