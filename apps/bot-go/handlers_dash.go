@@ -500,39 +500,90 @@ func (s *Server) handleDashDefaultAdminPrompt(w http.ResponseWriter, r *http.Req
 
 // ── PATCH /api/config ────────────────────────────────────────────────────────
 
+// dashConfigPatch — corpo do PATCH de configuração.
+//
+// TUDO anulável de propósito: PATCH quer dizer "mude o que eu mandei", não
+// "substitua o registro". Campo ausente chega nil, e o COALESCE no UPDATE
+// preserva o que já está no banco.
+//
+// Separado do dashConfig (que o GET devolve) porque só o corpo do PATCH precisa
+// distinguir "não mandei" de "mandei vazio".
+//
+// Antes, uma chamada legítima mandando só o systemPrompt zerava a base de
+// conhecimento, o nome do bot, a allowlist e os números dos admins — e o bot
+// parava de responder a todo mundo, sem erro nenhum, porque o UPDATE gravava o
+// zero value de cada campo omitido. Aconteceu em produção. A lição já estava
+// escrita neste arquivo, para os campos de voz; faltava valer para os outros.
+type dashConfigPatch struct {
+	BotName                     *string    `json:"botName"`
+	BotGender                   *string    `json:"botGender"`
+	BotEnabledByDefault         *bool      `json:"botEnabledByDefault"`
+	BotAllowedNumbers           *[]string  `json:"botAllowedNumbers"`
+	QuietHoursStart             *string    `json:"quietHoursStart"`
+	QuietHoursEnd               *string    `json:"quietHoursEnd"`
+	KBContent                   *[]KBEntry `json:"kbContent"`
+	SystemPrompt                *string    `json:"systemPrompt"`
+	AdminSystemPrompt           *string    `json:"adminSystemPrompt"`
+	AdminWhatsAppNumbers        *[]string  `json:"adminWhatsAppNumbers"`
+	DebounceMs                  *int       `json:"debounceMs"`
+	EvolutionBotReplyEnabled    *bool      `json:"evolutionBotReplyEnabled"`
+	EvolutionLeadCaptureEnabled *bool      `json:"evolutionLeadCaptureEnabled"`
+	EvolutionCaptureDisabled    *[]string  `json:"evolutionCaptureDisabled"`
+	NotifPhone                  *string    `json:"notifPhone"`
+	NotifInstance               *string    `json:"notifInstance"`
+	NotifEnabled                *bool      `json:"notifEnabled"`
+	NotifOnSuccess              *bool      `json:"notifOnSuccess"`
+	NotifOnContainerDown        *bool      `json:"notifOnContainerDown"`
+	VoiceEnabled                *bool      `json:"voiceEnabled"`
+	VoiceProvider               *string    `json:"voiceProvider"`
+	VoiceID                     *string    `json:"voiceId"`
+	VoiceModel                  *string    `json:"voiceModel"`
+}
+
+// jsonbOuNil devolve o JSON de uma lista, ou nil quando ela nem veio.
+//
+// A diferença importa: nil é "não mexe"; uma lista vazia enviada de propósito
+// é "esvazie mesmo".
+func jsonbOuNil[T any](v *[]T) *string {
+	if v == nil {
+		return nil
+	}
+	b, err := json.Marshal(*v)
+	if err != nil {
+		return nil
+	}
+	s := string(b)
+	return &s
+}
+
 func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tenantID := TenantID(s.cfg.TenantID)
 
-	var body dashConfig
+	var body dashConfigPatch
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, "invalid body", http.StatusBadRequest)
 		return
 	}
 
-	allowedJSON, _ := json.Marshal(body.BotAllowedNumbers)
-	if body.BotAllowedNumbers == nil {
-		allowedJSON = []byte("[]")
-	}
+	// Listas: nil = não mandou (preserva); [] = mandou vazio (esvazia mesmo).
+	allowedJSON := jsonbOuNil(body.BotAllowedNumbers)
+	adminNumbersJSON := jsonbOuNil(body.AdminWhatsAppNumbers)
+	captureDisabledJSON := jsonbOuNil(body.EvolutionCaptureDisabled)
+	kbJSON := jsonbOuNil(body.KBContent)
 
-	adminNumbersJSON, _ := json.Marshal(body.AdminWhatsAppNumbers)
-	if body.AdminWhatsAppNumbers == nil {
-		adminNumbersJSON = []byte("[]")
-	}
 	// Mantém a coluna legada em sincronia (primeiro número da lista).
-	legacyAdmin := ""
-	if len(body.AdminWhatsAppNumbers) > 0 {
-		legacyAdmin = body.AdminWhatsAppNumbers[0]
+	var legacyAdmin *string
+	if body.AdminWhatsAppNumbers != nil {
+		v := ""
+		if lista := *body.AdminWhatsAppNumbers; len(lista) > 0 {
+			v = lista[0]
+		}
+		legacyAdmin = &v
 	}
 
-	// voice_provider: só os implementados. Valor desconhecido vira 'openai',
+	// voice_provider: só os implementados. Valor desconhecido vira "openai",
 	// porque a constraint do banco rejeitaria e derrubaria o PATCH inteiro.
-	// nil (campo ausente) segue nil → o COALESCE preserva o que já está lá.
-	//
-	// 'clips' PRECISA estar aqui. O painel reenvia o config inteiro a cada save
-	// (`{...cfg.data, ...draft}`), então deixar 'clips' de fora fazia qualquer
-	// salvamento — mudar o nome do bot, por exemplo — derrubar a voz gravada do
-	// atendente para a voz sintética do OpenAI, sem avisar ninguém.
 	var voiceProvider *string
 	if body.VoiceProvider != nil {
 		p := *body.VoiceProvider
@@ -543,61 +594,61 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// debounce_ms: clamp defensivo (0–15s; 0 = sem agrupamento).
-	debounceMs := body.DebounceMs
-	if debounceMs < 0 {
-		debounceMs = 0
-	}
-	if debounceMs > 15000 {
-		debounceMs = 15000
-	}
-
-	kbJSON, _ := json.Marshal(body.KBContent)
-	if body.KBContent == nil {
-		kbJSON = []byte("[]")
-	}
-
-	captureDisabledJSON, _ := json.Marshal(body.EvolutionCaptureDisabled)
-	if body.EvolutionCaptureDisabled == nil {
-		captureDisabledJSON = []byte("[]")
+	var debounceMs *int
+	if body.DebounceMs != nil {
+		d := *body.DebounceMs
+		if d < 0 {
+			d = 0
+		}
+		if d > 15000 {
+			d = 15000
+		}
+		debounceMs = &d
 	}
 
+	// quiet_hours só é tocado quando os DOIS extremos vêm; mandar um só não
+	// diz nada sobre a janela.
 	var quietHoursJSON *string
-	if body.QuietHoursStart != nil && body.QuietHoursEnd != nil &&
-		*body.QuietHoursStart != "" && *body.QuietHoursEnd != "" {
-		v := fmt.Sprintf(`{"start":%q,"end":%q}`, *body.QuietHoursStart, *body.QuietHoursEnd)
+	if body.QuietHoursStart != nil && body.QuietHoursEnd != nil {
+		v := "{}"
+		if *body.QuietHoursStart != "" && *body.QuietHoursEnd != "" {
+			v = fmt.Sprintf(`{"start":%q,"end":%q}`, *body.QuietHoursStart, *body.QuietHoursEnd)
+		}
 		quietHoursJSON = &v
 	}
 
+	// COALESCE em TUDO: o que não veio no corpo fica como está.
 	_, err := s.pool.Exec(ctx, `
 		UPDATE tenant_config
-		SET bot_name               = $1,
-		    bot_gender             = $2,
-		    bot_enabled_by_default = $3,
-		    bot_allowed_numbers    = $4::jsonb,
-		    quiet_hours            = CASE WHEN $5::text IS NULL THEN '{}'::jsonb ELSE $5::jsonb END,
-		    kb_content             = $6::jsonb,
-		    system_prompt          = $8,
-		    admin_whatsapp_number  = $9,
-		    admin_whatsapp_numbers = $10::jsonb,
-		    debounce_ms            = $11,
-		    admin_system_prompt    = $12,
-		    evolution_bot_reply_enabled = $13,
-		    evolution_lead_capture_enabled = $14,
-		    evolution_capture_disabled = $15::jsonb,
-		    notif_phone    = $16,
-		    notif_instance = $17,
-		    notif_enabled  = $18,
-		    notif_on_success = $19,
-		    notif_on_container_down = $20,
+		SET bot_name               = COALESCE($1, bot_name),
+		    bot_gender             = COALESCE($2, bot_gender),
+		    bot_enabled_by_default = COALESCE($3, bot_enabled_by_default),
+		    bot_allowed_numbers    = COALESCE($4::jsonb, bot_allowed_numbers),
+		    quiet_hours            = COALESCE($5::jsonb, quiet_hours),
+		    kb_content             = COALESCE($6::jsonb, kb_content),
+		    system_prompt          = COALESCE($8, system_prompt),
+		    admin_whatsapp_number  = COALESCE($9, admin_whatsapp_number),
+		    admin_whatsapp_numbers = COALESCE($10::jsonb, admin_whatsapp_numbers),
+		    debounce_ms            = COALESCE($11, debounce_ms),
+		    admin_system_prompt    = COALESCE($12, admin_system_prompt),
+		    evolution_bot_reply_enabled    = COALESCE($13, evolution_bot_reply_enabled),
+		    evolution_lead_capture_enabled = COALESCE($14, evolution_lead_capture_enabled),
+		    evolution_capture_disabled     = COALESCE($15::jsonb, evolution_capture_disabled),
+		    notif_phone    = COALESCE($16, notif_phone),
+		    notif_instance = COALESCE($17, notif_instance),
+		    notif_enabled  = COALESCE($18, notif_enabled),
+		    notif_on_success = COALESCE($19, notif_on_success),
+		    notif_on_container_down = COALESCE($20, notif_on_container_down),
 		    voice_enabled  = COALESCE($21, voice_enabled),
 		    voice_provider = COALESCE($22, voice_provider),
 		    voice_id       = COALESCE($23, voice_id),
-		    voice_model    = COALESCE($24, voice_model)
+		    voice_model    = COALESCE($24, voice_model),
+		    updated_at     = now()
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
 		allowedJSON, quietHoursJSON, kbJSON, tenantID, body.SystemPrompt,
-		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt, body.EvolutionBotReplyEnabled,
-		body.EvolutionLeadCaptureEnabled, captureDisabledJSON,
+		legacyAdmin, adminNumbersJSON, debounceMs, body.AdminSystemPrompt,
+		body.EvolutionBotReplyEnabled, body.EvolutionLeadCaptureEnabled, captureDisabledJSON,
 		body.NotifPhone, body.NotifInstance, body.NotifEnabled,
 		body.NotifOnSuccess, body.NotifOnContainerDown,
 		body.VoiceEnabled, voiceProvider, body.VoiceID, body.VoiceModel)
