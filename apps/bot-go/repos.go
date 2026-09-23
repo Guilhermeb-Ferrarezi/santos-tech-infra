@@ -1294,3 +1294,74 @@ func normalizePhone(s string) string {
 	}
 	return b.String()
 }
+
+// ── qualificação do lead (0037) ──────────────────────────────────────────────
+
+// QualificacaoRepo guarda o dossiê de cada pessoa.
+type QualificacaoRepo struct{ pool *pgxpool.Pool }
+
+func NewQualificacaoRepo(pool *pgxpool.Pool) *QualificacaoRepo {
+	return &QualificacaoRepo{pool: pool}
+}
+
+// Get devolve o que se sabe. Contato sem linha devolve dossiê vazio, não erro:
+// primeira conversa é o caso normal, não uma falha.
+func (r *QualificacaoRepo) Get(ctx context.Context, tenantID TenantID, contactID ContactID) Qualificacao {
+	var q Qualificacao
+	err := r.pool.QueryRow(ctx, `
+		SELECT para_quem, aluno_nome, aluno_idade, interesse, ja_faz_curso,
+		       disponibilidade, motivacao, motivacao_tipo, observacoes,
+		       preco_informado, aula_marcada, perguntas_respondidas
+		FROM lead_qualificacao
+		WHERE tenant_id = $1 AND contact_id = $2
+	`, tenantID, contactID).Scan(
+		&q.ParaQuem, &q.AlunoNome, &q.AlunoIdade, &q.Interesse, &q.JaFazCurso,
+		&q.Disponibilidade, &q.Motivacao, &q.MotivacaoTipo, &q.Observacoes,
+		&q.PrecoInformado, &q.AulaMarcada, &q.PerguntasRespondidas)
+	if err != nil {
+		return Qualificacao{}
+	}
+	return q
+}
+
+// Save grava o dossiê inteiro (já mesclado pelo chamador).
+func (r *QualificacaoRepo) Save(ctx context.Context, tenantID TenantID, contactID ContactID, q Qualificacao) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO lead_qualificacao
+		  (tenant_id, contact_id, para_quem, aluno_nome, aluno_idade, interesse,
+		   ja_faz_curso, disponibilidade, motivacao, motivacao_tipo, observacoes,
+		   preco_informado, aula_marcada, perguntas_respondidas, atualizado_em)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())
+		ON CONFLICT (tenant_id, contact_id) DO UPDATE SET
+		  para_quem = EXCLUDED.para_quem, aluno_nome = EXCLUDED.aluno_nome,
+		  aluno_idade = EXCLUDED.aluno_idade, interesse = EXCLUDED.interesse,
+		  ja_faz_curso = EXCLUDED.ja_faz_curso,
+		  disponibilidade = EXCLUDED.disponibilidade,
+		  motivacao = EXCLUDED.motivacao, motivacao_tipo = EXCLUDED.motivacao_tipo,
+		  observacoes = EXCLUDED.observacoes,
+		  preco_informado = EXCLUDED.preco_informado,
+		  aula_marcada = EXCLUDED.aula_marcada,
+		  perguntas_respondidas = EXCLUDED.perguntas_respondidas,
+		  atualizado_em = now()
+	`, tenantID, contactID, q.ParaQuem, q.AlunoNome, q.AlunoIdade, q.Interesse,
+		q.JaFazCurso, q.Disponibilidade, q.Motivacao, q.MotivacaoTipo, q.Observacoes,
+		q.PrecoInformado, q.AulaMarcada, q.Respondidas())
+	if err != nil {
+		return fmt.Errorf("QualificacaoRepo.Save: %w", err)
+	}
+	return nil
+}
+
+// MarcaAula registra que a aula saiu — é o sinal que mais pesa no grau.
+func (r *QualificacaoRepo) MarcaAula(ctx context.Context, tenantID TenantID, contactID ContactID) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO lead_qualificacao (tenant_id, contact_id, aula_marcada, atualizado_em)
+		VALUES ($1, $2, true, now())
+		ON CONFLICT (tenant_id, contact_id) DO UPDATE
+		SET aula_marcada = true, atualizado_em = now()
+	`, tenantID, contactID)
+	if err != nil {
+		return fmt.Errorf("QualificacaoRepo.MarcaAula: %w", err)
+	}
+	return nil
+}

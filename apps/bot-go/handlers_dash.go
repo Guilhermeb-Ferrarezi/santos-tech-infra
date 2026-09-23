@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1188,3 +1189,97 @@ func (s *Server) dashWSAuthorized(r *http.Request) bool {
 
 // Garante que context é usado (lint).
 var _ = context.Background
+
+// ── qualificação do lead (0037) ──────────────────────────────────────────────
+
+// dashQualificacao — o dossiê como o painel mostra.
+type dashQualificacao struct {
+	Phone           string `json:"phone"`
+	ContactName     string `json:"contactName"`
+	Grau            string `json:"grau"`
+	GrauLegivel     string `json:"grauLegivel"`
+	ParaQuem        string `json:"paraQuem"`
+	AlunoNome       string `json:"alunoNome"`
+	AlunoIdade      int    `json:"alunoIdade"`
+	Interesse       string `json:"interesse"`
+	JaFazCurso      string `json:"jaFazCurso"`
+	Disponibilidade string `json:"disponibilidade"`
+	Motivacao       string `json:"motivacao"`
+	MotivacaoTipo   string `json:"motivacaoTipo"`
+	Observacoes     string `json:"observacoes"`
+	PrecoInformado  bool   `json:"precoInformado"`
+	AulaMarcada     bool   `json:"aulaMarcada"`
+	Respondidas     int    `json:"respondidas"`
+	AtualizadoEm    string `json:"atualizadoEm"`
+}
+
+// GET /api/qualificacoes — quem é cada lead, do mais quente para o mais frio.
+//
+// A ordem não é cronológica de propósito: quem abre esta tela quer saber para
+// quem ligar primeiro, e isso é o grau, não a hora da última mensagem.
+func (s *Server) handleDashQualificacoes(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	rows, err := s.pool.Query(ctx, `
+		SELECT ci.external_id, coalesce(c.display_name, ''),
+		       q.para_quem, q.aluno_nome, q.aluno_idade, q.interesse, q.ja_faz_curso,
+		       q.disponibilidade, q.motivacao, q.motivacao_tipo, q.observacoes,
+		       q.preco_informado, q.aula_marcada, q.atualizado_em
+		FROM lead_qualificacao q
+		JOIN contact c ON c.id = q.contact_id
+		JOIN channel_identity ci ON ci.contact_id = c.id
+		WHERE q.tenant_id = $1
+		ORDER BY q.atualizado_em DESC
+		LIMIT 500
+	`, TenantID(s.cfg.TenantID))
+	if err != nil {
+		s.logger.Error("dash: listar qualificações", "err", err)
+		jsonErr(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	out := []dashQualificacao{}
+	vistos := map[string]bool{}
+	for rows.Next() {
+		var d dashQualificacao
+		var q Qualificacao
+		var atualizado time.Time
+		if err := rows.Scan(&d.Phone, &d.ContactName,
+			&q.ParaQuem, &q.AlunoNome, &q.AlunoIdade, &q.Interesse, &q.JaFazCurso,
+			&q.Disponibilidade, &q.Motivacao, &q.MotivacaoTipo, &q.Observacoes,
+			&q.PrecoInformado, &q.AulaMarcada, &atualizado); err != nil {
+			s.logger.Error("dash: scan qualificação", "err", err)
+			continue
+		}
+		// Um contato pode ter identidade em mais de um canal (whatsapp e
+		// evolution). É a mesma pessoa; mostrar duas vezes só confunde.
+		if vistos[d.Phone] {
+			continue
+		}
+		vistos[d.Phone] = true
+
+		d.Grau = string(q.Grau())
+		d.GrauLegivel = q.Grau().Legivel()
+		d.ParaQuem, d.AlunoNome, d.AlunoIdade = q.ParaQuem, q.AlunoNome, q.AlunoIdade
+		d.Interesse, d.JaFazCurso = q.Interesse, q.JaFazCurso
+		d.Disponibilidade, d.Motivacao = q.Disponibilidade, q.Motivacao
+		d.MotivacaoTipo, d.Observacoes = q.MotivacaoTipo, q.Observacoes
+		d.PrecoInformado, d.AulaMarcada = q.PrecoInformado, q.AulaMarcada
+		d.Respondidas = q.Respondidas()
+		d.AtualizadoEm = atualizado.Format(time.RFC3339)
+		out = append(out, d)
+	}
+
+	// Mais quente primeiro; dentro do mesmo grau, o mais recente.
+	peso := map[string]int{
+		string(GrauMuitoQualificado): 0, string(GrauQualificado): 1,
+		string(GrauMorno): 2, string(GrauFrio): 3,
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if peso[out[i].Grau] != peso[out[j].Grau] {
+			return peso[out[i].Grau] < peso[out[j].Grau]
+		}
+		return out[i].AtualizadoEm > out[j].AtualizadoEm
+	})
+	jsonOK(w, map[string]any{"leads": out})
+}
