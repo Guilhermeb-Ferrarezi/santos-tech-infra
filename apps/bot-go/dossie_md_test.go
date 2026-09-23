@@ -144,3 +144,20 @@ func TestCadaContaAutorizaSoOSeuProposito(t *testing.T) {
 		t.Error("uso inválido foi aceito")
 	}
 }
+
+// O que foi PEDIDO e o que foi CONCEDIDO podem divergir — e divergiram.
+//
+// A conta da diretoria devolveu um token com Drive COMPLETO mesmo tendo sido
+// pedido só drive.file, porque já havia concedido esse acesso a este mesmo app
+// antes e o Google somou as permissões antigas. O link não pode mais somar, e
+// o bot não pode mais usar um token largo demais.
+func TestLinkNaoSomaPermissoesAntigas(t *testing.T) {
+	g := NewGCalClient("id", "secret", "https://exemplo/callback", nil)
+	for _, uso := range []string{UsoAgenda, UsoDrive} {
+		url := g.URLDeAutorizacao("estado", uso)
+		if strings.Contains(url, "include_granted_scopes") {
+			t.Errorf("uso=%s: o link soma permissões antigas — foi assim que o bot "+
+				"ganhou acesso aos 5 TB da diretoria", uso)
+		}
+	}
+}
