@@ -36,7 +36,7 @@ func (s *Server) startPosaulaWorker(ctx context.Context) {
 	if s.portalDB == nil {
 		return
 	}
-	go func() {
+	safeGo("posaulaWorker", func() {
 		select {
 		case <-ctx.Done():
 			return
@@ -53,7 +53,7 @@ func (s *Server) startPosaulaWorker(ctx context.Context) {
 				s.posaulaNotificarComLock(ctx)
 			}
 		}
-	}()
+	})
 }
 
 func (s *Server) posaulaNotificarComLock(ctx context.Context) {

@@ -140,7 +140,7 @@ func (s *Server) startExpiracaoWorker(ctx context.Context) {
 	if s.portalDB == nil {
 		return
 	}
-	go func() {
+	safeGo("expiracaoWorker", func() {
 		select {
 		case <-ctx.Done():
 			return
@@ -157,7 +157,7 @@ func (s *Server) startExpiracaoWorker(ctx context.Context) {
 				s.portalNotificarExpiracaoComLock(ctx)
 			}
 		}
-	}()
+	})
 }
 
 func (s *Server) portalNotificarExpiracaoComLock(ctx context.Context) {

@@ -30,7 +30,7 @@ func (s *Server) startAgendadorSocial(ctx context.Context) {
 	if s.db == nil {
 		return
 	}
-	go func() {
+	safeGo("agendadorSocial", func() {
 		t := time.NewTicker(agendadorIntervalo)
 		defer t.Stop()
 		for {
@@ -41,7 +41,7 @@ func (s *Server) startAgendadorSocial(ctx context.Context) {
 				s.publicarAgendadosVencidos(ctx)
 			}
 		}
-	}()
+	})
 }
 
 // publicarAgendadosVencidos busca os posts com horário vencido e publica.

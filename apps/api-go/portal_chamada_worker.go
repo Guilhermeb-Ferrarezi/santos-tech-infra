@@ -28,7 +28,7 @@ func (s *Server) startChamadaWorker(ctx context.Context) {
 	if s.portalDB == nil {
 		return
 	}
-	go func() {
+	safeGo("chamadaWorker", func() {
 		select {
 		case <-ctx.Done():
 			return
@@ -46,7 +46,7 @@ func (s *Server) startChamadaWorker(ctx context.Context) {
 				s.gerarAulasComLock(ctx)
 			}
 		}
-	}()
+	})
 }
 
 // gerarAulasComLock roda a geração no máximo uma vez por janela em todo o
