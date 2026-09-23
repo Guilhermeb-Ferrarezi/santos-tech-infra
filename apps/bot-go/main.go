@@ -169,6 +169,7 @@ func main() {
 		EscolaFecha:       cfg.EscolaFecha,
 		AulaDuracaoMin:    cfg.AulaDuracaoMin,
 		GCal:              NewGCalClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL, logger),
+		GCalDrive:         NovoClienteDoDrive(cfg, logger),
 		GCalRepo:          NewGCalRepo(pool),
 		Lembretes:         NewLembreteRepo(pool),
 		Qualificacoes:     NewQualificacaoRepo(pool),

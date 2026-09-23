@@ -105,8 +105,11 @@ type EngineDeps struct {
 	AulaDuracaoMin int
 	// GCal / GCalRepo — Google Agenda. Nil quando não configurado; o
 	// agendamento continua funcionando sem eles.
-	GCal     *GCalClient
-	GCalRepo *GCalRepo
+	GCal *GCalClient
+	// GCalDrive — o app que fala com o Drive. Pode ser outro, sem o histórico
+	// de arquivos que o app antigo carrega naquela conta.
+	GCalDrive *GCalClient
+	GCalRepo  *GCalRepo
 	// Lembretes — os três avisos ao cliente antes da aula.
 	Lembretes *LembreteRepo
 	// Qualificacoes — o dossiê de cada pessoa, lido antes de responder e
@@ -1982,7 +1985,7 @@ func (e *ConversationEngine) espelhaDossieNoDrive(telefone string) {
 		// diferentes divergem no dia em que uma gravação falhar.
 		conta := &contas[0]
 
-		pasta, err := e.deps.GCal.GarantePasta(ctx, conta.RefreshToken)
+		pasta, err := e.driveClient().GarantePasta(ctx, conta.RefreshToken)
 		if err != nil {
 			log.Error("drive: falha ao garantir a pasta", "err", err, "conta", conta.Email)
 			return
@@ -1992,7 +1995,7 @@ func (e *ConversationEngine) espelhaDossieNoDrive(telefone string) {
 			return
 		}
 		agora := time.Now()
-		if err := e.deps.GCal.EscreveDossie(ctx, conta.RefreshToken, pasta, telefone,
+		if err := e.driveClient().EscreveDossie(ctx, conta.RefreshToken, pasta, telefone,
 			dossie.NomeDoArquivo(), dossie.Markdown(agora), agora); err != nil {
 			log.Error("drive: falha ao escrever o dossiê", "err", err, "conta", conta.Email)
 			return
@@ -2058,4 +2061,16 @@ func descricaoParaOCliente() string {
 		"Av. Nove de Julho, 1992 — Jardim América, Ribeirão Preto.\n" +
 		"Temos garagem própria, é só entrar.\n\n" +
 		"Qualquer coisa, é só chamar no WhatsApp."
+}
+
+// driveClient — o app que fala com o Drive.
+//
+// Separado do da agenda quando há credenciais próprias: o app antigo carrega,
+// na conta da diretoria, uma lista arquivo-a-arquivo de PDFs que ele alcançou
+// quando teve o Drive inteiro, e essa lista sobreviveu à revogação.
+func (e *ConversationEngine) driveClient() *GCalClient {
+	if e.deps.GCalDrive != nil && e.deps.GCalDrive.Enabled() {
+		return e.deps.GCalDrive
+	}
+	return e.deps.GCal
 }

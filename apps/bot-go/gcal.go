@@ -507,3 +507,22 @@ func escopoDoUso(uso string) string {
 func UsoValido(uso string) bool {
 	return uso == UsoAgenda || uso == UsoDrive
 }
+
+// ClienteDoDrive devolve o cliente que fala com o Drive.
+//
+// Quando existem credenciais próprias, o Drive usa um app DIFERENTE do que
+// cuida da agenda. O motivo é concreto: o app antigo carrega, na conta da
+// diretoria, uma lista arquivo-a-arquivo de PDFs que ele alcançou quando teve o
+// Drive inteiro — e essa lista sobreviveu à revogação e à nova autorização.
+// Reduzir o escopo não a apaga; só um app novo começa sem ela.
+//
+// Separado, em vez de trocar o único app, porque trocar obrigaria Henrique e
+// Rodrigo a reautorizar a agenda deles — que está certa, mínima e funcionando.
+// Uma pessoa autoriza uma conta, e não três pessoas três contas.
+func NovoClienteDoDrive(cfg Config, log *slog.Logger) *GCalClient {
+	id, secret := cfg.GoogleDriveClientID, cfg.GoogleDriveClientSecret
+	if id == "" || secret == "" {
+		id, secret = cfg.GoogleClientID, cfg.GoogleClientSecret
+	}
+	return NewGCalClient(id, secret, cfg.GoogleRedirectURL, log)
+}
