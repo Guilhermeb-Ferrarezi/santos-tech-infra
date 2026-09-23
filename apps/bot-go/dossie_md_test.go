@@ -93,3 +93,35 @@ func TestFormataTelefone(t *testing.T) {
 		}
 	}
 }
+
+// O escopo pedido precisa ser drive.file, nunca drive.
+//
+// drive dá ao bot o Drive INTEIRO de quem autorizou — planilhas da escola,
+// fotos de família, tudo. drive.file dá só o que ele mesmo criou. A diferença
+// é entre um bot que escreve os dossiês e um bot que pode ler a vida da pessoa.
+func TestEscopoDoDriveEhOMenorPossivel(t *testing.T) {
+	if driveScope != "https://www.googleapis.com/auth/drive.file" {
+		t.Errorf("escopo = %q; tem que ser drive.file", driveScope)
+	}
+	g := NewGCalClient("id", "secret", "https://exemplo/callback", nil)
+	url := g.URLDeAutorizacao("estado")
+
+	if !strings.Contains(url, "drive.file") {
+		t.Error("o link de autorização não pede o Drive")
+	}
+	// Se o escopo largo entrar por descuido, o link passaria a pedir tudo.
+	if strings.Contains(url, "auth%2Fdrive+") || strings.Contains(url, "auth%2Fdrive&") {
+		t.Error("o link está pedindo o Drive INTEIRO")
+	}
+	// E o calendário não pode se perder na troca.
+	if !strings.Contains(url, "calendar.events") {
+		t.Error("o link perdeu o escopo do Google Agenda")
+	}
+	// Sem estes dois, o Google não devolve refresh token e a integração morre
+	// sozinha em uma hora.
+	for _, obrigatorio := range []string{"access_type=offline", "prompt=consent"} {
+		if !strings.Contains(url, obrigatorio) {
+			t.Errorf("o link não tem %s", obrigatorio)
+		}
+	}
+}

@@ -793,6 +793,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			e.deps.Logger.Info("qualificacao: dossiê atualizado",
 				"contato", contactID, "respondidas", atual.Respondidas(),
 				"grau", string(atual.Grau()), "pode_falar_preco", atual.PodeFalarPreco())
+			e.espelhaDossieNoDrive(contactPhone)
 		}
 	}
 
@@ -1946,6 +1947,64 @@ func (e *ConversationEngine) cancelaAulaDoCliente(ctx context.Context, conv Conv
 	}
 	e.tiraDoGoogleAgenda(ctx, inbound.TenantID, aula.PageID)
 	log.Info("cancelamento: horário liberado", "aula", aula.PageID, "era_em", aula.Em.Format(time.RFC3339))
+}
+
+// espelhaDossieNoDrive reescreve o documento do cliente no Drive.
+//
+// Roda em segundo plano e nunca segura a resposta: o cliente esperando no
+// WhatsApp não pode pagar pela latência de um upload. Falhar aqui não perde
+// nada — o dossiê continua no banco, e o documento é regerado dele na próxima
+// vez. É espelho, não original.
+func (e *ConversationEngine) espelhaDossieNoDrive(telefone string) {
+	if e.deps.GCal == nil || !e.deps.GCal.Enabled() || e.deps.GCalRepo == nil ||
+		e.deps.Qualificacoes == nil || telefone == "" {
+		return
+	}
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				e.deps.Logger.Error("drive: panic ao espelhar o dossiê", "panic", rec)
+			}
+		}()
+		// Contexto próprio: o da mensagem morre quando a resposta sai.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		log := e.deps.Logger
+		contas, err := e.deps.GCalRepo.Ativas(ctx, e.deps.TenantID)
+		if err != nil || len(contas) == 0 {
+			return
+		}
+		// UMA conta escreve, não todas: duas cópias do mesmo dossiê em Drives
+		// diferentes divergem no dia em que uma gravação falhar.
+		var conta *GCalAccount
+		for i := range contas {
+			if e.deps.GCal.TemEscopoDoDrive(ctx, contas[i].RefreshToken) {
+				conta = &contas[i]
+				break
+			}
+		}
+		if conta == nil {
+			log.Info("drive: nenhuma conta autorizou a escrita; o dossiê fica só no banco")
+			return
+		}
+
+		pasta, err := e.deps.GCal.GarantePasta(ctx, conta.RefreshToken)
+		if err != nil {
+			log.Error("drive: falha ao garantir a pasta", "err", err, "conta", conta.Email)
+			return
+		}
+		dossie, ok := e.deps.Qualificacoes.DossieDoTelefone(ctx, e.deps.TenantID, telefone)
+		if !ok {
+			return
+		}
+		if err := e.deps.GCal.EscreveDossie(ctx, conta.RefreshToken, pasta, telefone,
+			dossie.NomeDoArquivo(), dossie.Markdown(time.Now())); err != nil {
+			log.Error("drive: falha ao escrever o dossiê", "err", err, "conta", conta.Email)
+			return
+		}
+		log.Info("drive: dossiê espelhado", "arquivo", dossie.NomeDoArquivo())
+	}()
 }
 
 // convidaClienteNoEvento põe o cliente no evento que já existe.
