@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -1293,4 +1294,124 @@ func normalizePhone(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// ── qualificação do lead (0037) ──────────────────────────────────────────────
+
+// QualificacaoRepo guarda o dossiê de cada pessoa.
+type QualificacaoRepo struct{ pool *pgxpool.Pool }
+
+func NewQualificacaoRepo(pool *pgxpool.Pool) *QualificacaoRepo {
+	return &QualificacaoRepo{pool: pool}
+}
+
+// Get devolve o dossiê e se dá para CONFIAR nele.
+//
+// O segundo retorno não é decoração. Antes, qualquer erro virava dossiê vazio,
+// e o Save seguinte gravava esse vazio por cima: um blip de rede apagava o nome
+// da criança, a motivação e a aula já marcada, e re-trancava o preço de quem já
+// tinha conversado. Contato novo e banco fora do ar não podem ser a mesma coisa.
+func (r *QualificacaoRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID, contactID ContactID) (Qualificacao, bool) {
+	var q Qualificacao
+	var linha pgx.Row
+	const sql = `
+		SELECT para_quem, aluno_nome, aluno_idade, interesse, ja_faz_curso,
+		       disponibilidade, motivacao, motivacao_tipo, observacoes,
+		       preco_informado, aula_marcada, turnos_respondendo, pedidos_de_preco
+		FROM lead_qualificacao
+		WHERE tenant_id = $1 AND contact_id = $2`
+	// Dentro da transação do Handle, usa a MESMA conexão. Pedir outra ao pool
+	// com a transação aberta é o caminho para esgotar as dez conexões numa
+	// rajada e travar o bot inteiro.
+	if tx != nil {
+		linha = tx.QueryRow(ctx, sql, tenantID, contactID)
+	} else {
+		linha = r.pool.QueryRow(ctx, sql, tenantID, contactID)
+	}
+	err := linha.Scan(
+		&q.ParaQuem, &q.AlunoNome, &q.AlunoIdade, &q.Interesse, &q.JaFazCurso,
+		&q.Disponibilidade, &q.Motivacao, &q.MotivacaoTipo, &q.Observacoes,
+		&q.PrecoInformado, &q.AulaMarcada, &q.TurnosRespondendo, &q.PedidosDePreco)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Qualificacao{}, true // primeira conversa: vazio E confiável
+	}
+	if err != nil {
+		return Qualificacao{}, false
+	}
+	return q, true
+}
+
+// Save grava o dossiê SEM NUNCA APAGAR o que já estava lá.
+//
+// Cada coluna só avança: texto vazio não sobrescreve texto cheio, sinal aceso
+// não apaga, contador não anda para trás. Um upsert que sobrescreve tudo
+// transforma qualquer leitura falha, ou qualquer omissão do modelo, em perda
+// permanente — e o dado perdido aqui é o que a escola usa para vender.
+func (r *QualificacaoRepo) Save(ctx context.Context, tenantID TenantID, contactID ContactID, q Qualificacao) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO lead_qualificacao
+		  (tenant_id, contact_id, para_quem, aluno_nome, aluno_idade, interesse,
+		   ja_faz_curso, disponibilidade, motivacao, motivacao_tipo, observacoes,
+		   preco_informado, aula_marcada, turnos_respondendo, pedidos_de_preco,
+		   perguntas_respondidas, atualizado_em)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, now())
+		ON CONFLICT (tenant_id, contact_id) DO UPDATE SET
+		  para_quem       = coalesce(nullif(EXCLUDED.para_quem, ''),       lead_qualificacao.para_quem),
+		  aluno_nome      = coalesce(nullif(EXCLUDED.aluno_nome, ''),      lead_qualificacao.aluno_nome),
+		  aluno_idade     = greatest(EXCLUDED.aluno_idade, lead_qualificacao.aluno_idade),
+		  interesse       = coalesce(nullif(EXCLUDED.interesse, ''),       lead_qualificacao.interesse),
+		  ja_faz_curso    = coalesce(nullif(EXCLUDED.ja_faz_curso, ''),    lead_qualificacao.ja_faz_curso),
+		  disponibilidade = coalesce(nullif(EXCLUDED.disponibilidade, ''), lead_qualificacao.disponibilidade),
+		  motivacao       = coalesce(nullif(EXCLUDED.motivacao, ''),       lead_qualificacao.motivacao),
+		  motivacao_tipo  = coalesce(nullif(EXCLUDED.motivacao_tipo, ''),  lead_qualificacao.motivacao_tipo),
+		  observacoes     = coalesce(nullif(EXCLUDED.observacoes, ''),     lead_qualificacao.observacoes),
+		  preco_informado = lead_qualificacao.preco_informado OR EXCLUDED.preco_informado,
+		  aula_marcada    = lead_qualificacao.aula_marcada    OR EXCLUDED.aula_marcada,
+		  turnos_respondendo = greatest(EXCLUDED.turnos_respondendo, lead_qualificacao.turnos_respondendo),
+		  pedidos_de_preco   = greatest(EXCLUDED.pedidos_de_preco,   lead_qualificacao.pedidos_de_preco),
+		  perguntas_respondidas = greatest(EXCLUDED.perguntas_respondidas, lead_qualificacao.perguntas_respondidas),
+		  atualizado_em = now()
+	`, tenantID, contactID, q.ParaQuem, q.AlunoNome, q.AlunoIdade, q.Interesse,
+		q.JaFazCurso, q.Disponibilidade, q.Motivacao, q.MotivacaoTipo, q.Observacoes,
+		q.PrecoInformado, q.AulaMarcada, q.TurnosRespondendo, q.PedidosDePreco,
+		q.Respondidas())
+	if err != nil {
+		return fmt.Errorf("QualificacaoRepo.Save: %w", err)
+	}
+	return nil
+}
+
+// MarcaAula registra que a aula saiu — é o sinal que mais pesa no grau.
+func (r *QualificacaoRepo) MarcaAula(ctx context.Context, tenantID TenantID, contactID ContactID) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO lead_qualificacao (tenant_id, contact_id, aula_marcada, atualizado_em)
+		VALUES ($1, $2, true, now())
+		ON CONFLICT (tenant_id, contact_id) DO UPDATE
+		SET aula_marcada = true, atualizado_em = now()
+	`, tenantID, contactID)
+	if err != nil {
+		return fmt.Errorf("QualificacaoRepo.MarcaAula: %w", err)
+	}
+	return nil
+}
+
+// MarcaAulaPorConversa acende o sinal a partir da conversa, quando o chamador
+// não tem o contato em mãos.
+//
+// É o caso do admin confirmando pelo painel: a pendência guarda a conversa, não
+// o contato. Sem este caminho, a aula confirmada à mão — que costuma ser o lead
+// mais quente — nunca entrava no dossiê.
+func (r *QualificacaoRepo) MarcaAulaPorConversa(ctx context.Context, tenantID TenantID, convID ConversationID) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO lead_qualificacao (tenant_id, contact_id, aula_marcada, atualizado_em)
+		SELECT $1, c.contact_id, true, now()
+		FROM conversation c
+		WHERE c.tenant_id = $1 AND c.id = $2::uuid
+		ON CONFLICT (tenant_id, contact_id) DO UPDATE
+		SET aula_marcada = true, atualizado_em = now()
+	`, tenantID, convID)
+	if err != nil {
+		return fmt.Errorf("QualificacaoRepo.MarcaAulaPorConversa: %w", err)
+	}
+	return nil
 }

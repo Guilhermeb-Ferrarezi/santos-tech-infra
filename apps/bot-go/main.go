@@ -171,6 +171,7 @@ func main() {
 		GCal:              NewGCalClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL, logger),
 		GCalRepo:          NewGCalRepo(pool),
 		Lembretes:         NewLembreteRepo(pool),
+		Qualificacoes:     NewQualificacaoRepo(pool),
 	}
 
 	depsCloud := depsBase

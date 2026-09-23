@@ -109,6 +109,9 @@ type EngineDeps struct {
 	GCalRepo *GCalRepo
 	// Lembretes — os três avisos ao cliente antes da aula.
 	Lembretes *LembreteRepo
+	// Qualificacoes — o dossiê de cada pessoa, lido antes de responder e
+	// gravado depois. É a memória que o bot não tinha.
+	Qualificacoes *QualificacaoRepo
 	// ForceBotEnabled — força o bot ativo nas conversas deste engine (ex.: canal
 	// Evolution, cujo gate é o toggle externo, não o whitelist do tenant).
 	ForceBotEnabled bool
@@ -178,16 +181,18 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	handleStart := time.Now()
 
 	var (
-		conv          Conversation
-		cfg           TenantConfig
-		output        ResponderOutput
-		inboundText   string
-		mediaFallback bool
-		contactPhone  = inbound.ExternalID
-		contactName   string
-		convCtx       ConversationContext
-		llmReady      bool
-		held          bool // mensagem retida (quiet hours) — não marcar webhook done
+		conv            Conversation
+		cfg             TenantConfig
+		output          ResponderOutput
+		inboundText     string
+		mediaFallback   bool
+		contactPhone    = inbound.ExternalID
+		contactName     string
+		contactID       ContactID // sai da transação para o dossiê ser gravado depois
+		dossieConfiavel = true    // leitura do dossiê deu certo? sem isto, não grava
+		convCtx         ConversationContext
+		llmReady        bool
+		held            bool // mensagem retida (quiet hours) — não marcar webhook done
 	)
 
 	err := e.withTenant(ctx, func(tx pgx.Tx) error {
@@ -221,6 +226,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 		}
 		contactName = contact.DisplayName
+		contactID = contact.ID
 
 		// c) Resolve conversa
 		convPtr, err := e.deps.Convs.FindByChannelIdentity(ctx, tx, chIdentity.ID)
@@ -311,6 +317,20 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			RecentTurns:     recentTurns,
 			Summary:         summary,
 			StructuredFacts: conv.StructuredFacts,
+		}
+		// O dossiê da PESSOA entra em toda mensagem. É o que faz o bot saber que
+		// o filho se chama Caio, tem 14 anos e curte programação sem perguntar
+		// pela terceira vez — e é o que dá o "como foi a aula do Caio?" quando a
+		// família volta semanas depois, numa conversa nova.
+		if e.deps.Qualificacoes != nil && !cfg.IsAdminConversation {
+			convCtx.Qualificacao, dossieConfiavel = e.deps.Qualificacoes.Get(ctx, tx, inbound.TenantID, contact.ID)
+			if !dossieConfiavel {
+				// Não dá para gravar por cima do que não se conseguiu ler: o Save
+				// viria em cima de um dossiê vazio. Melhor um turno sem memória
+				// que um dossiê apagado.
+				e.deps.Logger.Error("qualificacao: não consegui ler o dossiê; não vou gravar neste turno",
+					"contato", contact.ID)
+			}
 		}
 
 		// k) Quiet hours — verifica se deve suspender o processamento
@@ -761,6 +781,21 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	// Fora da transação de propósito: gravar no Notion é efeito externo, e se a
 	// transação desse rollback a página ficaria lá, órfã, sem pendência no banco
 	// para explicá-la.
+	// Dossiê da pessoa — grava o que se descobriu ANTES de tentar agendar, para
+	// que uma falha no Notion não leve junto o que o cliente contou. O que ele
+	// disse sobre si é dele; a aula é outro assunto.
+	if err == nil && !cfg.IsAdminConversation && e.deps.Qualificacoes != nil &&
+		output.Qualificacao != nil && dossieConfiavel {
+		atual := convCtx.Qualificacao.Merge(*output.Qualificacao)
+		if saveErr := e.deps.Qualificacoes.Save(ctx, inbound.TenantID, contactID, atual); saveErr != nil {
+			e.deps.Logger.Error("qualificacao: falha ao gravar o dossiê", "err", saveErr, "contato", contactID)
+		} else {
+			e.deps.Logger.Info("qualificacao: dossiê atualizado",
+				"contato", contactID, "respondidas", atual.Respondidas(),
+				"grau", string(atual.Grau()), "pode_falar_preco", atual.PodeFalarPreco())
+		}
+	}
+
 	marcouAgora := false
 	if err == nil && !cfg.IsAdminConversation && output.SchedulingRequest != nil {
 		marcouAgora = e.autoConfirmarAgendamento(ctx, conv, inbound, cfg, output.SchedulingRequest, contactName)
@@ -1011,6 +1046,14 @@ func (e *ConversationEngine) autoConfirmarAgendamento(ctx context.Context, conv 
 
 	log.Info("agenda: aula marcada pelo bot", "aluno", aluno, "quando", iso, "conversa", conv.ID)
 
+	// A aula marcada é o sinal que mais pesa no grau do lead. Quem conversou,
+	// ouviu o preço e mesmo assim marcou é outra categoria de interessado.
+	if e.deps.Qualificacoes != nil {
+		if err := e.deps.Qualificacoes.MarcaAula(ctx, inbound.TenantID, conv.ContactID); err != nil {
+			log.Error("qualificacao: falha ao registrar a aula no dossiê", "err", err)
+		}
+	}
+
 	// A pendência cumpriu o papel dela: existe para o caso de o bot NÃO
 	// conseguir marcar. Marcou, então some do painel — deixada aberta, um admin
 	// confirmando por lá criaria uma segunda aula no horário abandonado.
@@ -1104,8 +1147,23 @@ func (e *ConversationEngine) avisaAdminsDoAgendamento(ctx context.Context, conv 
 	if e.deps.Emitter == nil {
 		return
 	}
-	msg := fmt.Sprintf("✅ Aula experimental MARCADA pelo bot: %s%s — %s. Cliente: %s",
-		aluno, courseSuffix(sr.Course), formatBRDateTime(iso), inbound.ExternalID)
+	// O grau vai junto: é a diferença entre "mais uma aula marcada" e "esta
+	// família respondeu tudo, ouviu o preço e veio mesmo assim". Sem isso no
+	// aviso, a classificação existe no banco e não muda nada na prática.
+	grau := ""
+	if e.deps.Qualificacoes != nil {
+		if q, ok := e.deps.Qualificacoes.Get(ctx, nil, inbound.TenantID, conv.ContactID); ok {
+			grau = "\nLead: " + q.Grau().Legivel()
+			if q.Motivacao != "" {
+				// Texto do CLIENTE indo para uma mensagem de WhatsApp da
+				// escola. Sem limpar, ele escreve quebras de linha e forja
+				// linhas do aviso ("Lead: muito qualificado").
+				grau += "\nMotivo: " + limpaTextoDoCliente(q.Motivacao, 160)
+			}
+		}
+	}
+	msg := fmt.Sprintf("✅ Aula experimental MARCADA pelo bot: %s%s — %s. Cliente: %s%s",
+		aluno, courseSuffix(sr.Course), formatBRDateTime(iso), inbound.ExternalID, grau)
 	ev := DomainEvent{
 		TenantID:    inbound.TenantID,
 		AggregateID: conv.ID,
@@ -1356,6 +1414,15 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 					errStr = notionErr.Error()
 				}
 				e.logAction(inbound.TenantID, pb.ConversationID, pb.ClientPhone, bookingAluno(*pb), desc, errStr)
+			}
+			// A aula confirmada à mão conta igual no dossiê. Sem isto, o lead
+			// que a coordenação confirmou pessoalmente — costuma ser o mais
+			// quente de todos — aparecia na lista como morno, porque só o
+			// caminho automático acendia o sinal.
+			if e.deps.Qualificacoes != nil {
+				if err := e.deps.Qualificacoes.MarcaAulaPorConversa(ctx, inbound.TenantID, pb.ConversationID); err != nil {
+					e.deps.Logger.Error("qualificacao: aula confirmada pelo admin não entrou no dossiê", "err", err)
+				}
 			}
 			// Marca confirmado e avisa o cliente.
 			if err := e.withTenant(ctx, func(tx pgx.Tx) error {

@@ -361,6 +361,13 @@ type ConversationContext struct {
 	// PendingBookings — agendamentos aguardando confirmação. Injetados SOMENTE
 	// em conversas admin, para o LLM confirmar/ajustar/rejeitar.
 	PendingBookings []PendingBooking
+
+	// Qualificacao — o dossiê desta PESSOA, acumulado entre conversas.
+	//
+	// É o que o bot sabe de quem está do outro lado antes de responder: o nome
+	// do filho, a idade, o que a família procura, se já ouviu o preço. Entra em
+	// toda mensagem, e é o que impede a terceira pergunta repetida.
+	Qualificacao Qualificacao
 }
 
 // PendingQuestion — dúvida de um cliente que o bot não soube responder (handoff),
@@ -422,6 +429,10 @@ type ResponderOutput struct {
 	// remarcação silenciosa da aula, pendência duplicada no painel e alarme falso
 	// para os admins. Um campo separado só convida na agenda e não toca na aula.
 	ClienteEmail string
+
+	// Qualificacao — o que o modelo descobriu sobre a pessoa nesta mensagem.
+	// nil quando não descobriu nada; o engine mescla com o que já se sabia.
+	Qualificacao *Qualificacao
 }
 
 // ScheduledContact — reativação pedida pelo cliente ("me chama em julho").

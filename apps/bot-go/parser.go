@@ -23,6 +23,7 @@ type rawResponderOutput struct {
 	SchedulingRequest json.RawMessage `json:"schedulingRequest"`
 	BookingActions    json.RawMessage `json:"bookingActions"`
 	ClienteEmail      string          `json:"clienteEmail"`
+	Qualificacao      json.RawMessage `json:"qualificacao"`
 }
 
 // ParseModelReply extrai e parseia o JSON de resposta do LLM.
@@ -84,6 +85,12 @@ func ParseModelReply(raw string) (ResponderOutput, error) {
 	// schedulingRequest (cliente): descarta se malformado, sem falhar
 	if len(r.SchedulingRequest) > 0 && string(r.SchedulingRequest) != "null" {
 		out.SchedulingRequest = parseSchedulingRequest(r.SchedulingRequest)
+	}
+
+	// qualificacao: o que o modelo descobriu NESTE turno. Descarta se
+	// malformado — perder um campo é melhor que derrubar a resposta inteira.
+	if len(r.Qualificacao) > 0 && string(r.Qualificacao) != "null" {
+		out.Qualificacao = parseQualificacao(r.Qualificacao)
 	}
 
 	// bookingActions (modo admin): descarta se malformado, sem falhar
@@ -284,4 +291,50 @@ func parseQuotedReplies(raw json.RawMessage) []QuotedReply {
 		return nil
 	}
 	return result
+}
+
+// parseQualificacao lê o que o modelo descobriu sobre a pessoa neste turno.
+//
+// Devolve nil quando não veio nada de útil: um objeto vazio faria o engine
+// gravar no banco a cada mensagem sem nada ter mudado.
+func parseQualificacao(raw json.RawMessage) *Qualificacao {
+	var q struct {
+		ParaQuem        string `json:"paraQuem"`
+		AlunoNome       string `json:"alunoNome"`
+		AlunoIdade      int    `json:"alunoIdade"`
+		Interesse       string `json:"interesse"`
+		JaFazCurso      string `json:"jaFazCurso"`
+		Disponibilidade string `json:"disponibilidade"`
+		Motivacao       string `json:"motivacao"`
+		MotivacaoTipo   string `json:"motivacaoTipo"`
+		Observacoes     string `json:"observacoes"`
+		// PrecoInformado é o único sinal que o modelo pode acender: só ele sabe
+		// se acabou de dizer um valor. Os outros o código deduz de fatos.
+		PrecoInformado bool `json:"precoInformado"`
+		// ClientePediuPreco — observação sobre ESTE turno. O código conta as
+		// vezes; o modelo não controla contador nenhum.
+		ClientePediuPreco bool `json:"clientePediuPreco"`
+	}
+	if err := json.Unmarshal(raw, &q); err != nil {
+		return nil
+	}
+	out := Qualificacao{
+		ParaQuem:        strings.ToLower(strings.TrimSpace(q.ParaQuem)),
+		AlunoNome:       strings.TrimSpace(q.AlunoNome),
+		AlunoIdade:      q.AlunoIdade,
+		Interesse:       strings.TrimSpace(q.Interesse),
+		JaFazCurso:      strings.ToLower(strings.TrimSpace(q.JaFazCurso)),
+		Disponibilidade: strings.TrimSpace(q.Disponibilidade),
+		Motivacao:       strings.TrimSpace(q.Motivacao),
+		MotivacaoTipo:   strings.ToLower(strings.TrimSpace(q.MotivacaoTipo)),
+		Observacoes:     strings.TrimSpace(q.Observacoes),
+		PrecoInformado:  q.PrecoInformado,
+	}
+	if q.ClientePediuPreco {
+		out.PedidosDePreco = 1
+	}
+	if out.Vazia() && !out.PrecoInformado && out.PedidosDePreco == 0 {
+		return nil
+	}
+	return &out
 }

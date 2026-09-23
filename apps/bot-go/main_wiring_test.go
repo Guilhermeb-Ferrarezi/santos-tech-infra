@@ -52,6 +52,7 @@ func TestCapacidadesDeAgendamentoEstaoNaBaseCompartilhada(t *testing.T) {
 		"AgendaAutoConfirm:", "EscolaAbre:", "EscolaFecha:", "AulaDuracaoMin:", // travas
 		"Notion:", "Bookings:", // onde a aula é gravada
 		"Voice:", "AudioClips:", // a voz do Henrique
+		"Qualificacoes:", // a memória sobre cada pessoa
 	} {
 		if !strings.Contains(base, campo) {
 			t.Errorf("%s saiu da base compartilhada — um dos canais vai ficar sem essa capacidade", campo)
