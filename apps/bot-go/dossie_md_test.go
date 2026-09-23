@@ -183,3 +183,31 @@ func TestNomeDaPastaDoMes(t *testing.T) {
 		t.Errorf("virada do mês saiu em UTC: %q (deveria ser Setembro 2026)", got)
 	}
 }
+
+// Drive e agenda podem ser apps Google diferentes. Sem credenciais próprias, o
+// Drive cai no app de sempre — não pode quebrar quem ainda não configurou.
+func TestClienteDoDriveCaiNoPadraoQuandoNaoConfigurado(t *testing.T) {
+	base := Config{
+		GoogleClientID:     "app-antigo",
+		GoogleClientSecret: "segredo-antigo",
+		GoogleRedirectURL:  "https://exemplo/cb",
+	}
+	if g := NovoClienteDoDrive(base, nil); g.clientID != "app-antigo" {
+		t.Errorf("sem credenciais próprias deveria usar o app de sempre, usou %q", g.clientID)
+	}
+
+	comProprias := base
+	comProprias.GoogleDriveClientID = "app-novo"
+	comProprias.GoogleDriveClientSecret = "segredo-novo"
+	if g := NovoClienteDoDrive(comProprias, nil); g.clientID != "app-novo" {
+		t.Errorf("com credenciais próprias deveria usar o app novo, usou %q", g.clientID)
+	}
+
+	// Metade configurada é erro de digitação, não intenção: cair no app antigo
+	// é melhor que subir com um client sem segredo e falhar em toda renovação.
+	meio := base
+	meio.GoogleDriveClientID = "app-novo"
+	if g := NovoClienteDoDrive(meio, nil); g.clientID != "app-antigo" {
+		t.Errorf("com só metade das credenciais deveria cair no app de sempre, usou %q", g.clientID)
+	}
+}

@@ -141,8 +141,11 @@ type Server struct {
 	// não configurado); nesse caso os endpoints de lacuna devolvem lista vazia.
 	audioClips *AudioClipStore
 	// Google Agenda — nil quando GOOGLE_CLIENT_ID/SECRET não estão configurados.
-	gcal     *GCalClient
-	gcalRepo *GCalRepo
+	gcal *GCalClient
+	// gcalDrive — o app que fala com o Drive. Pode ser outro, com credenciais
+	// próprias, para começar sem o histórico de arquivos do app antigo.
+	gcalDrive *GCalClient
+	gcalRepo  *GCalRepo
 	// rdb pode ser nil — o dedupe de notificações cai pro fallback in-memory.
 	rdb         *redis.Client
 	notifDedupe *notifDedupe
@@ -181,6 +184,7 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		voice:       voice,
 		audioClips:  NewAudioClipStore(pool, cfg.AudioClipsDir),
 		gcal:        NewGCalClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL, logger),
+		gcalDrive:   NovoClienteDoDrive(cfg, logger),
 		gcalRepo:    NewGCalRepo(pool),
 		rdb:         rdb,
 		notifDedupe: newNotifDedupe(),

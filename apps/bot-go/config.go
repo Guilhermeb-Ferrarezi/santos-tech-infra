@@ -157,6 +157,9 @@ type Config struct {
 	GoogleClientID     string
 	GoogleClientSecret string
 	GoogleRedirectURL  string
+	// Credenciais próprias do Drive; vazias = usa as mesmas do Google Agenda.
+	GoogleDriveClientID     string
+	GoogleDriveClientSecret string
 }
 
 func LoadConfig() Config {
@@ -264,6 +267,18 @@ func LoadConfig() Config {
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
 		GoogleRedirectURL:  getEnv("GOOGLE_CALENDAR_REDIRECT_URL", "https://api.santos-tech.com/bot/auth/google/callback"),
+
+		// Credenciais SEPARADAS para o Drive.
+		//
+		// O app antigo carrega, naquela conta, uma lista arquivo-a-arquivo de
+		// PDFs que ele alcançou quando tinha o Drive inteiro — e essa lista
+		// sobreviveu à revogação. Um client novo não tem esse passado.
+		//
+		// Separado em vez de trocar o único: trocar obrigaria Henrique e Rodrigo
+		// a reautorizar a agenda deles, que está certa e funcionando. Vazio
+		// significa "usa o mesmo de sempre".
+		GoogleDriveClientID:     getEnv("GOOGLE_DRIVE_CLIENT_ID", ""),
+		GoogleDriveClientSecret: getEnv("GOOGLE_DRIVE_CLIENT_SECRET", ""),
 	}
 }
 

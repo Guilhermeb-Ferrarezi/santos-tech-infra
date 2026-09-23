@@ -92,7 +92,7 @@ func (s *Server) handleGCalStart(w http.ResponseWriter, r *http.Request) {
 	if !UsoValido(uso) {
 		uso = UsoAgenda
 	}
-	http.Redirect(w, r, s.gcal.URLDeAutorizacao(estadosGCal.novo(uso), uso), http.StatusFound)
+	http.Redirect(w, r, s.appDoUso(uso).URLDeAutorizacao(estadosGCal.novo(uso), uso), http.StatusFound)
 }
 
 // handleGCalCallback — GET /auth/google/callback
@@ -122,7 +122,8 @@ func (s *Server) handleGCalCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	refresh, email, err := s.gcal.TrocaCodigo(ctx, code)
+	// O token TEM que ser trocado pelo mesmo app que pediu o código.
+	refresh, email, err := s.appDoUso(uso).TrocaCodigo(ctx, code)
 	if err != nil {
 		s.logger.Error("gcal: falha ao trocar o código", "err", err)
 		paginaGCal(w, http.StatusBadGateway, "Não deu certo",
@@ -161,4 +162,17 @@ func paginaGCal(w http.ResponseWriter, status int, titulo, texto string) {
  h1{color:#0DB88F;font-size:1.5rem;margin:0 0 .75rem}
  p{margin:0;color:#c8d6de}
 </style></head><body><main><h1>` + titulo + `</h1><p>` + texto + `</p></main></body></html>`))
+}
+
+// appDoUso escolhe qual app Google atende aquele propósito.
+//
+// Drive e agenda podem ser apps diferentes, e o token precisa ser trocado e
+// renovado SEMPRE pelo mesmo app que o emitiu — misturar devolve "invalid
+// client" numa renovação qualquer, semanas depois, sem relação óbvia com a
+// causa.
+func (s *Server) appDoUso(uso string) *GCalClient {
+	if uso == UsoDrive && s.gcalDrive != nil && s.gcalDrive.Enabled() {
+		return s.gcalDrive
+	}
+	return s.gcal
 }
