@@ -11,6 +11,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // O espelho dos dossiês no Google Drive.
@@ -26,21 +27,54 @@ import (
 // escrever numa pasta feita à mão — então cria a dele, e essa pasta aparece no
 // Drive de quem autorizou, pronta para ser compartilhada com a equipe.
 
-const nomeDaPastaDeAtendimentos = "Atendimentos — Santos Tech"
+const nomeDaPastaDeAtendimentos = "Atendimentos do bot no WhatsApp"
 
-// GarantePasta devolve o id da pasta do bot, criando-a na primeira vez.
+// mesesPT — como a pasta do mês se chama. Em português porque quem abre a
+// pasta é a coordenação, não um sistema.
+var mesesPT = [...]string{"", "Janeiro", "Fevereiro", "Março", "Abril", "Maio",
+	"Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"}
+
+// NomeDaPastaDoMes — "Setembro 2026".
+func NomeDaPastaDoMes(t time.Time) string {
+	t = t.In(brLocation)
+	return fmt.Sprintf("%s %d", mesesPT[int(t.Month())], t.Year())
+}
+
+// GarantePasta devolve o id da pasta raiz do bot, criando-a na primeira vez.
+//
+// O bot cria a própria pasta porque o escopo é drive.file: ele só alcança o
+// que ele mesmo criou. A contrapartida é boa — depois de criada, ela pode ser
+// movida para qualquer lugar do Drive que o bot continua alcançando, e ele
+// continua sem enxergar mais nada.
 func (g *GCalClient) GarantePasta(ctx context.Context, refreshToken string) (string, error) {
+	return g.garantePastaEm(ctx, refreshToken, nomeDaPastaDeAtendimentos, "")
+}
+
+// GarantePastaDoMes devolve a subpasta do mês, criando-a quando o mês vira.
+//
+// Só é chamada quando um cliente NOVO aparece: cliente que já tem dossiê não
+// muda de pasta, mesmo voltando meses depois. Ver EncontraDossie.
+func (g *GCalClient) GarantePastaDoMes(ctx context.Context, refreshToken, raizID string, quando time.Time) (string, error) {
+	return g.garantePastaEm(ctx, refreshToken, NomeDaPastaDoMes(quando), raizID)
+}
+
+// garantePastaEm procura antes de criar.
+//
+// Sem a busca, cada reinício do bot criaria mais uma pasta com o mesmo nome —
+// o Drive permite isso sem reclamar, e a coordenação acabaria com cinco pastas
+// "Setembro 2026" e os atendimentos espalhados entre elas.
+func (g *GCalClient) garantePastaEm(ctx context.Context, refreshToken, nome, paiID string) (string, error) {
 	access, err := g.accessToken(ctx, refreshToken)
 	if err != nil {
 		return "", err
 	}
-
-	// Procura antes de criar: sem isto, cada reinício do bot criaria mais uma
-	// pasta com o mesmo nome, e o Drive permite isso sem reclamar.
+	filtro := fmt.Sprintf("name = %q and mimeType = 'application/vnd.google-apps.folder' and trashed = false", nome)
+	if paiID != "" {
+		filtro += fmt.Sprintf(" and %q in parents", paiID)
+	}
 	q := url.Values{}
-	q.Set("q", fmt.Sprintf("name = %q and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-		nomeDaPastaDeAtendimentos))
-	q.Set("fields", "files(id,name)")
+	q.Set("q", filtro)
+	q.Set("fields", "files(id)")
 	q.Set("pageSize", "10")
 	var busca struct {
 		Files []struct {
@@ -49,16 +83,17 @@ func (g *GCalClient) GarantePasta(ctx context.Context, refreshToken string) (str
 	}
 	if err := g.doJSON(ctx, http.MethodGet,
 		"https://www.googleapis.com/drive/v3/files?"+q.Encode(), access, nil, &busca); err != nil {
-		return "", fmt.Errorf("drive: busca da pasta: %w", err)
+		return "", fmt.Errorf("drive: busca da pasta %q: %w", nome, err)
 	}
 	if len(busca.Files) > 0 {
 		return busca.Files[0].ID, nil
 	}
 
-	corpo, err := json.Marshal(map[string]any{
-		"name":     nomeDaPastaDeAtendimentos,
-		"mimeType": "application/vnd.google-apps.folder",
-	})
+	meta := map[string]any{"name": nome, "mimeType": "application/vnd.google-apps.folder"}
+	if paiID != "" {
+		meta["parents"] = []string{paiID}
+	}
+	corpo, err := json.Marshal(meta)
 	if err != nil {
 		return "", err
 	}
@@ -67,51 +102,76 @@ func (g *GCalClient) GarantePasta(ctx context.Context, refreshToken string) (str
 	}
 	if err := g.doJSON(ctx, http.MethodPost,
 		"https://www.googleapis.com/drive/v3/files?fields=id", access, corpo, &criada); err != nil {
-		return "", fmt.Errorf("drive: criar a pasta: %w", err)
+		return "", fmt.Errorf("drive: criar a pasta %q: %w", nome, err)
 	}
-	g.log.Info("drive: pasta de atendimentos criada", "id", criada.ID, "nome", nomeDaPastaDeAtendimentos)
+	g.log.Info("drive: pasta criada", "nome", nome, "id", criada.ID)
 	return criada.ID, nil
 }
 
-// EscreveDossie grava (ou reescreve) o documento de um cliente.
+// EncontraDossie procura o arquivo de um telefone em QUALQUER pasta do bot.
 //
-// Procura pelo telefone no nome do arquivo em vez de guardar o id: um id salvo
-// no banco vira lixo quando alguém apaga o arquivo à mão, e aí o bot passa a
-// reescrever um arquivo que não existe mais, em silêncio. O nome é a chave
-// porque é o que sobrevive a alguém mexer na pasta.
-func (g *GCalClient) EscreveDossie(ctx context.Context, refreshToken, pastaID, telefone, nomeArquivo, conteudo string) error {
+// A busca é global de propósito. O arquivo do cliente mora na pasta do mês em
+// que ele apareceu pela PRIMEIRA vez, e fica lá para sempre: quem foi atendido
+// em setembro e volta em dezembro continua tendo um dossiê só, em "Setembro
+// 2026", atualizado. Procurar só na pasta do mês corrente criaria um segundo
+// arquivo para a mesma pessoa a cada volta — e a memória dela ficaria picotada
+// entre pastas, que é o oposto de ter memória.
+func (g *GCalClient) EncontraDossie(ctx context.Context, refreshToken, telefone string) (string, error) {
 	access, err := g.accessToken(ctx, refreshToken)
 	if err != nil {
-		return err
+		return "", err
 	}
-
 	q := url.Values{}
-	q.Set("q", fmt.Sprintf("name contains %q and %q in parents and trashed = false", telefone, pastaID))
+	q.Set("q", fmt.Sprintf("name contains %q and trashed = false", telefone))
 	q.Set("fields", "files(id,name)")
 	q.Set("pageSize", "5")
 	var busca struct {
 		Files []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID string `json:"id"`
 		} `json:"files"`
 	}
 	if err := g.doJSON(ctx, http.MethodGet,
 		"https://www.googleapis.com/drive/v3/files?"+q.Encode(), access, nil, &busca); err != nil {
-		return fmt.Errorf("drive: busca do dossiê: %w", err)
+		return "", fmt.Errorf("drive: busca do dossiê: %w", err)
+	}
+	if len(busca.Files) == 0 {
+		return "", nil // cliente novo
+	}
+	return busca.Files[0].ID, nil
+}
+
+// EscreveDossie grava ou atualiza o documento de um cliente.
+//
+// Cliente conhecido: atualiza o arquivo onde ele já está, sem mover de pasta —
+// o link que a coordenação salvou continua valendo, e o histórico dele não se
+// parte entre meses.
+//
+// Cliente novo: cria na pasta do mês corrente, criando a pasta se o mês virou.
+func (g *GCalClient) EscreveDossie(ctx context.Context, refreshToken, raizID, telefone, nomeArquivo, conteudo string, agora time.Time) error {
+	arquivoID, err := g.EncontraDossie(ctx, refreshToken, telefone)
+	if err != nil {
+		return err
 	}
 
+	metodo, endpoint := http.MethodPatch, ""
 	metadados := map[string]any{"name": nomeArquivo}
-	metodo, endpoint := http.MethodPost,
-		"https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id"
-	if len(busca.Files) > 0 {
-		// Atualiza no lugar: o link que a coordenação salvou continua valendo.
-		metodo = http.MethodPatch
+	if arquivoID != "" {
 		endpoint = "https://www.googleapis.com/upload/drive/v3/files/" +
-			url.PathEscape(busca.Files[0].ID) + "?uploadType=multipart&fields=id"
+			url.PathEscape(arquivoID) + "?uploadType=multipart&fields=id"
 	} else {
-		metadados["parents"] = []string{pastaID}
+		mes, err := g.GarantePastaDoMes(ctx, refreshToken, raizID, agora)
+		if err != nil {
+			return err
+		}
+		metodo = http.MethodPost
+		endpoint = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id"
+		metadados["parents"] = []string{mes}
 	}
 
+	access, err := g.accessToken(ctx, refreshToken)
+	if err != nil {
+		return err
+	}
 	corpo, tipo, err := multipartDrive(metadados, conteudo)
 	if err != nil {
 		return err

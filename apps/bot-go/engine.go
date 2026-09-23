@@ -1991,8 +1991,9 @@ func (e *ConversationEngine) espelhaDossieNoDrive(telefone string) {
 		if !ok {
 			return
 		}
+		agora := time.Now()
 		if err := e.deps.GCal.EscreveDossie(ctx, conta.RefreshToken, pasta, telefone,
-			dossie.NomeDoArquivo(), dossie.Markdown(time.Now())); err != nil {
+			dossie.NomeDoArquivo(), dossie.Markdown(agora), agora); err != nil {
 			log.Error("drive: falha ao escrever o dossiê", "err", err, "conta", conta.Email)
 			return
 		}
