@@ -148,6 +148,82 @@ func TestCORS(t *testing.T) {
 	}
 }
 
+// TestCORSQuizAnswerAbertoSemCredenciais confere o CORS especial de
+// POST /quiz/answer (bookmarklet, ver comentário em cors()): qualquer origem
+// recebe Allow-Origin: "*", NUNCA Allow-Credentials, e o preflight responde
+// 204 com os headers específicos da rota — sem passar pelo handler seguinte
+// (equivalente a não passar pelo guard de autenticação: quizAccessGuard só
+// roda dentro do mux, depois desta camada).
+func TestCORSQuizAnswerAbertoSemCredenciais(t *testing.T) {
+	s := testServer(Config{CORSOrigins: []string{"https://mails.santos-tech.com"}})
+	nextCalled := false
+	h := s.cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		nextCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Preflight de origem ARBITRÁRIA (não está em nenhuma allowlist).
+	nextCalled = false
+	r := httptest.NewRequest("OPTIONS", "/quiz/answer", nil)
+	r.Header.Set("Origin", "https://prova-qualquer.exemplo.com")
+	r.Header.Set("Access-Control-Request-Method", "POST")
+	r.Header.Set("Access-Control-Request-Headers", "content-type, x-quiz-key")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("preflight /quiz/answer code=%d, queria 204", w.Code)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("Allow-Origin=%q, queria \"*\"", got)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Methods"); got != "POST, OPTIONS" {
+		t.Errorf("Allow-Methods=%q, queria \"POST, OPTIONS\"", got)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, X-Quiz-Key" {
+		t.Errorf("Allow-Headers=%q, queria \"Content-Type, X-Quiz-Key\"", got)
+	}
+	if got := w.Header().Get("Access-Control-Max-Age"); got != "600" {
+		t.Errorf("Max-Age=%q, queria \"600\"", got)
+	}
+	if w.Header().Get("Access-Control-Allow-Credentials") != "" {
+		t.Error("preflight /quiz/answer NUNCA pode ter Access-Control-Allow-Credentials")
+	}
+	if nextCalled {
+		t.Error("preflight não deveria alcançar o próximo handler (equivale a pular o guard)")
+	}
+
+	// POST de origem arbitrária, autenticado por X-Quiz-Key → Allow-Origin: *,
+	// sem Allow-Credentials, alcança o handler seguinte.
+	nextCalled = false
+	r2 := httptest.NewRequest("POST", "/quiz/answer", nil)
+	r2.Header.Set("Origin", "https://prova-qualquer.exemplo.com")
+	r2.Header.Set("X-Quiz-Key", "qz_teste")
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, r2)
+	if got := w2.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("POST Allow-Origin=%q, queria \"*\"", got)
+	}
+	if w2.Header().Get("Access-Control-Allow-Credentials") != "" {
+		t.Error("POST /quiz/answer NUNCA pode ter Access-Control-Allow-Credentials")
+	}
+	if !nextCalled {
+		t.Error("POST deveria alcançar o handler seguinte")
+	}
+
+	// Outra rota qualquer continua com o comportamento antigo (allowlist,
+	// credenciais quando a origem é permitida).
+	r3 := httptest.NewRequest("GET", "/x", nil)
+	r3.Header.Set("Origin", "https://mails.santos-tech.com")
+	w3 := httptest.NewRecorder()
+	h.ServeHTTP(w3, r3)
+	if got := w3.Header().Get("Access-Control-Allow-Origin"); got != "https://mails.santos-tech.com" {
+		t.Errorf("rota comum Allow-Origin=%q, queria origem refletida", got)
+	}
+	if w3.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Error("rota comum deveria continuar com Access-Control-Allow-Credentials")
+	}
+}
+
 func TestCORSFailClosed(t *testing.T) {
 	s := testServer(Config{}) // sem CORSOrigins nem AuthWebOrigin
 	h := s.cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))

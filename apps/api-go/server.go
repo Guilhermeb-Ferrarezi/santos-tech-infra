@@ -177,6 +177,29 @@ func isInlineFileContentType(ct string) bool {
 
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// POST /quiz/answer roda dentro do bookmarklet — a requisição chega
+		// com Origin do site da prova (qualquer domínio) ou da página relay
+		// no GitHub Pages, nunca cabendo numa allowlist. Aberto pra qualquer
+		// origem, SEM credenciais: com Allow-Origin: "*" o navegador NUNCA
+		// envia cookie cross-origin (a spec fetch proíbe combinar "*" com
+		// `credentials: include`) — cross-origin só X-Quiz-Key autentica,
+		// nunca a sessão. Mesmo precedente de /public/* abaixo, mas mais
+		// estrito: aqui NUNCA Allow-Credentials, em hipótese nenhuma. O
+		// preflight responde 204 aqui mesmo, ANTES de alcançar
+		// quizAccessGuard (que só roda dentro do mux, depois desta camada) —
+		// preflight não carrega credencial, então não há o que autenticar.
+		if r.URL.Path == "/quiz/answer" {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			if r.Method == http.MethodOptions {
+				w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Quiz-Key")
+				w.Header().Set("Access-Control-Max-Age", "600")
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		origin := r.Header.Get("Origin")
 		// Rotas /public/* não usam cookie/credencial (token na URL é a
 		// credencial) — liberadas pra qualquer origem, sem

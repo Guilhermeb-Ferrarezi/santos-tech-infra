@@ -2713,6 +2713,26 @@ paths:
         como admin (`/auth/admin/api-router/.../proxy`), que dispararia
         requisição arbitrária com as chaves da empresa.
 
+        **CORS aberto, sem credenciais** — única rota do serviço com esta
+        política (todas as outras seguem a allowlist de origens de sempre).
+        Um bookmarklet roda DENTRO da página da prova, então a requisição
+        chega com `Origin` de qualquer domínio (o site da prova, ou a página
+        relay hospedada no GitHub Pages) — nunca cabendo numa allowlist. Por
+        isso, tanto o preflight (`OPTIONS /quiz/answer`) quanto a resposta do
+        `POST` sempre devolvem `Access-Control-Allow-Origin: *`,
+        `Access-Control-Allow-Methods: POST, OPTIONS`,
+        `Access-Control-Allow-Headers: Content-Type, X-Quiz-Key` e
+        `Access-Control-Max-Age: 600` — e **nunca**
+        `Access-Control-Allow-Credentials`. É essa ausência que torna seguro
+        abrir pra qualquer origem: com `Allow-Origin: "*"` o navegador nunca
+        envia cookie cross-origin (a spec fetch proíbe combinar `"*"` com
+        `credentials: include`), então uma origem fora da allowlist só
+        consegue autenticar via `X-Quiz-Key` — nunca via sessão do usuário. O
+        preflight responde `204` sem passar pelo `quizAccessGuard` (não há
+        credencial num preflight pra autenticar). A extensão de navegador
+        (que usa `Authorization: Bearer`, não cookie) continua funcionando
+        sem mudança — `Allow-Origin: "*"` também cobre esse caso.
+
         Chave de acesso (`X-Quiz-Key`): cada chave tem um limite diário de
         questões (`daily_limit`, configurado na criação) que reseta à
         meia-noite UTC (21:00 no horário de Brasília). A cota é reservada
