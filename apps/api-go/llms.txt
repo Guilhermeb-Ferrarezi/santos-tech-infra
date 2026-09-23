@@ -949,9 +949,13 @@ ao mover para `revisao`, dispara email ao `SOCIAL_ALERT_EMAIL`.
     `formato: "carrossel"` sempre voltam `status: "unsupported"` (com adaptador
     configurado) ou `"manual"` (sem adaptador), nunca publicam de verdade. Feature de
     19/08/2026.
-- `POST /social/posts/{id}/publish-confirmations/{platform}` — confirma publicação
-  naquela plataforma (upsert; reconfirmar atualiza, não duplica). `confirmedBy` vem
-  sempre da sessão autenticada, nunca do corpo da requisição. → `{confirmations:[...]}`
+- `POST /social/posts/{id}/publish-confirmations/{platform} {url}` — confirma publicação
+  naquela plataforma (upsert; reconfirmar atualiza, não duplica — também sobrescreve
+  `url`). `confirmedBy` vem sempre da sessão autenticada, nunca do corpo. `url`
+  **obrigatório** desde 23/09/2026 (o link real da publicação — sem validação de
+  formato, aceita qualquer texto não-vazio); vazio/só espaço → 400 `BAD_REQUEST`
+  "Cole o link da publicação antes de confirmar.". Confirmação de antes desta data
+  fica com `url:""` e continua válida (sem revalidação retroativa). → `{confirmations:[...]}`
 - `DELETE /social/posts/{id}/publish-confirmations/{platform}` — desconfirma. → `{confirmations:[...]}`
 - **Trava de publicação**: `PUT`/`PATCH .../status` recusam a *transição* pra
   `status: publicado` (400 `PUBLISH_NOT_CONFIRMED`) se sobrar alguma plataforma de
@@ -1035,8 +1039,13 @@ substitui a lista inteira a cada save, igual `hashtags`/`plataformasDestino`; id
 envolvido". Feature de 18/08/2026),
 `funilEtapa` (''|topo|meio|fundo — função da peça no funil de tráfego pago; vazio é o
 default das peças criadas antes do campo existir. Valor inválido → 400),
-`publishConfirmations[]` ({platform,confirmedById,confirmedByName,confirmedAt} — só
-populado em `GET /social/posts/{id}` (post único), vazio em `GET /social/posts` (lista)),
+`publishConfirmations[]` ({platform,confirmedById,confirmedByName,confirmedAt,url} —
+populado tanto em `GET /social/posts/{id}` (post único) quanto em `GET /social/posts`
+(lista; uma query só busca as confirmações de todos os posts da página, sem N+1 —
+ver `resolveSocialPostPublishConfirmations` em `social.go`. Antes de 23/09/2026 a
+lista devolvia `null` aqui). `url`: link real da publicação, obrigatório desde
+23/09/2026 pra confirmação NOVA (ver `POST .../publish-confirmations/{platform}`
+abaixo); confirmação de antes fica com `url:""` e continua válida),
 `serie` (nullable, `{id,nome}` — só leitura, denormalizado a partir de `serieId`; ver
 `GET/POST/PUT /social/series` acima. Feature de 25/08/2026),
 `conta` (`{id,nome}`, SEM null — toda post tem exatamente 1 conta — só leitura, denormalizado

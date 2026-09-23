@@ -1128,6 +1128,15 @@ CREATE TABLE IF NOT EXISTS quiz_access_keys (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   revoked_at  TIMESTAMPTZ
 );
+
+-- Link real da publicação, colado por quem confirma o checklist (ver
+-- docs/superpowers/specs/2026-09-23-link-confirmacao-publicacao-design.md no
+-- repo dashboard). Endurece a confirmação de "só um clique" (13/08) pra exigir
+-- prova de que saiu no ar — validado no handler (handleConfirmSocialPostPlatform),
+-- não aqui no schema. Confirmações existentes ficam com url='' (sem link) e
+-- continuam válidas — sem revalidação retroativa, mesmo princípio de 13/08.
+ALTER TABLE social_post_platform_confirmations
+  ADD COLUMN IF NOT EXISTS url TEXT NOT NULL DEFAULT '';
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

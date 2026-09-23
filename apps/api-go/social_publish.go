@@ -281,7 +281,11 @@ func (s *Server) runPublish(ctx context.Context, post *SocialPost, targets []str
 			s.insertPublishFailureNote(ctx, post.ID, actingUserID, platform, err.Error())
 			continue
 		}
-		if err := s.upsertSocialPostPublishConfirmation(ctx, post.ID, platform, actingUserID); err != nil {
+		// url="" de propósito: auto-captura do link via Graph API é fora de
+		// escopo nesta versão (decisão do Henrique, 23/09/2026) — mesmo
+		// publicado automaticamente, o link só entra se alguém colar manualmente
+		// depois (desconfirmar + confirmar de novo com o link).
+		if err := s.upsertSocialPostPublishConfirmation(ctx, post.ID, platform, actingUserID, ""); err != nil {
 			slog.Error("social publish: publicou mas falhou ao confirmar checklist", "post_id", post.ID, "platform", platform, "err", err)
 		}
 		if _, err := s.insertSocialPostNote(ctx, post.ID, actingUserID,
@@ -345,7 +349,8 @@ func (s *Server) publishCarouselPost(ctx context.Context, post *SocialPost, targ
 			s.insertPublishFailureNote(ctx, post.ID, actingUserID, platform, err.Error())
 			continue
 		}
-		if err := s.upsertSocialPostPublishConfirmation(ctx, post.ID, platform, actingUserID); err != nil {
+		// url="" — mesmo motivo de runPublish acima (auto-captura fora de escopo).
+		if err := s.upsertSocialPostPublishConfirmation(ctx, post.ID, platform, actingUserID, ""); err != nil {
 			slog.Error("social publish: publicou mas falhou ao confirmar checklist", "post_id", post.ID, "platform", platform, "err", err)
 		}
 		if _, err := s.insertSocialPostNote(ctx, post.ID, actingUserID,

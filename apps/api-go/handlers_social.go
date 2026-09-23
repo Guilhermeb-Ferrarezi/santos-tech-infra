@@ -478,6 +478,23 @@ func (s *Server) handleConfirmSocialPostPlatform(w http.ResponseWriter, r *http.
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Plataforma inválida"))
 		return
 	}
+	// Prova de que a publicação saiu no ar — obrigatório desde 23/09/2026 (antes,
+	// confirmar era só um clique, "modelo de confiança" de 13/08). Sem validação
+	// de formato (aceita qualquer texto colado). Validado antes de tocar o banco
+	// (dono/post), mesmo padrão de handleAddSocialPostNote.
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var in struct {
+		URL string `json:"url"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	in.URL = strings.TrimSpace(in.URL)
+	if in.URL == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Cole o link da publicação antes de confirmar."))
+		return
+	}
 	owner, err := s.getSocialPlatformOwner(r.Context(), platform)
 	if err != nil {
 		writeErr(w, err)
@@ -497,7 +514,9 @@ func (s *Server) handleConfirmSocialPostPlatform(w http.ResponseWriter, r *http.
 		writeErr(w, errSocialPostNotFound)
 		return
 	}
-	if err := s.upsertSocialPostPublishConfirmation(r.Context(), id, platform, userIDFrom(r)); err != nil {
+	// confirmedBy vem SEMPRE de userIDFrom(r) (sessão autenticada) — nunca do
+	// corpo da requisição, que só carrega "url" (ver struct `in` acima).
+	if err := s.upsertSocialPostPublishConfirmation(r.Context(), id, platform, userIDFrom(r), in.URL); err != nil {
 		writeErr(w, err)
 		return
 	}

@@ -4093,13 +4093,29 @@ paths:
       summary: Confirma publicação numa plataforma (checklist manual)
       description: |
         Requer Admin ou cargo com `social:execute`. Rate limit 60/min. Upsert
-        — reconfirmar atualiza, não duplica. `confirmedBy` vem sempre da
-        sessão autenticada. Se a plataforma tiver **dono** definido
-        (`GET /social/platform-owners`), só ele confirma — outro usuário leva
-        403 `NOT_PLATFORM_OWNER`.
+        — reconfirmar atualiza, não duplica (também sobrescreve `url` — é assim
+        que se corrige um link colado errado). `confirmedBy` vem sempre da
+        sessão autenticada, nunca do corpo. Se a plataforma tiver **dono**
+        definido (`GET /social/platform-owners`), só ele confirma — outro
+        usuário leva 403 `NOT_PLATFORM_OWNER`.
+
+        Corpo exige `url` (o link real da publicação — prova de que saiu no
+        ar). Sem validação de formato: aceita qualquer texto não-vazio.
+        Vazio/só espaço → 400. Confirmações registradas antes de 23/09/2026
+        (sem esta exigência) ficam com `url: ""` e continuam válidas — sem
+        revalidação retroativa.
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
         - { in: path, name: platform, required: true, schema: { $ref: "#/components/schemas/SocialPlatform" } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: { type: string, description: "Link real da publicação. Obrigatório, sem validação de formato." }
+              required: [url]
       responses:
         "200":
           description: Checklist atualizado.
@@ -4110,6 +4126,12 @@ paths:
                 properties:
                   confirmations: { type: array, items: { $ref: "#/components/schemas/SocialPostPublishConfirmation" } }
                 required: [confirmations]
+        "400":
+          description: "`url` ausente, vazia ou só espaço."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: BAD_REQUEST, message: "Cole o link da publicação antes de confirmar." }
         "403":
           description: Plataforma tem dono e não é o usuário autenticado.
           content:
@@ -7593,8 +7615,7 @@ components:
         updatedAt: { type: string, format: date-time }
         publishConfirmations:
           type: array
-          nullable: true
-          description: "Só populado em GET de post único — null em GET /social/posts (lista, evita N+1)."
+          description: "Populado tanto em GET de post único quanto em GET /social/posts (lista) — a listagem busca as confirmações de todos os posts da página numa query só, sem N+1."
           items: { $ref: "#/components/schemas/SocialPostPublishConfirmation" }
       required: [id, title, caption, platform, pilar, status, formato, objetivo, programa, receita, funilEtapa, conta, createdAt, updatedAt]
 
@@ -7669,7 +7690,10 @@ components:
         confirmedById: { type: integer, format: int64, nullable: true }
         confirmedByName: { type: string }
         confirmedAt: { type: string, format: date-time }
-      required: [platform, confirmedByName, confirmedAt]
+        url:
+          type: string
+          description: "Link real da publicação. Confirmações de antes de 23/09/2026 têm url=\"\" (sem link) e continuam válidas."
+      required: [platform, confirmedByName, confirmedAt, url]
 
     SocialPlatformOwner:
       type: object

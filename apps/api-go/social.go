@@ -96,12 +96,17 @@ type SocialPost struct {
 // SocialPostPublishConfirmation: 1 linha = "essa plataforma recebeu essa peça",
 // confirmado por alguém. ConfirmedByID vem sempre da sessão autenticada no
 // handler — nunca de um valor mandado pelo cliente, pra não dar pra fraudar
-// "quem confirmou".
+// "quem confirmou". URL é o link colado da publicação (obrigatório desde
+// 23/09/2026 pra confirmação NOVA — ver validação em
+// handleConfirmSocialPostPlatform); confirmações de antes dessa data ficam
+// com URL="" (default da coluna nova, ver migração em db.go) e continuam
+// válidas, só sem o atalho de abrir o link.
 type SocialPostPublishConfirmation struct {
 	Platform      string    `json:"platform"`
 	ConfirmedByID *int64    `json:"confirmedById"`
 	ConfirmedBy   string    `json:"confirmedByName"`
 	ConfirmedAt   time.Time `json:"confirmedAt"`
+	URL           string    `json:"url"`
 }
 
 // SocialPlatformOwner: mapeamento global (não por post) de quem pode
@@ -433,7 +438,19 @@ func (s *Server) listSocialPosts(ctx context.Context) ([]SocialPost, error) {
 		}
 		out = append(out, *p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Fecha o cursor antes de outra query no mesmo pool (mesma disciplina de
+	// resolveOpenAppIcons em hour_lab_devices.go). Card da lista de posts do dia
+	// (dashboard) precisa do link de confirmação sem abrir o post — por isso a
+	// listagem passou a popular publishConfirmations também (2026-09-23; antes
+	// só GET /social/posts/{id} populava, aqui vinha null).
+	rows.Close()
+	if err := s.resolveSocialPostPublishConfirmations(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Server) getSocialPost(ctx context.Context, id string) (*SocialPost, error) {
@@ -635,7 +652,7 @@ func (s *Server) insertSocialPostNote(ctx context.Context, postID string, author
 
 func (s *Server) listSocialPostPublishConfirmations(ctx context.Context, postID string) ([]SocialPostPublishConfirmation, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT c.platform, c.confirmed_by, COALESCE(u.name,''), c.confirmed_at
+		SELECT c.platform, c.confirmed_by, COALESCE(u.name,''), c.confirmed_at, c.url
 		FROM social_post_platform_confirmations c
 		LEFT JOIN users u ON u.id = c.confirmed_by
 		WHERE c.post_id = $1::uuid ORDER BY c.confirmed_at`, postID)
@@ -646,7 +663,7 @@ func (s *Server) listSocialPostPublishConfirmations(ctx context.Context, postID 
 	out := []SocialPostPublishConfirmation{}
 	for rows.Next() {
 		var c SocialPostPublishConfirmation
-		if err := rows.Scan(&c.Platform, &c.ConfirmedByID, &c.ConfirmedBy, &c.ConfirmedAt); err != nil {
+		if err := rows.Scan(&c.Platform, &c.ConfirmedByID, &c.ConfirmedBy, &c.ConfirmedAt, &c.URL); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -654,14 +671,63 @@ func (s *Server) listSocialPostPublishConfirmations(ctx context.Context, postID 
 	return out, rows.Err()
 }
 
+// resolveSocialPostPublishConfirmations preenche PublishConfirmations de cada
+// post com uma query só pra todos os ids da página — mesmo padrão de
+// resolveOpenAppIcons (hour_lab_open_app_icons.go): sem isso, popular o
+// checklist na LISTAGEM (GET /social/posts, ver listSocialPosts) faria uma
+// query por post. GET /social/posts/{id} (post único) continua usando
+// listSocialPostPublishConfirmations direto — um post só não é N+1.
+func (s *Server) resolveSocialPostPublishConfirmations(ctx context.Context, posts []SocialPost) error {
+	ids := make([]string, len(posts))
+	for i := range posts {
+		posts[i].PublishConfirmations = []SocialPostPublishConfirmation{}
+		ids[i] = posts[i].ID
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT c.post_id::text, c.platform, c.confirmed_by, COALESCE(u.name,''), c.confirmed_at, c.url
+		FROM social_post_platform_confirmations c
+		LEFT JOIN users u ON u.id = c.confirmed_by
+		WHERE c.post_id = ANY($1::uuid[])
+		ORDER BY c.post_id, c.confirmed_at`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byPost := make(map[string][]SocialPostPublishConfirmation, len(ids))
+	for rows.Next() {
+		var postID string
+		var c SocialPostPublishConfirmation
+		if err := rows.Scan(&postID, &c.Platform, &c.ConfirmedByID, &c.ConfirmedBy, &c.ConfirmedAt, &c.URL); err != nil {
+			return err
+		}
+		byPost[postID] = append(byPost[postID], c)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range posts {
+		if cs, ok := byPost[posts[i].ID]; ok {
+			posts[i].PublishConfirmations = cs
+		}
+	}
+	return nil
+}
+
 // upsertSocialPostPublishConfirmation grava/atualiza a confirmação. confirmedBy
 // é sempre o usuário autenticado (chamador nunca aceita esse valor do cliente).
-func (s *Server) upsertSocialPostPublishConfirmation(ctx context.Context, postID, platform string, confirmedBy int64) error {
+// url é o link colado da publicação — sobrescrito numa reconfirmação (é assim
+// que se corrige um link errado: desconfirmar + confirmar de novo com o link
+// certo). Publicação automática (social_publish.go) passa url="" de propósito —
+// auto-captura do link via Graph API é fora de escopo nesta versão.
+func (s *Server) upsertSocialPostPublishConfirmation(ctx context.Context, postID, platform string, confirmedBy int64, url string) error {
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO social_post_platform_confirmations (post_id, platform, confirmed_by, confirmed_at)
-		VALUES ($1::uuid, $2, $3, now())
-		ON CONFLICT (post_id, platform) DO UPDATE SET confirmed_by = $3, confirmed_at = now()`,
-		postID, platform, confirmedBy)
+		INSERT INTO social_post_platform_confirmations (post_id, platform, confirmed_by, confirmed_at, url)
+		VALUES ($1::uuid, $2, $3, now(), $4)
+		ON CONFLICT (post_id, platform) DO UPDATE SET confirmed_by = $3, confirmed_at = now(), url = $4`,
+		postID, platform, confirmedBy, url)
 	return err
 }
 

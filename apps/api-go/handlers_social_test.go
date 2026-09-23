@@ -47,12 +47,47 @@ func socialPlatformReq(method, id, platform string, userID int64) *http.Request 
 	return reqAs(r, userID)
 }
 
+// socialPlatformReqBody é socialPlatformReq com corpo — usado pela validação de
+// link obrigatório (2026-09-23): POST .../publish-confirmations/{platform}
+// passou a exigir {"url": string} no corpo.
+func socialPlatformReqBody(method, id, platform, body string, userID int64) *http.Request {
+	r := httptest.NewRequest(method, "/social/posts/"+id+"/publish-confirmations/"+platform, strings.NewReader(body))
+	r.SetPathValue("id", id)
+	r.SetPathValue("platform", platform)
+	return reqAs(r, userID)
+}
+
 func TestHandleConfirmSocialPostPlatformValidation(t *testing.T) {
 	s := testServer(Config{})
 	w := httptest.NewRecorder()
 	s.handleConfirmSocialPostPlatform(w, socialPlatformReq("POST", validUUID, "myspace", 1))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("plataforma inválida: code=%d", w.Code)
+	}
+}
+
+// Confirmar sem o link real da publicação (prova de que saiu no ar, exigida
+// desde 23/09/2026) é rejeitado antes de checar dono ou post — não toca o banco
+// (nil em testServer(Config{})), mesma convenção do resto do arquivo. Corpo
+// ausente/vazio/só espaço → "Cole o link da publicação antes de confirmar.";
+// corpo malformado → "Corpo inválido" (erro de decode, mensagem diferente, mas
+// ainda 400 e ainda sem tocar o banco).
+func TestHandleConfirmSocialPostPlatformRequiresURL(t *testing.T) {
+	s := testServer(Config{})
+	for _, body := range []string{"{}", `{"url":""}`, `{"url":"   "}`} {
+		w := httptest.NewRecorder()
+		s.handleConfirmSocialPostPlatform(w, socialPlatformReqBody("POST", validUUID, "instagram", body, 1))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body=%q code=%d", body, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "Cole o link da publicação antes de confirmar.") {
+			t.Fatalf("body=%q resposta=%q", body, w.Body.String())
+		}
+	}
+	w := httptest.NewRecorder()
+	s.handleConfirmSocialPostPlatform(w, socialPlatformReqBody("POST", validUUID, "instagram", "xxx", 1))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("corpo malformado: code=%d", w.Code)
 	}
 }
 
@@ -147,6 +182,14 @@ func TestHandleAddSocialPostNoteValidation(t *testing.T) {
 //   - getSocialPlatformOwner retornando nil sem erro quando não há dono (a
 //     própria função faz s.db.QueryRow; sem um banco real não dá pra exercitar
 //     nem o caminho "sem linha" nem o caminho "com linha")
+//
+// Mesma lacuna para o link obrigatório na confirmação (2026-09-23, ver
+// TestHandleConfirmSocialPostPlatformRequiresURL acima pro que É testável):
+//   - Confirmar com url válida → grava e aparece no GET /social/posts/{id} seguinte
+//   - Reconfirmar com url diferente → sobrescreve (não duplica; UNIQUE(post_id,platform)
+//     garante isso no banco, não dá pra observar sem um banco real)
+//   - resolveSocialPostPublishConfirmations (social.go) populando publishConfirmations
+//     em GET /social/posts (listagem) numa query só pra todos os posts da página
 // Ficam registrados como pendência de teste de integração (ver PENDENCIAS.md).
 
 func TestListSocialPlatformOwnersNoToken(t *testing.T) {
