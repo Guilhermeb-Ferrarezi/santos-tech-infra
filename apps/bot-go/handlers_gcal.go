@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -28,7 +29,13 @@ type estadosPendentes struct {
 
 var estadosGCal = &estadosPendentes{itens: map[string]time.Time{}}
 
-func (e *estadosPendentes) novo() string {
+// novo devolve um state de uso único, com o PROPÓSITO embutido.
+//
+// O propósito precisa sobreviver à ida ao Google e voltar, e o state é a única
+// coisa que faz essa viagem. Guardá-lo aqui, junto do segredo, evita uma
+// tabela só para lembrar "esta autorização era do Drive" — e evita que duas
+// autorizações simultâneas embaralhem os propósitos.
+func (e *estadosPendentes) novo(uso string) string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	s := hex.EncodeToString(b)
@@ -43,14 +50,16 @@ func (e *estadosPendentes) novo() string {
 			delete(e.itens, k)
 		}
 	}
+	s = uso + "." + s
 	e.itens[s] = agora.Add(15 * time.Minute)
 	return s
 }
 
 // consome valida e QUEIMA o state — um mesmo link não autoriza duas vezes.
-func (e *estadosPendentes) consome(s string) bool {
+// consome valida o state e devolve o propósito que viajou nele.
+func (e *estadosPendentes) consome(s string) (string, bool) {
 	if s == "" {
-		return false
+		return "", false
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -58,10 +67,17 @@ func (e *estadosPendentes) consome(s string) bool {
 		// Comparação em tempo constante: o state é um segredo de uso único.
 		if subtle.ConstantTimeCompare([]byte(k), []byte(s)) == 1 {
 			delete(e.itens, k)
-			return time.Now().Before(exp)
+			if !time.Now().Before(exp) {
+				return "", false
+			}
+			uso, _, _ := strings.Cut(s, ".")
+			if !UsoValido(uso) {
+				return "", false
+			}
+			return uso, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // handleGCalStart — GET /auth/google/start
@@ -71,7 +87,12 @@ func (s *Server) handleGCalStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Google Agenda não configurado neste servidor.", http.StatusServiceUnavailable)
 		return
 	}
-	http.Redirect(w, r, s.gcal.URLDeAutorizacao(estadosGCal.novo()), http.StatusFound)
+	// ?uso=drive para a conta que guarda os dossiês; agenda é o padrão.
+	uso := r.URL.Query().Get("uso")
+	if !UsoValido(uso) {
+		uso = UsoAgenda
+	}
+	http.Redirect(w, r, s.gcal.URLDeAutorizacao(estadosGCal.novo(uso), uso), http.StatusFound)
 }
 
 // handleGCalCallback — GET /auth/google/callback
@@ -88,7 +109,8 @@ func (s *Server) handleGCalCallback(w http.ResponseWriter, r *http.Request) {
 			"Você não autorizou o acesso à agenda. Se foi sem querer, abra o link de novo.")
 		return
 	}
-	if !estadosGCal.consome(r.URL.Query().Get("state")) {
+	uso, ok := estadosGCal.consome(r.URL.Query().Get("state"))
+	if !ok {
 		// Link velho, já usado, ou vindo de outro lugar.
 		paginaGCal(w, http.StatusBadRequest, "Link expirado",
 			"Este link de autorização não vale mais. Peça um novo e tente outra vez.")
@@ -107,16 +129,21 @@ func (s *Server) handleGCalCallback(w http.ResponseWriter, r *http.Request) {
 			"Não consegui concluir a autorização. Tente de novo; se insistir, me avise.")
 		return
 	}
-	if err := s.gcalRepo.Salvar(ctx, TenantID(s.cfg.TenantID), email, refresh); err != nil {
+	if err := s.gcalRepo.Salvar(ctx, TenantID(s.cfg.TenantID), email, refresh, uso); err != nil {
 		s.logger.Error("gcal: falha ao salvar a conta", "err", err, "email", email)
 		paginaGCal(w, http.StatusInternalServerError, "Não deu para salvar",
 			"A autorização funcionou, mas não consegui guardar. Tente de novo.")
 		return
 	}
 
-	s.logger.Info("gcal: conta autorizada", "email", email)
+	s.logger.Info("gcal: conta autorizada", "email", email, "uso", uso)
+	if uso == UsoDrive {
+		paginaGCal(w, http.StatusOK, "Pronto!",
+			"O Drive de "+email+" vai guardar os dossiês dos clientes, numa pasta chamada \"Atendimentos — Santos Tech\" que o bot cria sozinho. Ele só enxerga os arquivos que ele mesmo criar — nada do resto do Drive. Pode fechar esta página.")
+		return
+	}
 	paginaGCal(w, http.StatusOK, "Pronto!",
-		"A agenda de "+email+" está conectada. As aulas experimentais marcadas pelo bot vão aparecer aí, com lembrete de 1 dia e 4 horas antes. Pode fechar esta página.")
+		"A agenda de "+email+" está conectada. As aulas experimentais marcadas pelo bot vão aparecer aí, com lembrete de 1 dia, 4 horas e 1 hora antes. Pode fechar esta página.")
 }
 
 // paginaGCal responde uma página simples — quem abre isso está no celular, não

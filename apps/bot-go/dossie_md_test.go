@@ -99,29 +99,48 @@ func TestFormataTelefone(t *testing.T) {
 // drive dá ao bot o Drive INTEIRO de quem autorizou — planilhas da escola,
 // fotos de família, tudo. drive.file dá só o que ele mesmo criou. A diferença
 // é entre um bot que escreve os dossiês e um bot que pode ler a vida da pessoa.
-func TestEscopoDoDriveEhOMenorPossivel(t *testing.T) {
+// Cada conta autoriza UM propósito. Pedir Drive na agenda pessoal do Henrique
+// seria pedir acesso que ele não precisa dar; e a conta da diretoria, onde
+// ficam os arquivos sensíveis da empresa, não deve virar agenda.
+func TestCadaContaAutorizaSoOSeuProposito(t *testing.T) {
 	if driveScope != "https://www.googleapis.com/auth/drive.file" {
-		t.Errorf("escopo = %q; tem que ser drive.file", driveScope)
+		t.Errorf("escopo = %q; tem que ser drive.file, não drive", driveScope)
 	}
 	g := NewGCalClient("id", "secret", "https://exemplo/callback", nil)
-	url := g.URLDeAutorizacao("estado")
 
-	if !strings.Contains(url, "drive.file") {
-		t.Error("o link de autorização não pede o Drive")
+	agenda := g.URLDeAutorizacao("estado", UsoAgenda)
+	if !strings.Contains(agenda, "calendar.events") {
+		t.Error("o link da agenda não pede o calendário")
 	}
-	// Se o escopo largo entrar por descuido, o link passaria a pedir tudo.
-	if strings.Contains(url, "auth%2Fdrive+") || strings.Contains(url, "auth%2Fdrive&") {
+	if strings.Contains(agenda, "drive") {
+		t.Error("o link da AGENDA está pedindo Drive — acesso que ninguém precisa dar")
+	}
+
+	drive := g.URLDeAutorizacao("estado", UsoDrive)
+	if !strings.Contains(drive, "drive.file") {
+		t.Error("o link do Drive não pede o Drive")
+	}
+	if strings.Contains(drive, "calendar") {
+		t.Error("o link do DRIVE está pedindo agenda")
+	}
+	// Se o escopo largo entrar por descuido, o bot passaria a enxergar os 5 TB
+	// de arquivos sensíveis da diretoria.
+	if strings.Contains(drive, "auth%2Fdrive+") || strings.Contains(drive, "auth%2Fdrive&") {
 		t.Error("o link está pedindo o Drive INTEIRO")
 	}
-	// E o calendário não pode se perder na troca.
-	if !strings.Contains(url, "calendar.events") {
-		t.Error("o link perdeu o escopo do Google Agenda")
-	}
-	// Sem estes dois, o Google não devolve refresh token e a integração morre
+
+	// Sem estes dois o Google não devolve refresh token, e a integração morre
 	// sozinha em uma hora.
-	for _, obrigatorio := range []string{"access_type=offline", "prompt=consent"} {
-		if !strings.Contains(url, obrigatorio) {
-			t.Errorf("o link não tem %s", obrigatorio)
+	for _, link := range []string{agenda, drive} {
+		for _, obrigatorio := range []string{"access_type=offline", "prompt=consent"} {
+			if !strings.Contains(link, obrigatorio) {
+				t.Errorf("faltou %s no link", obrigatorio)
+			}
 		}
+	}
+
+	// Parâmetro inventado não pode virar autorização larga por acidente.
+	if UsoValido("tudo") || UsoValido("") {
+		t.Error("uso inválido foi aceito")
 	}
 }

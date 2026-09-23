@@ -26,28 +26,39 @@ func NewGCalRepo(pool *pgxpool.Pool) *GCalRepo { return &GCalRepo{pool: pool} }
 // ON CONFLICT reautoriza a mesma conta sem criar linha nova, e zera o
 // last_error — se a pessoa está autorizando de novo, é justamente porque o
 // acesso anterior quebrou.
-func (r *GCalRepo) Salvar(ctx context.Context, tenantID TenantID, email, refreshToken string) error {
+func (r *GCalRepo) Salvar(ctx context.Context, tenantID TenantID, email, refreshToken, uso string) error {
+	// Os propósitos ACUMULAM: uma conta que já servia para a agenda e depois
+	// autoriza o Drive passa a servir para os dois. Sobrescrever faria a segunda
+	// autorização desligar a primeira em silêncio, e os eventos parariam de
+	// aparecer sem ninguém entender por quê.
+	agenda := uso == UsoAgenda
+	drive := uso == UsoDrive
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO google_calendar_account (tenant_id, email, refresh_token)
-		VALUES ($1, $2, $3)
+		INSERT INTO google_calendar_account (tenant_id, email, refresh_token, usa_agenda, usa_drive)
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (tenant_id, email) DO UPDATE SET
 		  refresh_token = EXCLUDED.refresh_token,
+		  usa_agenda    = google_calendar_account.usa_agenda OR EXCLUDED.usa_agenda,
+		  usa_drive     = google_calendar_account.usa_drive  OR EXCLUDED.usa_drive,
 		  active        = true,
 		  last_error    = NULL,
 		  updated_at    = now()
-	`, tenantID, email, refreshToken)
+	`, tenantID, email, refreshToken, agenda, drive)
 	if err != nil {
 		return fmt.Errorf("GCalRepo.Salvar: %w", err)
 	}
 	return nil
 }
 
-// Ativas devolve as contas que devem receber os eventos.
+// Ativas devolve as contas que recebem os EVENTOS de aula.
+//
+// Só as que autorizaram a agenda. A conta da diretoria, que autorizou apenas o
+// Drive, não aparece aqui — criar evento numa agenda que ninguém abre é ruído.
 func (r *GCalRepo) Ativas(ctx context.Context, tenantID TenantID) ([]GCalAccount, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id::text, email, refresh_token, calendar_id
 		FROM google_calendar_account
-		WHERE tenant_id = $1 AND active
+		WHERE tenant_id = $1 AND active AND usa_agenda
 		ORDER BY email
 	`, tenantID)
 	if err != nil {
@@ -131,4 +142,32 @@ func (r *GCalRepo) EsquecerAula(ctx context.Context, tenantID TenantID, notionPa
 	_, _ = r.pool.Exec(ctx, `
 		DELETE FROM google_calendar_event WHERE tenant_id = $1 AND notion_page_id = $2
 	`, tenantID, notionPageID)
+}
+
+// ComDrive devolve as contas que guardam os dossiês.
+//
+// Separada de Ativas porque são conjuntos diferentes por desenho: as agendas
+// pessoais do Henrique e do Rodrigo de um lado, a conta da diretoria — onde
+// ficam os arquivos sensíveis da empresa — do outro. Misturar as duas listas
+// faria o bot tentar escrever arquivo na agenda pessoal de alguém.
+func (r *GCalRepo) ComDrive(ctx context.Context, tenantID TenantID) ([]GCalAccount, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id::text, email, refresh_token, calendar_id
+		FROM google_calendar_account
+		WHERE tenant_id = $1 AND active AND usa_drive
+		ORDER BY email
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("GCalRepo.ComDrive: %w", err)
+	}
+	defer rows.Close()
+	var out []GCalAccount
+	for rows.Next() {
+		var a GCalAccount
+		if err := rows.Scan(&a.ID, &a.Email, &a.RefreshToken, &a.CalendarID); err != nil {
+			return nil, fmt.Errorf("GCalRepo.ComDrive scan: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }

@@ -82,12 +82,12 @@ func (g *GCalClient) Enabled() bool {
 // devolva um REFRESH token. Sem os dois, a segunda autorização da mesma conta
 // volta só com access token de uma hora — e aí a integração morre sozinha uma
 // hora depois, sem erro visível.
-func (g *GCalClient) URLDeAutorizacao(state string) string {
+func (g *GCalClient) URLDeAutorizacao(state, uso string) string {
 	q := url.Values{}
 	q.Set("client_id", g.clientID)
 	q.Set("redirect_uri", g.redirectURL)
 	q.Set("response_type", "code")
-	q.Set("scope", gcalScope+" "+driveScope+" https://www.googleapis.com/auth/userinfo.email")
+	q.Set("scope", escopoDoUso(uso)+" https://www.googleapis.com/auth/userinfo.email")
 	q.Set("access_type", "offline")
 	q.Set("prompt", "consent")
 	q.Set("include_granted_scopes", "true")
@@ -467,4 +467,35 @@ func (g *GCalClient) ConvidarNoEvento(ctx context.Context, refreshToken, calenda
 		return err
 	}
 	return g.doJSON(ctx, http.MethodPatch, endpoint+"?sendUpdates=all", access, corpo, &struct{}{})
+}
+
+// ── propósito da conta ───────────────────────────────────────────────────────
+
+// Os dois usos que o bot faz de uma conta Google. São separados porque as
+// contas da escola são separadas: as agendas pessoais do Henrique e do Rodrigo
+// de um lado, e a conta da diretoria — onde ficam os arquivos sensíveis da
+// empresa — do outro.
+//
+// Pedir Drive na agenda pessoal seria pedir acesso que ninguém precisa dar.
+const (
+	UsoAgenda = "agenda"
+	UsoDrive  = "drive"
+)
+
+// escopoDoUso devolve só o que aquele propósito precisa.
+//
+// O padrão é a agenda: se o link vier sem parâmetro, o pedido é o menor dos
+// dois. Errar para o lado de pedir de menos é recuperável — pedir de mais, em
+// conta com arquivo sensível, não.
+func escopoDoUso(uso string) string {
+	if uso == UsoDrive {
+		return driveScope
+	}
+	return gcalScope
+}
+
+// UsoValido protege contra um link com parâmetro inventado virar autorização
+// larga por acidente.
+func UsoValido(uso string) bool {
+	return uso == UsoAgenda || uso == UsoDrive
 }
