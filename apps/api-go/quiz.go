@@ -156,6 +156,14 @@ type quizRequest struct {
 	// com visão (ver answerQuiz).
 	ImageBase64 string `json:"imageBase64"`
 	ImageMime   string `json:"imageMime"`
+	// ImageURL: alternativa a ImageBase64 pra quando o bookmarklet NÃO
+	// consegue ler os bytes da imagem na página (CORS/CSP do site da prova
+	// bloqueiam canvas/fetch dali) — manda só o endereço, e o servidor baixa
+	// (ver resolveQuizImageURL, abaixo, e quiz_image_fetch.go pras defesas
+	// de SSRF). Só usada quando ImageBase64 vem vazio; as duas presentes ao
+	// mesmo tempo não acontece no cliente hoje, mas se acontecer
+	// ImageBase64 vence (mesma prioridade que já existia implicitamente).
+	ImageURL string `json:"imageUrl"`
 }
 
 // validateQuizImage confere o mime (allowlist) e o tamanho decodificado
@@ -255,10 +263,43 @@ type quizDeps struct {
 	// esgotada, ou nil) — handleQuizAnswer sabe reconhecer esse erro e não
 	// remapeá-lo via quizErr.
 	reserve func() error
+	// fetchImage: baixa a imagem de ImageURL quando o bookmarklet mandou só
+	// o endereço (ImageBase64 vazio) — ver resolveQuizImageURL. Injetado
+	// (não chamado direto) pelo mesmo motivo de jev/fallback: testável sem
+	// rede. nil só acontece se handlers_quiz.go esquecer de conectar —
+	// resolveQuizImageURL trata como falha (não como "sem imagem").
+	fetchImage func(ctx context.Context, url string) (imageB64, mime string, err error)
+}
+
+// resolveQuizImageURL baixa a imagem quando o cliente mandou ImageURL em vez
+// de ImageBase64 — ANTES de qualquer outra validação/reserva de cota, mesmo
+// lugar (início de answerQuiz) onde validateQuizImage já rodava pro caminho
+// de base64: uma URL que falha em baixar nunca deveria chegar a reservar
+// cota de X-Quiz-Key. Devolve req inalterado quando não há ImageURL a
+// resolver (ImageBase64 já preenchido, ou nenhuma imagem na requisição).
+func resolveQuizImageURL(ctx context.Context, req quizRequest, deps quizDeps) (quizRequest, error) {
+	if req.ImageBase64 != "" || req.ImageURL == "" {
+		return req, nil
+	}
+	if deps.fetchImage == nil {
+		return req, errQuizImagemURLIndisponivel
+	}
+	b64, mime, err := deps.fetchImage(ctx, req.ImageURL)
+	if err != nil {
+		return req, err
+	}
+	req.ImageBase64 = b64
+	req.ImageMime = mime
+	return req, nil
 }
 
 func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizResponse, error) {
 	started := time.Now()
+
+	req, err := resolveQuizImageURL(ctx, req, deps)
+	if err != nil {
+		return quizResponse{}, err
+	}
 
 	temImagem := req.ImageBase64 != ""
 	if temImagem {

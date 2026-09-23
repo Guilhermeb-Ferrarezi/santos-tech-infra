@@ -37,6 +37,21 @@ func quizErr(err error) *AppError {
 		return appErr(http.StatusBadRequest, "INVALID_IMAGE", "Imagem inválida — base64 malformado")
 	case errors.Is(err, errQuizImagemGrandeDemais):
 		return appErr(http.StatusBadRequest, "INVALID_IMAGE", "Imagem inválida — tamanho acima do limite")
+	// Falhas ao baixar imageUrl: código próprio (IMAGE_FETCH_FAILED),
+	// diferente de INVALID_IMAGE (que é sobre imageBase64 já em mãos vindo
+	// mal formado) — aqui o problema é ANTES disso, no download em si. A
+	// causa "indisponível" agrupa toda falha de rede (IP bloqueado, DNS,
+	// timeout, status de erro, redirecionamentos demais) numa mensagem só
+	// de propósito — ver o comentário de errQuizImagemURLIndisponivel em
+	// quiz_image_fetch.go pro porquê (não virar oráculo de rede interna).
+	case errors.Is(err, errQuizImagemURLEsquemaInvalido):
+		return appErr(http.StatusBadRequest, "IMAGE_FETCH_FAILED", "URL da imagem inválida — use http ou https")
+	case errors.Is(err, errQuizImagemURLIndisponivel):
+		return appErr(http.StatusBadRequest, "IMAGE_FETCH_FAILED", "Não foi possível baixar a imagem indicada")
+	case errors.Is(err, errQuizImagemURLNaoImagem):
+		return appErr(http.StatusBadRequest, "IMAGE_FETCH_FAILED", "O conteúdo da URL não é uma imagem suportada (use png, jpeg, webp ou gif)")
+	case errors.Is(err, errQuizImagemURLGrandeDemais):
+		return appErr(http.StatusBadRequest, "IMAGE_FETCH_FAILED", "Imagem da URL maior que o limite (8MB)")
 	case errors.Is(err, errAPIRouterNoActiveKeys):
 		return appErr(http.StatusServiceUnavailable, "NO_ACTIVE_KEYS", "Provider sem chaves ativas")
 	default:
@@ -84,6 +99,7 @@ func (s *Server) handleQuizAnswer(w http.ResponseWriter, r *http.Request) {
 		minMargin:     s.cfg.QuizMinMargin,
 		minMultiAlt:   s.cfg.QuizMultiMin,
 		reserve:       s.quizReserveFunc(r.Context(), key),
+		fetchImage:    fetchQuizImageURL,
 	})
 	if err != nil {
 		// deps.reserve devolve um *AppError pronto (429 QUOTA_EXCEEDED) —

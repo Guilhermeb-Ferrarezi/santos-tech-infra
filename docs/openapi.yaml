@@ -2705,6 +2705,50 @@ paths:
         palpite do Jev pra degradar — a rota devolve erro (502/504) em vez de
         uma resposta cega.
 
+        **Com imagem por URL** (`imageUrl`): alternativa a `imageBase64` para
+        quando o bookmarklet não consegue ler os bytes da figura na própria
+        página (CORS/CSP do site da prova bloqueiam canvas/fetch dali). Só
+        usada quando `imageBase64` vem **vazio**; se os dois vierem
+        preenchidos, `imageBase64` prevalece. Quando usada, o servidor baixa
+        a URL e segue o mesmo fluxo de imagem descrito acima — o cliente não
+        percebe diferença na resposta.
+
+        Baixar uma URL fornecida pelo usuário abre superfície de SSRF
+        (Server-Side Request Forgery): sem defesa, a rota viraria um jeito de fazer
+        o servidor sondar rede interna, Postgres/Redis, ou o endpoint de
+        metadados de nuvem. As defesas, nesta ordem:
+        - Só esquema `http`/`https` — qualquer outro (`file://`, `gopher://`
+          etc.) é recusado sem tentar rede.
+        - O IP é validado **no momento da conexão**, não só antes de discar —
+          fecha o ataque de DNS rebinding (um resolvedor que devolvesse um IP
+          público na checagem e um IP privado no connect não teria como: não
+          existe uma segunda resolução entre os dois — o servidor resolve
+          uma vez, valida TODOS os IPs devolvidos, e conecta no IP já
+          validado). Rejeitado se o IP (ou QUALQUER IP, quando o host
+          resolve pra mais de um) for privado, loopback, link-local,
+          multicast, não especificado, CGNAT, ou de uma faixa de metadados
+          de nuvem conhecida (inclui `169.254.0.0/16`, `100.64.0.0/10`,
+          `10/8`, `172.16/12`, `192.168/16`, `127.0.0.0/8`, `0.0.0.0/8`,
+          `::1`, `fc00::/7`, `fe80::/10`).
+        - Redirecionamentos: no máximo 3, cada destino passa pela MESMA
+          validação de IP (mesmo mecanismo de conexão usado pra requisição
+          original).
+        - Timeout total curto (10s); corpo limitado ao mesmo teto de 8MB de
+          `imageBase64` (`io.LimitReader` — para de ler e rejeita antes de
+          materializar o excedente em memória).
+        - `Content-Type` da resposta precisa bater com a allowlist de
+          imagem; se vier ausente ou errado, tenta detectar pelos bytes
+          (`http.DetectContentType`) e rejeita se não for imagem suportada.
+        - Nenhum cookie/header da requisição original a `/quiz/answer` é
+          copiado pra requisição de download — o destino nunca recebe nada
+          da sessão de quem chamou a rota.
+
+        Qualquer falha no download — esquema inválido, IP bloqueado, timeout,
+        status de erro, conteúdo que não é imagem, ou tamanho acima do teto —
+        devolve `400 IMAGE_FETCH_FAILED` **antes** de reservar cota de
+        `X-Quiz-Key` (mesma regra de `imageBase64` inválido — ver a seção de
+        cota, abaixo).
+
         Exige sessão autenticada, qualquer papel (`authGuard`), **ou** o
         header `X-Quiz-Key` com uma chave de acesso (`qz_...`) — forma
         alternativa pensada para quem usa a extensão sem conta santos-tech.
@@ -2820,6 +2864,21 @@ paths:
                   type: string
                   description: "Mime da imagem em `imageBase64`. Obrigatório junto dela."
                   enum: [image/png, image/jpeg, image/webp, image/gif]
+                imageUrl:
+                  type: string
+                  format: uri
+                  description: >-
+                    Alternativa a `imageBase64` — endereço da figura, para
+                    quando o bookmarklet não consegue ler os bytes na própria
+                    página (CORS/CSP do site da prova). Só usada quando
+                    `imageBase64` vem vazio; o servidor baixa a URL e segue o
+                    mesmo fluxo de imagem — ver a descrição da rota pras
+                    defesas de SSRF aplicadas ao download (só http/https, IP
+                    validado no momento da conexão contra faixas privadas e
+                    de metadados de nuvem, redirects limitados e revalidados,
+                    teto de 8MB, Content-Type conferido). Falha no download
+                    devolve `400 IMAGE_FETCH_FAILED`.
+                  example: "https://prova.exemplo.com/figuras/questao-12.png"
       responses:
         "200":
           description: Resposta escolhida
@@ -2973,7 +3032,18 @@ paths:
                       options: {}
                     timings: { jevMs: 0, claudeMs: 2100, totalMs: 2110 }
         "400":
-          description: "JSON inválido, `raw`/`options`/`ask` todos vazios, `ask` só com espaço, ou `imageBase64`/`imageMime` inválidos (mime fora da allowlist, base64 malformado, ou tamanho decodificado acima de 8MB — mesmo código `INVALID_IMAGE` para as três causas, mensagem diferente pra cada)"
+          description: >-
+            JSON inválido, `raw`/`options`/`ask` todos vazios, `ask` só com
+            espaço, `imageBase64`/`imageMime` inválidos (mime fora da
+            allowlist, base64 malformado, ou tamanho decodificado acima de
+            8MB — mesmo código `INVALID_IMAGE` para as três causas, mensagem
+            diferente pra cada), ou falha ao baixar `imageUrl` (esquema não
+            http/https, destino bloqueado por resolver pra IP privado/de
+            metadados/reservado, timeout, redirecionamentos demais, status de
+            erro, conteúdo que não é imagem suportada, ou corpo acima de 8MB
+            — mesmo código `IMAGE_FETCH_FAILED` para essas causas de rede,
+            mensagem genérica de propósito pras que envolvem IP bloqueado —
+            ver a descrição da rota).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -2993,6 +3063,18 @@ paths:
                 imagemGrandeDemais:
                   summary: Imagem — tamanho acima do limite
                   value: { code: INVALID_IMAGE, message: "Imagem inválida — tamanho acima do limite" }
+                imageUrlEsquemaInvalido:
+                  summary: imageUrl — esquema não suportado
+                  value: { code: IMAGE_FETCH_FAILED, message: "URL da imagem inválida — use http ou https" }
+                imageUrlIndisponivel:
+                  summary: "imageUrl — download falhou (inclui IP bloqueado por SSRF, DNS, timeout, status de erro)"
+                  value: { code: IMAGE_FETCH_FAILED, message: "Não foi possível baixar a imagem indicada" }
+                imageUrlNaoImagem:
+                  summary: imageUrl — conteúdo baixado não é imagem suportada
+                  value: { code: IMAGE_FETCH_FAILED, message: "O conteúdo da URL não é uma imagem suportada (use png, jpeg, webp ou gif)" }
+                imageUrlGrandeDemais:
+                  summary: imageUrl — corpo baixado acima do limite
+                  value: { code: IMAGE_FETCH_FAILED, message: "Imagem da URL maior que o limite (8MB)" }
         "401":
           description: >-
             Sem sessão válida (`UNAUTHORIZED`) — cookie/Bearer ausente ou
