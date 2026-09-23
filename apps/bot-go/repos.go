@@ -1415,3 +1415,94 @@ func (r *QualificacaoRepo) MarcaAulaPorConversa(ctx context.Context, tenantID Te
 	}
 	return nil
 }
+
+// DossieDoTelefone monta o dossiê completo de uma pessoa a partir do banco.
+//
+// Junta as três fontes que hoje vivem separadas: o contato (nome), a
+// qualificação (o que ela contou) e as mensagens (o que foi dito). É o que
+// permite gerar o documento do cliente sem guardar um segundo arquivo em
+// paralelo — e portanto sem o risco de os dois divergirem.
+func (r *QualificacaoRepo) DossieDoTelefone(ctx context.Context, tenantID TenantID, telefone string) (DossieCliente, bool) {
+	var d DossieCliente
+	var contactID string
+	err := r.pool.QueryRow(ctx, `
+		SELECT ci.contact_id::text, ci.external_id, coalesce(c.display_name, '')
+		FROM channel_identity ci
+		JOIN contact c ON c.id = ci.contact_id
+		WHERE ci.tenant_id = $1 AND ci.external_id = $2
+		LIMIT 1
+	`, tenantID, telefone).Scan(&contactID, &d.Telefone, &d.Nome)
+	if err != nil {
+		return DossieCliente{}, false
+	}
+
+	d.Qualificacao, _ = r.Get(ctx, nil, tenantID, contactID)
+
+	// As mensagens dos dois lados, em ordem. UNION ALL porque entrada e saída
+	// moram em tabelas diferentes — decisão antiga do schema.
+	rows, err := r.pool.Query(ctx, `
+		SELECT quando, de_quem, texto FROM (
+		  SELECT m.created_at AS quando, 'cliente' AS de_quem,
+		         coalesce(m.content->>'Text', m.content->>'text', '') AS texto
+		  FROM inbound_message m
+		  JOIN conversation cv ON cv.id = m.conversation_id
+		  JOIN channel_identity ci ON ci.id = cv.channel_identity_id
+		  WHERE ci.contact_id = $1::uuid
+		  UNION ALL
+		  SELECT m.created_at, 'bot',
+		         coalesce(m.content->>'Text', m.content->>'text', '')
+		  FROM outbound_message m
+		  JOIN conversation cv ON cv.id = m.conversation_id
+		  JOIN channel_identity ci ON ci.id = cv.channel_identity_id
+		  WHERE ci.contact_id = $1::uuid AND m.status <> 'failed'
+		) t WHERE texto <> '' ORDER BY quando
+	`, contactID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var l LinhaDaConversa
+			if rows.Scan(&l.Quando, &l.DeQuem, &l.Texto) == nil {
+				d.Conversa = append(d.Conversa, l)
+			}
+		}
+	}
+	d.TotalMensagens = len(d.Conversa)
+	if d.TotalMensagens > 0 {
+		d.PrimeiroTexto = d.Conversa[0].Quando
+		d.UltimoTexto = d.Conversa[d.TotalMensagens-1].Quando
+	}
+
+	// A aula, quando existe, sai do livro-razão dos lembretes.
+	_ = r.pool.QueryRow(ctx, `
+		SELECT aula_em, aluno FROM booking_reminder
+		WHERE tenant_id = $1 AND client_phone = $2 AND status <> 'cancelado'
+		ORDER BY aula_em DESC LIMIT 1
+	`, tenantID, telefone).Scan(&d.AulaEm, &d.AulaTitulo)
+
+	return d, true
+}
+
+// TelefonesComDossie lista quem tem ficha, do mexido mais recentemente para o
+// mais antigo. Usado para espelhar tudo no Drive.
+func (r *QualificacaoRepo) TelefonesComDossie(ctx context.Context, tenantID TenantID, limite int) []string {
+	rows, err := r.pool.Query(ctx, `
+		SELECT DISTINCT ON (ci.external_id) ci.external_id
+		FROM lead_qualificacao q
+		JOIN channel_identity ci ON ci.contact_id = q.contact_id
+		WHERE q.tenant_id = $1
+		ORDER BY ci.external_id, q.atualizado_em DESC
+		LIMIT $2
+	`, tenantID, limite)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var t string
+		if rows.Scan(&t) == nil {
+			out = append(out, t)
+		}
+	}
+	return out
+}
