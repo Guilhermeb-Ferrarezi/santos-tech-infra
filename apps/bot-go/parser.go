@@ -311,6 +311,9 @@ func parseQualificacao(raw json.RawMessage) *Qualificacao {
 		// PrecoInformado é o único sinal que o modelo pode acender: só ele sabe
 		// se acabou de dizer um valor. Os outros o código deduz de fatos.
 		PrecoInformado bool `json:"precoInformado"`
+		// ClientePediuPreco — observação sobre ESTE turno. O código conta as
+		// vezes; o modelo não controla contador nenhum.
+		ClientePediuPreco bool `json:"clientePediuPreco"`
 	}
 	if err := json.Unmarshal(raw, &q); err != nil {
 		return nil
@@ -327,7 +330,10 @@ func parseQualificacao(raw json.RawMessage) *Qualificacao {
 		Observacoes:     strings.TrimSpace(q.Observacoes),
 		PrecoInformado:  q.PrecoInformado,
 	}
-	if out.Vazia() && !out.PrecoInformado {
+	if q.ClientePediuPreco {
+		out.PedidosDePreco = 1
+	}
+	if out.Vazia() && !out.PrecoInformado && out.PedidosDePreco == 0 {
 		return nil
 	}
 	return &out

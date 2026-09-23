@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS lead_qualificacao (
   aula_marcada          boolean NOT NULL DEFAULT false,
   perguntas_respondidas int     NOT NULL DEFAULT 0,
 
+  -- TURNOS, não campos: quem despeja cinco fatos numa frase conversou UMA vez.
+  -- É a diferença entre o lead que troca ideia e o que só quer o número.
+  turnos_respondendo    int     NOT NULL DEFAULT 0,
+  -- A válvula de escape precisa de memória: "na segunda vez, informe o valor"
+  -- não existe se ninguém contar as vezes.
+  pedidos_de_preco      int     NOT NULL DEFAULT 0,
+
   criado_em     timestamptz NOT NULL DEFAULT now(),
   atualizado_em timestamptz NOT NULL DEFAULT now(),
 

@@ -181,17 +181,18 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	handleStart := time.Now()
 
 	var (
-		conv          Conversation
-		cfg           TenantConfig
-		output        ResponderOutput
-		inboundText   string
-		mediaFallback bool
-		contactPhone  = inbound.ExternalID
-		contactName   string
-		contactID     ContactID // sai da transação para o dossiê ser gravado depois
-		convCtx       ConversationContext
-		llmReady      bool
-		held          bool // mensagem retida (quiet hours) — não marcar webhook done
+		conv            Conversation
+		cfg             TenantConfig
+		output          ResponderOutput
+		inboundText     string
+		mediaFallback   bool
+		contactPhone    = inbound.ExternalID
+		contactName     string
+		contactID       ContactID // sai da transação para o dossiê ser gravado depois
+		dossieConfiavel = true    // leitura do dossiê deu certo? sem isto, não grava
+		convCtx         ConversationContext
+		llmReady        bool
+		held            bool // mensagem retida (quiet hours) — não marcar webhook done
 	)
 
 	err := e.withTenant(ctx, func(tx pgx.Tx) error {
@@ -322,7 +323,14 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		// pela terceira vez — e é o que dá o "como foi a aula do Caio?" quando a
 		// família volta semanas depois, numa conversa nova.
 		if e.deps.Qualificacoes != nil && !cfg.IsAdminConversation {
-			convCtx.Qualificacao = e.deps.Qualificacoes.Get(ctx, inbound.TenantID, contact.ID)
+			convCtx.Qualificacao, dossieConfiavel = e.deps.Qualificacoes.Get(ctx, tx, inbound.TenantID, contact.ID)
+			if !dossieConfiavel {
+				// Não dá para gravar por cima do que não se conseguiu ler: o Save
+				// viria em cima de um dossiê vazio. Melhor um turno sem memória
+				// que um dossiê apagado.
+				e.deps.Logger.Error("qualificacao: não consegui ler o dossiê; não vou gravar neste turno",
+					"contato", contact.ID)
+			}
 		}
 
 		// k) Quiet hours — verifica se deve suspender o processamento
@@ -776,7 +784,8 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	// Dossiê da pessoa — grava o que se descobriu ANTES de tentar agendar, para
 	// que uma falha no Notion não leve junto o que o cliente contou. O que ele
 	// disse sobre si é dele; a aula é outro assunto.
-	if err == nil && !cfg.IsAdminConversation && e.deps.Qualificacoes != nil && output.Qualificacao != nil {
+	if err == nil && !cfg.IsAdminConversation && e.deps.Qualificacoes != nil &&
+		output.Qualificacao != nil && dossieConfiavel {
 		atual := convCtx.Qualificacao.Merge(*output.Qualificacao)
 		if saveErr := e.deps.Qualificacoes.Save(ctx, inbound.TenantID, contactID, atual); saveErr != nil {
 			e.deps.Logger.Error("qualificacao: falha ao gravar o dossiê", "err", saveErr, "contato", contactID)
@@ -1143,10 +1152,14 @@ func (e *ConversationEngine) avisaAdminsDoAgendamento(ctx context.Context, conv 
 	// aviso, a classificação existe no banco e não muda nada na prática.
 	grau := ""
 	if e.deps.Qualificacoes != nil {
-		q := e.deps.Qualificacoes.Get(ctx, inbound.TenantID, conv.ContactID)
-		grau = "\nLead: " + q.Grau().Legivel()
-		if q.Motivacao != "" {
-			grau += "\nMotivo: " + q.Motivacao
+		if q, ok := e.deps.Qualificacoes.Get(ctx, nil, inbound.TenantID, conv.ContactID); ok {
+			grau = "\nLead: " + q.Grau().Legivel()
+			if q.Motivacao != "" {
+				// Texto do CLIENTE indo para uma mensagem de WhatsApp da
+				// escola. Sem limpar, ele escreve quebras de linha e forja
+				// linhas do aviso ("Lead: muito qualificado").
+				grau += "\nMotivo: " + limpaTextoDoCliente(q.Motivacao, 160)
+			}
 		}
 	}
 	msg := fmt.Sprintf("✅ Aula experimental MARCADA pelo bot: %s%s — %s. Cliente: %s%s",
@@ -1401,6 +1414,15 @@ func (e *ConversationEngine) executeBookingActions(ctx context.Context, inbound 
 					errStr = notionErr.Error()
 				}
 				e.logAction(inbound.TenantID, pb.ConversationID, pb.ClientPhone, bookingAluno(*pb), desc, errStr)
+			}
+			// A aula confirmada à mão conta igual no dossiê. Sem isto, o lead
+			// que a coordenação confirmou pessoalmente — costuma ser o mais
+			// quente de todos — aparecia na lista como morno, porque só o
+			// caminho automático acendia o sinal.
+			if e.deps.Qualificacoes != nil {
+				if err := e.deps.Qualificacoes.MarcaAulaPorConversa(ctx, inbound.TenantID, pb.ConversationID); err != nil {
+					e.deps.Logger.Error("qualificacao: aula confirmada pelo admin não entrou no dossiê", "err", err)
+				}
 			}
 			// Marca confirmado e avisa o cliente.
 			if err := e.withTenant(ctx, func(tx pgx.Tx) error {
