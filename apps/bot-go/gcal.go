@@ -27,6 +27,16 @@ import (
 
 const gcalScope = "https://www.googleapis.com/auth/calendar.events"
 
+// driveScope — escrever os dossiês dos clientes no Drive.
+//
+// drive.file, não drive: dá acesso SÓ aos arquivos que o próprio bot criar.
+// Ele não enxerga nem toca em mais nada do Drive de quem autorizou — nem
+// planilha da escola, nem foto de família. Menor privilégio que resolve.
+//
+// Por isso o bot CRIA a própria pasta em vez de escrever numa existente: com
+// este escopo ele só pode mexer no que é dele.
+const driveScope = "https://www.googleapis.com/auth/drive.file"
+
 // GCalClient fala com a API do Google Agenda em nome de cada conta autorizada.
 type GCalClient struct {
 	clientID     string
@@ -77,7 +87,7 @@ func (g *GCalClient) URLDeAutorizacao(state string) string {
 	q.Set("client_id", g.clientID)
 	q.Set("redirect_uri", g.redirectURL)
 	q.Set("response_type", "code")
-	q.Set("scope", gcalScope+" https://www.googleapis.com/auth/userinfo.email")
+	q.Set("scope", gcalScope+" "+driveScope+" https://www.googleapis.com/auth/userinfo.email")
 	q.Set("access_type", "offline")
 	q.Set("prompt", "consent")
 	q.Set("include_granted_scopes", "true")
