@@ -434,3 +434,79 @@ func TestParseFallbackAnswerRotuloInventadoNaoPassa(t *testing.T) {
 		t.Errorf("erro não cita o valor recebido: %v", err)
 	}
 }
+
+// ── modo pergunta livre (Alt+Q, T) ─────────────────────────────────────────
+
+func TestBuildAskPromptMencionaContextoEPergunta(t *testing.T) {
+	got := buildAskPrompt("A fotossíntese ocorre nos cloroplastos.", "o que é fotossíntese?", false)
+	if !strings.Contains(got, "A fotossíntese ocorre nos cloroplastos.") {
+		t.Error("prompt sem o contexto selecionado")
+	}
+	if !strings.Contains(got, "o que é fotossíntese?") {
+		t.Error("prompt sem a pergunta do usuário")
+	}
+	if !strings.Contains(got, "JSON") {
+		t.Error("prompt não pede JSON — o parse depende disso")
+	}
+	if strings.Contains(strings.ToLower(got), "1 a 3 frases") {
+		t.Error("prompt do modo pergunta livre não deveria limitar a resposta a poucas frases (é o oposto do modo aberto)")
+	}
+}
+
+func TestBuildAskPromptSemContextoNaoMencionaAssuntoSelecionado(t *testing.T) {
+	got := buildAskPrompt("", "o que é fotossíntese?", false)
+	if strings.Contains(got, "Assunto selecionado:") {
+		t.Errorf("prompt sem contexto não deveria imprimir a seção de assunto selecionado:\n%s", got)
+	}
+}
+
+func TestBuildAskPromptComImagemMencionaAFigura(t *testing.T) {
+	got := buildAskPrompt("", "o que a imagem mostra?", true)
+	if !strings.Contains(strings.ToLower(got), "imagem") {
+		t.Errorf("prompt com imagem não menciona a figura anexada:\n%s", got)
+	}
+}
+
+func TestParseAskAnswerJSONSimples(t *testing.T) {
+	texto := `{"answer":"É o processo de conversão de luz em energia química.","reasoning":"definição direta"}`
+	got, err := parseAskAnswer(texto)
+	if err != nil {
+		t.Fatalf("parseAskAnswer: %v", err)
+	}
+	if got.Answer != "É o processo de conversão de luz em energia química." || got.Reasoning == "" {
+		t.Errorf("resposta = %+v", got)
+	}
+}
+
+func TestParseAskAnswerSemJSONUsaTextoCru(t *testing.T) {
+	texto := "É o processo pelo qual as plantas convertem luz em energia."
+	got, err := parseAskAnswer(texto)
+	if err != nil {
+		t.Fatalf("parseAskAnswer: %v", err)
+	}
+	if got.Answer != texto {
+		t.Errorf("answer = %q, queria o texto cru como resposta", got.Answer)
+	}
+}
+
+func TestParseAskAnswerTextoVazioErro(t *testing.T) {
+	if _, err := parseAskAnswer(""); err == nil {
+		t.Error("queria erro para texto vazio")
+	}
+}
+
+func TestParseAskAnswerTruncaRespostaLonga(t *testing.T) {
+	longo := strings.Repeat("a", quizAskAnswerMaxChars+50)
+	texto := `{"answer":"` + longo + `","reasoning":"x"}`
+	got, err := parseAskAnswer(texto)
+	if err != nil {
+		t.Fatalf("parseAskAnswer: %v", err)
+	}
+	r := []rune(got.Answer)
+	if len(r) != quizAskAnswerMaxChars+1 { // +1 pra reticências
+		t.Errorf("len(answer) = %d, queria %d (%d chars + reticências)", len(r), quizAskAnswerMaxChars+1, quizAskAnswerMaxChars)
+	}
+	if !strings.HasSuffix(got.Answer, "…") {
+		t.Errorf("resposta truncada sem reticências: %q", got.Answer)
+	}
+}

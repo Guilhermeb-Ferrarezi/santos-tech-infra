@@ -24,6 +24,8 @@ func quizErr(err error) *AppError {
 	case errors.Is(err, errQuizTextoInsuficiente):
 		return appErr(http.StatusUnprocessableEntity, "TEXTO_INSUFICIENTE",
 			"Texto insuficiente para responder — selecione o enunciado completo da questão")
+	case errors.Is(err, errQuizAskVazia):
+		return appErr(http.StatusBadRequest, "EMPTY_QUESTION", "Escreva uma pergunta")
 	case errors.Is(err, errQuizTimeout):
 		return appErr(http.StatusGatewayTimeout, "UPSTREAM_TIMEOUT", "Tempo esgotado ao consultar os modelos")
 	// Mesmo código HTTP (400 INVALID_IMAGE) pras três causas — o que muda é
@@ -61,8 +63,8 @@ func (s *Server) handleQuizAnswer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "corpo inválido"))
 		return
 	}
-	if body.Raw == "" && len(body.Options) == 0 {
-		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "informe `raw` ou `options`"))
+	if body.Raw == "" && len(body.Options) == 0 && body.Ask == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "informe `raw`, `options` ou `ask`"))
 		return
 	}
 

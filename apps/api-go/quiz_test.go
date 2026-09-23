@@ -770,3 +770,107 @@ func TestAnswerQuizImagemAcimaDoLimiteNaoChamaUpstream(t *testing.T) {
 		t.Errorf("chamadas = %v, queria nenhuma (imagem grande demais não deve gastar upstream)", chamadas)
 	}
 }
+
+// ── modo pergunta livre (Alt+Q, T) ─────────────────────────────────────────
+
+const fbAskOK = `{"answer":"É o processo pelo qual as plantas convertem luz em energia química.","reasoning":"definição direta"}`
+
+func reqExemploAsk() quizRequest {
+	return quizRequest{Raw: "A fotossíntese ocorre nos cloroplastos.", Ask: "o que é fotossíntese?"}
+}
+
+func TestAnswerQuizAskNaoChamaJevEDevolveModoAberto(t *testing.T) {
+	var chamadas []string
+	got, err := answerQuiz(context.Background(), reqExemploAsk(), depsFake(jevConfiante, nil, fbAskOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindAberta {
+		t.Errorf("kind = %q, queria %q", got.Kind, quizKindAberta)
+	}
+	if got.Source != quizSourceClaude || !got.Escalated {
+		t.Errorf("source=%q escalated=%v", got.Source, got.Escalated)
+	}
+	if got.Answer != "" {
+		t.Errorf("answer = %q, queria vazio no modo pergunta livre (não há rótulo)", got.Answer)
+	}
+	if got.AnswerText == "" {
+		t.Error("answerText vazio no modo pergunta livre")
+	}
+	for _, c := range chamadas {
+		if c == "jev" {
+			t.Errorf("chamadas = %v, o jev não deveria ser chamado no modo pergunta livre", chamadas)
+		}
+	}
+	if len(chamadas) != 1 || chamadas[0] != "fallback" {
+		t.Errorf("chamadas = %v, queria só o fallback", chamadas)
+	}
+}
+
+func TestAnswerQuizAskSemContextoAindaFunciona(t *testing.T) {
+	// Ask não exige raw: o usuário pode perguntar sem ter selecionado nada.
+	var chamadas []string
+	req := quizRequest{Ask: "o que é fotossíntese?"}
+	got, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbAskOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindAberta || got.AnswerText == "" {
+		t.Errorf("resposta = %+v", got)
+	}
+}
+
+func TestAnswerQuizAskVazioNaoChamaUpstream(t *testing.T) {
+	var chamadas []string
+	req := quizRequest{Raw: "algum contexto", Ask: "   "}
+	_, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbAskOK, nil, &chamadas))
+	if !errors.Is(err, errQuizAskVazia) {
+		t.Errorf("err = %v, queria errQuizAskVazia", err)
+	}
+	if len(chamadas) != 0 {
+		t.Errorf("chamadas = %v, queria nenhuma (pergunta vazia não deve gastar upstream)", chamadas)
+	}
+}
+
+func TestAnswerQuizAskContextoLongoDemaisNaoChamaUpstream(t *testing.T) {
+	var chamadas []string
+	req := quizRequest{Raw: strings.Repeat("a bcd ", quizOpenMaxChars), Ask: "resuma isso"}
+	_, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbAskOK, nil, &chamadas))
+	if !errors.Is(err, errQuizTextoInsuficiente) {
+		t.Errorf("err = %v, queria errQuizTextoInsuficiente", err)
+	}
+	if len(chamadas) != 0 {
+		t.Errorf("chamadas = %v, queria nenhuma (contexto longo demais não deve gastar upstream)", chamadas)
+	}
+}
+
+func TestAnswerQuizAskFallbackFalhaDevolveErro(t *testing.T) {
+	var chamadas []string
+	_, err := answerQuiz(context.Background(), reqExemploAsk(), depsFake(jevConfiante, nil, "", errors.New("502"), &chamadas))
+	if !errors.Is(err, errQuizUpstream) {
+		t.Errorf("err = %v, queria errQuizUpstream", err)
+	}
+}
+
+func TestAnswerQuizAskPrevaleceSobreOptions(t *testing.T) {
+	// Ask presente pula o parsing de alternativas inteiramente, mesmo que
+	// `options` também venha preenchido — o modo pergunta livre não decide
+	// por rótulo nenhum.
+	var chamadas []string
+	req := quizRequest{
+		Ask:     "explique a diferença entre as duas",
+		Options: map[string]string{"A": "primeira", "B": "segunda"},
+	}
+	got, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbAskOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindAberta {
+		t.Errorf("kind = %q, queria %q (options não deveria ser considerado quando ask está presente)", got.Kind, quizKindAberta)
+	}
+	for _, c := range chamadas {
+		if c == "jev" {
+			t.Errorf("chamadas = %v, o jev não deveria ser chamado", chamadas)
+		}
+	}
+}

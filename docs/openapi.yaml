@@ -109,9 +109,12 @@ tags:
       quando fica inseguro, escala para o Claude Code em container
       (agent-go). Quando a questão depende de uma figura (gráfico, cupom,
       tabela, figura geométrica), a extensão manda `imageBase64` e a rota
-      pula direto para o Claude com visão, sem passar pelo Jev. Exige apenas
-      sessão válida (qualquer papel) — rota estreita de propósito, não
-      alcança o roteador de chaves de API como admin
+      pula direto para o Claude com visão, sem passar pelo Jev. Também
+      atende o modo pergunta livre (`ask`) — atalho separado da extensão
+      (Alt+Q, T) pra perguntar algo sobre o texto selecionado, fora do fluxo
+      de questão de prova, sem limite de tamanho de resposta como o modo
+      aberto. Exige apenas sessão válida (qualquer papel) — rota estreita de
+      propósito, não alcança o roteador de chaves de API como admin
       (`/auth/admin/api-router/.../proxy`).
 
 paths:
@@ -2672,6 +2675,20 @@ paths:
         (menos de ~15 caracteres não-espaço) continua erro — ver `422`
         abaixo — pra não gastar uma chamada ao Claude à toa.
 
+        **Modo pergunta livre** (`ask`) — atalho separado da extensão
+        (Alt+Q, T): o usuário seleciona um trecho qualquer (`raw`, opcional
+        e tratado como CONTEXTO, não como enunciado) e digita uma pergunta
+        livre sobre ele em `ask`. Quando `ask` vem preenchido, a rota **pula
+        Jev e o parsing de alternativas inteiramente** — mesmo que `options`
+        também venha no corpo — e manda a pergunta + contexto direto ao
+        Claude. A resposta usa `kind: "aberta"` (mesmo contrato do modo
+        aberto: `answer` vazio, `answerText` com a resposta), mas SEM o
+        limite de 1-3 frases do modo aberto — a resposta pode (e deve)
+        escrever o quanto for necessário pra explicar bem, truncada em 2000
+        caracteres em vez de 600. `ask` vazio ou só espaço devolve `400
+        EMPTY_QUESTION`; `raw` acima de ~4000 caracteres devolve `422
+        TEXTO_INSUFICIENTE` (mesmo teto do modo aberto).
+
         **Com imagem** (`imageBase64`): parte das questões reais depende de
         uma figura (gráfico, cupom, tabela, figura geométrica) que o texto
         sozinho não carrega. Quando `imageBase64` vem preenchido, a rota
@@ -2760,6 +2777,16 @@ paths:
                 explain:
                   type: boolean
                   description: "Força o escalonamento para o Claude e pede justificativa (`reasoning` na resposta), mesmo se o Jev respondesse com confiança alta."
+                ask:
+                  type: string
+                  description: >-
+                    Pergunta livre sobre o texto selecionado — atalho
+                    "perguntar" da extensão (Alt+Q, T), separado do fluxo de
+                    questão de prova. Quando presente, pula Jev e o parsing
+                    de alternativas (mesmo com `options` preenchido) e vai
+                    direto pro modo pergunta livre — ver a descrição da
+                    rota. Nesse modo `raw` é opcional e vira só o contexto
+                    da pergunta, não o enunciado a responder.
                 imageBase64:
                   type: string
                   format: byte
@@ -2910,15 +2937,33 @@ paths:
                       question: "Um cartaz instrucional é um material de função normativa porque tem como finalidade ___ o público sobre os ___ ou as ___ que devem ser seguidos"
                       options: {}
                     timings: { jevMs: 0, claudeMs: 3200, totalMs: 3210 }
+                perguntaLivre:
+                  summary: Modo pergunta livre (ask — atalho Alt+Q, T)
+                  value:
+                    kind: aberta
+                    answer: ""
+                    answerText: "A fotossíntese é o processo pelo qual plantas, algas e algumas bactérias convertem luz em energia química, usando gás carbônico e água para produzir glicose e oxigênio."
+                    confidence: 0
+                    source: claude
+                    escalated: true
+                    degraded: false
+                    reasoning: "definição direta, sem entrar em detalhes bioquímicos"
+                    parsed:
+                      question: "o que é fotossíntese?"
+                      options: {}
+                    timings: { jevMs: 0, claudeMs: 2100, totalMs: 2110 }
         "400":
-          description: "JSON inválido, `raw` e `options` ambos vazios, ou `imageBase64`/`imageMime` inválidos (mime fora da allowlist, base64 malformado, ou tamanho decodificado acima de 8MB — mesmo código `INVALID_IMAGE` para as três causas, mensagem diferente pra cada)"
+          description: "JSON inválido, `raw`/`options`/`ask` todos vazios, `ask` só com espaço, ou `imageBase64`/`imageMime` inválidos (mime fora da allowlist, base64 malformado, ou tamanho decodificado acima de 8MB — mesmo código `INVALID_IMAGE` para as três causas, mensagem diferente pra cada)"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
               examples:
                 corpoInvalido:
                   summary: Corpo inválido
-                  value: { code: INVALID_BODY, message: "informe `raw` ou `options`" }
+                  value: { code: INVALID_BODY, message: "informe `raw`, `options` ou `ask`" }
+                perguntaVazia:
+                  summary: Modo pergunta livre — ask vazio
+                  value: { code: EMPTY_QUESTION, message: "Escreva uma pergunta" }
                 imagemMimeInvalido:
                   summary: Imagem — mime não suportado
                   value: { code: INVALID_IMAGE, message: "Imagem inválida — mime não suportado (use png, jpeg, webp ou gif)" }

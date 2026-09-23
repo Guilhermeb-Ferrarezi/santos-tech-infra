@@ -119,6 +119,11 @@ var (
 	// errQuizUnparseable): a causa aqui é tamanho de texto, não ausência de
 	// rótulos — misturar as duas confundiria quem depura pelo código do erro.
 	errQuizTextoInsuficiente = errors.New("quiz: texto insuficiente para responder no modo aberto")
+
+	// errQuizAskVazia: guarda do modo pergunta livre — `ask` em branco não
+	// vale gastar uma chamada ao Claude (o `raw` sozinho, sem pergunta, não
+	// diz o que responder).
+	errQuizAskVazia = errors.New("quiz: pergunta vazia")
 )
 
 // quizImagemMimesAceitos espelha imageExtFromMime de
@@ -136,6 +141,15 @@ type quizRequest struct {
 	Question string            `json:"question"`
 	Options  map[string]string `json:"options"`
 	Explain  bool              `json:"explain"`
+	// Ask: pergunta livre do usuário sobre o texto selecionado (`raw`), fora
+	// do fluxo de questão de prova — o atalho "perguntar" da extensão
+	// (Alt+Q, T). Presente → answerQuiz pula Jev e o parsing de
+	// alternativas inteiramente e vai direto pro modo pergunta livre
+	// (answerQuizAsk), que trata `raw` como CONTEXTO, não como enunciado a
+	// responder. Não confundir com `Question`: aquele é o enunciado já
+	// separado pelo cliente (usado junto de `Options`), continua parte da
+	// questão em si.
+	Ask string `json:"ask"`
 	// Imagem opcional: a extensão manda a figura (gráfico, cupom, tabela,
 	// figura geométrica) que a questão referencia, quando o enunciado
 	// sozinho não basta pra responder. Presente → pula direto pro fallback
@@ -262,6 +276,14 @@ func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizRespon
 	}
 	ctx, cancel := context.WithTimeout(ctx, totalBudget)
 	defer cancel()
+
+	if req.Ask != "" {
+		// Modo pergunta livre: nem tenta separar alternativas — `raw` aqui é
+		// só o contexto da pergunta, pode nem ter o formato de questão
+		// nenhum (ex.: um parágrafo qualquer que o usuário quis entender
+		// melhor).
+		return answerQuizAsk(ctx, req, deps, started, temImagem)
+	}
 
 	parsed, err := resolveQuizParsed(req)
 	if err != nil {
@@ -496,6 +518,85 @@ func answerQuizAberto(ctx context.Context, req quizRequest, deps quizDeps, start
 	resp.Reasoning = ans.Reasoning
 	resp.Timings.TotalMs = time.Since(started).Milliseconds()
 	return resp, nil
+}
+
+// ── modo pergunta livre ─────────────────────────────────────────────────
+//
+// Atalho "perguntar" da extensão (Alt+Q, T): o usuário seleciona um trecho
+// qualquer (não precisa ser uma questão de prova) e digita uma pergunta
+// sobre ele. answerQuizAsk nunca chama o Jev — ele só sabe escolher entre
+// alternativas, e aqui não há alternativa nenhuma, só um texto de contexto
+// e uma pergunta. Devolve sempre kind "aberta" (mesmo contrato do modo
+// aberto): não existe rótulo, a resposta inteira mora em AnswerText.
+
+func answerQuizAsk(ctx context.Context, req quizRequest, deps quizDeps, started time.Time, temImagem bool) (quizResponse, error) {
+	pergunta := strings.TrimSpace(req.Ask)
+	if pergunta == "" {
+		return quizResponse{}, errQuizAskVazia
+	}
+	// Contexto (o `raw` selecionado) segue o mesmo teto do modo aberto — é a
+	// mesma preocupação (seleção que pegou a página inteira em vez do
+	// trecho pretendido), só que aqui o texto é contexto, não a pergunta em
+	// si, então valida separado da pergunta.
+	contexto := strings.TrimSpace(req.Raw)
+	if len([]rune(contexto)) > quizOpenMaxChars {
+		return quizResponse{}, errQuizTextoInsuficiente
+	}
+
+	// Mesma regra dos outros caminhos (ver answerQuiz/answerQuizAberto):
+	// entrada já validada, cota reservada ANTES de chamar o modelo.
+	if deps.reserve != nil {
+		if err := deps.reserve(); err != nil {
+			return quizResponse{}, err
+		}
+	}
+
+	resp := quizResponse{
+		Kind:   quizKindAberta,
+		Parsed: quizParsed{Question: pergunta, Options: map[string]string{}},
+	}
+
+	var imageB64, imageMime string
+	if temImagem {
+		imageB64, imageMime = req.ImageBase64, req.ImageMime
+	}
+
+	ans, claudeMs, fbErr := askAskFallback(ctx, contexto, pergunta, imageB64, imageMime, deps)
+	resp.Timings.ClaudeMs = claudeMs
+	if fbErr != nil {
+		// Sem Jev nesse caminho, não há palpite nenhum pra degradar — mesmo
+		// raciocínio do modo aberto e do caminho com imagem.
+		if ctx.Err() != nil {
+			return quizResponse{}, errQuizTimeout
+		}
+		return quizResponse{}, errQuizUpstream
+	}
+	resp.Source = quizSourceClaude
+	resp.Escalated = true
+	// Answer fica vazio de propósito: não existe rótulo no modo pergunta
+	// livre — a resposta inteira mora em AnswerText.
+	resp.AnswerText = ans.Answer
+	resp.Reasoning = ans.Reasoning
+	resp.Timings.TotalMs = time.Since(started).Milliseconds()
+	return resp, nil
+}
+
+func askAskFallback(ctx context.Context, contexto, pergunta, imageB64, imageMime string, deps quizDeps) (quizAskAnswer, int64, error) {
+	temImagem := imageB64 != ""
+	budget := quizFallbackBudget
+	if temImagem {
+		budget = quizVisionBudget
+	}
+	fbCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	started := time.Now()
+	resposta, err := deps.fallback(fbCtx, buildAskPrompt(contexto, pergunta, temImagem), imageB64, imageMime)
+	elapsed := time.Since(started).Milliseconds()
+	if err != nil {
+		return quizAskAnswer{}, elapsed, err
+	}
+	ans, err := parseAskAnswer(resposta)
+	return ans, elapsed, err
 }
 
 // ── modo múltipla resposta ("marque todas que se aplicam") ────────────────

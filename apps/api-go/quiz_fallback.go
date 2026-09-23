@@ -389,3 +389,79 @@ func parseOpenAnswer(texto string) (quizOpenAnswer, error) {
 	// cru da resposta ainda serve.
 	return quizOpenAnswer{Answer: truncateQuizOpenAnswer(limpo)}, nil
 }
+
+// ── modo pergunta livre ──────────────────────────────────────────────────
+//
+// Atalho "perguntar" da extensão (Alt+Q, T): diferente do modo aberto
+// (buildOpenPrompt), aqui não há questão nenhuma pra responder — só um
+// texto de contexto (o que o usuário selecionou) e uma pergunta livre dele
+// sobre esse texto. buildAskPrompt e parseAskAnswer são irmãs de
+// buildOpenPrompt/parseOpenAnswer, mas sem o teto de "1 a 3 frases": o
+// próprio atalho existe pra deixar a resposta escrever mais quando o
+// assunto pedir.
+
+type quizAskAnswer struct {
+	Answer    string `json:"answer"`
+	Reasoning string `json:"reasoning"`
+}
+
+// quizAskAnswerMaxChars: maior que quizOpenAnswerMaxChars de propósito — o
+// modo aberto pede resposta curta (1-3 frases), o modo pergunta livre pede
+// o oposto ("escrever mais"). Ainda assim tem teto: sem ele, uma resposta
+// arbitrariamente longa estouraria o card da extensão.
+const quizAskAnswerMaxChars = 2000
+
+func truncateQuizAskAnswer(s string) string {
+	r := []rune(s)
+	if len(r) <= quizAskAnswerMaxChars {
+		return s
+	}
+	return string(r[:quizAskAnswerMaxChars]) + "…"
+}
+
+// buildAskPrompt monta o prompt do modo pergunta livre. contexto é o texto
+// selecionado (pode vir vazio — nem toda pergunta precisa de um trecho de
+// apoio); pergunta é o que o usuário digitou. temImagem segue o mesmo
+// significado de buildFallbackPrompt.
+func buildAskPrompt(contexto, pergunta string, temImagem bool) string {
+	var b strings.Builder
+	b.WriteString("O texto abaixo foi selecionado numa página pelo usuário como o ASSUNTO da pergunta ")
+	b.WriteString("dele. Responda à pergunta sobre esse assunto de forma clara e completa, em português ")
+	b.WriteString("do Brasil — ao contrário de um resumo de 1-3 frases, pode (e deve) escrever o quanto ")
+	b.WriteString("for necessário pra explicar bem.\n\n")
+	if temImagem {
+		b.WriteString("Há uma imagem anexada a esta mensagem — considere-a ao responder.\n\n")
+	}
+	if contexto != "" {
+		b.WriteString("Assunto selecionado:\n")
+		b.WriteString(contexto)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Pergunta do usuário:\n")
+	b.WriteString(pergunta)
+	b.WriteString("\n\n")
+	b.WriteString("Responda SOMENTE com um objeto JSON estrito, sem nada fora dele: ")
+	b.WriteString(`{"answer": "<a resposta>", "reasoning": "<opcional, uma frase curta de contexto extra>"}`)
+	b.WriteString(".")
+	return b.String()
+}
+
+// parseAskAnswer extrai a resposta do modo pergunta livre. Mesma
+// tolerância de parseOpenAnswer: sem JSON utilizável, o texto cru ainda
+// serve como resposta em vez de virar erro.
+func parseAskAnswer(texto string) (quizAskAnswer, error) {
+	limpo := strings.TrimSpace(texto)
+	if limpo == "" {
+		return quizAskAnswer{}, fmt.Errorf("quiz: fallback não devolveu texto")
+	}
+	if match := primeiroObjetoJSON(texto); match != "" {
+		var ans quizAskAnswer
+		if err := json.Unmarshal([]byte(match), &ans); err == nil {
+			if resposta := strings.TrimSpace(ans.Answer); resposta != "" {
+				ans.Answer = truncateQuizAskAnswer(resposta)
+				return ans, nil
+			}
+		}
+	}
+	return quizAskAnswer{Answer: truncateQuizAskAnswer(limpo)}, nil
+}
