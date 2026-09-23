@@ -12,7 +12,7 @@ import (
 // de uma hora — e a integração morre sozinha, sem erro visível.
 func TestURLDeAutorizacaoPedeRefreshToken(t *testing.T) {
 	g := NewGCalClient("id", "segredo", "https://exemplo/cb", nil)
-	u, err := url.Parse(g.URLDeAutorizacao("abc123"))
+	u, err := url.Parse(g.URLDeAutorizacao("abc123", UsoAgenda))
 	if err != nil {
 		t.Fatalf("URL inválida: %v", err)
 	}
@@ -58,21 +58,35 @@ func TestEnabledExigeAsTresCoisas(t *testing.T) {
 // O state é de uso único: um link de autorização não pode valer duas vezes.
 func TestStateDeUsoUnico(t *testing.T) {
 	e := &estadosPendentes{itens: map[string]time.Time{}}
-	s := e.novo()
-	if !e.consome(s) {
+	s := e.novo(UsoAgenda)
+	uso, ok := e.consome(s)
+	if !ok {
 		t.Fatal("o state recém-criado deveria valer")
 	}
-	if e.consome(s) {
+	if uso != UsoAgenda {
+		t.Errorf("o propósito não sobreviveu à viagem: %q", uso)
+	}
+	if _, ok := e.consome(s); ok {
 		t.Error("o mesmo state valeu duas vezes")
 	}
-	if e.consome("inventado") || e.consome("") {
-		t.Error("state desconhecido ou vazio não pode passar")
+	if _, ok := e.consome("inventado"); ok {
+		t.Error("state desconhecido não pode passar")
+	}
+	if _, ok := e.consome(""); ok {
+		t.Error("state vazio não pode passar")
+	}
+
+	// O propósito viaja no state; o do Drive tem que voltar como Drive, senão
+	// a conta da diretoria seria gravada como agenda.
+	sd := e.novo(UsoDrive)
+	if uso, ok := e.consome(sd); !ok || uso != UsoDrive {
+		t.Errorf("propósito do Drive voltou como %q (ok=%v)", uso, ok)
 	}
 }
 
 func TestStateExpirado(t *testing.T) {
 	e := &estadosPendentes{itens: map[string]time.Time{"velho": time.Now().Add(-time.Minute)}}
-	if e.consome("velho") {
+	if _, ok := e.consome("velho"); ok {
 		t.Error("state vencido não pode passar")
 	}
 }

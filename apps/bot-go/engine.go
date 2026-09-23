@@ -1971,23 +1971,16 @@ func (e *ConversationEngine) espelhaDossieNoDrive(telefone string) {
 		defer cancel()
 
 		log := e.deps.Logger
-		contas, err := e.deps.GCalRepo.Ativas(ctx, e.deps.TenantID)
+		// Só as contas que autorizaram o DRIVE. A agenda pessoal do Henrique e
+		// a do Rodrigo não entram aqui — os dossiês moram na conta da diretoria.
+		contas, err := e.deps.GCalRepo.ComDrive(ctx, e.deps.TenantID)
 		if err != nil || len(contas) == 0 {
+			log.Info("drive: nenhuma conta autorizou a escrita; o dossiê fica só no banco")
 			return
 		}
 		// UMA conta escreve, não todas: duas cópias do mesmo dossiê em Drives
 		// diferentes divergem no dia em que uma gravação falhar.
-		var conta *GCalAccount
-		for i := range contas {
-			if e.deps.GCal.TemEscopoDoDrive(ctx, contas[i].RefreshToken) {
-				conta = &contas[i]
-				break
-			}
-		}
-		if conta == nil {
-			log.Info("drive: nenhuma conta autorizou a escrita; o dossiê fica só no banco")
-			return
-		}
+		conta := &contas[0]
 
 		pasta, err := e.deps.GCal.GarantePasta(ctx, conta.RefreshToken)
 		if err != nil {
