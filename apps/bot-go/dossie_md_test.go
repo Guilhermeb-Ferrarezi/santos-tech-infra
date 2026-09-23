@@ -161,3 +161,25 @@ func TestLinkNaoSomaPermissoesAntigas(t *testing.T) {
 		}
 	}
 }
+
+// A pasta do mês é para GENTE ler, então o nome é em português.
+func TestNomeDaPastaDoMes(t *testing.T) {
+	casos := map[string]time.Time{
+		"Setembro 2026": time.Date(2026, 9, 23, 18, 0, 0, 0, brLocation),
+		"Outubro 2026":  time.Date(2026, 10, 1, 9, 0, 0, 0, brLocation),
+		"Janeiro 2027":  time.Date(2027, 1, 15, 12, 0, 0, 0, brLocation),
+		"Março 2026":    time.Date(2026, 3, 2, 8, 0, 0, 0, brLocation),
+	}
+	for esperado, quando := range casos {
+		if got := NomeDaPastaDoMes(quando); got != esperado {
+			t.Errorf("NomeDaPastaDoMes(%v) = %q, esperado %q", quando, got, esperado)
+		}
+	}
+
+	// A virada do mês em horário de Brasília, não UTC: 30/09 às 22h em SP é
+	// 01/10 em UTC, e o arquivo iria para a pasta errada.
+	viradaUTC := time.Date(2026, 10, 1, 1, 0, 0, 0, time.UTC) // 30/09 22h em SP
+	if got := NomeDaPastaDoMes(viradaUTC); got != "Setembro 2026" {
+		t.Errorf("virada do mês saiu em UTC: %q (deveria ser Setembro 2026)", got)
+	}
+}
