@@ -8,6 +8,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -464,4 +465,208 @@ func parseAskAnswer(texto string) (quizAskAnswer, error) {
 		}
 	}
 	return quizAskAnswer{Answer: truncateQuizAskAnswer(limpo)}, nil
+}
+
+// ── modo só imagem ──────────────────────────────────────────────────────
+//
+// Print da questão sem enunciado/alternativas em texto: a imagem é a ÚNICA
+// fonte da questão, então o modelo tem que fazer o trabalho que o parser
+// (quiz_parse.go) faria em texto — ler a questão inteira, identificar o
+// tipo (escolha única, múltipla resposta ou aberta) e responder num dos três
+// formatos JSON abaixo. buildImagemSoPrompt e parseFallbackAnswerImagemSo
+// são irmãs de buildFallbackPrompt/parseFallbackAnswer, mas sem `p.Options`
+// pra validar rótulo contra (a questão nunca passou pelo parser) — a
+// validação vira sobre o FORMATO do rótulo (normalizeImagemSoLabel).
+
+// quizImagemSoAnswer é a resposta já normalizada do modo só imagem — Kind
+// sempre um dos três quizKind* (nunca o valor cru que o modelo mandou em
+// "kind"), pronta pra quiz.go montar o quizResponse sem checar mais nada.
+type quizImagemSoAnswer struct {
+	Kind       string
+	Answer     string
+	AnswerText string
+	Answers    []string
+	Options    map[string]string
+	Reasoning  string
+}
+
+// quizFallbackRawImagemSo é o JSON cru que o modelo devolve no modo só
+// imagem — todos os campos dos três formatos num struct só, porque o
+// formato realmente usado só se sabe depois de olhar "kind" (ou nem isso,
+// ver parseFallbackAnswerImagemSo).
+type quizFallbackRawImagemSo struct {
+	Kind       string            `json:"kind"`
+	Answer     string            `json:"answer"`
+	AnswerText string            `json:"answerText"`
+	Answers    []string          `json:"answers"`
+	Options    map[string]string `json:"options"`
+	Reasoning  string            `json:"reasoning"`
+}
+
+// buildImagemSoPrompt monta o prompt do modo só imagem. contexto é o `raw`
+// selecionado, quando vier junto (pode ser vazio) — mandado só como apoio: a
+// imagem continua sendo a fonte principal mesmo quando há texto junto.
+func buildImagemSoPrompt(contexto string) string {
+	var b strings.Builder
+	b.WriteString("A imagem anexada a esta mensagem é o PRINT de uma questão de prova. Leia a ")
+	b.WriteString("questão INTEIRA na imagem — o enunciado e TODAS as alternativas, quando houver ")
+	b.WriteString("— identifique o tipo dela e responda em português do Brasil.\n\n")
+	if contexto != "" {
+		b.WriteString("Texto adicional selecionado pelo usuário (contexto de apoio — a imagem continua ")
+		b.WriteString("sendo a fonte principal da questão):\n")
+		b.WriteString(contexto)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Se houver mais de uma questão na imagem, responda a que estiver mais completa ou ")
+	b.WriteString("central no print, e diga isso no campo \"reasoning\".\n\n")
+	// Mesma preferência já instruída no prompt do modo aberto (ver
+	// buildOpenPrompt) — texto de apoio existe, não custa nada repetir.
+	b.WriteString("Se a questão for de completar lacunas ou de identificar uma informação presente no ")
+	b.WriteString("material da imagem, PREFIRA os termos que já aparecem nele em vez de sinônimos — ")
+	b.WriteString("mesmo um sinônimo correto costuma não valer ponto numa correção objetiva.\n\n")
+	b.WriteString("Responda SOMENTE com um objeto JSON estrito, sem nada fora dele, num dos três ")
+	b.WriteString("formatos abaixo, conforme o tipo da questão:\n\n")
+	b.WriteString("Escolha única (uma alternativa correta) — \"answer\" é APENAS o rótulo exatamente ")
+	b.WriteString("como aparece na imagem (a letra ou número, nunca o texto da alternativa):\n")
+	b.WriteString(`{"kind":"unica","answer":"B","answerText":"texto da alternativa B","reasoning":"uma frase"}`)
+	b.WriteString("\n\n")
+	b.WriteString("Múltipla resposta (marque TODAS as alternativas corretas) — \"options\" traz o texto ")
+	b.WriteString("de TODAS as alternativas (não só as marcadas), rótulos exatamente como na imagem:\n")
+	b.WriteString(`{"kind":"multipla","answers":["B","C"],"options":{"A":"...","B":"...","C":"...","D":"..."},"reasoning":"..."}`)
+	b.WriteString("\n\n")
+	b.WriteString("Aberta ou preencher lacuna (sem alternativas) — a resposta inteira em \"answerText\":\n")
+	b.WriteString(`{"kind":"aberta","answerText":"a resposta","reasoning":"..."}`)
+	b.WriteString("\n\nNão escreva nada fora do JSON.")
+	return b.String()
+}
+
+// quizImagemSoLabelRe valida o FORMATO do rótulo inteiro (já maiúsculo): um
+// caractere alfanumérico, ou um número de 1-2 dígitos — a mesma tolerância
+// de formato de resolveFallbackLabel, mas aqui não há options pra checar
+// existência (a questão não passou pelo parser), só o formato.
+var quizImagemSoLabelRe = regexp.MustCompile(`^[A-Z]$|^[0-9]{1,2}$`)
+
+// quizImagemSoLabelPrefixRe casa um rótulo colado ao início do texto da
+// alternativa — "C) texto…", "3. texto…", "b - texto…" — mesmo formato de
+// quizLabelRe (quiz_parse.go), mas aceitando também números de 2 dígitos.
+// Âncora tudo em ^: diferente de resolveFallbackLabel (que tokeniza o texto
+// INTEIRO e casa qualquer token contra options), isto NUNCA varre palavras
+// no meio do texto — sem um mapa de options pra confirmar existência, casar
+// uma palavra qualquer (ex.: o artigo "a" em "a linha inteira da
+// alternativa") inventaria um rótulo que não está ali.
+var quizImagemSoLabelPrefixRe = regexp.MustCompile(`^\s*([A-Za-z]|[0-9]{1,2})\s*[\)\.\-:]`)
+
+// normalizeImagemSoLabel tolera os dois formatos mais comuns que um LLM
+// devolve no campo "answer"/"answers" mesmo sem options pra validar contra:
+// o rótulo sozinho ("B", "12") ou colado ao texto da alternativa ("C) texto
+// da alternativa"). Um valor que não bate com nenhum dos dois é descartado
+// (segundo retorno false), nunca inventado.
+func normalizeImagemSoLabel(bruto string) (string, bool) {
+	trimmed := strings.TrimSpace(bruto)
+	if trimmed == "" {
+		return "", false
+	}
+	if upper := strings.ToUpper(trimmed); quizImagemSoLabelRe.MatchString(upper) {
+		return upper, true
+	}
+	if m := quizImagemSoLabelPrefixRe.FindStringSubmatch(trimmed); m != nil {
+		return strings.ToUpper(m[1]), true
+	}
+	return "", false
+}
+
+// normalizeImagemSoLabels normaliza uma lista de rótulos (modo múltipla) —
+// cada um passa por normalizeImagemSoLabel; inválidos são descartados (não
+// invalidam a lista inteira, mesma filosofia de parseFallbackAnswerMultipla),
+// e duplicados são removidos preservando a primeira ocorrência.
+func normalizeImagemSoLabels(brutos []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, bruto := range brutos {
+		label, ok := normalizeImagemSoLabel(bruto)
+		if !ok || seen[label] {
+			continue
+		}
+		seen[label] = true
+		out = append(out, label)
+	}
+	return out
+}
+
+// normalizeImagemSoOptions normaliza as chaves do mapa "options" (modo
+// múltipla) pela mesma regra de normalizeImagemSoLabel — uma chave que não
+// bate com o formato de rótulo é descartada junto com seu valor.
+func normalizeImagemSoOptions(raw map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range raw {
+		label, ok := normalizeImagemSoLabel(k)
+		if !ok {
+			continue
+		}
+		out[label] = v
+	}
+	return out
+}
+
+// normalizeImagemSoAnswer decide o Kind final a partir do que o modelo
+// devolveu, degradando pra "aberta" sempre que o formato pedido não puder
+// ser satisfeito — nunca erro, porque a imagem já foi lida (a chamada ao
+// modelo teve sucesso) e alguma resposta aproveitável quase sempre sobra:
+//   - kind fora de unica/multipla/aberta → aberta.
+//   - unica sem rótulo num formato reconhecível → aberta (usa answerText,
+//     reasoning ou o texto cru, o que vier).
+//   - multipla sem nenhum rótulo válido em "answers" → aberta (mesma
+//     degradação; ver o comentário acima).
+//   - aberta (ou já degradado pra aberta) sem "answerText" → usa o texto
+//     cru da resposta do modelo inteira, truncado do mesmo jeito que o modo
+//     aberto de sempre (parseOpenAnswer).
+func normalizeImagemSoAnswer(raw quizFallbackRawImagemSo, textoCru string) quizImagemSoAnswer {
+	abrir := func() quizImagemSoAnswer {
+		texto := strings.TrimSpace(raw.AnswerText)
+		if texto == "" {
+			texto = strings.TrimSpace(raw.Reasoning)
+		}
+		if texto == "" {
+			texto = textoCru
+		}
+		return quizImagemSoAnswer{Kind: quizKindAberta, AnswerText: truncateQuizOpenAnswer(texto), Reasoning: raw.Reasoning}
+	}
+	switch raw.Kind {
+	case quizKindUnica:
+		label, ok := normalizeImagemSoLabel(raw.Answer)
+		if !ok {
+			return abrir()
+		}
+		return quizImagemSoAnswer{Kind: quizKindUnica, Answer: label, AnswerText: strings.TrimSpace(raw.AnswerText), Reasoning: raw.Reasoning}
+	case quizKindMultipla:
+		labels := normalizeImagemSoLabels(raw.Answers)
+		if len(labels) == 0 {
+			return abrir()
+		}
+		return quizImagemSoAnswer{Kind: quizKindMultipla, Answers: labels, Options: normalizeImagemSoOptions(raw.Options), Reasoning: raw.Reasoning}
+	default: // "aberta", ou qualquer valor fora dos três formatos conhecidos.
+		return abrir()
+	}
+}
+
+// parseFallbackAnswerImagemSo extrai a resposta do modo só imagem. Tolerante
+// como parseOpenAnswer: sem JSON utilizável (ausente ou malformado), o texto
+// cru da resposta ainda serve como resposta aberta — só um erro de verdade
+// (a chamada ao modelo não devolveu nada) invalida a resposta inteira.
+func parseFallbackAnswerImagemSo(texto string) (quizImagemSoAnswer, error) {
+	limpo := strings.TrimSpace(texto)
+	if limpo == "" {
+		return quizImagemSoAnswer{}, fmt.Errorf("quiz: fallback não devolveu texto")
+	}
+	match := primeiroObjetoJSON(texto)
+	if match == "" {
+		return quizImagemSoAnswer{Kind: quizKindAberta, AnswerText: truncateQuizOpenAnswer(limpo)}, nil
+	}
+	var raw quizFallbackRawImagemSo
+	if err := json.Unmarshal([]byte(match), &raw); err != nil {
+		// JSON malformado: mesma tolerância de "sem JSON nenhum" — o texto
+		// cru ainda é aproveitável, melhor que recusar a resposta inteira.
+		return quizImagemSoAnswer{Kind: quizKindAberta, AnswerText: truncateQuizOpenAnswer(limpo)}, nil
+	}
+	return normalizeImagemSoAnswer(raw, limpo), nil
 }

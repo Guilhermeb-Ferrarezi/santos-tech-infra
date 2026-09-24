@@ -2705,6 +2705,45 @@ paths:
         palpite do Jev pra degradar — a rota devolve erro (502/504) em vez de
         uma resposta cega.
 
+        **Modo só imagem** (`imageBase64`/`imageUrl` sem `raw` com texto
+        suficiente): pensado pro app de celular, onde o usuário tira um
+        PRINT da questão e compartilha só a imagem — sem nenhum texto
+        selecionado, porque não há texto nenhum pra selecionar (é uma foto).
+        Quando há imagem e `raw` vem vazio ou curto demais pro piso do modo
+        aberto (menos de ~15 caracteres não-espaço — o mesmo piso de
+        `TEXTO_INSUFICIENTE`), a rota **não recusa a requisição**: entende que
+        o enunciado e as alternativas moram DENTRO da imagem e pede pro
+        próprio Claude (com visão, sempre — o Jev não lê imagem e aqui nem há
+        `options` pra ele escolher) ler a questão inteira, identificar o tipo
+        dela e responder no formato correspondente. `raw`, quando vier (mesmo
+        curto demais pro modo aberto sozinho), segue como contexto adicional
+        no prompt — a imagem continua sendo a fonte principal. Se houver mais
+        de uma questão na imagem, o modelo responde a mais completa/central e
+        diz isso em `reasoning`.
+
+        A resposta usa o `kind` que o próprio modelo identificou
+        (`unica`, `multipla` ou `aberta`), no mesmo contrato de cada modo —
+        ver a descrição de `kind` na resposta — com duas particularidades
+        deste caminho: `source` é sempre `claude`, `escalated` sempre `true`,
+        e `confidence`/`probabilities` ficam **ausentes** nos três formatos
+        (não existe veredito do Jev nesse caminho). No formato `multipla`,
+        `parsed.options` vem preenchido com o texto de TODAS as alternativas
+        que o modelo leu na imagem (não só as marcadas — o card precisa do
+        texto pra mostrar as que ficaram de fora), mas **não** há
+        `answerProbs`: sem o Jev, não existe probabilidade por alternativa
+        pra publicar (diferente do modo múltipla resposta de sempre, onde
+        `answerProbs` sempre acompanha `answers`) — o cliente precisa lidar
+        com esse campo ausente nesse caminho específico. A resposta do
+        modelo é tolerante ao formato: um `kind` fora dos três esperados, ou
+        um `answers` sem nenhum rótulo aproveitável no modo múltipla, ou até
+        a ausência total de JSON na resposta, tudo degrada para `aberta` com
+        o texto que sobrar (nunca erro só por causa do formato) — um rótulo
+        individual inválido (fora do padrão de 1 caractere alfanumérico ou
+        número de 1-2 dígitos) é descartado sem invalidar o resto. Se a
+        chamada ao Claude falhar de verdade (timeout, upstream fora), não há
+        palpite do Jev pra degradar — a rota devolve erro (502/504), mesmo
+        comportamento dos outros caminhos com imagem e sem Jev.
+
         **Com imagem por URL** (`imageUrl`): alternativa a `imageBase64` para
         quando o bookmarklet não consegue ler os bytes da figura na própria
         página (CORS/CSP do site da prova bloqueiam canvas/fetch dali). Só
@@ -2820,7 +2859,7 @@ paths:
           application/json:
             schema:
               type: object
-              description: "É obrigatório informar `raw` OU `options` (com pelo menos 2 alternativas)."
+              description: "É obrigatório informar `raw`, `options` (com pelo menos 2 alternativas), `ask`, ou `imageBase64`/`imageUrl` (modo só imagem — ver a descrição da rota)."
               properties:
                 raw:
                   type: string
@@ -2859,7 +2898,8 @@ paths:
                     geométrica), em base64. Quando presente, a rota pula o
                     Jev e vai direto para o Claude com visão — ver a
                     descrição da rota. Exige `imageMime`. Tamanho decodificado
-                    limitado a 8MB.
+                    limitado a 8MB. Sozinha (sem `raw` com texto suficiente),
+                    ativa o modo só imagem — ver a descrição da rota.
                 imageMime:
                   type: string
                   description: "Mime da imagem em `imageBase64`. Obrigatório junto dela."
@@ -3031,13 +3071,31 @@ paths:
                       question: "o que é fotossíntese?"
                       options: {}
                     timings: { jevMs: 0, claudeMs: 2100, totalMs: 2110 }
+                modoSoImagem:
+                  summary: Modo só imagem (print da questão, sem raw — app de celular)
+                  value:
+                    kind: multipla
+                    answer: ""
+                    answerText: ""
+                    answers: ["B", "C"]
+                    confidence: 0
+                    source: claude
+                    escalated: true
+                    degraded: false
+                    reasoning: "Duas alternativas corretas, lidas no print — B e C descrevem o mesmo conceito de ângulos formados."
+                    parsed:
+                      question: ""
+                      options: { A: "primeira", B: "segunda", C: "terceira", D: "quarta" }
+                    timings: { jevMs: 0, claudeMs: 4100, totalMs: 4110 }
         "400":
           description: >-
-            JSON inválido, `raw`/`options`/`ask` todos vazios, `ask` só com
-            espaço, `imageBase64`/`imageMime` inválidos (mime fora da
-            allowlist, base64 malformado, ou tamanho decodificado acima de
-            8MB — mesmo código `INVALID_IMAGE` para as três causas, mensagem
-            diferente pra cada), ou falha ao baixar `imageUrl` (esquema não
+            JSON inválido, `raw`/`options`/`ask`/`imageBase64`/`imageUrl`
+            todos vazios (imagem sozinha, sem os demais, É aceita — ativa o
+            modo só imagem, ver a descrição da rota), `ask` só com espaço,
+            `imageBase64`/`imageMime` inválidos (mime fora da allowlist,
+            base64 malformado, ou tamanho decodificado acima de 8MB — mesmo
+            código `INVALID_IMAGE` para as três causas, mensagem diferente
+            pra cada), ou falha ao baixar `imageUrl` (esquema não
             http/https, destino bloqueado por resolver pra IP privado/de
             metadados/reservado, timeout, redirecionamentos demais, status de
             erro, conteúdo que não é imagem suportada, ou corpo acima de 8MB
@@ -3050,7 +3108,7 @@ paths:
               examples:
                 corpoInvalido:
                   summary: Corpo inválido
-                  value: { code: INVALID_BODY, message: "informe `raw`, `options` ou `ask`" }
+                  value: { code: INVALID_BODY, message: "informe `raw`, `options`, `ask` ou uma imagem (`imageBase64`/`imageUrl`)" }
                 perguntaVazia:
                   summary: Modo pergunta livre — ask vazio
                   value: { code: EMPTY_QUESTION, message: "Escreva uma pergunta" }
@@ -3101,7 +3159,11 @@ paths:
             aberto (`kind: "aberta"`), ver a descrição da rota. `TEXTO_INSUFICIENTE`:
             o texto enviado (`raw`, no modo aberto) é vazio, curto demais
             (menos de ~15 caracteres não-espaço) ou longo demais para ser
-            uma questão — não vale gastar uma chamada ao Claude.
+            uma questão — não vale gastar uma chamada ao Claude. Exceção: com
+            imagem anexada, `raw` vazio ou curto demais NÃO devolve
+            `TEXTO_INSUFICIENTE` — ativa o modo só imagem em vez de erro (ver
+            a descrição da rota); só o caso "longo demais" continua valendo
+            com imagem.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

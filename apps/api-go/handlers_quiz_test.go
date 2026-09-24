@@ -124,6 +124,65 @@ func TestHandleQuizAnswerAceitaCorpoAcimaDe1MB(t *testing.T) {
 	}
 }
 
+// TestHandleQuizAnswerImagemSemRawNaoDa400 manda só imagem (sem raw, options
+// nem ask) pro handler real e confere que a resposta NÃO é 400 INVALID_BODY
+// — antes desta mudança, o guard exigia um dos três e recusava a entrada
+// mesmo com imagem presente. O fake de banco devolve erro de propósito
+// (mesmo truque de TestHandleQuizAnswerAceitaCorpoAcimaDe1MB): chegar até
+// NOT_CONFIGURED prova que passou do guard, não que a resposta final tenha
+// sido calculada (isso é coberto pelos testes de answerQuiz em quiz_test.go).
+func TestHandleQuizAnswerImagemSemRawNaoDa400(t *testing.T) {
+	s := testServer(Config{QuizJevProviderID: 1})
+	s.vault = &Vault{}
+	s.q = db.New(quizFakeDBTX{})
+
+	payload, err := json.Marshal(quizRequest{
+		ImageBase64: "eHh4eHh4eHh4",
+		ImageMime:   "image/png",
+	})
+	if err != nil {
+		t.Fatalf("marshal do payload de teste: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/quiz/answer", strings.NewReader(string(payload)))
+	w := httptest.NewRecorder()
+	s.handleQuizAnswer(w, r)
+
+	var respBody map[string]string
+	if err := json.NewDecoder(w.Result().Body).Decode(&respBody); err != nil {
+		t.Fatalf("resposta não é JSON: %v", err)
+	}
+	if respBody["code"] == "INVALID_BODY" {
+		t.Fatalf("imagem sem raw rejeitada como INVALID_BODY (status=%d) — o modo só imagem devia ser aceito", w.Code)
+	}
+	if w.Code != http.StatusServiceUnavailable || respBody["code"] != "NOT_CONFIGURED" {
+		t.Errorf("code=%q status=%d, queria NOT_CONFIGURED/503 (erro do fake de banco — prova que passou do guard)",
+			respBody["code"], w.Code)
+	}
+}
+
+// TestHandleQuizAnswerSemImagemESemTextoContinua400 é o contraponto do teste
+// acima: sem imagem NENHUMA e sem raw/options/ask, o guard continua
+// recusando com 400 INVALID_BODY — o modo só imagem não abre uma porta pra
+// aceitar corpo vazio.
+func TestHandleQuizAnswerSemImagemESemTextoContinua400(t *testing.T) {
+	s := testServer(Config{QuizJevProviderID: 1})
+	s.vault = &Vault{}
+	s.q = db.New(quizFakeDBTX{})
+
+	r := httptest.NewRequest(http.MethodPost, "/quiz/answer", strings.NewReader("{}"))
+	w := httptest.NewRecorder()
+	s.handleQuizAnswer(w, r)
+
+	var respBody map[string]string
+	if err := json.NewDecoder(w.Result().Body).Decode(&respBody); err != nil {
+		t.Fatalf("resposta não é JSON: %v", err)
+	}
+	if w.Code != http.StatusBadRequest || respBody["code"] != "INVALID_BODY" {
+		t.Errorf("code=%q status=%d, queria INVALID_BODY/400 (sem raw, options, ask nem imagem)", respBody["code"], w.Code)
+	}
+}
+
 func TestIsNativeClientAceitaExtensaoFirefox(t *testing.T) {
 	// Fetch de extensão Firefox SEMPRE manda Origin: moz-extension://<uuid>.
 	// Sem isto o login devolve só cookies httpOnly SameSite=Lax, que a

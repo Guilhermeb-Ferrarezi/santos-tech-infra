@@ -184,17 +184,26 @@ func validateQuizImage(imageB64, mime string) error {
 	return nil
 }
 
-// validateQuizOpenText confere o texto do modo aberto ANTES de gastar uma
-// chamada ao Claude — mesma motivação de validateQuizImage: falhar na hora é
-// mais barato que deixar o upstream recusar depois.
-func validateQuizOpenText(raw string) error {
+// quizOpenTextNonSpaceLen conta os caracteres não-espaço de raw — usado tanto
+// por validateQuizOpenText (o piso do modo aberto) quanto pela decisão de
+// entrar no modo só imagem (ver answerQuiz): texto vazio ou curto demais
+// pro modo aberto, mas com imagem anexada, cai no modo só imagem em vez de
+// TEXTO_INSUFICIENTE.
+func quizOpenTextNonSpaceLen(raw string) int {
 	semEspaco := strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
 			return -1
 		}
 		return r
 	}, raw)
-	if len([]rune(semEspaco)) < quizOpenMinChars {
+	return len([]rune(semEspaco))
+}
+
+// validateQuizOpenText confere o texto do modo aberto ANTES de gastar uma
+// chamada ao Claude — mesma motivação de validateQuizImage: falhar na hora é
+// mais barato que deixar o upstream recusar depois.
+func validateQuizOpenText(raw string) error {
+	if quizOpenTextNonSpaceLen(raw) < quizOpenMinChars {
 		return errQuizTextoInsuficiente
 	}
 	if len([]rune(raw)) > quizOpenMaxChars {
@@ -335,6 +344,16 @@ func answerQuiz(ctx context.Context, req quizRequest, deps quizDeps) (quizRespon
 		// separar alternativas e errou o formato, não é o caso "sem
 		// alternativa nenhuma".
 		if len(req.Options) == 0 && errors.Is(err, errQuizUnparseable) {
+			// Modo só imagem: há imagem anexada e `raw` não chega ao piso do
+			// modo aberto (vazio ou curto demais, ver quizOpenMinChars) — a
+			// extensão mandou só o print (enunciado e alternativas moram
+			// DENTRO da imagem, não em texto). Isto NÃO é TEXTO_INSUFICIENTE:
+			// aqui a ausência de texto é o caso esperado, não um erro de
+			// seleção. Sem imagem, comportamento intacto: cai no modo aberto
+			// de sempre, que segue exigindo o mínimo de texto.
+			if temImagem && quizOpenTextNonSpaceLen(req.Raw) < quizOpenMinChars {
+				return answerQuizImagemSo(ctx, req, deps, started)
+			}
 			return answerQuizAberto(ctx, req, deps, started, temImagem)
 		}
 		return quizResponse{}, err
@@ -559,6 +578,93 @@ func answerQuizAberto(ctx context.Context, req quizRequest, deps quizDeps, start
 	resp.Reasoning = ans.Reasoning
 	resp.Timings.TotalMs = time.Since(started).Milliseconds()
 	return resp, nil
+}
+
+// ── modo só imagem ──────────────────────────────────────────────────────
+//
+// Print da questão sem enunciado/alternativas em texto (app de celular: o
+// usuário tira print da questão e compartilha só a imagem) — a imagem é a
+// ÚNICA fonte da questão. Nunca chama o Jev (ele não lê imagem, e aqui nem
+// há `options` pra ele escolher entre) — vai direto ao Claude com visão,
+// pedindo pra ele próprio identificar o tipo da questão (escolha única,
+// múltipla resposta ou aberta) e responder no formato correspondente. Sempre
+// escalado, sem confidence/probabilities (não existe veredito do Jev nesse
+// caminho — mesma regra dos outros caminhos com imagem).
+
+// answerQuizImagemSo responde o modo só imagem. Chamada só quando há imagem
+// e `raw` não chega ao piso do modo aberto (ver o ponto de chamada em
+// answerQuiz) — texto insuficiente aqui não é erro, é o caso esperado.
+func answerQuizImagemSo(ctx context.Context, req quizRequest, deps quizDeps, started time.Time) (quizResponse, error) {
+	// Mesma regra dos outros caminhos (ver answerQuiz/answerQuizAberto): a
+	// entrada já está validada (imagem ok — é tudo que há pra validar aqui,
+	// não há texto com piso próprio), cota reservada ANTES de chamar o
+	// modelo.
+	if deps.reserve != nil {
+		if err := deps.reserve(); err != nil {
+			return quizResponse{}, err
+		}
+	}
+
+	// `raw`, quando vier (mesmo curto demais pro modo aberto sozinho), segue
+	// como contexto adicional pro prompt — a imagem continua sendo a fonte
+	// principal (ver buildImagemSoPrompt).
+	contexto := strings.TrimSpace(req.Raw)
+
+	resp := quizResponse{}
+	ans, claudeMs, fbErr := askFallbackImagemSo(ctx, contexto, req.ImageBase64, req.ImageMime, deps)
+	resp.Timings.ClaudeMs = claudeMs
+	if fbErr != nil {
+		// Sem Jev nesse caminho, não há palpite nenhum pra degradar — mesmo
+		// raciocínio dos outros caminhos com imagem/sem Jev.
+		if ctx.Err() != nil {
+			return quizResponse{}, errQuizTimeout
+		}
+		return quizResponse{}, errQuizUpstream
+	}
+	resp.Source = quizSourceClaude
+	resp.Escalated = true
+	resp.Kind = ans.Kind
+	resp.Reasoning = ans.Reasoning
+
+	switch ans.Kind {
+	case quizKindMultipla:
+		resp.Answers = ans.Answers
+		opts := ans.Options
+		if opts == nil {
+			// Options vazio (não nil): mesmo motivo do modo aberto — o
+			// contrato da rota exige o campo como objeto.
+			opts = map[string]string{}
+		}
+		resp.Parsed = quizParsed{Question: contexto, Options: opts}
+		// AnswerProbs fica ausente de propósito: sem Jev nesse modo não
+		// existe probabilidade nenhuma pra publicar (o card do front precisa
+		// lidar com a ausência — sem isso seria inventar dado que não existe).
+	default:
+		// unica ou aberta (normalizeImagemSoAnswer nunca devolve outro
+		// valor — ver quiz_fallback.go).
+		resp.Answer = ans.Answer
+		resp.AnswerText = ans.AnswerText
+		resp.Parsed = quizParsed{Question: contexto, Options: map[string]string{}}
+	}
+	resp.Timings.TotalMs = time.Since(started).Milliseconds()
+	return resp, nil
+}
+
+// askFallbackImagemSo chama o fallback sempre com o orçamento de visão — o
+// modo só imagem só existe QUANDO há imagem (ver o ponto de chamada em
+// answerQuiz), diferente de askOpenFallback/askFallback, que recebem
+// imageB64 vazio no caminho de texto puro.
+func askFallbackImagemSo(ctx context.Context, contexto, imageB64, imageMime string, deps quizDeps) (quizImagemSoAnswer, int64, error) {
+	fbCtx, cancel := context.WithTimeout(ctx, quizVisionBudget)
+	defer cancel()
+	started := time.Now()
+	texto, err := deps.fallback(fbCtx, buildImagemSoPrompt(contexto), imageB64, imageMime)
+	elapsed := time.Since(started).Milliseconds()
+	if err != nil {
+		return quizImagemSoAnswer{}, elapsed, err
+	}
+	ans, err := parseFallbackAnswerImagemSo(texto)
+	return ans, elapsed, err
 }
 
 // ── modo pergunta livre ─────────────────────────────────────────────────

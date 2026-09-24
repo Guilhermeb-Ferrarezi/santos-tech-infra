@@ -874,3 +874,136 @@ func TestAnswerQuizAskPrevaleceSobreOptions(t *testing.T) {
 		}
 	}
 }
+
+// ── modo só imagem ──────────────────────────────────────────────────────
+
+func reqExemploImagemSo() quizRequest {
+	return quizRequest{
+		ImageBase64: base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 128))),
+		ImageMime:   "image/png",
+	}
+}
+
+func TestAnswerQuizImagemSemRawNaoChamaJev(t *testing.T) {
+	var chamadas []string
+	fbResp := `{"kind":"unica","answer":"B","answerText":"Ulan Bator","reasoning":"lido na imagem"}`
+	got, err := answerQuiz(context.Background(), reqExemploImagemSo(), depsFake(jevConfiante, nil, fbResp, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	for _, c := range chamadas {
+		if c == "jev" {
+			t.Errorf("chamadas = %v, o jev não deveria ser chamado no modo só imagem", chamadas)
+		}
+	}
+	if len(chamadas) != 1 || chamadas[0] != "fallback" {
+		t.Errorf("chamadas = %v, queria só o fallback", chamadas)
+	}
+	if got.Kind != quizKindUnica || got.Answer != "B" || got.AnswerText != "Ulan Bator" {
+		t.Errorf("resposta = %+v", got)
+	}
+	if got.Source != quizSourceClaude || !got.Escalated {
+		t.Errorf("source=%q escalated=%v, queria claude/true", got.Source, got.Escalated)
+	}
+	// Sem Jev nesse caminho, não existe confiança/probabilidades pra publicar
+	// — mesma regra dos outros caminhos com imagem.
+	if got.Confidence != 0 || got.Probabilities != nil {
+		t.Errorf("confidence/probabilities deveriam ficar zerados: %+v", got)
+	}
+}
+
+func TestAnswerQuizImagemComRawCurtoDemaisEntraNoModoSoImagem(t *testing.T) {
+	// raw curto demais pro modo aberto (< quizOpenMinChars) + imagem: NÃO é
+	// TEXTO_INSUFICIENTE — a imagem basta, o texto vira só contexto extra.
+	var chamadas []string
+	req := reqExemploImagemSo()
+	req.Raw = "curto"
+	fbResp := `{"kind":"aberta","answerText":"resposta lida na imagem","reasoning":"x"}`
+	got, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbResp, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v (não deveria dar TEXTO_INSUFICIENTE com imagem presente)", err)
+	}
+	if got.Kind != quizKindAberta || got.AnswerText != "resposta lida na imagem" {
+		t.Errorf("resposta = %+v", got)
+	}
+}
+
+func TestAnswerQuizImagemSemRawEComRawVazioIguais(t *testing.T) {
+	// raw ausente e raw só com espaço devem se comportar igual — os dois são
+	// "sem texto" pro propósito do modo só imagem.
+	var chamadas []string
+	req := reqExemploImagemSo()
+	req.Raw = "   "
+	fbResp := `{"kind":"aberta","answerText":"resposta","reasoning":"x"}`
+	got, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbResp, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindAberta {
+		t.Errorf("kind = %q", got.Kind)
+	}
+}
+
+func TestAnswerQuizImagemSoMultiplaPreencheParsedOptionsSemAnswerProbs(t *testing.T) {
+	var chamadas []string
+	fbResp := `{"kind":"multipla","answers":["B","C"],"options":{"A":"um","B":"dois","C":"três","D":"quatro"},"reasoning":"duas corretas"}`
+	got, err := answerQuiz(context.Background(), reqExemploImagemSo(), depsFake(jevConfiante, nil, fbResp, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindMultipla {
+		t.Errorf("kind = %q, queria %q", got.Kind, quizKindMultipla)
+	}
+	if len(got.Answers) != 2 || got.Answers[0] != "B" || got.Answers[1] != "C" {
+		t.Errorf("answers = %v", got.Answers)
+	}
+	if got.Parsed.Options["B"] != "dois" || got.Parsed.Options["C"] != "três" {
+		t.Errorf("parsed.options = %+v, queria as options que o modelo leu", got.Parsed.Options)
+	}
+	// Sem Jev nesse modo, não existe alt_X pra calcular probabilidade nenhuma
+	// — diferente do modo múltipla de sempre, answerProbs fica ausente aqui.
+	if got.AnswerProbs != nil {
+		t.Errorf("answerProbs = %+v, queria ausente (sem Jev no modo só imagem)", got.AnswerProbs)
+	}
+}
+
+func TestAnswerQuizImagemSoFallbackFalhaDevolveErro(t *testing.T) {
+	var chamadas []string
+	_, err := answerQuiz(context.Background(), reqExemploImagemSo(), depsFake(jevConfiante, nil, "", errors.New("502"), &chamadas))
+	// Sem Jev nesse caminho, não há palpite nenhum pra degradar.
+	if !errors.Is(err, errQuizUpstream) {
+		t.Errorf("err = %v, queria errQuizUpstream", err)
+	}
+}
+
+func TestAnswerQuizImagemSoReservaCotaAntesDoFallback(t *testing.T) {
+	var chamadas []string
+	reservado := false
+	deps := depsFake(jevConfiante, nil, `{"kind":"aberta","answerText":"resposta"}`, nil, &chamadas)
+	deps.reserve = func() error {
+		reservado = true
+		return nil
+	}
+	_, err := answerQuiz(context.Background(), reqExemploImagemSo(), deps)
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if !reservado {
+		t.Error("cota não foi reservada no modo só imagem")
+	}
+}
+
+func TestAnswerQuizComAlternativasNoTextoIgnoraModoSoImagem(t *testing.T) {
+	// Sanidade: imagem + raw com alternativas reconhecíveis continua o
+	// caminho de escolha única de sempre (askFallback com visão), não o modo
+	// só imagem — texto já suficiente pra parsear, a imagem só complementa.
+	var chamadas []string
+	req := reqExemploComImagem("image/png", 128)
+	got, err := answerQuiz(context.Background(), req, depsFake(jevConfiante, nil, fbOK, nil, &chamadas))
+	if err != nil {
+		t.Fatalf("answerQuiz: %v", err)
+	}
+	if got.Kind != quizKindUnica || got.Answer != "A" {
+		t.Errorf("resposta = %+v, queria o caminho de escolha única de sempre", got)
+	}
+}

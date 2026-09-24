@@ -78,8 +78,12 @@ func (s *Server) handleQuizAnswer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "corpo inválido"))
 		return
 	}
-	if body.Raw == "" && len(body.Options) == 0 && body.Ask == "" {
-		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "informe `raw`, `options` ou `ask`"))
+	// Imagem (imageBase64 ou imageUrl) conta como entrada válida mesmo sem
+	// `raw`/`options`/`ask` — é o modo só imagem (app de celular: print da
+	// questão, sem texto nenhum selecionado). answerQuiz decide o resto
+	// (texto insuficiente + imagem cai no modo só imagem, não em erro).
+	if body.Raw == "" && len(body.Options) == 0 && body.Ask == "" && body.ImageBase64 == "" && body.ImageURL == "" {
+		writeErr(w, appErr(http.StatusBadRequest, "INVALID_BODY", "informe `raw`, `options`, `ask` ou uma imagem (`imageBase64`/`imageUrl`)"))
 		return
 	}
 

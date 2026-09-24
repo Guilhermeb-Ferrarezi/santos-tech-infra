@@ -510,3 +510,164 @@ func TestParseAskAnswerTruncaRespostaLonga(t *testing.T) {
 		t.Errorf("resposta truncada sem reticências: %q", got.Answer)
 	}
 }
+
+// ── modo só imagem ──────────────────────────────────────────────────────
+
+func TestBuildImagemSoPromptPedeOsTresFormatos(t *testing.T) {
+	got := buildImagemSoPrompt("")
+	for _, trecho := range []string{`"kind":"unica"`, `"kind":"multipla"`, `"kind":"aberta"`, "JSON"} {
+		if !strings.Contains(got, trecho) {
+			t.Errorf("prompt sem %q:\n%s", trecho, got)
+		}
+	}
+}
+
+func TestBuildImagemSoPromptComContextoIncluiComoApoio(t *testing.T) {
+	got := buildImagemSoPrompt("trecho selecionado pelo usuário")
+	if !strings.Contains(got, "trecho selecionado pelo usuário") {
+		t.Errorf("prompt não inclui o contexto adicional:\n%s", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "fonte principal") {
+		t.Errorf("prompt não deixa claro que a imagem é a fonte principal:\n%s", got)
+	}
+}
+
+func TestBuildImagemSoPromptSemContextoNaoMencionaTextoAdicional(t *testing.T) {
+	got := buildImagemSoPrompt("")
+	if strings.Contains(got, "Texto adicional selecionado") {
+		t.Errorf("prompt sem contexto não deveria mencionar texto adicional:\n%s", got)
+	}
+}
+
+func TestParseFallbackAnswerImagemSoUnica(t *testing.T) {
+	texto := `{"kind":"unica","answer":"B","answerText":"Ulan Bator","reasoning":"lido na imagem"}`
+	got, err := parseFallbackAnswerImagemSo(texto)
+	if err != nil {
+		t.Fatalf("parseFallbackAnswerImagemSo: %v", err)
+	}
+	if got.Kind != quizKindUnica || got.Answer != "B" || got.AnswerText != "Ulan Bator" || got.Reasoning == "" {
+		t.Errorf("resposta = %+v", got)
+	}
+}
+
+func TestParseFallbackAnswerImagemSoMultiplaComOptions(t *testing.T) {
+	texto := `{"kind":"multipla","answers":["B","C"],"options":{"A":"um","B":"dois","C":"três","D":"quatro"},"reasoning":"duas corretas"}`
+	got, err := parseFallbackAnswerImagemSo(texto)
+	if err != nil {
+		t.Fatalf("parseFallbackAnswerImagemSo: %v", err)
+	}
+	if got.Kind != quizKindMultipla {
+		t.Errorf("kind = %q, queria %q", got.Kind, quizKindMultipla)
+	}
+	if len(got.Answers) != 2 || got.Answers[0] != "B" || got.Answers[1] != "C" {
+		t.Errorf("answers = %v", got.Answers)
+	}
+	if got.Options["B"] != "dois" || got.Options["C"] != "três" || len(got.Options) != 4 {
+		t.Errorf("options = %+v", got.Options)
+	}
+}
+
+func TestParseFallbackAnswerImagemSoAberta(t *testing.T) {
+	texto := `{"kind":"aberta","answerText":"instruir; comportamentos; procedimentos","reasoning":"literal"}`
+	got, err := parseFallbackAnswerImagemSo(texto)
+	if err != nil {
+		t.Fatalf("parseFallbackAnswerImagemSo: %v", err)
+	}
+	if got.Kind != quizKindAberta || got.AnswerText != "instruir; comportamentos; procedimentos" {
+		t.Errorf("resposta = %+v", got)
+	}
+}
+
+func TestParseFallbackAnswerImagemSoJSONEmbrulhadoEmTexto(t *testing.T) {
+	texto := "Claro! Aqui está a resposta:\n```json\n{\"kind\":\"unica\",\"answer\":\"A\",\"answerText\":\"Astana\",\"reasoning\":\"x\"}\n```"
+	got, err := parseFallbackAnswerImagemSo(texto)
+	if err != nil {
+		t.Fatalf("parseFallbackAnswerImagemSo: %v", err)
+	}
+	if got.Kind != quizKindUnica || got.Answer != "A" {
+		t.Errorf("resposta = %+v", got)
+	}
+}
+
+func TestParseFallbackAnswerImagemSoKindInvalidoViraAberta(t *testing.T) {
+	texto := `{"kind":"escolha_multipla","answer":"B","answerText":"não deveria usar isto","reasoning":"kind errado"}`
+	got, err := parseFallbackAnswerImagemSo(texto)
+	if err != nil {
+		t.Fatalf("parseFallbackAnswerImagemSo: %v", err)
+	}
+	if got.Kind != quizKindAberta {
+		t.Errorf("kind = %q, queria %q (degradação de kind desconhecido)", got.Kind, quizKindAberta)
+	}
+}
+
+func TestParseFallbackAnswerImagemSoMultiplaSemAnswersValidosViraAberta(t *testing.T) {
+	texto := `{"kind":"multipla","answers":["zz","!!"],"reasoning":"nenhum rótulo válido"}`
+	got, err := parseFallbackAnswerImagemSo(texto)
+	if err != nil {
+		t.Fatalf("parseFallbackAnswerImagemSo: %v", err)
+	}
+	if got.Kind != quizKindAberta {
+		t.Errorf("kind = %q, queria %q (sem rótulo válido em answers)", got.Kind, quizKindAberta)
+	}
+	if got.AnswerText == "" {
+		t.Error("answerText vazio na degradação — devia sobrar reasoning ou o texto cru")
+	}
+}
+
+func TestParseFallbackAnswerImagemSoUnicaComRotuloInvalidoViraAberta(t *testing.T) {
+	texto := `{"kind":"unica","answer":"a linha inteira da alternativa, não um rótulo","reasoning":"leu errado"}`
+	got, err := parseFallbackAnswerImagemSo(texto)
+	if err != nil {
+		t.Fatalf("parseFallbackAnswerImagemSo: %v", err)
+	}
+	if got.Kind != quizKindAberta {
+		t.Errorf("kind = %q, queria %q (rótulo fora do formato aceito)", got.Kind, quizKindAberta)
+	}
+}
+
+func TestParseFallbackAnswerImagemSoSemJSONUsaTextoCru(t *testing.T) {
+	texto := "A resposta certa é a letra B, porque o gráfico mostra crescimento."
+	got, err := parseFallbackAnswerImagemSo(texto)
+	if err != nil {
+		t.Fatalf("parseFallbackAnswerImagemSo: %v", err)
+	}
+	if got.Kind != quizKindAberta || got.AnswerText != texto {
+		t.Errorf("resposta = %+v, queria o texto cru como aberta", got)
+	}
+}
+
+func TestParseFallbackAnswerImagemSoTextoVazioErro(t *testing.T) {
+	if _, err := parseFallbackAnswerImagemSo(""); err == nil {
+		t.Error("queria erro para texto vazio (fallback não devolveu nada)")
+	}
+}
+
+func TestNormalizeImagemSoLabelAceitaRotuloColadoAoTexto(t *testing.T) {
+	label, ok := normalizeImagemSoLabel("C) texto da alternativa inteiro")
+	if !ok || label != "C" {
+		t.Errorf("normalizeImagemSoLabel = %q/%v, queria C/true", label, ok)
+	}
+}
+
+func TestNormalizeImagemSoLabelDescartaRotuloInvalido(t *testing.T) {
+	casos := []string{"", "a linha inteira da alternativa", "!!", "100"}
+	for _, c := range casos {
+		if label, ok := normalizeImagemSoLabel(c); ok {
+			t.Errorf("normalizeImagemSoLabel(%q) = %q/true, queria descartado (false)", c, label)
+		}
+	}
+}
+
+func TestNormalizeImagemSoLabelAceitaNumeroDeDoisDigitos(t *testing.T) {
+	label, ok := normalizeImagemSoLabel("12")
+	if !ok || label != "12" {
+		t.Errorf("normalizeImagemSoLabel(12) = %q/%v, queria 12/true", label, ok)
+	}
+}
+
+func TestNormalizeImagemSoLabelNormalizaParaMaiuscula(t *testing.T) {
+	label, ok := normalizeImagemSoLabel("b")
+	if !ok || label != "B" {
+		t.Errorf("normalizeImagemSoLabel(b) = %q/%v, queria B/true", label, ok)
+	}
+}
