@@ -64,11 +64,19 @@ func resolveOcorrencias(ev AgendaEvento, rangeStart, rangeEnd time.Time) ([]Agen
 		return nil, fmt.Errorf("dataInicio inválida: %w", err)
 	}
 
+	// computadoresUsados nil ("não informado") não conta pra soma de capacidade
+	// em vez de virar 0 disfarçado — quem quer saber se um evento tem PC
+	// desconhecido lê o AgendaEvento original (computadoresUsados: null), não
+	// essa ocorrência resolvida.
+	pcs := 0
+	if ev.ComputadoresUsados != nil {
+		pcs = *ev.ComputadoresUsados
+	}
 	mk := func(d time.Time) AgendaOcorrencia {
 		return AgendaOcorrencia{
 			EventoID: ev.ID, Tipo: ev.Tipo, Data: d,
 			HoraInicioMin: horaInicioMin, HoraFimMin: horaFimMin,
-			ComputadoresUsados: ev.ComputadoresUsados,
+			ComputadoresUsados: pcs,
 		}
 	}
 
@@ -79,21 +87,27 @@ func resolveOcorrencias(ev AgendaEvento, rangeStart, rangeEnd time.Time) ([]Agen
 		return []AgendaOcorrencia{mk(dataInicio)}, nil
 	}
 
-	if ev.DiaSemana == nil || ev.DataFimRecorrencia == nil {
-		return nil, fmt.Errorf("evento semanal sem diaSemana/dataFimRecorrencia")
-	}
-	fimRecorrencia, err := parseData(*ev.DataFimRecorrencia)
-	if err != nil {
-		return nil, fmt.Errorf("dataFimRecorrencia inválida: %w", err)
+	if ev.DiaSemana == nil {
+		return nil, fmt.Errorf("evento semanal sem diaSemana")
 	}
 
 	start := dataInicio
 	if rangeStart.After(start) {
 		start = rangeStart
 	}
-	end := fimRecorrencia
-	if rangeEnd.Before(end) {
-		end = rangeEnd
+	// dataFimRecorrencia nil = recorrência indefinida: sem teto próprio, limitada
+	// só pela janela pedida pelo caller (rangeEnd) — nunca expande sozinha.
+	end := rangeEnd
+	if ev.DataFimRecorrencia != nil {
+		fimRecorrencia, err := parseData(*ev.DataFimRecorrencia)
+		if err != nil {
+			return nil, fmt.Errorf("dataFimRecorrencia inválida: %w", err)
+		}
+		if rangeEnd.Before(fimRecorrencia) {
+			end = rangeEnd
+		} else {
+			end = fimRecorrencia
+		}
 	}
 	if start.After(end) {
 		return nil, nil
@@ -150,10 +164,21 @@ func checkConflitos(candidato AgendaEvento, existentes []AgendaEvento) (AgendaCo
 		return resultado, err
 	}
 	rangeEnd := rangeStart
-	if candidato.Recorrencia == "semanal" && candidato.DataFimRecorrencia != nil {
-		rangeEnd, err = parseData(*candidato.DataFimRecorrencia)
-		if err != nil {
-			return resultado, err
+	if candidato.Recorrencia == "semanal" {
+		if candidato.DataFimRecorrencia != nil {
+			rangeEnd, err = parseData(*candidato.DataFimRecorrencia)
+			if err != nil {
+				return resultado, err
+			}
+		} else {
+			// Recorrência indefinida: sem data de fim pra usar como teto, então
+			// checamos conflito num horizonte sintético (mesmo teto de
+			// agendaRecorrenciaMaxDias já usado pra limitar recorrência com fim
+			// definido). Sem isso, rangeEnd ficaria == rangeStart e o evento só
+			// seria checado no seu 1º dia — as ocorrências futuras (que é o caso
+			// comum de uma turma sem data de término) nunca disputariam PC/horário
+			// com nada.
+			rangeEnd = rangeStart.AddDate(0, 0, agendaRecorrenciaMaxDias)
 		}
 	}
 

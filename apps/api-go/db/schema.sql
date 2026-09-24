@@ -432,12 +432,15 @@ CREATE TABLE IF NOT EXISTS agenda_eventos (
   conteudo                    TEXT,
   jogo                        TEXT,
   qtd_pessoas                 INTEGER,
-  computadores_usados         INTEGER NOT NULL CHECK (computadores_usados >= 0),
+  -- NULL = não informado (turma migrada sem contagem confiável de PC): não
+  -- conta na soma de capacidade, mas o front sinaliza o evento como tal.
+  computadores_usados         INTEGER CHECK (computadores_usados >= 0),
   data_inicio                 DATE NOT NULL,
   hora_inicio                 TIME NOT NULL,
   hora_fim                    TIME NOT NULL CHECK (hora_fim > hora_inicio),
   recorrencia                 TEXT NOT NULL DEFAULT 'nenhuma' CHECK (recorrencia IN ('nenhuma','semanal')),
   dia_semana                  SMALLINT CHECK (dia_semana BETWEEN 0 AND 6),
+  -- NULL para recorrência semanal = indefinida (sem data de término conhecida).
   data_fim_recorrencia        DATE,
   data_fim                    DATE,
   status_preparo               TEXT CHECK (status_preparo IN ('nao_aplica','pendente','pronto')),
