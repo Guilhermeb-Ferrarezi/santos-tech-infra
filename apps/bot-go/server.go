@@ -232,6 +232,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/qualificacoes", da(s.handleDashQualificacoes))
 	mux.Handle("GET /api/clientes/{telefone}", da(s.handleDossieMarkdown))
 	mux.Handle("POST /api/bookings/reschedule", da(s.handleDashReschedule))
+	mux.Handle("POST /api/bookings/confirm", da(s.handleDashBookingConfirm))
+	mux.Handle("POST /api/bookings/{id}/reject", da(s.handleDashBookingReject))
 	mux.Handle("PATCH /api/leads/{id}", da(s.handleDashPatchLead))
 	mux.Handle("DELETE /api/leads/{id}", da(s.handleDashDeleteLead))
 	mux.Handle("GET /api/evolution/instances", da(s.handleDashEvolutionInstances))

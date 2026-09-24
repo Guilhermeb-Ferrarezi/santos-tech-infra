@@ -1107,6 +1107,154 @@ func (s *Server) handleDashReschedule(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, resp)
 }
 
+// POST /api/bookings/confirm — confirma um agendamento pendente (ex.: lead que
+// pediu aula experimental pelo WhatsApp): grava a aula na Agenda de Aulas do
+// Notion e marca a pendência como "confirmed". Body:
+//
+//	{ id, day?, time? } — day/time sobrescrevem o que o lead propôs.
+//
+// Diferente do fluxo interno do bot (engine.go, ação "confirm" disparada por
+// mensagem do admin), esta rota é chamada de fora (dashboard/MCP) — por isso
+// checa SlotOcupadoExceto antes de gravar, mesma trava que a remarcação usa.
+// O fluxo interno não checa porque o admin já está decidindo o horário na
+// hora; aqui a confiança é menor e o custo de checar é baixo.
+func (s *Server) handleDashBookingConfirm(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+
+	var body struct {
+		ID   string `json:"id"`
+		Day  string `json:"day"`
+		Time string `json:"time"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ID == "" {
+		jsonErr(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if s.engine.deps.Bookings == nil {
+		jsonErr(w, "pendências indisponíveis", http.StatusServiceUnavailable)
+		return
+	}
+
+	var pb *PendingBooking
+	if err := s.withTenant(ctx, func(tx pgx.Tx) error {
+		loaded, err := s.engine.deps.Bookings.Get(ctx, tx, tenantID, body.ID)
+		pb = loaded
+		return err
+	}); err != nil {
+		s.logger.Error("dash: booking confirm get", "id", body.ID, "err", err)
+		jsonErr(w, "falha ao carregar agendamento", http.StatusInternalServerError)
+		return
+	}
+	if pb == nil {
+		jsonErr(w, "agendamento não encontrado", http.StatusNotFound)
+		return
+	}
+	if pb.Status != "open" {
+		jsonErr(w, "agendamento já foi "+pb.Status, http.StatusConflict)
+		return
+	}
+
+	dateInput := firstNonEmpty(body.Day, pb.ProposedDate, pb.ProposedDay)
+	tm := firstNonEmpty(body.Time, pb.ProposedTime)
+	dataHora, resolved := ResolveBookingDateTime(dateInput, tm, time.Now())
+
+	status := "Agendada"
+	if !resolved {
+		status = "Confirmar"
+	}
+
+	if resolved && s.engine.deps.Notion != nil && s.engine.deps.Notion.Enabled() {
+		if inicio, ok := parseNotionTime(dataHora); ok {
+			dur := time.Duration(s.engine.deps.AulaDuracaoMin) * time.Minute
+			if dur <= 0 {
+				dur = time.Hour
+			}
+			if outro, ocupado, err := s.engine.deps.Notion.SlotOcupadoExceto(ctx, inicio, dur, ""); err != nil {
+				s.logger.Error("dash: booking confirm slot check", "id", body.ID, "err", err)
+			} else if ocupado {
+				jsonErr(w, "horário ocupado: "+outro.Display(), http.StatusConflict)
+				return
+			}
+		}
+	}
+
+	var pageID string
+	if s.engine.deps.Notion != nil && s.engine.deps.Notion.Enabled() {
+		id, err := s.engine.deps.Notion.CreateBooking(ctx, Booking{
+			Aluno:      bookingAluno(*pb),
+			WhatsApp:   pb.ClientPhone,
+			DataHora:   dataHora,
+			Status:     status,
+			Tipo:       pb.Kind,
+			Curso:      pb.Course,
+			Idade:      pb.Age,
+			Resumo:     pb.Notes,
+			DuracaoMin: s.engine.deps.AulaDuracaoMin,
+		})
+		if err != nil {
+			s.logger.Error("dash: booking confirm create", "id", body.ID, "err", err)
+			jsonErr(w, "falha ao gravar no Notion", http.StatusInternalServerError)
+			return
+		}
+		pageID = id
+	}
+
+	if err := s.withTenant(ctx, func(tx pgx.Tx) error {
+		return s.engine.deps.Bookings.MarkStatus(ctx, tx, tenantID, body.ID, "confirmed")
+	}); err != nil {
+		s.logger.Error("dash: booking confirm mark status", "id", body.ID, "err", err)
+		jsonErr(w, "aula gravada no Notion, mas falha ao marcar pendência como confirmada", http.StatusInternalServerError)
+		return
+	}
+
+	jsonOK(w, map[string]any{"ok": true, "pageId": pageID, "dataHora": dataHora, "resolved": resolved})
+}
+
+// POST /api/bookings/{id}/reject — recusa um agendamento pendente sem gravar
+// nada no Notion.
+func (s *Server) handleDashBookingReject(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID := TenantID(s.cfg.TenantID)
+	id := r.PathValue("id")
+	if id == "" {
+		jsonErr(w, "id vazio", http.StatusBadRequest)
+		return
+	}
+	if s.engine.deps.Bookings == nil {
+		jsonErr(w, "pendências indisponíveis", http.StatusServiceUnavailable)
+		return
+	}
+
+	var pb *PendingBooking
+	if err := s.withTenant(ctx, func(tx pgx.Tx) error {
+		loaded, err := s.engine.deps.Bookings.Get(ctx, tx, tenantID, id)
+		pb = loaded
+		return err
+	}); err != nil {
+		s.logger.Error("dash: booking reject get", "id", id, "err", err)
+		jsonErr(w, "falha ao carregar agendamento", http.StatusInternalServerError)
+		return
+	}
+	if pb == nil {
+		jsonErr(w, "agendamento não encontrado", http.StatusNotFound)
+		return
+	}
+	if pb.Status != "open" {
+		jsonErr(w, "agendamento já foi "+pb.Status, http.StatusConflict)
+		return
+	}
+
+	if err := s.withTenant(ctx, func(tx pgx.Tx) error {
+		return s.engine.deps.Bookings.MarkStatus(ctx, tx, tenantID, id, "rejected")
+	}); err != nil {
+		s.logger.Error("dash: booking reject", "id", id, "err", err)
+		jsonErr(w, "falha ao recusar agendamento", http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 // PATCH /api/leads/{id} — atualiza status (e opcional owner/interest) de um lead.
 func (s *Server) handleDashPatchLead(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
