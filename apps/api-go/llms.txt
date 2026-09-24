@@ -1426,9 +1426,20 @@ claude mcp add --transport http santos-tech https://api.santos-tech.com/mcp \
   inviável (token a token). **Arquivo local** (agente com shell): não use a
   tool — `curl -F file=@foto.png -H 'Authorization: Bearer st_...'
   https://api.santos-tech.com/auth/upload` (avatar: idem em `/auth/avatar`)
+- **Tools agenda:** `agenda_events_list` (sem filtro, mesma convenção de
+  `GET /agenda/eventos` — use antes de criar pra checar duplicidade) ·
+  `agenda_event_create {tipo,titulo,dataInicio,horaInicio,horaFim,…}` (mesmas
+  validações/motor de conflito de `POST /agenda/eventos`, ver seção Agenda;
+  omita `computadoresUsados`/`dataFimRecorrencia` em vez de inventar um valor
+  — ambos aceitam `null` como estado válido)
 - **Resources:** `santos-tech://llms.txt` (este arquivo, sempre fresco) ·
   `santos-tech://openapi/auth` (contrato OpenAPI da auth)
 - `GET /mcp/health` — liveness (sem auth)
+
+**Nota de cobertura:** esta lista de tools não é exaustiva (várias categorias —
+workspace, conteúdo, bot, pagamentos, admin — já registradas no servidor não
+estão documentadas aqui, gap pré-existente). A lista real e sempre atual é
+`tools/list` no protocolo MCP, ou o código-fonte em `apps/mcp-go/tools_*.go`.
 
 ## Cron (agendador de tarefas) — `api.santos-tech.com/cron`
 
