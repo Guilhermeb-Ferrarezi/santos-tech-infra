@@ -59,7 +59,7 @@ type GetAgendaEventoRow struct {
 	Conteudo                   *string
 	Jogo                       *string
 	QtdPessoas                 pgtype.Int4
-	ComputadoresUsados         int32
+	ComputadoresUsados         pgtype.Int4
 	DataInicio                 string
 	HoraInicio                 string
 	HoraFim                    string
@@ -138,7 +138,7 @@ type InsertAgendaEventoParams struct {
 	Conteudo                 *string
 	Jogo                     *string
 	QtdPessoas               pgtype.Int4
-	ComputadoresUsados       int32
+	ComputadoresUsados       pgtype.Int4
 	DataInicio               pgtype.Date
 	HoraInicio               pgtype.Time
 	HoraFim                  pgtype.Time
@@ -161,7 +161,7 @@ type InsertAgendaEventoRow struct {
 	Conteudo                   *string
 	Jogo                       *string
 	QtdPessoas                 pgtype.Int4
-	ComputadoresUsados         int32
+	ComputadoresUsados         pgtype.Int4
 	DataInicio                 string
 	HoraInicio                 string
 	HoraFim                    string
@@ -298,7 +298,7 @@ type ListAgendaEventosRow struct {
 	Conteudo                   *string
 	Jogo                       *string
 	QtdPessoas                 pgtype.Int4
-	ComputadoresUsados         int32
+	ComputadoresUsados         pgtype.Int4
 	DataInicio                 string
 	HoraInicio                 string
 	HoraFim                    string
@@ -462,7 +462,7 @@ type UpdateAgendaEventoParams struct {
 	Conteudo                 *string
 	Jogo                     *string
 	QtdPessoas               pgtype.Int4
-	ComputadoresUsados       int32
+	ComputadoresUsados       pgtype.Int4
 	DataInicio               pgtype.Date
 	HoraInicio               pgtype.Time
 	HoraFim                  pgtype.Time
@@ -485,7 +485,7 @@ type UpdateAgendaEventoRow struct {
 	Conteudo                   *string
 	Jogo                       *string
 	QtdPessoas                 pgtype.Int4
-	ComputadoresUsados         int32
+	ComputadoresUsados         pgtype.Int4
 	DataInicio                 string
 	HoraInicio                 string
 	HoraFim                    string

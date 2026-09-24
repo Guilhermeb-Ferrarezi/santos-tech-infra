@@ -27,9 +27,10 @@ func validateAgendaEventoInput(in *AgendaEventoInput) error {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Tipo inválido")
 	}
 	// Teto: sem ele, um valor absurdo (ex.: fat-finger ou POST malicioso) passa
-	// direto pelo `int32(...)` em agenda.go e trunca/wrap silenciosamente — podendo
-	// virar até um int32 negativo, corrompendo a soma de checkConflitos.
-	if in.ComputadoresUsados < 0 || in.ComputadoresUsados > 1000 {
+	// direto pro pgtype.Int4 em agenda.go e trunca/wrap silenciosamente — podendo
+	// virar até um int32 negativo, corrompendo a soma de checkConflitos. nil
+	// ("não informado") passa direto: fica de fora da soma, não é um valor a validar.
+	if in.ComputadoresUsados != nil && (*in.ComputadoresUsados < 0 || *in.ComputadoresUsados > 1000) {
 		return appErr(http.StatusBadRequest, "BAD_REQUEST", "Quantidade de computadores inválida")
 	}
 	if _, err := time.Parse("2006-01-02", in.DataInicio); err != nil {
@@ -54,7 +55,8 @@ func validateAgendaEventoInput(in *AgendaEventoInput) error {
 			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim não pode ser antes do início")
 		}
 		in.HoraInicio, in.HoraFim = "00:00:00", "23:59:59"
-		in.ComputadoresUsados = 0
+		zero := 0
+		in.ComputadoresUsados = &zero
 	} else {
 		in.DataFim = nil
 		hi, err := parseHoraMinutos(in.HoraInicio)
@@ -80,24 +82,31 @@ func validateAgendaEventoInput(in *AgendaEventoInput) error {
 		if in.DiaSemana == nil || *in.DiaSemana < 0 || *in.DiaSemana > 6 {
 			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Dia da semana obrigatório para evento recorrente")
 		}
-		if in.DataFimRecorrencia == nil || strings.TrimSpace(*in.DataFimRecorrencia) == "" {
-			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim da recorrência obrigatória")
+		// dataFimRecorrencia nil/vazia = recorrência indefinida (sem data de término
+		// conhecida) — estado válido, não um campo faltando. resolveOcorrencias trata
+		// nil como "sem teto próprio" (limitado só pela janela pedida pelo caller) e
+		// checkConflitos usa um horizonte sintético (agendaRecorrenciaMaxDias) pra não
+		// deixar de checar conflito nas ocorrências futuras desse evento.
+		if in.DataFimRecorrencia != nil && strings.TrimSpace(*in.DataFimRecorrencia) == "" {
+			in.DataFimRecorrencia = nil
 		}
-		fim, err := time.Parse("2006-01-02", *in.DataFimRecorrencia)
-		if err != nil {
-			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim da recorrência inválida")
-		}
-		inicio, _ := time.Parse("2006-01-02", in.DataInicio)
-		if !fim.After(inicio) {
-			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim da recorrência deve ser depois do início")
-		}
-		// Sem teto, um intervalo absurdo (ex.: "9999-12-31") faz resolveOcorrencias
-		// gerar centenas de milhares de ocorrências semanais — e checkConflitos
-		// compara cada uma contra todo evento existente. POST /agenda/eventos/check
-		// roda isso a cada keystroke do form (60 req/min, qualquer usuário com
-		// agenda:write), então esse custo é multiplicável.
-		if fim.After(inicio.AddDate(0, 0, agendaRecorrenciaMaxDias)) {
-			return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim da recorrência não pode ser mais de 2 anos após o início")
+		if in.DataFimRecorrencia != nil {
+			fim, err := time.Parse("2006-01-02", *in.DataFimRecorrencia)
+			if err != nil {
+				return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim da recorrência inválida")
+			}
+			inicio, _ := time.Parse("2006-01-02", in.DataInicio)
+			if !fim.After(inicio) {
+				return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim da recorrência deve ser depois do início")
+			}
+			// Sem teto, um intervalo absurdo (ex.: "9999-12-31") faz resolveOcorrencias
+			// gerar centenas de milhares de ocorrências semanais — e checkConflitos
+			// compara cada uma contra todo evento existente. POST /agenda/eventos/check
+			// roda isso a cada keystroke do form (60 req/min, qualquer usuário com
+			// agenda:write), então esse custo é multiplicável.
+			if fim.After(inicio.AddDate(0, 0, agendaRecorrenciaMaxDias)) {
+				return appErr(http.StatusBadRequest, "BAD_REQUEST", "Data de fim da recorrência não pode ser mais de 2 anos após o início")
+			}
 		}
 	} else {
 		in.DiaSemana = nil

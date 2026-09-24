@@ -61,9 +61,10 @@ func TestHandleCreateAgendaEventoValidation(t *testing.T) {
 func TestValidateAgendaEventoInputNormalizaRecorrencia(t *testing.T) {
 	dia := 2
 	fim := "2026-12-01"
+	pcs8, pcs5 := 8, 5
 	in := AgendaEventoInput{
 		Tipo: "aula_turma", Titulo: "Turma", DataInicio: "2026-09-01",
-		HoraInicio: "19:30", HoraFim: "21:30", ComputadoresUsados: 8,
+		HoraInicio: "19:30", HoraFim: "21:30", ComputadoresUsados: &pcs8,
 		DiaSemana: &dia, DataFimRecorrencia: &fim,
 	}
 	if err := validateAgendaEventoInput(&in); err != nil {
@@ -75,7 +76,7 @@ func TestValidateAgendaEventoInputNormalizaRecorrencia(t *testing.T) {
 
 	in2 := AgendaEventoInput{
 		Tipo: "avulso", Titulo: "Mix", DataInicio: "2026-09-04",
-		HoraInicio: "20:00", HoraFim: "22:00", ComputadoresUsados: 5,
+		HoraInicio: "20:00", HoraFim: "22:00", ComputadoresUsados: &pcs5,
 	}
 	if err := validateAgendaEventoInput(&in2); err != nil {
 		t.Fatalf("não esperava erro: %v", err)
@@ -91,12 +92,57 @@ func TestValidateAgendaEventoInputNormalizaRecorrencia(t *testing.T) {
 func TestValidateAgendaEventoInputRecorrenciaMaxSpan(t *testing.T) {
 	dia := 2
 	fim := "9999-12-31"
+	pcs := 8
 	in := AgendaEventoInput{
 		Tipo: "aula_turma", Titulo: "Turma", DataInicio: "2026-09-01",
-		HoraInicio: "19:30", HoraFim: "21:30", ComputadoresUsados: 8,
+		HoraInicio: "19:30", HoraFim: "21:30", ComputadoresUsados: &pcs,
 		DiaSemana: &dia, DataFimRecorrencia: &fim,
 	}
 	if err := validateAgendaEventoInput(&in); err == nil {
 		t.Fatal("dataFimRecorrencia a mais de 2 anos do início deveria ser rejeitada")
+	}
+}
+
+// aula_turma sem dataFimRecorrencia agora é um estado válido (recorrência
+// indefinida) — antes disso era 400 "obrigatória".
+func TestValidateAgendaEventoInputRecorrenciaIndefinidaValida(t *testing.T) {
+	dia := 2
+	pcs := 8
+	in := AgendaEventoInput{
+		Tipo: "aula_turma", Titulo: "Turma", DataInicio: "2026-09-01",
+		HoraInicio: "19:30", HoraFim: "21:30", ComputadoresUsados: &pcs,
+		DiaSemana: &dia, DataFimRecorrencia: nil,
+	}
+	if err := validateAgendaEventoInput(&in); err != nil {
+		t.Fatalf("dataFimRecorrencia nil deveria ser aceita como recorrência indefinida: %v", err)
+	}
+	if in.DataFimRecorrencia != nil {
+		t.Fatal("dataFimRecorrencia deveria continuar nil")
+	}
+
+	// String vazia (form em branco) também normaliza pra nil, não erro.
+	vazia := ""
+	in2 := AgendaEventoInput{
+		Tipo: "aula_turma", Titulo: "Turma", DataInicio: "2026-09-01",
+		HoraInicio: "19:30", HoraFim: "21:30", ComputadoresUsados: &pcs,
+		DiaSemana: &dia, DataFimRecorrencia: &vazia,
+	}
+	if err := validateAgendaEventoInput(&in2); err != nil {
+		t.Fatalf("dataFimRecorrencia vazia deveria normalizar pra indefinida: %v", err)
+	}
+	if in2.DataFimRecorrencia != nil {
+		t.Fatal("dataFimRecorrencia vazia deveria virar nil")
+	}
+}
+
+// computadoresUsados nil ("não informado") é um estado válido — só o range
+// [0,1000] é rejeitado quando um valor É enviado.
+func TestValidateAgendaEventoInputComputadoresUsadosNilValido(t *testing.T) {
+	in := AgendaEventoInput{
+		Tipo: "avulso", Titulo: "T", DataInicio: "2026-09-04",
+		HoraInicio: "20:00", HoraFim: "22:00", ComputadoresUsados: nil,
+	}
+	if err := validateAgendaEventoInput(&in); err != nil {
+		t.Fatalf("computadoresUsados nil não deveria ser rejeitado: %v", err)
 	}
 }

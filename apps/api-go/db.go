@@ -985,6 +985,13 @@ ALTER TABLE agenda_eventos DROP CONSTRAINT IF EXISTS agenda_eventos_tipo_check;
 ALTER TABLE agenda_eventos ADD CONSTRAINT agenda_eventos_tipo_check
   CHECK (tipo IN ('aula_turma','aula_particular','aula_experimental','avulso','corujao','mix','dia_inteiro'));
 
+-- computadores_usados vira opcional: turma migrada sem contagem confiável de PC
+-- grava NULL ("não informado") em vez de forçar um número inventado. NULL some
+-- da soma de capacidade (não conta como 0 nem impede o cálculo) e o front sinaliza
+-- visualmente o evento como "PCs não informado" pra não passar falsa sensação de
+-- capacidade sobrando. O CHECK (>= 0) já é satisfeito por NULL, não precisa recriar.
+ALTER TABLE agenda_eventos ALTER COLUMN computadores_usados DROP NOT NULL;
+
 -- Registra quando alguém confirma criar/editar um evento de Arena apesar do
 -- aviso de conflito de política (Arena em cima de aula) — dá visibilidade de
 -- intervenção ao Henrique/Rodrigo sem bloquear quem precisa vender.

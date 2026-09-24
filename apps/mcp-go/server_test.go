@@ -311,6 +311,97 @@ func TestMailboxSendExigeCorpo(t *testing.T) {
 	}
 }
 
+func TestAgendaEventsListRepassaToken(t *testing.T) {
+	var gotAuth, gotURL string
+	fakeAuth := httptest.NewServer(authMeOK(3, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotURL = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"eventos":[]}`))
+	}))
+	defer fakeAuth.Close()
+
+	session := newTestSession(t, Config{AuthBaseURL: fakeAuth.URL}, nil, "Bearer st_test123")
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "agenda_events_list",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("tool falhou: %s", toolText(t, res))
+	}
+	if gotAuth != "Bearer st_test123" {
+		t.Fatalf("Authorization não repassado: %q", gotAuth)
+	}
+	if gotURL != "/agenda/eventos" {
+		t.Fatalf("URL errada: %q", gotURL)
+	}
+}
+
+// TestAgendaEventCreateValidacaoLocal espelha TestHandleCreateAgendaEventoValidation
+// (api-go): a tool rejeita localmente os mesmos casos óbvios antes de gastar uma
+// chamada de rede — a validação de verdade (capacidade/conflito) continua sendo
+// da API, aqui é só o filtro barato.
+func TestAgendaEventCreateValidacaoLocal(t *testing.T) {
+	session := newTestSession(t, Config{}, nil, "Bearer st_x")
+	cases := []struct {
+		name string
+		args map[string]any
+	}{
+		{"título vazio", map[string]any{"tipo": "avulso", "dataInicio": "2026-09-04", "horaInicio": "20:00", "horaFim": "22:00"}},
+		{"tipo inválido", map[string]any{"titulo": "T", "tipo": "invalido", "dataInicio": "2026-09-04", "horaInicio": "20:00", "horaFim": "22:00"}},
+		{"sem dataInicio", map[string]any{"titulo": "T", "tipo": "avulso", "horaInicio": "20:00", "horaFim": "22:00"}},
+		{"aula_turma sem diaSemana", map[string]any{"titulo": "T", "tipo": "aula_turma", "dataInicio": "2026-09-01", "horaInicio": "19:00", "horaFim": "20:00"}},
+	}
+	for _, tc := range cases {
+		res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "agenda_event_create", Arguments: tc.args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.IsError {
+			t.Fatalf("%s: esperava erro, tool passou", tc.name)
+		}
+	}
+}
+
+// TestAgendaEventCreateNaoInventaComputadoresUsadosNemDataFimRecorrencia é o
+// caso central da migração de turmas: omitir computadoresUsados/dataFimRecorrencia
+// precisa chegar como campo AUSENTE no corpo (json:",omitempty" com ponteiro nil),
+// nunca como 0/"" disfarçado — é exatamente o que a API agora aceita como estado
+// válido (ver santos-tech-infra apps/api-go, agenda_conflitos.go/handlers_agenda.go).
+func TestAgendaEventCreateNaoInventaComputadoresUsadosNemDataFimRecorrencia(t *testing.T) {
+	var gotBody map[string]any
+	fakeAuth := httptest.NewServer(authMeOK(3, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"evento":{"id":"1"}}`))
+	}))
+	defer fakeAuth.Close()
+
+	session := newTestSession(t, Config{AuthBaseURL: fakeAuth.URL}, nil, "Bearer st_x")
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "agenda_event_create",
+		Arguments: map[string]any{
+			"tipo": "aula_turma", "titulo": "Turma migrada", "dataInicio": "2026-09-01",
+			"horaInicio": "19:00", "horaFim": "20:00", "diaSemana": 3,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("tool falhou: %s", toolText(t, res))
+	}
+	if _, has := gotBody["computadoresUsados"]; has {
+		t.Fatalf("computadoresUsados não deveria ir no corpo quando omitido: %v", gotBody)
+	}
+	if _, has := gotBody["dataFimRecorrencia"]; has {
+		t.Fatalf("dataFimRecorrencia não deveria ir no corpo quando omitido: %v", gotBody)
+	}
+}
+
 func TestResourceLLMSProxiaComToken(t *testing.T) {
 	var gotAuth string
 	fakeAuth := httptest.NewServer(authMeOK(3, func(w http.ResponseWriter, r *http.Request) {
@@ -402,6 +493,8 @@ func TestTodasAsToolsRegistradas(t *testing.T) {
 		"ip_ban",
 		"oauth_clients_list", "oauth_client_create", "oauth_client_update", "oauth_client_delete",
 		"model3d", "model3d_upload",
+		// Agenda.
+		"agenda_events_list", "agenda_event_create",
 	}
 	got := map[string]bool{}
 	for _, tl := range res.Tools {

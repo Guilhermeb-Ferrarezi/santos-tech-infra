@@ -20,13 +20,15 @@ type AgendaEvento struct {
 	Conteudo                   *string `json:"conteudo"`
 	Jogo                       *string `json:"jogo"`
 	QtdPessoas                 *int    `json:"qtdPessoas"`
-	ComputadoresUsados         int     `json:"computadoresUsados"`
-	DataInicio                 string  `json:"dataInicio"`
-	HoraInicio                 string  `json:"horaInicio"`
-	HoraFim                    string  `json:"horaFim"`
-	Recorrencia                string  `json:"recorrencia"`
-	DiaSemana                  *int    `json:"diaSemana"`
-	DataFimRecorrencia         *string `json:"dataFimRecorrencia"`
+	// nil = não informado (turma migrada sem contagem confiável) — fica de fora
+	// da soma de capacidade em vez de virar 0 disfarçado (ver checkConflitos).
+	ComputadoresUsados *int    `json:"computadoresUsados"`
+	DataInicio         string  `json:"dataInicio"`
+	HoraInicio         string  `json:"horaInicio"`
+	HoraFim            string  `json:"horaFim"`
+	Recorrencia        string  `json:"recorrencia"`
+	DiaSemana          *int    `json:"diaSemana"`
+	DataFimRecorrencia *string `json:"dataFimRecorrencia"`
 	// DataFim: último dia (inclusive) de um evento "dia_inteiro" que abrange
 	// vários dias consecutivos — distinto de DataFimRecorrencia (recorrência
 	// semanal). Só usado quando Tipo == "dia_inteiro".
@@ -47,7 +49,7 @@ type AgendaEventoInput struct {
 	Conteudo                 *string `json:"conteudo"`
 	Jogo                     *string `json:"jogo"`
 	QtdPessoas               *int    `json:"qtdPessoas"`
-	ComputadoresUsados       int     `json:"computadoresUsados"`
+	ComputadoresUsados       *int    `json:"computadoresUsados"`
 	DataInicio               string  `json:"dataInicio"`
 	HoraInicio               string  `json:"horaInicio"`
 	HoraFim                  string  `json:"horaFim"`
@@ -170,7 +172,7 @@ func timeStrToPgTime(s string) pgtype.Time {
 func mkAgendaEvento(
 	id, tipo, titulo string, alunoOuGrupo *string,
 	professorID pgtype.Int4, professorNome string,
-	conteudo, jogo *string, qtdPessoas pgtype.Int4, pcs int32,
+	conteudo, jogo *string, qtdPessoas pgtype.Int4, pcs pgtype.Int4,
 	dataInicio, horaInicio, horaFim, recorrencia string, diaSemana *int16, dataFimRecorrencia, dataFim string,
 	statusPreparo *string, notas string, createdBy pgtype.Int4, createdByNome string,
 	createdAt, updatedAt pgtype.Timestamptz,
@@ -178,7 +180,7 @@ func mkAgendaEvento(
 	return AgendaEvento{
 		ID: id, Tipo: tipo, Titulo: titulo, AlunoOuGrupo: alunoOuGrupo,
 		ProfessorOuResponsavelID: pgInt4ToInt64Ptr(professorID), ProfessorOuResponsavelNome: professorNome,
-		Conteudo: conteudo, Jogo: jogo, QtdPessoas: pgInt4ToIntPtr(qtdPessoas), ComputadoresUsados: int(pcs),
+		Conteudo: conteudo, Jogo: jogo, QtdPessoas: pgInt4ToIntPtr(qtdPessoas), ComputadoresUsados: pgInt4ToIntPtr(pcs),
 		DataInicio: dataInicio, HoraInicio: horaInicio, HoraFim: horaFim,
 		Recorrencia: recorrencia, DiaSemana: int16PtrToIntPtr(diaSemana), DataFimRecorrencia: strPtrOrNil(dataFimRecorrencia),
 		DataFim: strPtrOrNil(dataFim), StatusPreparo: statusPreparo, Notas: notas,
@@ -255,7 +257,7 @@ func (s *Server) insertAgendaEvento(ctx context.Context, in AgendaEventoInput, c
 		Tipo: in.Tipo, Titulo: in.Titulo, AlunoOuGrupo: in.AlunoOuGrupo,
 		ProfessorOuResponsavelID: int64PtrToPgInt4(in.ProfessorOuResponsavelID),
 		Conteudo:                 in.Conteudo, Jogo: in.Jogo, QtdPessoas: intPtrToPgInt4(in.QtdPessoas),
-		ComputadoresUsados: int32(in.ComputadoresUsados),
+		ComputadoresUsados: intPtrToPgInt4(in.ComputadoresUsados),
 		DataInicio:         dateStrToPgDate(&in.DataInicio), HoraInicio: timeStrToPgTime(in.HoraInicio), HoraFim: timeStrToPgTime(in.HoraFim),
 		Recorrencia: in.Recorrencia, DiaSemana: intPtrToInt16Ptr(in.DiaSemana), DataFimRecorrencia: dateStrToPgDate(in.DataFimRecorrencia),
 		DataFim:       dateStrToPgDate(in.DataFim),
@@ -273,7 +275,7 @@ func (s *Server) updateAgendaEvento(ctx context.Context, id string, in AgendaEve
 		ID: uuidToPg(id), Tipo: in.Tipo, Titulo: in.Titulo, AlunoOuGrupo: in.AlunoOuGrupo,
 		ProfessorOuResponsavelID: int64PtrToPgInt4(in.ProfessorOuResponsavelID),
 		Conteudo:                 in.Conteudo, Jogo: in.Jogo, QtdPessoas: intPtrToPgInt4(in.QtdPessoas),
-		ComputadoresUsados: int32(in.ComputadoresUsados),
+		ComputadoresUsados: intPtrToPgInt4(in.ComputadoresUsados),
 		DataInicio:         dateStrToPgDate(&in.DataInicio), HoraInicio: timeStrToPgTime(in.HoraInicio), HoraFim: timeStrToPgTime(in.HoraFim),
 		Recorrencia: in.Recorrencia, DiaSemana: intPtrToInt16Ptr(in.DiaSemana), DataFimRecorrencia: dateStrToPgDate(in.DataFimRecorrencia),
 		DataFim:       dateStrToPgDate(in.DataFim),

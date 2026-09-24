@@ -17,7 +17,7 @@ type AgendaEvento struct {
 	Conteudo                 *string
 	Jogo                     *string
 	QtdPessoas               pgtype.Int4
-	ComputadoresUsados       int32
+	ComputadoresUsados       pgtype.Int4
 	DataInicio               pgtype.Date
 	HoraInicio               pgtype.Time
 	HoraFim                  pgtype.Time

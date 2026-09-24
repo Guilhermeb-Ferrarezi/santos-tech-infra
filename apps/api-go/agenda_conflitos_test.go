@@ -5,7 +5,7 @@ import "testing"
 func agendaEventoFixture(id, tipo string, dataInicio, horaInicio, horaFim string, pcs int) AgendaEvento {
 	return AgendaEvento{
 		ID: id, Tipo: tipo, Titulo: tipo, DataInicio: dataInicio,
-		HoraInicio: horaInicio, HoraFim: horaFim, ComputadoresUsados: pcs,
+		HoraInicio: horaInicio, HoraFim: horaFim, ComputadoresUsados: &pcs,
 		Recorrencia: "nenhuma",
 	}
 }
@@ -50,9 +50,10 @@ func TestResolveOcorrenciasNaoRecorrente(t *testing.T) {
 func TestResolveOcorrenciasSemanal(t *testing.T) {
 	dia := 2 // terça (time.Tuesday == 2)
 	fim := "2026-10-27"
+	pcs := 8
 	ev := AgendaEvento{
 		ID: "turma", Tipo: "aula_turma", DataInicio: "2026-09-01",
-		HoraInicio: "19:30", HoraFim: "21:30", ComputadoresUsados: 8,
+		HoraInicio: "19:30", HoraFim: "21:30", ComputadoresUsados: &pcs,
 		Recorrencia: "semanal", DiaSemana: &dia, DataFimRecorrencia: &fim,
 	}
 	start, _ := parseData("2026-09-01")
@@ -69,6 +70,98 @@ func TestResolveOcorrenciasSemanal(t *testing.T) {
 		if int(o.Data.Weekday()) != dia {
 			t.Fatalf("ocorrência fora do dia da semana esperado: %v", o.Data)
 		}
+	}
+}
+
+// dataFimRecorrencia nil = recorrência indefinida: resolveOcorrencias não deve
+// mais tratar isso como erro, e deve gerar ocorrências até o rangeEnd pedido
+// (sem teto próprio).
+func TestResolveOcorrenciasSemanalIndefinida(t *testing.T) {
+	dia := 2 // terça
+	pcs := 8
+	ev := AgendaEvento{
+		ID: "turma", Tipo: "aula_turma", DataInicio: "2026-09-01",
+		HoraInicio: "19:30", HoraFim: "21:30", ComputadoresUsados: &pcs,
+		Recorrencia: "semanal", DiaSemana: &dia, DataFimRecorrencia: nil,
+	}
+	start, _ := parseData("2026-09-01")
+	end, _ := parseData("2026-09-30")
+	ocs, err := resolveOcorrencias(ev, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ocs) != 5 {
+		t.Fatalf("esperava 5 ocorrências em setembro (limitadas pelo rangeEnd), got %d", len(ocs))
+	}
+	// Mudando a janela pra um mês bem mais adiante, a turma indefinida ainda
+	// aparece — sem teto próprio, ela nunca "termina" sozinha.
+	start2, _ := parseData("2027-06-01")
+	end2, _ := parseData("2027-06-30")
+	ocs2, err := resolveOcorrencias(ev, start2, end2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ocs2) == 0 {
+		t.Fatal("turma com recorrência indefinida deveria continuar aparecendo em janelas futuras")
+	}
+}
+
+// checkConflitos precisa checar conflito nas ocorrências FUTURAS de um
+// candidato com recorrência indefinida, não só no seu primeiro dia — sem o
+// horizonte sintético em checkConflitos, um evento semanal sem
+// dataFimRecorrencia teria rangeEnd==rangeStart e nunca disputaria PC/horário
+// com nada além do dia de estreia.
+func TestCheckConflitosCandidatoIndefinidoDetectaConflitoFuturo(t *testing.T) {
+	dia := 2 // terça
+	pcsExistente, pcsCandidato := 8, 5
+	// Turma existente só a partir de outubro, mesma terça e horário do candidato.
+	existenteFim := "2026-12-29"
+	existente := AgendaEvento{
+		ID: "existente", Tipo: "aula_turma", Titulo: "existente",
+		DataInicio: "2026-10-06", HoraInicio: "19:30", HoraFim: "21:30",
+		ComputadoresUsados: &pcsExistente, Recorrencia: "semanal", DiaSemana: &dia,
+		DataFimRecorrencia: &existenteFim,
+	}
+	// Candidato indefinido começa em setembro — o conflito de outubro em diante
+	// só aparece se checkConflitos olhar além do 1º dia do candidato.
+	candidato := AgendaEvento{
+		ID: "", Tipo: "aula_turma", Titulo: "candidato",
+		DataInicio: "2026-09-01", HoraInicio: "20:00", HoraFim: "22:00",
+		ComputadoresUsados: &pcsCandidato, Recorrencia: "semanal", DiaSemana: &dia,
+		DataFimRecorrencia: nil,
+	}
+	res, err := checkConflitos(candidato, []AgendaEvento{existente})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.CapacidadeExcedida {
+		t.Fatal("8+5=13 > 10 numa terça de outubro em diante, deveria exceder capacidade")
+	}
+}
+
+// computadoresUsados nil ("não informado") fica de fora da soma de capacidade
+// em vez de virar 0 disfarçado.
+func TestCheckConflitosComputadoresUsadosNilNaoContaCapacidade(t *testing.T) {
+	pcsExistente := 8
+	existente := AgendaEvento{
+		ID: "existente", Tipo: "aula_turma", Titulo: "existente",
+		DataInicio: "2026-09-04", HoraInicio: "19:30", HoraFim: "21:30",
+		ComputadoresUsados: &pcsExistente, Recorrencia: "nenhuma",
+	}
+	candidato := AgendaEvento{
+		ID: "", Tipo: "avulso", Titulo: "candidato",
+		DataInicio: "2026-09-04", HoraInicio: "20:00", HoraFim: "22:00",
+		ComputadoresUsados: nil, Recorrencia: "nenhuma",
+	}
+	res, err := checkConflitos(candidato, []AgendaEvento{existente})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PCsOcupados != 8 {
+		t.Fatalf("computadoresUsados nil não deveria somar nada além do evento existente: got %d, want 8", res.PCsOcupados)
+	}
+	if res.CapacidadeExcedida {
+		t.Fatal("8 (só o existente) <= 10, não deveria exceder capacidade")
 	}
 }
 
