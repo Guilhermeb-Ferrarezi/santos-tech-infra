@@ -309,7 +309,9 @@ func (s *Server) setCORSHeaders(w http.ResponseWriter) {
 		// header o browser descarta a resposta.
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dash-Key, Authorization")
+		// X-Requested-With: sinal anti-CSRF que o dashboard manda em mutação
+		// sem corpo (mesmo conjunto que o api-go libera em /auth/*).
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dash-Key, Authorization, X-Requested-With")
 	}
 }
 
