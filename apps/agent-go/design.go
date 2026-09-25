@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,13 @@ import (
 	"strings"
 	"time"
 )
+
+// designSystemPrompt são as instruções do Claude Design, passadas ao CLI por
+// --append-system-prompt em toda sessão kind=design (claudeArgsLive). Ensinam a
+// perguntar pelo AskUserQuestion e a organizar várias telas.
+//
+//go:embed design_prompt.md
+var designSystemPrompt string
 
 const designScreenSlug = "index"
 const previewTokenTTL = 30 * time.Minute
@@ -111,11 +119,21 @@ func safeDesignPath(workdir, rel string) (string, error) {
 // do Google. connect-src 'none' e img-src sem https fecham os dois canais baratos de
 // exfiltração (fetch e URL de imagem) — o HTML aqui é gerado por um modelo e tratado
 // como não confiável.
+//
+// O `sandbox` torna a origem do documento opaca mesmo quando ele é aberto direto numa
+// aba (link público, "abrir em nova aba"): sem ele o HTML gerado rodaria na origem de
+// api.santos-tech.com. O iframe do painel já tem sandbox próprio; os dois se somam.
 func designCSP(cfg Config) string {
 	ancestors := "'self'"
 	if len(cfg.CORSOrigins) > 0 {
 		ancestors = strings.Join(cfg.CORSOrigins, " ")
 	}
+	return designCSPWithAncestors(ancestors)
+}
+
+// designCSPWithAncestors é a política com o frame-ancestors escolhido pelo chamador
+// ('none' no link público: não é para ser embutido em lugar nenhum).
+func designCSPWithAncestors(ancestors string) string {
 	return strings.Join([]string{
 		"default-src 'none'",
 		"img-src 'self' data:",
@@ -124,8 +142,10 @@ func designCSP(cfg Config) string {
 		"script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com",
 		"connect-src 'none'",
 		"form-action 'none'",
-		"base-uri 'none'",
+		// 'self' e não 'none': o canvas injeta <base href> na tela (assets relativos).
+		"base-uri 'self'",
 		"frame-ancestors " + ancestors,
+		"sandbox allow-scripts allow-forms",
 	}, "; ")
 }
 
@@ -194,8 +214,8 @@ o HTML no chat.
 
 ## Regras do arquivo
 
-- A tela vive em ` + "`telas/index.html`" + `. Edite esse arquivo; não crie outros
-  sem o usuário pedir.
+- A tela principal é ` + "`telas/index.html`" + `. Outras telas do fluxo ficam em
+  ` + "`telas/<slug>.html`" + `, cada uma com um ` + "`<title>`" + ` curto.
 - HTML autocontido: estilos no próprio arquivo (` + "`<style>`" + ` ou classes do
   Tailwind), sem build.
 - Tailwind está disponível por ` + "`<script src=\"https://cdn.tailwindcss.com\"></script>`" + `.

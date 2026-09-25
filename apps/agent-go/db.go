@@ -135,6 +135,18 @@ CREATE TABLE IF NOT EXISTS claude_usage_events (
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_usage_created ON claude_usage_events(created_at DESC);
+
+-- Links públicos (somente leitura) de projetos do Claude Design. Um ativo por
+-- projeto; revogar marca revoked_at e o link para de responder na hora.
+CREATE TABLE IF NOT EXISTS claude_design_shares (
+  token           TEXT PRIMARY KEY,
+  conversation_id UUID NOT NULL REFERENCES claude_conversations(id) ON DELETE CASCADE,
+  created_by      BIGINT NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at      TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_design_share_ativo
+  ON claude_design_shares(conversation_id) WHERE revoked_at IS NULL;
 `
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

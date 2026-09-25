@@ -327,11 +327,32 @@ Auth: sessão do auth central ou PAT (`st_...`).
   pro iframe do preview · `GET /claude/designs/{id}/preview/{path...}?t=&inspect=`
   — serve o workdir do projeto (whitelist de extensão, sem `authGuard`: a
   autenticação é o token da query). Nunca embutir sem
-  `sandbox="allow-scripts allow-forms"` (sem `allow-same-origin`)
+  `sandbox="allow-scripts allow-forms"` (sem `allow-same-origin`); a CSP da
+  resposta também traz `sandbox`, então abrir numa aba própria é seguro
+- `GET /claude/designs/{id}/files` — telas do projeto `{screens:[{path,title,updatedAt}]}`
+  (`telas/*.html`, `index` primeiro; `title` = `<title>` do HTML)
+- **Canvas:** `GET /claude/designs/{id}/source?path=telas/x.html` (admin) → `{path, html}`
+  · `GET /claude/designs/{id}/c/{token}/` — casca do canvas (sem authGuard, token
+  assinado no caminho); o painel injeta o HTML por postMessage (`render`, `zoom`,
+  `inspect`) e recebe `ready`/`rendered`/`navigate` + `santos-design-inspect`.
+  `.../c/{token}/{telas|assets}/...` serve os assets relativos da tela injetada.
+  WS de design emite `design_draft {path, html, done}` (HTML parcial do Write enquanto
+  o modelo escreve, ~2/s) e `design_file {path}` (arquivo salvo)
+- `GET|POST|DELETE /claude/designs/{id}/share` — link público somente leitura:
+  status `{active, token?, createdAt?}` · cria (ou devolve o ativo; um por
+  projeto) · revoga (204). Link: `GET /claude/share/{token}/{path...}` —
+  **público, sem login**; só `telas/` e `assets/`, CSP com `sandbox` e
+  `frame-ancestors 'none'`, `X-Robots-Tag: noindex`; revogado = 404 na hora
 - `GET /claude/conversations/{id}/ws` — WebSocket da conversa. Evento `prompt`
   aceita `attachments: [{mediaType, data}]` (base64; máx 4 × 5 MB; jpeg/png/
   webp/gif/pdf) — o agente grava em `<workdir>/media/` e o turno libera
-  `Read(<workdir>/media/**)` escopado (terceiros seguem sem outras tools)
+  `Read(<workdir>/media/**)` escopado (terceiros seguem sem outras tools).
+  **Design (`kind=design`):** o agente pergunta pelo `AskUserQuestion`; o
+  servidor emite `{type:"question", data:{requestId, toolUseId, questions}}`
+  (turno pausado; reenviado a quem conectar depois) e o cliente responde
+  `{type:"answer", requestId, answers:{"<pergunta>":"<resposta>"}, skip?}`
+  (`skip` = "decida você"); fecha com `question_closed`. Sem resposta em 30 min
+  a pergunta é recusada sozinha. `tool_use` traz `id`
 - `POST /claude/conversations/{id}/model|compact|clear` · `POST /claude/stop-all`
 - `POST /claude/auth/session` — sessão mobile; `POST /claude/push/register`
 - `GET /claude/usage` (**admin**) — gastos do CLI claude (todas as origens:

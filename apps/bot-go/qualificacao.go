@@ -8,8 +8,7 @@ import (
 // Qualificação de lead — o que a escola sabe sobre a pessoa, e quanto ela vale.
 //
 // A REGRA QUE ORGANIZA TUDO: conversa primeiro, preço depois. Vale para
-// qualquer atendimento — curso infantil, trilha de adolescente ou aula
-// particular de adulto.
+// qualquer atendimento — curso em turma ou curso particular, de qualquer idade.
 //
 // Não é sonegar preço. Quem pergunta recebe; a diferença é QUANDO. O bot faz as
 // perguntas-chave, e o número sai no fim. Recusar a quem insiste soa evasivo e
@@ -94,8 +93,17 @@ var paraQuemValidos = map[string]bool{"proprio": true, "filho": true, "outro": t
 type perguntaChave struct {
 	campo    string
 	pergunta string
-	// soParaFilho: idade só faz sentido quando o curso é para uma criança.
-	soParaFilho bool
+	// perguntaProprio: a mesma pergunta quando o aluno é quem está falando.
+	perguntaProprio string
+}
+
+// texto devolve a pergunta na pessoa certa: "quantos anos ele(a) tem?" para o
+// filho, "sua idade" para quem é o próprio aluno.
+func (p perguntaChave) texto(q Qualificacao) string {
+	if p.perguntaProprio != "" && q.ParaQuem == "proprio" {
+		return p.perguntaProprio
+	}
+	return p.pergunta
 }
 
 // perguntasDaQualificacao — a ordem importa.
@@ -105,7 +113,11 @@ type perguntaChave struct {
 // motivação antes de saber para quem é soa fora de lugar.
 var perguntasDaQualificacao = []perguntaChave{
 	{campo: "paraQuem", pergunta: "é pra você mesmo ou pra alguém da família?"},
-	{campo: "alunoIdade", pergunta: "quantos anos ele(a) tem?", soParaFilho: true},
+	// Idade vale para TODOS, inclusive quem é o próprio aluno: é ela que decide
+	// turma × particular (ver modalidade.go). Até 25/09/2026 só se perguntava
+	// para filho, e o adolescente de 16 anos escrevendo por conta própria era
+	// tratado como adulto.
+	{campo: "alunoIdade", pergunta: "quantos anos ele(a) tem?", perguntaProprio: "posso saber sua idade? me ajuda a te indicar o formato certo"},
 	{campo: "interesse", pergunta: "que área chama mais atenção — programação, jogos, modelagem 3D, informática?"},
 	{campo: "jaFazCurso", pergunta: "já faz algum curso livre fora da escola?"},
 	{campo: "motivacao", pergunta: "o que fez você procurar o curso agora?"},
@@ -128,9 +140,6 @@ func (q Qualificacao) Falta() []perguntaChave {
 	}
 	var falta []perguntaChave
 	for _, p := range perguntasDaQualificacao {
-		if p.soParaFilho && q.ParaQuem != "filho" && q.ParaQuem != "outro" {
-			continue
-		}
 		if !respondido[p.campo] {
 			falta = append(falta, p)
 		}
@@ -140,11 +149,7 @@ func (q Qualificacao) Falta() []perguntaChave {
 
 // Respondidas conta quantas perguntas-chave já têm resposta.
 func (q Qualificacao) Respondidas() int {
-	total := len(perguntasDaQualificacao)
-	if q.ParaQuem != "filho" && q.ParaQuem != "outro" {
-		total-- // idade não se aplica
-	}
-	return total - len(q.Falta())
+	return len(perguntasDaQualificacao) - len(q.Falta())
 }
 
 // PodeFalarPreco diz se a conversa já aconteceu.
@@ -415,7 +420,7 @@ func (q Qualificacao) BlocoDasRegras() string {
 	} else {
 		b.WriteString("Ainda falta saber, nesta ordem:\n")
 		for i, p := range falta {
-			fmt.Fprintf(&b, "%d. %s\n", i+1, p.pergunta)
+			fmt.Fprintf(&b, "%d. %s\n", i+1, p.texto(q))
 		}
 		b.WriteString("Encaixe a PRÓXIMA da lista quando fizer sentido na conversa. Não despeje todas.\n")
 	}
@@ -448,7 +453,7 @@ func (q Qualificacao) BlocoDasRegras() string {
 		// cliente que o bot está fugindo dele.
 		b.WriteString("Esta pessoa JÁ PEDIU o preço mais de uma vez. Informe os valores AGORA, com o que está incluído, e só depois convide para a experimental. NÃO adie de novo.\n")
 	default:
-		b.WriteString("AINDA NÃO informe valores — nem mensalidade, nem matrícula, nem material, nem faixa de preço. Vale para curso infantil, trilha de adolescente E aula particular de adulto.\n")
+		b.WriteString("AINDA NÃO informe valores — nem mensalidade, nem matrícula, nem material, nem faixa de preço. Vale para curso em turma E curso particular, de qualquer idade.\n")
 		b.WriteString("Se o cliente perguntar o preço agora: NÃO diga que não pode falar e NÃO invente desculpa. Diga que já passa os valores e, no MESMO balão, faça a próxima pergunta da lista acima. Exemplo: \"Já te falo os valores! Só pra eu te indicar certo: é pra você ou pra alguém da família?\"\n")
 		b.WriteString("Marque \"clientePediuPreco\": true toda vez que ele pedir o valor — na segunda vez o sistema libera sozinho.\n")
 	}

@@ -101,6 +101,28 @@ num iframe de origem opaca, sem cookie. A resposta carrega CSP própria
 (`designCSP`) com `connect-src 'none'` e `img-src` sem `https:` — o HTML é gerado
 por um modelo e tratado como não confiável.
 
+**Instruções do agente:** `design_prompt.md` (embutido) entra por
+`--append-system-prompt` em toda sessão viva `kind=design` — vale também para
+projetos criados antes dele (o `CLAUDE.md` do workspace só é gravado na criação).
+
+**Perguntas (`question.go`):** a sessão viva de design roda com
+`--permission-prompt-tool stdio`. O `AskUserQuestion` chega como `control_request`
+`can_use_tool`; o turno fica pausado (watchdog desarmado, prazo de 30 min) até o
+painel responder pelo WS (`answer`). Qualquer outra ferramenta interativa é recusada
+na hora. `Stop` com pergunta pendente recusa antes do interrupt.
+
+**Canvas (`design_canvas.go`, `canvas_shell.html`, `design_live.go`):** o painel
+carrega a casca uma vez e injeta o HTML de cada tela por postMessage (iframe srcdoc,
+buffer duplo — sem flash, rolagem preservada, zoom). Cada tela injetada ganha um script
+(runtime) que reporta rolagem, intercepta links entre telas e faz o inspecionar: a casca
+tem CSP `sandbox`, e cada filho ganha OUTRA origem opaca, então tudo é por mensagem.
+`designLive` lê o `input_json_delta` do Write (stream parcial do CLI) e emite
+`design_draft` com o HTML parcial (~2/s); o `tool_result` de Write/Edit vira `design_file`.
+
+**Várias telas e link público:** `telas/*.html` (listadas por `/files`); o link de
+`/claude/share/{token}` é revogável, serve só `telas/` e `assets/` e usa a mesma CSP
+com `sandbox` (origem opaca mesmo numa aba própria) e `frame-ancestors 'none'`.
+
 ⚠️ O painel embute esse iframe com `sandbox="allow-scripts allow-forms"`.
 **Nunca acrescente `allow-same-origin`**: é ele que impede o conteúdo gerado de
 alcançar cookie e storage de `api.santos-tech.com`.
@@ -128,15 +150,22 @@ rate limit por rota+IP).
 | POST | `/claude/conversations/{id}/clear` | zera contexto |
 | POST | `/claude/designs/{id}/preview-token` | emite token curto assinado (30min) pro iframe do preview |
 | GET | `/claude/designs/{id}/preview/{path...}` | **sem authGuard** — serve o workdir do projeto de design, autenticado pelo token da query `?t=` |
+| GET | `/claude/designs/{id}/files` | telas do projeto `{screens:[{path,title,updatedAt}]}` |
+| GET | `/claude/designs/{id}/source?path=` | HTML da tela `{path, html}` (o painel injeta no canvas) |
+| GET | `/claude/designs/{id}/c/{token}/{path...}` | **sem authGuard** — casca do canvas (sem path) e assets de `telas/`/`assets/`; token assinado no caminho |
+| GET/POST/DELETE | `/claude/designs/{id}/share` | status / cria (ou devolve o ativo) / revoga o link público |
+| GET | `/claude/share/{token}/{path...}` | **público, sem login** — link de compartilhamento (só `telas/` e `assets/`, CSP com `sandbox`) |
 | POST | `/claude/generate` | geração one-shot stateless `{task, brief, tone?}` → `{subject, html, text}` |
 | POST | `/claude/auth/login` | inicia OAuth (PTY) → `{state, authUrl}`; ou `{token}` direto |
 | POST | `/claude/auth/callback` | `{state, code}` → captura e cifra o token |
 | POST | `/claude/auth/logout` | limpa o token |
 | GET | `/claude/auth/status` | `logged_in` / `logged_out` |
 
-**WebSocket** — cliente envia `{type:"prompt", text}` ou `{type:"interrupt"}`; servidor
-emite `init` · `delta` (texto ao vivo) · `tool_use` · `tool_result` · `result` ·
-`error` · `busy` · `done` · `design_updated` · `design_no_change` (só em conversas `kind=design`).
+**WebSocket** — cliente envia `{type:"prompt", text}`, `{type:"interrupt"}` ou
+`{type:"answer", requestId, answers, skip?}`; servidor emite `init` · `delta` (texto ao
+vivo) · `tool_use` (com `id`) · `tool_result` · `result` · `error` · `busy` · `done` ·
+`design_updated` · `design_no_change` · `question` · `question_closed` (os quatro
+últimos só em conversas `kind=design`).
 
 **Auth** — autentica via JWT de sessão (cookie/Bearer) **ou** Personal Access Token do auth
 (`Authorization: Bearer st_…`, validado na tabela `api_keys` compartilhada). As rotas

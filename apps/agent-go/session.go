@@ -41,7 +41,8 @@ const turnTimeout = 8 * time.Minute
 
 // turnEvent é o evento normalizado enviado ao cliente (WS) durante um turno.
 type turnEvent struct {
-	Type    string `json:"type"` // init|delta|tool_use|tool_result|result|error|done
+	Type    string `json:"type"`         // init|delta|tool_use|tool_result|result|error|done|question|question_closed
+	ID      string `json:"id,omitempty"` // tool_use: id do bloco (liga o card ao tool_result)
 	Text    string `json:"text,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Input   any    `json:"input,omitempty"`
@@ -336,7 +337,15 @@ func (m *SessionManager) claudeArgs(conv *Conversation, mediaGlob string) []stri
 // lendo mensagens do stdin em vez de ler um prompt e sair.
 func (m *SessionManager) claudeArgsLive(conv *Conversation, mediaGlob string) []string {
 	args := m.claudeArgs(conv, mediaGlob)
-	return append(args, "--input-format", "stream-json", "--replay-user-messages")
+	args = append(args, "--input-format", "stream-json", "--replay-user-messages")
+	if conv.Kind == designKind && !conv.ToolsDisabled {
+		// O host (este processo) responde às ferramentas interativas pelo stdin — é o
+		// que devolve o AskUserQuestion à sessão (question.go). As instruções do Claude
+		// Design entram por aqui, e não só pelo CLAUDE.md do workspace, para valerem
+		// também nos projetos criados antes delas.
+		args = append(args, "--permission-prompt-tool", "stdio", "--append-system-prompt", designSystemPrompt)
+	}
+	return args
 }
 
 // claudeEnv monta o ambiente MÍNIMO e EXPLÍCITO do processo `claude`.
@@ -493,7 +502,8 @@ func (m *SessionManager) handleEvent(ctx context.Context, conv *Conversation, ev
 				}
 			case "tool_use":
 				name, _ := block["name"].(string)
-				emit(turnEvent{Type: "tool_use", Name: name, Input: block["input"]})
+				id, _ := block["id"].(string)
+				emit(turnEvent{Type: "tool_use", ID: id, Name: name, Input: block["input"]})
 				_ = m.s.insertMessage(ctx, &Message{ConversationID: conv.ID, Role: "assistant", Kind: "tool_use", Content: block})
 			}
 		}

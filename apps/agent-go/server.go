@@ -29,6 +29,8 @@ type Server struct {
 
 	// designWorkdirFor é injetável nos testes; nil em produção (usa o Postgres).
 	designWorkdirFor designWorkdirResolver
+	// shareWorkdirFor é injetável nos testes; nil em produção (usa o Postgres).
+	shareWorkdirFor shareWorkdirResolver
 }
 
 func NewServer(cfg Config, pool *pgxpool.Pool, rdb *redis.Client) *Server {

@@ -42,6 +42,9 @@ func TestHelperProcess(t *testing.T) {
 	// FAKE_HANG=1: emite o evento assistant mas NUNCA emite result — simula turno travado.
 	// O processo fica vivo aguardando mais stdin (sc.Scan bloqueia) até ser morto pelo watchdog.
 	hang := os.Getenv("FAKE_HANG") == "1"
+	// FAKE_ASK=1: a cada turno chama AskUserQuestion (control_request can_use_tool) e só
+	// termina o turno quando o host responde; o tool_result ecoa a resposta recebida.
+	ask := os.Getenv("FAKE_ASK") == "1"
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 	sc := bufio.NewScanner(os.Stdin)
@@ -58,12 +61,34 @@ func TestHelperProcess(t *testing.T) {
 			out.Flush()
 			continue
 		}
+		if in["type"] == "control_response" && ask {
+			resp, _ := in["response"].(map[string]any)
+			inner, _ := resp["response"].(map[string]any)
+			eco, _ := json.Marshal(map[string]any{"request_id": resp["request_id"], "behavior": inner["behavior"], "answers": (func() any {
+				u, _ := inner["updatedInput"].(map[string]any)
+				return u["answers"]
+			})(), "message": inner["message"]})
+			res, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"content": []any{
+				map[string]any{"type": "tool_result", "tool_use_id": "toolu_ask", "content": string(eco)},
+			}}})
+			fmt.Fprintln(out, string(res))
+			fmt.Fprintf(out, `{"type":"result","subtype":"success","turn":%d}`+"\n", turn)
+			out.Flush()
+			continue
+		}
 		if in["type"] != "user" {
 			continue
 		}
 		turn++
 		if emitInit {
 			fmt.Fprintln(out, `{"type":"system","subtype":"init"}`)
+		}
+		if ask {
+			q := `{"questions":[{"question":"Qual plataforma?","header":"Plataforma","multiSelect":false,"options":[{"label":"iOS","description":"iPhone"},{"label":"Android","description":"Android"}]}]}`
+			fmt.Fprintf(out, `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_ask","name":"AskUserQuestion","input":%s}]}}`+"\n", q)
+			fmt.Fprintf(out, `{"type":"control_request","request_id":"req-%d","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":%s,"tool_use_id":"toolu_ask","requires_user_interaction":true}}`+"\n", turn, q)
+			out.Flush()
+			continue
 		}
 		fmt.Fprintf(out, `{"type":"assistant","message":{"content":[{"type":"text","text":"resposta %d"}]}}`+"\n", turn)
 		out.Flush()

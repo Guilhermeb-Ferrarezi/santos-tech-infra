@@ -108,20 +108,19 @@ func TestDossieNaoCarregaInstrucaoDoCliente(t *testing.T) {
 	}
 }
 
-// Adulto não tem a pergunta da idade, então três respostas dele são três de
-// cinco, não de seis. Se a conta não descontasse, o adulto precisaria responder
-// uma pergunta que ninguém vai fazer.
-func TestAdultoNaoPrecisaResponderIdade(t *testing.T) {
-	adulto := Qualificacao{}.
+// Revertido em 25/09/2026 (regra do Henrique): antes, quem era o próprio aluno
+// não recebia a pergunta da idade. Agora a idade vale para todos — é ela que
+// decide turma × particular (modalidade.go). A trava do preço continua
+// exigindo três respostas, agora de seis para todo mundo.
+func TestProprioAlunoTambemContaIdade(t *testing.T) {
+	proprio := Qualificacao{}.
 		Merge(Qualificacao{ParaQuem: "proprio", Interesse: "Excel"}).
 		Merge(Qualificacao{JaFazCurso: "nao"})
-	if !adulto.PodeFalarPreco() {
-		t.Error("adulto com três respostas deveria poder ouvir o preço")
+	if !proprio.PodeFalarPreco() {
+		t.Error("próprio aluno com três respostas em duas mensagens deveria poder ouvir o preço")
 	}
-	for _, p := range adulto.Falta() {
-		if p.campo == "alunoIdade" {
-			t.Error("a pergunta da idade não pode aparecer para adulto")
-		}
+	if n := proprio.Respondidas() + len(proprio.Falta()); n != len(perguntasDaQualificacao) {
+		t.Errorf("total de perguntas deveria ser %d para todos, veio %d", len(perguntasDaQualificacao), n)
 	}
 }
 
@@ -238,8 +237,8 @@ func TestPromptTravaOPrecoAteConversar(t *testing.T) {
 	if !strings.Contains(novo, "AINDA NÃO informe valores") {
 		t.Error("sem qualificação nenhuma, o prompt deveria travar o preço")
 	}
-	if !strings.Contains(novo, "aula particular de adulto") {
-		t.Error("a trava precisa dizer que vale para adulto também")
+	if !strings.Contains(novo, "curso particular, de qualquer idade") {
+		t.Error("a trava precisa dizer que vale para o curso particular também")
 	}
 	if !strings.Contains(novo, "Nada ainda") {
 		t.Error("o dossiê vazio deveria se anunciar como vazio")
