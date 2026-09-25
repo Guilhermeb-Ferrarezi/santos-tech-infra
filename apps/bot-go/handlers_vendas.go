@@ -25,6 +25,7 @@ func (s *Server) rotasDeVendas(mux *http.ServeMux) {
 	mux.Handle("GET /api/vendas/regras/versoes", da(s.handleVendasVersoes))
 	mux.Handle("GET /api/vendas/regras/versoes/{id}", da(s.handleVendasVersao))
 	mux.Handle("POST /api/vendas/regras/versoes/{id}/restaurar", da(s.handleVendasRestaura))
+	mux.Handle("GET /api/vendas/vocabulario/ocorrencias", da(s.handleVendasOcorrencias))
 }
 
 // versaoNaTela — o que a tela precisa saber da versão em vigor.

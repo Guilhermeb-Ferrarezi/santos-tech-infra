@@ -65,6 +65,7 @@ func TestRotasDeVendasSemCredencialDa401(t *testing.T) {
 		{"GET", "/api/vendas/regras/versoes"},
 		{"GET", "/api/vendas/regras/versoes/x"},
 		{"POST", "/api/vendas/regras/versoes/x/restaurar"},
+		{"GET", "/api/vendas/vocabulario/ocorrencias"},
 	} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(rota.metodo, rota.url, strings.NewReader("{}")))
@@ -150,6 +151,12 @@ func TestRotasDeVendasFluxoCompleto(t *testing.T) {
 	rec = pede(t, h, "POST", "/api/vendas/regras/versoes/"+r1.Versao.ID+"/restaurar", "")
 	if rec.Code != 200 {
 		t.Errorf("restaurar: %d %s", rec.Code, rec.Body)
+	}
+
+	// Onde os termos aparecem: a rota responde mesmo sem linha de config.
+	rec = pede(t, h, "GET", "/api/vendas/vocabulario/ocorrencias", "")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"termos"`) {
+		t.Errorf("ocorrências: %d %s", rec.Code, rec.Body)
 	}
 
 	// Padrão mudou depois da edição: finge que o padrão de "decidir" era outro
