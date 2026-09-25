@@ -254,10 +254,19 @@ func (s *Server) antiBotCheck(next http.Handler) http.Handler {
 		sc := &statusCapture{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sc, r)
 
-		if sc.status == http.StatusNotFound {
+		if sc.status == http.StatusNotFound && !isPublicPollingPath(r.URL.Path) {
 			s.check404Burst(r.Context(), ip)
 		}
 	})
+}
+
+// isPublicPollingPath: rotas públicas consultadas em loop por apps/páginas
+// legítimas, onde 404 é resposta de API esperada (sessão de horas apagada, PC
+// não cadastrado) e não varredura. Com NAT, uma única aba esquecida numa
+// sessão morta baniu o IP da escola inteira (25/09/2026), derrubando heartbeat
+// e cronômetro de todos os PCs. Essas rotas já têm rateLimit próprio por IP.
+func isPublicPollingPath(path string) bool {
+	return strings.HasPrefix(path, "/public/hour-sessions/") || strings.HasPrefix(path, "/public/lab-devices/")
 }
 
 // check404Burst bane o IP quando ele acumula muitos 404 numa janela curta.

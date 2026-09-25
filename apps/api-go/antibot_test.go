@@ -200,3 +200,37 @@ func TestHoneypotPathsDontCollideWithRealRoutes(t *testing.T) {
 		}
 	}
 }
+
+// TestAntiBot404BurstIgnoraPollingPublico: 404 em rota pública de polling é
+// resposta de API esperada (sessão de horas apagada, PC não cadastrado), não
+// varredura. Com NAT, UMA aba/app esquecido consultando sessão morta a cada 2s
+// baniu o IP da escola inteira (25/09/2026) e derrubou heartbeat e cronômetro
+// de todos os PCs. Essas rotas já têm rateLimit próprio por IP.
+func TestAntiBot404BurstIgnoraPollingPublico(t *testing.T) {
+	s := testServerWithRedis(t, Config{})
+	h := s.antiBotCheck(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	ip := "203.0.113.50"
+	paths := []string{
+		"/public/hour-sessions/973f3aabb9830c56f07a097e4517927d42ac41a8c789c66b6d63ebd5af8b43cb",
+		"/public/lab-devices/heartbeat",
+	}
+	for i := 0; i < notFoundBurstMax*3; i++ {
+		r := httptest.NewRequest("GET", paths[i%len(paths)], nil)
+		r.RemoteAddr = ip + ":1234"
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	if n, _ := s.rdb.Exists(context.Background(), "global:ip-ban:"+ip).Result(); n != 0 {
+		t.Fatal("404 em polling público não pode banir o IP")
+	}
+	// E uma varredura de verdade no mesmo IP continua sendo contada.
+	for i := 0; i <= notFoundBurstMax; i++ {
+		r := httptest.NewRequest("GET", "/caminho-inexistente-qualquer", nil)
+		r.RemoteAddr = ip + ":1234"
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	if n, _ := s.rdb.Exists(context.Background(), "global:ip-ban:"+ip).Result(); n == 0 {
+		t.Fatal("varredura fora do polling público ainda deveria banir")
+	}
+}
