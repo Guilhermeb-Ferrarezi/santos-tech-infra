@@ -71,7 +71,12 @@ func (s *Server) handleDesignPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rel := r.PathValue("path")
+	serveDesignFile(w, r.PathValue("path"), workdir, designCSP(s.cfg), r.URL.Query().Get("inspect") == "1")
+}
+
+// serveDesignFile entrega um arquivo do workdir de design com a CSP dada. Usado pelo
+// preview privado (iframe do painel) e pelo link público de compartilhamento.
+func serveDesignFile(w http.ResponseWriter, rel, workdir, csp string, inspect bool) {
 	if rel == "" {
 		rel = designScreenRel()
 	}
@@ -87,15 +92,15 @@ func (s *Server) handleDesignPreview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ct := previewTypes[strings.ToLower(filepath.Ext(full))]
-	if ct == "text/html; charset=utf-8" && r.URL.Query().Get("inspect") == "1" {
+	if ct == "text/html; charset=utf-8" && inspect {
 		data = injectInspector(data)
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Content-Security-Policy", designCSP(s.cfg))
+	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	// O conteúdo muda a cada turno e a URL carrega o sha; ainda assim, nada de cache
-	// compartilhado: a URL tem token.
+	// O conteúdo muda a cada turno (e um link público pode ser revogado): nada de
+	// cache compartilhado.
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)

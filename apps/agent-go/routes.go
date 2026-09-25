@@ -56,4 +56,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// token assinado, porque a URL vive num iframe de origem opaca, sem cookie).
 	mux.HandleFunc("POST /claude/designs/{id}/preview-token", s.authGuard(s.handleDesignPreviewToken))
 	mux.HandleFunc("GET /claude/designs/{id}/preview/{path...}", s.rateLimit(600, min, s.handleDesignPreview))
+	// Telas do projeto (seletor do canvas) e link público de compartilhamento.
+	mux.HandleFunc("GET /claude/designs/{id}/files", s.authGuard(s.handleDesignFiles))
+	mux.HandleFunc("GET /claude/designs/{id}/share", s.authGuard(s.handleDesignShareGet))
+	mux.HandleFunc("POST /claude/designs/{id}/share", s.rateLimit(20, min, s.authGuard(s.handleDesignShareCreate)))
+	mux.HandleFunc("DELETE /claude/designs/{id}/share", s.authGuard(s.handleDesignShareRevoke))
+	// PÚBLICO (sem login): quem autoriza é o token do link, revogável.
+	mux.HandleFunc("GET /claude/share/{token}/{path...}", s.rateLimit(300, min, s.handleDesignShared))
 }

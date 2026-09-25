@@ -44,6 +44,14 @@ type ClaudeCredential struct {
 	UpdatedAt     pgtype.Timestamptz
 }
 
+type ClaudeDesignShare struct {
+	Token          string
+	ConversationID pgtype.UUID
+	CreatedBy      int64
+	CreatedAt      pgtype.Timestamptz
+	RevokedAt      pgtype.Timestamptz
+}
+
 type ClaudeMessage struct {
 	ID             int64
 	ConversationID pgtype.UUID

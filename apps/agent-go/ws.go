@@ -25,9 +25,14 @@ const (
 
 // wsInbound é a mensagem que o cliente envia pelo WebSocket.
 type wsInbound struct {
-	Type        string       `json:"type"` // prompt|interrupt
+	Type        string       `json:"type"` // prompt|interrupt|answer
 	Text        string       `json:"text"`
 	Attachments []Attachment `json:"attachments,omitempty"` // imagens/PDFs (base64) do whats-agent
+
+	// answer: resposta ao formulário do AskUserQuestion (question.go).
+	RequestID string            `json:"requestId,omitempty"`
+	Answers   map[string]string `json:"answers,omitempty"`
+	Skip      bool              `json:"skip,omitempty"`
 }
 
 // handleConversationWS é o endpoint de chat em tempo real.
@@ -72,6 +77,11 @@ func (s *Server) handleConversationWS(w http.ResponseWriter, r *http.Request) {
 	// então sair do app NÃO mata o turno; reconectar reata o stream ao vivo.
 	events, unsub := s.mgr.Subscribe(conv.ID)
 	defer unsub()
+	// Turno parado numa pergunta: quem conecta agora (ex.: recarregou a página) precisa
+	// do formulário de novo. Vai pra todos os assinantes; o painel ignora repetidos.
+	if ev := s.mgr.PendingQuestion(conv.ID); ev != nil {
+		s.mgr.dispatch(conv.ID, *ev)
+	}
 
 	// Writer único: drena o canal de eventos para o WS.
 	go func() {
@@ -110,6 +120,10 @@ func (s *Server) handleConversationWS(w http.ResponseWriter, r *http.Request) {
 			s.mgr.DispatchPrompt(ctx, fresh, msg.Text, msg.Attachments)
 		case "interrupt":
 			s.mgr.DispatchInterrupt(conv)
+		case "answer":
+			if !s.mgr.AnswerQuestion(conv.ID, msg.RequestID, msg.Answers, msg.Skip) {
+				s.mgr.dispatch(conv.ID, turnEvent{Type: "question_closed", Data: map[string]any{"requestId": msg.RequestID}})
+			}
 		}
 	}
 }

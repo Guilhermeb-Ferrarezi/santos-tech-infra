@@ -28,12 +28,17 @@ type liveSession struct {
 
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
+	wmu   sync.Mutex // serializa escritas no stdin (prompt, interrupt, respostas de controle)
 
 	mu         sync.Mutex
 	state      string // StatusIdle | StatusRunning
 	queue      []pendingMsg
 	lastUsed   time.Time
 	lastPrompt string // último pedido do usuário — vira o assunto do commit de design
+
+	// question: pergunta do AskUserQuestion esperando o usuário (question.go). Enquanto
+	// existe, o turno está pausado e o watchdog, desarmado.
+	question *pendingQuestion
 
 	// evicted: tombstone de morte intencional (Evict por /clear, /model, /compact).
 	// Quando true, o crash path do readLoop NÃO emite TURN_FAILED — a morte foi
@@ -258,9 +263,7 @@ func (ls *liveSession) persistAndWrite(prompt string, atts []Attachment) {
 }
 
 func (ls *liveSession) writeUser(prompt string) error {
-	line := append(userMessageJSON(prompt), '\n')
-	_, err := ls.stdin.Write(line)
-	return err
+	return ls.writeLine(append(userMessageJSON(prompt), '\n'))
 }
 
 // readLoop lê o stdout do processo pela vida inteira: normaliza/persiste/transmite cada
@@ -279,6 +282,14 @@ func (ls *liveSession) readLoop(ctx context.Context, stdout io.Reader) {
 		if json.Unmarshal(line, &ev) != nil {
 			continue
 		}
+		switch ev["type"] {
+		case "control_request":
+			ls.handleControlRequest(ev)
+			continue
+		case "control_cancel_request":
+			ls.handleControlCancel(ev)
+			continue
+		}
 		ls.mgr.handleEvent(ctx, ls.conv, ev, emit)
 		if ev["type"] == "result" {
 			ls.onTurnEnd()
@@ -287,6 +298,7 @@ func (ls *liveSession) readLoop(ctx context.Context, stdout io.Reader) {
 	if err := ls.cmd.Wait(); err != nil {
 		slog.Debug("processo da sessão viva encerrado", "conv", ls.conv.ID, "err", err)
 	}
+	ls.dropQuestion() // processo morto não tem a quem responder
 
 	// O processo SAIU (crash, kill ou close limpo de hibernação). Limpa o estado e
 	// remove esta sessão do pool para que a PRÓXIMA mensagem a ressuscite via --resume.
@@ -321,11 +333,19 @@ func (ls *liveSession) Stop() {
 	ls.mu.Lock()
 	running := ls.state == StatusRunning
 	ls.queue = nil // descarta a fila ao parar
+	var pending string
+	if ls.question != nil {
+		pending = ls.question.RequestID
+	}
 	ls.mu.Unlock()
 	if !running || ls.stdin == nil {
 		return
 	}
-	_, _ = ls.stdin.Write([]byte(`{"type":"control_request","request":{"subtype":"interrupt"}}` + "\n"))
+	// Turno parado numa pergunta: responde antes, senão o CLI segue esperando o host.
+	if pending != "" {
+		ls.resolveQuestion(pending, nil, msgPerguntaParada)
+	}
+	_ = ls.writeLine([]byte(`{"type":"control_request","request":{"subtype":"interrupt"}}` + "\n"))
 }
 
 // close encerra a sessão de forma limpa: fecha o stdin, o que faz o CLI sair e salvar
