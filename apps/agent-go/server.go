@@ -31,6 +31,10 @@ type Server struct {
 	designWorkdirFor designWorkdirResolver
 	// shareWorkdirFor é injetável nos testes; nil em produção (usa o Postgres).
 	shareWorkdirFor shareWorkdirResolver
+	// billing é injetável nos testes; nil em produção (usa o Postgres).
+	billing billingStore
+	// onUsage é um gancho de teste chamado a cada registro de uso; nil em produção.
+	onUsage func(usageMeta, usageFields)
 }
 
 func NewServer(cfg Config, pool *pgxpool.Pool, rdb *redis.Client) *Server {

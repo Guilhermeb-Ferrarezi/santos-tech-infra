@@ -702,7 +702,7 @@ func (s *Server) materialAguardarSemente(ctx context.Context, p materialPayload)
 // UMA segunda chance com o motivo no brief.
 func (s *Server) materialSemear(ctx context.Context, p materialPayload, key string, in *briefSementeInput, inicio time.Time) error {
 	brief := montarBriefSemente(*in)
-	raw, err := s.claudeRawCom(ctx, brief, materialModeloSemente, materialSementeTimeout)
+	raw, err := s.claudeRawCom(ctx, origemMaterial, brief, materialModeloSemente, materialSementeTimeout)
 	if err != nil {
 		return s.materialFalharChamada(ctx, p, brief, err, time.Since(inicio))
 	}
@@ -711,7 +711,7 @@ func (s *Server) materialSemear(ctx context.Context, p materialPayload, key stri
 		slog.Warn("material: semente inválida, pedindo de novo", "course", p.CourseID, "err", perr)
 		in.ErroAnterior = perr.Error()
 		brief = montarBriefSemente(*in)
-		raw, err = s.claudeRawCom(ctx, brief, materialModeloSemente, materialSementeTimeout)
+		raw, err = s.claudeRawCom(ctx, origemMaterial, brief, materialModeloSemente, materialSementeTimeout)
 		if err != nil {
 			return s.materialFalharChamada(ctx, p, brief, err, time.Since(inicio))
 		}
@@ -771,7 +771,7 @@ func (s *Server) materialIncorporarAula(ctx context.Context, p materialPayload, 
 		in.Diario.Anexos = append(in.Diario.Anexos, a.Name)
 	}
 	brief := montarBriefPatch(in)
-	raw, err := s.claudeRaw(ctx, brief, materialModeloAula)
+	raw, err := s.claudeRaw(ctx, origemMaterial, brief, materialModeloAula)
 	if err != nil {
 		return s.materialFalharChamada(ctx, p, brief, err, time.Since(inicio))
 	}
@@ -780,7 +780,7 @@ func (s *Server) materialIncorporarAula(ctx context.Context, p materialPayload, 
 		slog.Warn("material: patch inválido, pedindo de novo", "course", p.CourseID, "session", p.SessionID, "err", perr)
 		in.ErroAnterior = perr.Error()
 		brief = montarBriefPatch(in)
-		raw, err = s.claudeRaw(ctx, brief, materialModeloAula)
+		raw, err = s.claudeRaw(ctx, origemMaterial, brief, materialModeloAula)
 		if err != nil {
 			return s.materialFalharChamada(ctx, p, brief, err, time.Since(inicio))
 		}

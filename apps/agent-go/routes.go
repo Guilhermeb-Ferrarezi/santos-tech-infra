@@ -20,6 +20,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// Painel de gastos — custo do CLI claude (todas as origens), admin-only.
 	mux.HandleFunc("GET /claude/usage", s.authGuard(s.handleUsage))
+	// Cobrança do bot: assinatura × chave de API (admin). A chave nunca volta no GET.
+	mux.HandleFunc("GET /claude/billing", s.authGuard(s.handleBillingGet))
+	mux.HandleFunc("PUT /claude/billing", s.authGuard(s.handleBillingSet))
+	mux.HandleFunc("PUT /claude/billing/api-key", s.rateLimit(5, min, s.authGuard(s.handleBillingSetKey)))
+	mux.HandleFunc("DELETE /claude/billing/api-key", s.authGuard(s.handleBillingDeleteKey))
 
 	// WebSocket de chat.
 	mux.HandleFunc("GET /claude/conversations/{id}/ws", s.handleConversationWS)

@@ -135,6 +135,22 @@ CREATE TABLE IF NOT EXISTS claude_usage_events (
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_usage_created ON claude_usage_events(created_at DESC);
+-- origin: quem pediu a geração ("bot", "posaula", ...) — separa o bot das outras
+-- funções que também usam a task "raw". billing: credencial que de fato rodou
+-- ('subscription' = assinatura, custo só simulado; 'api_key' = chave, custo real).
+ALTER TABLE claude_usage_events ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT '';
+ALTER TABLE claude_usage_events ADD COLUMN IF NOT EXISTS billing TEXT NOT NULL DEFAULT 'subscription';
+
+-- Cobrança do bot: chave de API (cifrada) e a chave liga/desliga que manda o bot
+-- rodar com ela em vez da assinatura. Linha única, como claude_credentials.
+CREATE TABLE IF NOT EXISTS claude_billing (
+  id               INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  bot_uses_api_key BOOLEAN NOT NULL DEFAULT false,
+  api_key_enc      BYTEA,
+  api_key_hint     TEXT NOT NULL DEFAULT '',
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO claude_billing (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
 -- Links públicos (somente leitura) de projetos do Claude Design. Um ativo por
 -- projeto; revogar marca revoked_at e o link para de responder na hora.

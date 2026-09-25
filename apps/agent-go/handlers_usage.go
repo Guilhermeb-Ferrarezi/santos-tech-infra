@@ -20,6 +20,9 @@ type usagePeriod struct {
 	OutputTokens     int64   `json:"outputTokens"`
 	CacheReadTokens  int64   `json:"cacheReadTokens"`
 	CacheWriteTokens int64   `json:"cacheWriteTokens"`
+	// APICostUSD é a parte que rodou com chave de API (custo REAL). O resto de
+	// CostUSD é simulação: preço de tabela do que rodou na assinatura.
+	APICostUSD float64 `json:"apiCostUsd"`
 }
 
 type usageDayPoint struct {
@@ -49,13 +52,34 @@ type usageTaskPoint struct {
 	CacheWriteTokens int64   `json:"cacheWriteTokens"`
 }
 
+// usageOriginPoint é o gasto por FUNÇÃO (quem pediu) nos últimos 30 dias —
+// "bot", "bot-tarefas", "posaula", "sessao", "email"... "raw" = histórico de antes
+// da separação por origem. week* = últimos 7 dias; api* = parte paga com chave.
+type usageOriginPoint struct {
+	Origin           string  `json:"origin"`
+	CostUSD          float64 `json:"costUsd"`
+	Calls            int64   `json:"calls"`
+	InputTokens      int64   `json:"inputTokens"`
+	OutputTokens     int64   `json:"outputTokens"`
+	CacheReadTokens  int64   `json:"cacheReadTokens"`
+	CacheWriteTokens int64   `json:"cacheWriteTokens"`
+	WeekCostUSD      float64 `json:"weekCostUsd"`
+	WeekCalls        int64   `json:"weekCalls"`
+	APICostUSD       float64 `json:"apiCostUsd"`
+	APICalls         int64   `json:"apiCalls"`
+}
+
 type usageResponse struct {
+	// Since é a data do primeiro registro — o "desde quando" do Total.
+	Since  *string            `json:"since"`
 	Total  usagePeriod        `json:"total"`
 	Today  usagePeriod        `json:"today"`
+	Week   usagePeriod        `json:"week"` // últimos 7 dias
 	Month  usagePeriod        `json:"month"`
 	Daily  []usageDayPoint    `json:"daily"`  // últimos 30 dias
 	Source []usageSourcePoint `json:"source"` // últimos 30 dias, por origem (generate/generate_stream/session)
 	Task   []usageTaskPoint   `json:"task"`   // últimos 30 dias, por task (bot=raw)
+	Origin []usageOriginPoint `json:"origin"` // últimos 30 dias, por função (quem pediu)
 }
 
 // handleUsage devolve o resumo de gastos do CLI claude (agent-go) para o painel —
@@ -70,6 +94,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
 	last30 := now.AddDate(0, 0, -30)
+	last7 := now.AddDate(0, 0, -7)
 
 	total, err := s.q.UsageSummary(ctx, tstz(epoch))
 	if err != nil {
@@ -82,6 +107,21 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	month, err := s.q.UsageSummary(ctx, tstz(startOfMonth))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	week, err := s.q.UsageSummary(ctx, tstz(last7))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	since, err := s.q.UsageSince(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	originRows, err := s.q.UsageByOrigin(ctx, agentdb.UsageByOriginParams{Since: tstz(last30), WeekSince: tstz(last7)})
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -110,12 +150,31 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 			OutputTokens:     row.OutputTokens,
 			CacheReadTokens:  row.CacheReadTokens,
 			CacheWriteTokens: row.CacheWriteTokens,
+			APICostUSD:       row.ApiCostUsd,
 		}
 	}
 	res := usageResponse{
+		Since: tstzOrNil(since),
 		Total: toPeriod(total),
 		Today: toPeriod(today),
+		Week:  toPeriod(week),
 		Month: toPeriod(month),
+	}
+	res.Origin = make([]usageOriginPoint, 0, len(originRows))
+	for _, row := range originRows {
+		res.Origin = append(res.Origin, usageOriginPoint{
+			Origin:           row.OriginKey,
+			CostUSD:          row.CostUsd,
+			Calls:            row.Calls,
+			InputTokens:      row.InputTokens,
+			OutputTokens:     row.OutputTokens,
+			CacheReadTokens:  row.CacheReadTokens,
+			CacheWriteTokens: row.CacheWriteTokens,
+			WeekCostUSD:      row.WeekCostUsd,
+			WeekCalls:        row.WeekCalls,
+			APICostUSD:       row.ApiCostUsd,
+			APICalls:         row.ApiCalls,
+		})
 	}
 	res.Daily = make([]usageDayPoint, 0, len(dailyRows))
 	for _, row := range dailyRows {

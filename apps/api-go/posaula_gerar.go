@@ -583,7 +583,7 @@ func (s *Server) posaulaGerar(ctx context.Context, p posaulaGerarPayload) error 
 	// Chama o modelo; JSON inválido ganha UMA segunda chance com o erro no
 	// brief. Erro de rede/5xx já foi retentado dentro de claudeRaw.
 	brief := montarBriefPraticas(in)
-	raw, err := s.claudeRaw(ctx, brief, posaulaModelo)
+	raw, err := s.claudeRaw(ctx, origemPosaula, brief, posaulaModelo)
 	if err != nil {
 		return s.posaulaFalharChamada(ctx, p.SessionID, brief, err, time.Since(inicio))
 	}
@@ -592,7 +592,7 @@ func (s *Server) posaulaGerar(ctx context.Context, p posaulaGerarPayload) error 
 		slog.Warn("posaula: resposta inválida, pedindo de novo", "session", p.SessionID, "err", perr)
 		in.ErroAnterior = perr.Error()
 		brief = montarBriefPraticas(in)
-		raw, err = s.claudeRaw(ctx, brief, posaulaModelo)
+		raw, err = s.claudeRaw(ctx, origemPosaula, brief, posaulaModelo)
 		if err != nil {
 			return s.posaulaFalharChamada(ctx, p.SessionID, brief, err, time.Since(inicio))
 		}
@@ -894,7 +894,7 @@ func (s *Server) posaulaCorrigir(ctx context.Context, answerID int64) (err error
 	}
 
 	brief := montarBriefCorrecao(in)
-	raw, cerr := s.claudeRaw(ctx, brief, posaulaModelo)
+	raw, cerr := s.claudeRaw(ctx, origemPosaula, brief, posaulaModelo)
 	if cerr != nil {
 		return falhaDoModelo(brief, cerr)
 	}
@@ -902,7 +902,7 @@ func (s *Server) posaulaCorrigir(ctx context.Context, answerID int64) (err error
 	if perr != nil {
 		in.ErroAnterior = perr.Error()
 		brief = montarBriefCorrecao(in)
-		raw, cerr = s.claudeRaw(ctx, brief, posaulaModelo)
+		raw, cerr = s.claudeRaw(ctx, origemPosaula, brief, posaulaModelo)
 		if cerr != nil {
 			return falhaDoModelo(brief, cerr)
 		}

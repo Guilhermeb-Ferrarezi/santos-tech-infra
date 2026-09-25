@@ -109,7 +109,7 @@ func (s *Server) generateStream(ctx context.Context, task, prompt string, w http
 		return fmt.Errorf("claude saiu com erro: %w", err)
 	}
 	if usage != (usageFields{}) {
-		s.recordUsage(ctx, "generate_stream", task, s.cfg.DefaultModel, "", usage)
+		s.recordUsage(ctx, usageMeta{source: "generate_stream", task: task, model: s.cfg.DefaultModel}, usage)
 	}
 	if finalText == "" {
 		finalText = acc.String()

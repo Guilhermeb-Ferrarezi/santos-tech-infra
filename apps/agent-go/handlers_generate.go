@@ -88,6 +88,22 @@ type generateRequest struct {
 	Model string   `json:"model"` // override do modelo: "sonnet" | "opus" | "haiku" ("" = default)
 	Kind  string   `json:"kind"`  // tipo do diagrama: "" auto | "flowchart" | "sequence" | "class"
 	Tools []string `json:"tools"` // conectores MCP liberados: "santos" | "notion" | "miro"
+	// Origin: quem pediu ("bot", "bot-tarefas", "posaula", "material", "curriculo",
+	// "quiz"...). Só rotula o gasto no painel — exceto no bot, onde decide se roda
+	// com a chave de API (ver credencialPara). Opcional; formato inválido vira "".
+	Origin string `json:"origin"`
+}
+
+// chamada é o que identifica uma geração pro registro de uso e pra escolha da
+// credencial: task, origem declarada e a credencial já decidida.
+type chamada struct {
+	task   string
+	origin string
+	cred   credencial
+}
+
+func (c chamada) meta(source, model string) usageMeta {
+	return usageMeta{source: source, task: c.task, origin: c.origin, billing: c.cred.billing(), model: model}
 }
 
 // diagramTools mapeia a opção da barra pro prefixo --allowedTools do conector
@@ -152,6 +168,8 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	req.Origin = normalizaOrigem(req.Origin)
+	ch := chamada{task: req.Task, origin: req.Origin, cred: s.credencialPara(r.Context(), userIDFrom(r), req.Origin)}
 
 	// task "raw": passa o brief diretamente ao Claude sem nenhum sistema de prompt.
 	// Usado por serviços internos (ex: bot-atendimento) que montam o próprio prompt.
@@ -170,7 +188,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		// prompt de redator de email que destruiria o sentido do "raw"). Sem
 		// imagem, o caminho continua idêntico ao de sempre (com trace).
 		if strings.TrimSpace(req.ImageBase64) != "" {
-			raw, err := s.generateOnce(r.Context(), req.Task, req.Brief, req.ImageBase64, req.ImageMime, req.Model, req.Web, nil)
+			raw, err := s.generateOnce(r.Context(), ch, req.Brief, req.ImageBase64, req.ImageMime, req.Model, req.Web, nil)
 			if err != nil {
 				writeErr(w, err)
 				return
@@ -184,7 +202,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, &generateResult{Text: raw})
 			return
 		}
-		raw, toolCalls, err := s.generateOnceWithTrace(r.Context(), req.Task, req.Brief, req.Model, req.Web)
+		raw, toolCalls, err := s.generateOnceWithTrace(r.Context(), ch, req.Brief, req.Model, req.Web)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -193,7 +211,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := s.generateOnce(r.Context(), req.Task, buildGeneratePrompt(req, strings.TrimSpace(req.ImageBase64) != ""), req.ImageBase64, req.ImageMime, req.Model, req.Web, req.Tools)
+	raw, err := s.generateOnce(r.Context(), ch, buildGeneratePrompt(req, strings.TrimSpace(req.ImageBase64) != ""), req.ImageBase64, req.ImageMime, req.Model, req.Web, req.Tools)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -211,7 +229,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 // de infra no ambiente — é redação de texto, não automação. `model` vazio usa o
 // default; `web` libera SÓ WebSearch/WebFetch; `tools` libera os conectores MCP
 // da conta (diagramTools) — ambos com timeout maior.
-func (s *Server) generateOnce(ctx context.Context, task, prompt, imageB64, imageMime, model string, web bool, tools []string) (string, error) {
+func (s *Server) generateOnce(ctx context.Context, ch chamada, prompt, imageB64, imageMime, model string, web bool, tools []string) (string, error) {
 	dir, err := os.MkdirTemp(s.cfg.WorkspaceRoot, "gen-*")
 	if err != nil {
 		if dir, err = os.MkdirTemp("", "gen-*"); err != nil {
@@ -282,10 +300,11 @@ func (s *Server) generateOnce(ctx context.Context, task, prompt, imageB64, image
 	cmd.Stdin = strings.NewReader(prompt)
 
 	// Ambiente mínimo e EXPLÍCITO (allow-list de claudeEnv): runtime essencial +
-	// token OAuth da assinatura. conv=nil => sem repo clonado => sem GITHUB_TOKEN.
+	// UMA credencial (assinatura, ou a chave de API quando é o bot com a troca
+	// ligada). conv=nil => sem repo clonado => sem GITHUB_TOKEN.
 	// Antes isto era os.Environ(), que vazava JWT_SECRET/DATABASE_URL/tokens de
 	// infra para dentro do processo Claude (exfiltráveis via prompt injection).
-	cmd.Env = s.claudeEnv(ctx, nil)
+	cmd.Env = s.claudeEnvCom(ctx, nil, ch.cred)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -302,7 +321,7 @@ func (s *Server) generateOnce(ctx context.Context, task, prompt, imageB64, image
 		return "", fmt.Errorf("resposta do claude inválida: %w", err)
 	}
 	f := usageFromMap(ev)
-	s.recordUsage(ctx, "generate", task, model, "", f)
+	s.recordUsage(ctx, ch.meta("generate", model), f)
 
 	result, _ := ev["result"].(string)
 	subtype, _ := ev["subtype"].(string)
@@ -315,7 +334,7 @@ func (s *Server) generateOnce(ctx context.Context, task, prompt, imageB64, image
 // generateOnceWithTrace é como generateOnce mas usa stream-json para capturar
 // tool calls emitidos pelo Claude durante a geração. Retorna o texto final e
 // a lista de tool calls (pode ser nil se nenhuma ferramenta foi usada).
-func (s *Server) generateOnceWithTrace(ctx context.Context, task, prompt, model string, web bool) (string, []toolCallRecord, error) {
+func (s *Server) generateOnceWithTrace(ctx context.Context, ch chamada, prompt, model string, web bool) (string, []toolCallRecord, error) {
 	dir, err := os.MkdirTemp(s.cfg.WorkspaceRoot, "gen-*")
 	if err != nil {
 		if dir, err = os.MkdirTemp("", "gen-*"); err != nil {
@@ -344,8 +363,8 @@ func (s *Server) generateOnceWithTrace(ctx context.Context, task, prompt, model 
 	cmd.Stdin = strings.NewReader(prompt)
 
 	// Mesmo ambiente mínimo do generateOnce (allow-list explícita, sem segredos
-	// de infra). Ver claudeEnv em session.go.
-	cmd.Env = s.claudeEnv(ctx, nil)
+	// de infra, uma credencial só). Ver claudeEnvCom em session.go.
+	cmd.Env = s.claudeEnvCom(ctx, nil, ch.cred)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -395,7 +414,7 @@ func (s *Server) generateOnceWithTrace(ctx context.Context, task, prompt, model 
 	// O evento "result" só sai se o CLI chegou ao fim do turno — se o processo
 	// morreu antes (timeout, kill), não há custo a registrar.
 	if usage != (usageFields{}) {
-		s.recordUsage(ctx, "generate", task, model, "", usage)
+		s.recordUsage(ctx, ch.meta("generate", model), usage)
 	}
 
 	if finalText == "" {

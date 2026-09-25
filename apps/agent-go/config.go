@@ -25,6 +25,10 @@ type Config struct {
 	// Cifragem do token OAuth do Claude em repouso (AES-256-GCM → 32 bytes).
 	EncryptionKey string
 
+	// API da Anthropic — só pra validar a chave de API do bot (GET /v1/models)
+	// antes de gravá-la. Configurável pros testes.
+	AnthropicAPIURL string
+
 	// Runtime do Claude.
 	WorkspaceRoot string // onde os repos são clonados (ex: /data/workspaces)
 	ClaudeBin     string // caminho do binário "claude"
@@ -61,6 +65,8 @@ func LoadConfig() Config {
 		CORSOrigins:   splitCSV(getEnv("CORS_ORIGIN", "")),
 		AuthAPIURL:    strings.TrimRight(getEnv("AUTH_API_URL", "https://api.santos-tech.com"), "/"),
 		EncryptionKey: mustEnv("ENCRYPTION_KEY"),
+
+		AnthropicAPIURL: strings.TrimRight(getEnv("ANTHROPIC_API_URL", "https://api.anthropic.com"), "/"),
 
 		WorkspaceRoot: getEnv("CLAUDE_WORKSPACE_ROOT", "/data/workspaces"),
 		ClaudeBin:     getEnv("CLAUDE_BIN", "claude"),
