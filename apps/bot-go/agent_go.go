@@ -55,7 +55,15 @@ type agentGoRequest struct {
 	Brief string `json:"brief"`
 	Model string `json:"model"`
 	Web   bool   `json:"web"`
+	// Origin identifica o bot no painel de gastos do agent-go e decide se ele
+	// roda com a chave de API (troca ligada em /admin/whats/uso) ou na assinatura.
+	Origin string `json:"origin"`
 }
+
+const (
+	origemBot        = "bot"         // resposta ao cliente
+	origemBotTarefas = "bot-tarefas" // chamadas internas (resumo, ficha da base, follow-up, reativação)
+)
 
 // agentGoResponse é a resposta de POST /claude/generate.
 type agentGoResponse struct {
@@ -80,7 +88,7 @@ func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx 
 	}
 	prompt := BuildPrompt(cfg, convCtx, inboundText, time.Now())
 
-	result, err := c.callAPI(ctx, agentGoRequest{Task: "raw", Brief: prompt, Model: c.modelo, Web: true})
+	result, err := c.callAPI(ctx, agentGoRequest{Task: "raw", Brief: prompt, Model: c.modelo, Web: true, Origin: origemBot})
 	if err != nil {
 		return ResponderOutput{}, fmt.Errorf("agent_go: respond: %w", err)
 	}
@@ -98,7 +106,7 @@ func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx 
 // Usado por classificadores (ex: haiku) e pelo Respond principal.
 // useWeb habilita WebSearch/WebFetch no Claude para esta geração.
 func (c *AgentGoClient) RespondWithModel(ctx context.Context, prompt, model string, useWeb bool) (string, error) {
-	result, err := c.callAPI(ctx, agentGoRequest{Task: "raw", Brief: prompt, Model: model, Web: useWeb})
+	result, err := c.callAPI(ctx, agentGoRequest{Task: "raw", Brief: prompt, Model: model, Web: useWeb, Origin: origemBotTarefas})
 	if err != nil {
 		return "", err
 	}
