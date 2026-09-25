@@ -66,6 +66,11 @@ func normalizaAvisoTelefone(s string) (string, error) {
 		}
 	}
 	d := b.String()
+	// Sem DDI (DDD + número, 10 ou 11 dígitos) é número do Brasil: entra o 55.
+	// Com "+" na frente, a pessoa já escreveu o DDI que quis — não mexe.
+	if !strings.HasPrefix(s, "+") && (len(d) == 10 || len(d) == 11) {
+		d = "55" + d
+	}
 	if len(d) < 10 || len(d) > 15 {
 		return "", errors.New("telefone inválido: use DDI + DDD + número (ex.: 5516999990000)")
 	}

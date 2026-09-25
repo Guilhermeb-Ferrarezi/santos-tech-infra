@@ -73,3 +73,19 @@ func TestListaVaziaEnviadaEsvaziaDeVerdade(t *testing.T) {
 		t.Error("lista ausente tem que virar nil, para o COALESCE preservar")
 	}
 }
+
+// Número de administrador sem o 55 não recebia aviso nenhum: o WhatsApp exige o
+// DDI. Número do Brasil digitado só com DDD ganha o 55; com "+", fica o que a
+// pessoa escreveu. Vazio e repetido saem.
+func TestNormalizaNumerosAdmin(t *testing.T) {
+	got := normalizaNumerosAdmin([]string{"16999990000", "+55 (16) 99999-0000", "", "  ", "(16) 3333-4444", "+1 555 123 4567"})
+	want := []string{"5516999990000", "551633334444", "15551234567"}
+	if len(got) != len(want) {
+		t.Fatalf("= %v, queria %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] = %q, queria %q", i, got[i], want[i])
+		}
+	}
+}

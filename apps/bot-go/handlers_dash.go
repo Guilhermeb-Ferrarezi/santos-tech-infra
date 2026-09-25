@@ -580,6 +580,29 @@ type dashConfigPatch struct {
 	ObservadorLigado            *bool   `json:"observadorLigado"`
 }
 
+// normalizaNumerosAdmin deixa cada número só com dígitos e com DDI. Número do
+// Brasil digitado só com DDD (10 ou 11 dígitos) ganha o 55 — sem ele o
+// WhatsApp não entrega e o admin nunca é avisado. Com "+" na frente, vale o
+// DDI que a pessoa escreveu. Vazios e repetidos saem.
+func normalizaNumerosAdmin(lista []string) []string {
+	out := make([]string, 0, len(lista))
+	visto := map[string]bool{}
+	for _, n := range lista {
+		d := normalizePhone(n)
+		if d == "" {
+			continue
+		}
+		if !strings.HasPrefix(strings.TrimSpace(n), "+") && (len(d) == 10 || len(d) == 11) {
+			d = "55" + d
+		}
+		if !visto[d] {
+			visto[d] = true
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // jsonbOuNil devolve o JSON de uma lista, ou nil quando ela nem veio.
 //
 // A diferença importa: nil é "não mexe"; uma lista vazia enviada de propósito
@@ -611,6 +634,12 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 	if err := validaFollowupPatch(body.FollowupModo, body.FollowupDiasPosExperimental, body.FollowupResponsavelID); err != nil {
 		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// Administradores: só dígitos e com o 55 (sem DDI o aviso não chega).
+	if body.AdminWhatsAppNumbers != nil {
+		limpos := normalizaNumerosAdmin(*body.AdminWhatsAppNumbers)
+		body.AdminWhatsAppNumbers = &limpos
 	}
 
 	// Listas: nil = não mandou (preserva); [] = mandou vazio (esvazia mesmo).
