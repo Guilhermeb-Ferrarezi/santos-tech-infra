@@ -97,3 +97,30 @@ func TestIdadePerguntadaTambemParaQuemEhOProprioAluno(t *testing.T) {
 		t.Error("a idade precisa ser perguntada também quando o curso é pra própria pessoa")
 	}
 }
+
+// Ancoragem do particular (Henrique, 25/09/2026): muita gente carrega a imagem
+// de que aprender é numa sala cheia. Ao apresentar o particular, o bot ancora
+// em "é o MESMO curso da turma" e mostra o que muda — sem citar tamanho de
+// turma e sem diminuir a turma, que é o produto principal para criança.
+func TestModalidadeAncoraParticularNoMesmoCurso(t *testing.T) {
+	b := Qualificacao{}.BlocoDaModalidade()
+	for _, esperado := range []string{
+		"Como apresentar o curso particular",
+		"é o MESMO curso",
+		"se adapta",
+		"NÃO diminua a turma",
+		"NÃO cite número de alunos",
+	} {
+		if !strings.Contains(b, esperado) {
+			t.Errorf("bloco sem %q:\n%s", esperado, b)
+		}
+	}
+}
+
+// "professor ou professora" é redundância: o Henrique pediu para eliminar.
+func TestModalidadeSemRedundanciaProfessorOuProfessora(t *testing.T) {
+	b := Qualificacao{}.BlocoDaModalidade()
+	if !strings.Contains(b, "NÃO escreva \"professor ou professora\"") {
+		t.Error("o bloco deveria proibir a redundância \"professor ou professora\"")
+	}
+}

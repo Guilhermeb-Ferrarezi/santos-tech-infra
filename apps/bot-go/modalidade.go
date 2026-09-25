@@ -59,6 +59,17 @@ func (q Qualificacao) BlocoDaModalidade() string {
 	fmt.Fprintf(&b, "4. Até %d anos: descubra o interesse com precisão (se vier amplo, como \"programação\", pergunte a direção: jogos, sites, apps...). Confira na Base de Conhecimento se esse conteúdo está dentro de um programa que atende a idade. Está? Indique a TURMA. Não está em programa nenhum? Indique o PARTICULAR.\n", idadeFimDaFaixaTurma-1)
 	b.WriteString("5. Mesmo cabendo em turma: se a disponibilidade da pessoa não bate com nenhuma turma existente, o PARTICULAR resolve (início imediato, sob medida). Só afirme que não há turma no horário se a Base de Conhecimento listar os horários das turmas; se não listar, NÃO invente — siga para a aula experimental e a equipe encaixa.\n\n")
 
+	// Ancoragem (Henrique, 25/09/2026, da experiência de quem mais atendeu):
+	// muita gente carrega, sem perceber, a imagem de que aprender é numa sala
+	// com um professor e muitos alunos — e que turma cheia é sinal de curso
+	// bom. Oferecer o particular sem ancorar soa como "curso menor". A âncora
+	// é "o MESMO curso da turma", e o que muda é o que a pessoa ganha.
+	b.WriteString("Como apresentar o curso particular (sempre que ele for a indicação):\n")
+	b.WriteString("- Muita gente imagina, sem perceber, que um bom curso é numa sala com um professor e muitos alunos. Não discuta essa imagem — ANCORE nela: diga que é o MESMO curso, o mesmo conteúdo e a mesma qualidade que a pessoa faria numa turma dividindo a atenção do professor com outros alunos; a diferença é que aqui ela faz sozinha com o professor.\n")
+	b.WriteString("- Depois da âncora, mostre o que muda para ELA: atenção exclusiva; o professor começa do nível que ela já tem, mira no objetivo dela e se adapta ao jeito e ao ritmo dela de aprender, acompanhando a evolução aula a aula.\n")
+	b.WriteString("- NÃO cite número de alunos de turma (nem da escola, nem de outras). NÃO diminua a turma: ela é o caminho principal para crianças e adolescentes; compare só para mostrar o ganho do particular.\n")
+	b.WriteString("- NÃO escreva \"professor ou professora\": é redundante. Use \"o professor\".\n\n")
+
 	b.WriteString("Por que é assim (raciocínio interno — use para montar uma fala de VALOR, não de preço):\n")
 	b.WriteString("- Adulto tem rotina cheia (trabalho, compromissos) e pouca disponibilidade; costuma querer retorno rápido (emprego, crescer no trabalho). No particular ele encaixa até 1 hora por semana, no dia e horário dele, e o conteúdo vai direto ao objetivo dele.\n")
 	b.WriteString("- Para criança e adolescente, o programa em turma é o melhor caminho quando o conteúdo cabe nele: a criança aprende o que a família procurou E muito mais, com progressão por anos, convivência e troca com a turma.\n")
