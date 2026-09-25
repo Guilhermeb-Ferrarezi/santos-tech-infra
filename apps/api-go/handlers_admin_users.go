@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -185,12 +186,13 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name         *string `json:"name"`
-		Role         *int16  `json:"role"`
-		Suspended    *bool   `json:"suspended"`
-		QuotaBytes   *int64  `json:"quotaBytes"`
-		CustomRoleID *string `json:"customRoleId"`
-		Password     string  `json:"password"`
+		Name         *string              `json:"name"`
+		Role         *int16               `json:"role"`
+		Suspended    *bool                `json:"suspended"`
+		QuotaBytes   *int64               `json:"quotaBytes"`
+		CustomRoleID *string              `json:"customRoleId"`
+		Password     string               `json:"password"`
+		Permissions  *map[string][]string `json:"permissions"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
@@ -204,9 +206,27 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "role inválido"))
 		return
 	}
-	if body.Role != nil && *body.Role == RoleCustom && (body.CustomRoleID == nil || !isValidUUID(*body.CustomRoleID)) {
-		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "customRoleId obrigatório e deve ser UUID válido para role=4"))
+	// Cargo é opcional em role=4 (só as permissões individuais valem). Se vier, tem que ser UUID.
+	if body.CustomRoleID != nil && *body.CustomRoleID != "" && !isValidUUID(*body.CustomRoleID) {
+		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "customRoleId deve ser UUID válido"))
 		return
+	}
+	if body.CustomRoleID != nil && *body.CustomRoleID == "" {
+		body.CustomRoleID = nil
+	}
+	var permsJSON []byte
+	if body.Permissions != nil {
+		if err := validatePermissions(*body.Permissions); err != nil {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "permissions: "+err.Error()))
+			return
+		}
+		// Conceder dispositivos:executar = SYSTEM na frota inteira. Exige
+		// confirmação recente de identidade, igual às ações destrutivas.
+		if !s.requestHasSudo(r) {
+			writeErr(w, appErr(http.StatusForbidden, "SUDO_REQUIRED", "Confirme sua identidade para alterar permissões"))
+			return
+		}
+		permsJSON, _ = json.Marshal(*body.Permissions)
 	}
 	if body.QuotaBytes != nil && *body.QuotaBytes < 0 {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "quotaBytes inválido"))
@@ -245,7 +265,7 @@ func (s *Server) handleUpdateAdminUser(w http.ResponseWriter, r *http.Request) {
 	}
 	// Atualiza senha + revoga sessões + campos de admin numa única transação,
 	// garantindo que nenhuma etapa fique parcialmente aplicada em caso de erro.
-	u, err := s.updateAdminUserFull(r.Context(), id, pwdHash, body.Name, body.Role, body.QuotaBytes, body.CustomRoleID)
+	u, err := s.updateAdminUserFull(r.Context(), id, pwdHash, body.Name, body.Role, body.QuotaBytes, body.CustomRoleID, permsJSON)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -423,5 +443,6 @@ func adminUserJSON(u *User) map[string]any {
 		"quotaBytes":    u.QuotaBytes,
 		"pending":       u.PasswordHash == nil, // convite não aceito (sem senha definida)
 		"loginDisabled": u.LoginDisabled,
+		"permissions":   u.Permissions,
 	}
 }

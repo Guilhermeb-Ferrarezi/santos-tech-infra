@@ -90,16 +90,20 @@ func TestDeleteAdminUserBadID(t *testing.T) {
 	}
 }
 
-// role=4 sem customRoleId → 400
+// role=4 sem customRoleId agora é válido (cargo é opcional; só as permissões
+// individuais valem) — não pode mais barrar com 400 na validação.
 func TestUpdateAdminUserRole4NoCustomRoleID(t *testing.T) {
 	s := testServer(Config{})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("PATCH", "/auth/admin/users/1",
 		strings.NewReader(`{"role":4}`))
 	r.SetPathValue("id", "1")
-	s.handleUpdateAdminUser(w, r)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("code=%d, esperado 400", w.Code)
+	func() {
+		defer func() { _ = recover() }() // s.db nil pode entrar em pânico ao chegar no banco
+		s.handleUpdateAdminUser(w, r)
+	}()
+	if w.Code == http.StatusBadRequest {
+		t.Fatalf("code=%d, role=4 sem customRoleId não pode mais ser 400", w.Code)
 	}
 }
 

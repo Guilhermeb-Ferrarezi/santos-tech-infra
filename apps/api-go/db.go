@@ -1372,7 +1372,7 @@ func (s *Server) deleteUser(ctx context.Context, id int64) error {
 // senha + revogação de sessões (quando pwdHash não está vazio) e os campos de admin
 // (nome, role, quota, customRoleID). Garante que nenhuma dessas etapas fique
 // parcialmente aplicada em caso de erro intermediário.
-func (s *Server) updateAdminUserFull(ctx context.Context, id int64, pwdHash string, name *string, role *int16, quotaBytes *int64, customRoleID *string) (*User, error) {
+func (s *Server) updateAdminUserFull(ctx context.Context, id int64, pwdHash string, name *string, role *int16, quotaBytes *int64, customRoleID *string, permissions []byte) (*User, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -1386,6 +1386,10 @@ func (s *Server) updateAdminUserFull(ctx context.Context, id int64, pwdHash stri
 			return nil, err
 		}
 	}
+	var permArg any
+	if permissions != nil {
+		permArg = string(permissions)
+	}
 	u, err := scanUser(tx.QueryRow(ctx,
 		`UPDATE users SET
 		   name           = COALESCE($2, name),
@@ -1395,9 +1399,10 @@ func (s *Server) updateAdminUserFull(ctx context.Context, id int64, pwdHash stri
 		                      WHEN $3 = 4 THEN $5::uuid
 		                      WHEN $3 IS NOT NULL AND $3 != 4 THEN NULL
 		                      ELSE custom_role_id
-		                    END
+		                    END,
+		   permissions    = COALESCE($6::jsonb, permissions)
 		 WHERE id = $1 RETURNING `+userCols,
-		id, name, role, quotaBytes, customRoleID))
+		id, name, role, quotaBytes, customRoleID, permArg))
 	if err != nil {
 		return nil, err
 	}

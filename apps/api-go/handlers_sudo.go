@@ -63,21 +63,28 @@ func tokenSudoUntil(token, secret string) time.Time {
 	return time.Unix(int64(exp), 0)
 }
 
+// requestHasSudo diz se o token do request está elevado (sudo recente). Pra
+// rotas em que só UMA parte do corpo exige sudo (ex.: PATCH de usuário muda
+// nome sem sudo, mas permissões só com).
+func (s *Server) requestHasSudo(r *http.Request) bool {
+	token := ""
+	if c, err := r.Cookie("access_token"); err == nil {
+		token = c.Value
+	}
+	if token == "" {
+		if after, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+			token = after
+		}
+	}
+	return !tokenSudoUntil(token, s.cfg.JWTSecret).Before(time.Now())
+}
+
 // sudoGuard exige elevação recente (sudo mode) além da sessão. Use por cima de
 // authGuard/adminGuard nas rotas perigosas. Sem elevação → 403 SUDO_REQUIRED,
 // e o front redireciona pro /confirm do auth-web.
 func (s *Server) sudoGuard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := ""
-		if c, err := r.Cookie("access_token"); err == nil {
-			token = c.Value
-		}
-		if token == "" {
-			if after, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
-				token = after
-			}
-		}
-		if tokenSudoUntil(token, s.cfg.JWTSecret).Before(time.Now()) {
+		if !s.requestHasSudo(r) {
 			writeErr(w, appErr(http.StatusForbidden, "SUDO_REQUIRED", "Confirme sua identidade para esta ação"))
 			return
 		}
