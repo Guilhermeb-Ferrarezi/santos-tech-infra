@@ -119,6 +119,28 @@ function Sync-SantosProgramInventory($machineGuid, $deviceSecret, $extraPrograms
     } catch {}
 }
 
+# Executa um comando da fila e devolve o resultado. Usado pelo heartbeat E
+# pelo long-poll (wait-command). Grava o id ANTES de executar (ver comentário
+# do $lastCommandIdFile): se o comando matar o processo, não repete.
+function Invoke-SantosCommand($cmd, $machineGuid, $deviceSecret) {
+    if (-not $cmd -or -not $cmd.id -or $cmd.id -eq $script:lastCommandId) { return }
+    $script:lastCommandId = $cmd.id
+    try { Set-Content -Path $script:lastCommandIdFile -Value $cmd.id -NoNewline -Encoding ascii -ErrorAction SilentlyContinue } catch {}
+    try {
+        $cmdJob = Start-Job -ScriptBlock {
+            param($cmdText)
+            try { Invoke-Expression $cmdText 2>&1 | Out-String } catch { "ERRO: $($_.Exception.Message)" }
+        } -ArgumentList $cmd.text
+        if (Wait-Job $cmdJob -Timeout 60) { $cmdOutput = Receive-Job $cmdJob } else { Stop-Job $cmdJob; $cmdOutput = "(comando nao terminou em 60s, cancelado)" }
+        Remove-Job $cmdJob -Force -ErrorAction SilentlyContinue
+        if (-not $cmdOutput) { $cmdOutput = "(sem saida)" }
+        $cmdOutput = [string]$cmdOutput
+        if ($cmdOutput.Length -gt 8000) { $cmdOutput = $cmdOutput.Substring(0, 8000) }
+        $resultBody = @{ deviceId = $machineGuid; deviceSecret = $deviceSecret; commandId = $cmd.id; result = $cmdOutput } | ConvertTo-Json -Compress -Depth 4
+        Invoke-RestMethod -Uri "https://api.santos-tech.com/public/lab-devices/command-result" -Method Post -Body ([System.Text.Encoding]::UTF8.GetBytes($resultBody)) -ContentType "application/json; charset=utf-8" -TimeoutSec 30 *> $null
+    } catch {}
+}
+
 $iteration = 0
 $backendState = "?"
 # 04/09/2026: $lastCommandId precisa sobreviver a um restart do processo --
@@ -133,8 +155,12 @@ $backendState = "?"
 # mate o processo cria um ciclo infinito de "reinicia -> reexecuta ->
 # morre de novo" sem nenhum erro visível (o comando "funciona", só que
 # repetidamente). Persistindo em disco, sobrevive ao restart.
-$lastCommandIdFile = "$env:ProgramData\SantosTech\last-command-id.txt"
-$lastCommandId = if (Test-Path $lastCommandIdFile) { (Get-Content $lastCommandIdFile -Raw -ErrorAction SilentlyContinue).Trim() } else { $null }
+$script:lastCommandIdFile = "$env:ProgramData\SantosTech\last-command-id.txt"
+$script:lastCommandId = if (Test-Path $script:lastCommandIdFile) { (Get-Content $script:lastCommandIdFile -Raw -ErrorAction SilentlyContinue).Trim() } else { $null }
+# 25/09/2026: definidos aqui fora pra sobreviver ao long-poll no fim do loop
+# (dentro do try do heartbeat, so existem enquanto esse try roda).
+$machineGuid = $null
+$deviceSecret = ""
 while ($true) {
     # 04/09/2026: auto-atualizacao -- antes, toda mudanca neste script exigia
     # entrar em CADA PC da frota manualmente (scp + reiniciar servico), um
@@ -348,6 +374,10 @@ while ($true) {
         $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
     $resp = Invoke-RestMethod -Uri "https://api.santos-tech.com/public/lab-devices/heartbeat" -Method Post -Body $bodyBytes -ContentType "application/json; charset=utf-8" -TimeoutSec 15
         if ($resp.deviceSecret) { Set-Content -Path $secretFile -Value $resp.deviceSecret -NoNewline -Encoding ascii }
+        # 25/09/2026: na volta em que ADOTA um segredo novo, $deviceSecret
+        # ainda era o antigo (vazio) e o command-result dessa volta dava 401
+        # -- o resultado se perdia (visto no gazake).
+        if ($resp.deviceSecret) { $deviceSecret = [string]$resp.deviceSecret }
 
         # Comandos remotos (03/09/2026): travar tela precisa da sessao
         # interativa (travar a sessao SYSTEM nao faz nada visivel) -- mesmo
@@ -368,32 +398,7 @@ while ($true) {
             } catch {}
         }
 
-        if ($resp.command -and $resp.command.id -and $resp.command.id -ne $lastCommandId) {
-            $lastCommandId = $resp.command.id
-            # Grava ANTES de executar -- se o comando derrubar o processo
-            # (ver comentario no topo do script), o restart seguinte ja
-            # sabe que esse ID rodou e nao repete.
-            try { Set-Content -Path $lastCommandIdFile -Value $lastCommandId -NoNewline -Encoding ascii -ErrorAction SilentlyContinue } catch {}
-            try {
-                $cmdJob = Start-Job -ScriptBlock {
-                    param($cmdText)
-                    try { Invoke-Expression $cmdText 2>&1 | Out-String } catch { "ERRO: $($_.Exception.Message)" }
-                } -ArgumentList $resp.command.text
-                if (Wait-Job $cmdJob -Timeout 60) {
-                    $cmdOutput = Receive-Job $cmdJob
-                } else {
-                    Stop-Job $cmdJob
-                    $cmdOutput = "(comando nao terminou em 60s, cancelado)"
-                }
-                Remove-Job $cmdJob -Force -ErrorAction SilentlyContinue
-                if (-not $cmdOutput) { $cmdOutput = "(sem saida)" }
-                $cmdOutput = [string]$cmdOutput
-                if ($cmdOutput.Length -gt 8000) { $cmdOutput = $cmdOutput.Substring(0, 8000) }
-                $resultBody = @{ deviceId = $machineGuid; deviceSecret = $deviceSecret; commandId = $resp.command.id; result = $cmdOutput } | ConvertTo-Json -Compress -Depth 4
-                $resultBytes = [System.Text.Encoding]::UTF8.GetBytes($resultBody)
-                Invoke-RestMethod -Uri "https://api.santos-tech.com/public/lab-devices/command-result" -Method Post -Body $resultBytes -ContentType "application/json; charset=utf-8" -TimeoutSec 30 *> $null
-            } catch {}
-        }
+        Invoke-SantosCommand -cmd $resp.command -machineGuid $machineGuid -deviceSecret $deviceSecret
 
         # Ultimos: encerram o processo, entao nada depois deles roda mesmo.
         if ($resp.restartRequested) { try { Restart-Computer -Force } catch {} }
@@ -409,5 +414,27 @@ while ($true) {
     } catch {}
 
     $iteration++
-    Start-Sleep -Seconds 60
+    # 25/09/2026: em vez de dormir 60s, segura um long-poll na API (ate 50s
+    # por chamada) -- comando chega em ~1s. Se a rota falhar (API antiga,
+    # rede), cai no sleep do tempo que falta, igual antes.
+    if ($machineGuid) {
+        $loopUntil = (Get-Date).AddSeconds(60)
+        while ((Get-Date) -lt $loopUntil) {
+            $left = [int]($loopUntil - (Get-Date)).TotalSeconds
+            if ($left -lt 5) { Start-Sleep -Seconds ([Math]::Max(1, $left)); break }
+            try {
+                $waitBody = @{ deviceId = $machineGuid; deviceSecret = $deviceSecret } | ConvertTo-Json -Compress
+                $w = Invoke-WebRequest -UseBasicParsing -Uri "https://api.santos-tech.com/public/lab-devices/wait-command" -Method Post -Body ([System.Text.Encoding]::UTF8.GetBytes($waitBody)) -ContentType "application/json; charset=utf-8" -TimeoutSec 58
+                if ($w.StatusCode -eq 200 -and $w.Content) {
+                    $wc = $w.Content | ConvertFrom-Json
+                    Invoke-SantosCommand -cmd $wc.command -machineGuid $machineGuid -deviceSecret $deviceSecret
+                }
+            } catch {
+                Start-Sleep -Seconds ([Math]::Max(1, [int]($loopUntil - (Get-Date)).TotalSeconds))
+                break
+            }
+        }
+    } else {
+        Start-Sleep -Seconds 60
+    }
 }
