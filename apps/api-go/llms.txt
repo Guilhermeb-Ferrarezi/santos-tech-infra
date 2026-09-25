@@ -329,8 +329,15 @@ Auth: sessão do auth central ou PAT (`st_...`).
   autenticação é o token da query). Nunca embutir sem
   `sandbox="allow-scripts allow-forms"` (sem `allow-same-origin`); a CSP da
   resposta também traz `sandbox`, então abrir numa aba própria é seguro
-- `GET /claude/designs/{id}/files` — telas do projeto `{screens:[{path,title}]}`
+- `GET /claude/designs/{id}/files` — telas do projeto `{screens:[{path,title,updatedAt}]}`
   (`telas/*.html`, `index` primeiro; `title` = `<title>` do HTML)
+- **Canvas:** `GET /claude/designs/{id}/source?path=telas/x.html` (admin) → `{path, html}`
+  · `GET /claude/designs/{id}/c/{token}/` — casca do canvas (sem authGuard, token
+  assinado no caminho); o painel injeta o HTML por postMessage (`render`, `zoom`,
+  `inspect`) e recebe `ready`/`rendered`/`navigate` + `santos-design-inspect`.
+  `.../c/{token}/{telas|assets}/...` serve os assets relativos da tela injetada.
+  WS de design emite `design_draft {path, html, done}` (HTML parcial do Write enquanto
+  o modelo escreve, ~2/s) e `design_file {path}` (arquivo salvo)
 - `GET|POST|DELETE /claude/designs/{id}/share` — link público somente leitura:
   status `{active, token?, createdAt?}` · cria (ou devolve o ativo; um por
   projeto) · revoga (204). Link: `GET /claude/share/{token}/{path...}` —

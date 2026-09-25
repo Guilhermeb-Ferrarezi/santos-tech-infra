@@ -111,6 +111,14 @@ projetos criados antes dele (o `CLAUDE.md` do workspace só é gravado na criaç
 painel responder pelo WS (`answer`). Qualquer outra ferramenta interativa é recusada
 na hora. `Stop` com pergunta pendente recusa antes do interrupt.
 
+**Canvas (`design_canvas.go`, `canvas_shell.html`, `design_live.go`):** o painel
+carrega a casca uma vez e injeta o HTML de cada tela por postMessage (iframe srcdoc,
+buffer duplo — sem flash, rolagem preservada, zoom). Cada tela injetada ganha um script
+(runtime) que reporta rolagem, intercepta links entre telas e faz o inspecionar: a casca
+tem CSP `sandbox`, e cada filho ganha OUTRA origem opaca, então tudo é por mensagem.
+`designLive` lê o `input_json_delta` do Write (stream parcial do CLI) e emite
+`design_draft` com o HTML parcial (~2/s); o `tool_result` de Write/Edit vira `design_file`.
+
 **Várias telas e link público:** `telas/*.html` (listadas por `/files`); o link de
 `/claude/share/{token}` é revogável, serve só `telas/` e `assets/` e usa a mesma CSP
 com `sandbox` (origem opaca mesmo numa aba própria) e `frame-ancestors 'none'`.
@@ -142,7 +150,9 @@ rate limit por rota+IP).
 | POST | `/claude/conversations/{id}/clear` | zera contexto |
 | POST | `/claude/designs/{id}/preview-token` | emite token curto assinado (30min) pro iframe do preview |
 | GET | `/claude/designs/{id}/preview/{path...}` | **sem authGuard** — serve o workdir do projeto de design, autenticado pelo token da query `?t=` |
-| GET | `/claude/designs/{id}/files` | telas do projeto `{screens:[{path,title}]}` |
+| GET | `/claude/designs/{id}/files` | telas do projeto `{screens:[{path,title,updatedAt}]}` |
+| GET | `/claude/designs/{id}/source?path=` | HTML da tela `{path, html}` (o painel injeta no canvas) |
+| GET | `/claude/designs/{id}/c/{token}/{path...}` | **sem authGuard** — casca do canvas (sem path) e assets de `telas/`/`assets/`; token assinado no caminho |
 | GET/POST/DELETE | `/claude/designs/{id}/share` | status / cria (ou devolve o ativo) / revoga o link público |
 | GET | `/claude/share/{token}/{path...}` | **público, sem login** — link de compartilhamento (só `telas/` e `assets/`, CSP com `sandbox`) |
 | POST | `/claude/generate` | geração one-shot stateless `{task, brief, tone?}` → `{subject, html, text}` |

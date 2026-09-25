@@ -40,6 +40,9 @@ type liveSession struct {
 	// existe, o turno está pausado e o watchdog, desarmado.
 	question *pendingQuestion
 
+	// live: canvas ao vivo (design_live.go) — só em conversas kind=design.
+	live *designLive
+
 	// evicted: tombstone de morte intencional (Evict por /clear, /model, /compact).
 	// Quando true, o crash path do readLoop NÃO emite TURN_FAILED — a morte foi
 	// planejada pelo chamador, não um crash inesperado.
@@ -271,6 +274,9 @@ func (ls *liveSession) writeUser(prompt string) error {
 func (ls *liveSession) readLoop(ctx context.Context, stdout io.Reader) {
 	defer close(ls.done)
 	emit := func(ev turnEvent) { ls.mgr.dispatch(ls.conv.ID, ev) }
+	if ls.conv.Kind == designKind {
+		ls.live = newDesignLive(ls.conv.Workdir, emit)
+	}
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for sc.Scan() {
@@ -289,6 +295,9 @@ func (ls *liveSession) readLoop(ctx context.Context, stdout io.Reader) {
 		case "control_cancel_request":
 			ls.handleControlCancel(ev)
 			continue
+		}
+		if ls.live != nil {
+			ls.live.observe(ev)
 		}
 		ls.mgr.handleEvent(ctx, ls.conv, ev, emit)
 		if ev["type"] == "result" {

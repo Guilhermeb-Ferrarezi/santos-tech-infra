@@ -42,8 +42,11 @@ func TestListDesignScreensIndexPrimeiroETitulo(t *testing.T) {
 		t.Fatalf("telas = %+v", got)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if got[i].Path != want[i].Path || got[i].Title != want[i].Title {
 			t.Fatalf("tela %d = %+v, queria %+v", i, got[i], want[i])
+		}
+		if got[i].UpdatedAt == "" {
+			t.Fatalf("tela %d sem updatedAt", i)
 		}
 	}
 }
