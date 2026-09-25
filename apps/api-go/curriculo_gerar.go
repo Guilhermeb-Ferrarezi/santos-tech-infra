@@ -37,6 +37,30 @@ var curriculoTaskOpts = []asynq.Option{
 	asynq.Queue(posaulaAsynqQueue), // mesma fila do Pós-aula — mesmo gargalo (agent-go)
 }
 
+// curriculoEstadoFinalTimeout: mesmo padrão do Pós-aula (posaulaEstadoFinalTimeout)
+// — prazo próprio, curto, pra gravar o estado final.
+const curriculoEstadoFinalTimeout = 15 * time.Second
+
+// curriculoCtxFinal é o ctx das gravações de estado FINAL (failed): sem o
+// cancelamento do ctx do asynq — que pode já ter estourado o Timeout quando
+// chega aqui — e com prazo próprio curto. Sem isto a linha ficava presa em
+// "running" pra sempre (a gravação do "failed" falhava com o mesmo ctx
+// vencido, e o erro era descartado silenciosamente).
+func curriculoCtxFinal(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), curriculoEstadoFinalTimeout)
+}
+
+// curriculoSetStatusFinal grava o estado final com um ctx próprio (ver
+// curriculoCtxFinal); falha só loga — o chamador já está saindo com o erro
+// de verdade (ou não tem erro nenhum a propagar pro asynq).
+func (s *Server) curriculoSetStatusFinal(ctx context.Context, id int64, status string, errMsg, textoReescrito *string) {
+	fctx, cancel := curriculoCtxFinal(ctx)
+	defer cancel()
+	if err := s.curriculoSetStatus(fctx, id, status, errMsg, textoReescrito); err != nil {
+		slog.Error("curriculo: não consegui gravar o estado final da reescrita", "rewrite_id", id, "status", status, "err", err)
+	}
+}
+
 type curriculoReescreverPayload struct {
 	RewriteID int64 `json:"rewriteId"`
 }
@@ -81,7 +105,7 @@ func (s *Server) enqueueCurriculoReescrever(ctx context.Context, userID int64, i
 	}
 	if _, err := s.queue.EnqueueContext(ctx, asynq.NewTask(TaskCurriculoReescrever, b, curriculoTaskOpts...)); err != nil {
 		msg := "não consegui enfileirar a reescrita: " + err.Error()
-		_ = s.curriculoSetStatus(ctx, id, "failed", &msg, nil)
+		s.curriculoSetStatusFinal(ctx, id, "failed", &msg, nil)
 		return 0, err
 	}
 	return id, nil
@@ -145,13 +169,13 @@ func (s *Server) curriculoReescrever(ctx context.Context, rewriteID int64) error
 	}
 	if err != nil {
 		msg := "erro ao carregar o pedido: " + err.Error()
-		s.curriculoSetStatus(ctx, rewriteID, "failed", &msg, nil)
+		s.curriculoSetStatusFinal(ctx, rewriteID, "failed", &msg, nil)
 		return fmt.Errorf("curriculo: carregar: %w", err)
 	}
 	var contexto curriculoContextoGravado
 	if err := json.Unmarshal([]byte(contextoRaw), &contexto); err != nil {
 		msg := "contexto inválido: " + err.Error()
-		s.curriculoSetStatus(ctx, rewriteID, "failed", &msg, nil)
+		s.curriculoSetStatusFinal(ctx, rewriteID, "failed", &msg, nil)
 		return nil
 	}
 	maxChars := curriculoMaxCharsClamp(contexto.MaxChars)
@@ -161,7 +185,7 @@ func (s *Server) curriculoReescrever(ctx context.Context, rewriteID int64) error
 	raw, err := s.claudeRaw(ctx, brief, curriculoModelo)
 	if err != nil {
 		msg := err.Error()
-		s.curriculoSetStatus(ctx, rewriteID, "failed", &msg, nil)
+		s.curriculoSetStatusFinal(ctx, rewriteID, "failed", &msg, nil)
 		var transitorio agentTransientError
 		if errors.As(err, &transitorio) {
 			return err // deixa o asynq retentar (só há 1 retentativa configurada)
@@ -175,13 +199,13 @@ func (s *Server) curriculoReescrever(ctx context.Context, rewriteID int64) error
 		raw, err = s.claudeRaw(ctx, brief, curriculoModelo)
 		if err != nil {
 			msg := err.Error()
-			s.curriculoSetStatus(ctx, rewriteID, "failed", &msg, nil)
+			s.curriculoSetStatusFinal(ctx, rewriteID, "failed", &msg, nil)
 			return nil
 		}
 		out, perr = parseCurriculoRewrite(raw, maxChars)
 		if perr != nil {
 			msg := "resposta do Claude inválida: " + perr.Error()
-			s.curriculoSetStatus(ctx, rewriteID, "failed", &msg, nil)
+			s.curriculoSetStatusFinal(ctx, rewriteID, "failed", &msg, nil)
 			return nil
 		}
 	}

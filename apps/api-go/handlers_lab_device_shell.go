@@ -273,7 +273,7 @@ func (s *Server) handleLabDeviceShellWS(w http.ResponseWriter, r *http.Request) 
 	// o socket vira responsabilidade só do coder/websocket a partir daqui.
 	// Ping periódico com timeout curto é o jeito de detectar isso sem
 	// depender do keepalive de TCP do SO (que por padrão é de horas).
-	go func() {
+	safeGo("labDeviceShellPing", func() {
 		t := time.NewTicker(20 * time.Second)
 		defer t.Stop()
 		for {
@@ -290,16 +290,16 @@ func (s *Server) handleLabDeviceShellWS(w http.ResponseWriter, r *http.Request) 
 				}
 			}
 		}
-	}()
+	})
 
 	// Dois goroutines, um por direção — cada Conn só é LIDA por uma goroutine
 	// (coder/websocket não permite leitura concorrente na mesma conn); Write
 	// é seguro mesmo se algo mais escrever na mesma conn em paralelo (aqui
 	// não escreve, mas vale registrar a garantia usada).
-	go func() {
+	safeGo("labDeviceShellRelay", func() {
 		defer cancelRelay()
 		relayBinary(ctx, adminConn, agent.conn)
-	}()
+	})
 	relayBinary(ctx, agent.conn, adminConn)
 }
 
