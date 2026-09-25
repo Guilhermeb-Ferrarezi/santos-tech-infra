@@ -93,6 +93,14 @@ type dashConfig struct {
 	// OrigemMarcadores — os textos prontos dos links `wa.me`, um por lugar onde
 	// a escola publica o link. Ver origem.go.
 	OrigemMarcadores *[]MarcadorOrigem `json:"origemMarcadores"`
+
+	// Follow-up e reativação (0042, reativacao_modos.go).
+	// FollowupResponsavelID 0 = usa o do ambiente, que vem em
+	// FollowupResponsavelPadrao para a tela mostrar quem é.
+	FollowupModo                string `json:"followupModo"`
+	FollowupDiasPosExperimental int    `json:"followupDiasPosExperimental"`
+	FollowupResponsavelID       int    `json:"followupResponsavelId"`
+	FollowupResponsavelPadrao   int    `json:"followupResponsavelPadrao"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -408,7 +416,10 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		       tc.voice_provider,
 		       tc.voice_id,
 		       tc.voice_model,
-		       tc.origem_marcadores
+		       tc.origem_marcadores,
+		       tc.followup_modo,
+		       tc.followup_dias_pos_experimental,
+		       COALESCE(tc.followup_responsavel_id, 0)
 		FROM tenant_config tc
 		WHERE tc.tenant_id = $1
 	`, tenantID).Scan(
@@ -421,6 +432,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		&cfg.NotifOnSuccess, &cfg.NotifOnContainerDown,
 		&voiceEnabled, &voiceProvider, &voiceID, &voiceModel,
 		&marcadoresRaw,
+		&cfg.FollowupModo, &cfg.FollowupDiasPosExperimental, &cfg.FollowupResponsavelID,
 	)
 	if err != nil {
 		s.logger.Error("dash: get config", "err", err)
@@ -460,6 +472,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(marcadoresRaw, &marcadores)
 	}
 	cfg.OrigemMarcadores = &marcadores
+	cfg.FollowupResponsavelPadrao = s.cfg.FollowUpResponsavelID
 
 	if kbRaw != nil && *kbRaw != "" && *kbRaw != "null" {
 		_ = json.Unmarshal([]byte(*kbRaw), &cfg.KBContent)
@@ -555,6 +568,11 @@ type dashConfigPatch struct {
 
 	// nil = não mandou (preserva); [] = mandou vazio (esvazia mesmo).
 	OrigemMarcadores *[]MarcadorOrigem `json:"origemMarcadores"`
+
+	// Follow-up (0042). Responsável 0 = volta ao padrão do ambiente (grava NULL).
+	FollowupModo                *string `json:"followupModo"`
+	FollowupDiasPosExperimental *int    `json:"followupDiasPosExperimental"`
+	FollowupResponsavelID       *int    `json:"followupResponsavelId"`
 }
 
 // jsonbOuNil devolve o JSON de uma lista, ou nil quando ela nem veio.
@@ -580,6 +598,13 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 	var body dashConfigPatch
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+
+	// Follow-up: valor fora do permitido é erro do painel, não algo a corrigir
+	// em silêncio — a constraint do banco derrubaria o PATCH inteiro.
+	if err := validaFollowupPatch(body.FollowupModo, body.FollowupDiasPosExperimental, body.FollowupResponsavelID); err != nil {
+		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -667,6 +692,13 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		    voice_id       = COALESCE($23, voice_id),
 		    voice_model    = COALESCE($24, voice_model),
 		    origem_marcadores = COALESCE($25::jsonb, origem_marcadores),
+		    followup_modo  = COALESCE($26, followup_modo),
+		    followup_dias_pos_experimental = COALESCE($27, followup_dias_pos_experimental),
+		    -- nil preserva; 0 volta ao padrão do ambiente (NULL).
+		    followup_responsavel_id = CASE
+		      WHEN $28::int IS NULL THEN followup_responsavel_id
+		      WHEN $28::int = 0 THEN NULL
+		      ELSE $28::int END,
 		    updated_at     = now()
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
@@ -676,7 +708,8 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		body.NotifPhone, body.NotifInstance, body.NotifEnabled,
 		body.NotifOnSuccess, body.NotifOnContainerDown,
 		body.VoiceEnabled, voiceProvider, body.VoiceID, body.VoiceModel,
-		marcadoresJSON)
+		marcadoresJSON,
+		body.FollowupModo, body.FollowupDiasPosExperimental, body.FollowupResponsavelID)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)

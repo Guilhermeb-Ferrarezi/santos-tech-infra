@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -309,7 +310,9 @@ func (s *Server) setCORSHeaders(w http.ResponseWriter) {
 		// header o browser descarta a resposta.
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dash-Key, Authorization")
+		// X-Requested-With: sinal anti-CSRF que o dashboard manda em mutação
+		// sem corpo (mesmo conjunto que o api-go libera em /auth/*).
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dash-Key, Authorization, X-Requested-With")
 	}
 }
 
@@ -543,9 +546,30 @@ func (s *Server) debounceWindow(ctx context.Context) time.Duration {
 // handleHealth — GET /health
 // ---------------------------------------------------------------------------
 
+// Devolve também o commit publicado (sha curto), que o Coolify injeta como
+// SOURCE_COMMIT a cada deploy — prova de qual versão está no ar.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":      true,
+		"version": shortCommit(os.Getenv("SOURCE_COMMIT")),
+	})
+}
+
+// shortCommit reduz o sha ao prefixo de 7 caracteres. Só aceita hex (7 a 40
+// chars): qualquer outra coisa vira "unknown", pra o health nunca expor mais
+// que o sha, mesmo que a env venha com lixo.
+func shortCommit(sha string) string {
+	sha = strings.ToLower(strings.TrimSpace(sha))
+	if len(sha) < 7 || len(sha) > 40 {
+		return "unknown"
+	}
+	for _, c := range sha {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return "unknown"
+		}
+	}
+	return sha[:7]
 }
 
 // ---------------------------------------------------------------------------

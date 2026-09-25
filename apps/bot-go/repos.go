@@ -881,7 +881,11 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		       tc.voice_provider,
 		       tc.voice_id,
 		       tc.voice_model,
-		       tc.origem_marcadores
+		       tc.origem_marcadores,
+		       tc.followup_modo,
+		       tc.followup_dias_pos_experimental,
+		       COALESCE(tc.followup_responsavel_id, 0),
+		       tc.evolution_bot_reply_enabled
 		FROM tenant_config tc
 		JOIN tenants t ON t.id = tc.tenant_id
 		WHERE tc.tenant_id = $1
@@ -922,6 +926,10 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		&cfg.VoiceID,
 		&cfg.VoiceModel,
 		&marcadoresRaw,
+		&cfg.FollowupModo,
+		&cfg.FollowupDiasPosExperimental,
+		&cfg.FollowupResponsavelID,
+		&cfg.EvolutionBotReplyEnabled,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("TenantConfigRepo.Get: tenant %s não encontrado", tenantID)
