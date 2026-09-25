@@ -507,6 +507,8 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /public/lab-devices/screenshot", s.rateLimit(10, min, s.handleLabDeviceScreenshot))
 	// Resultado do comando livre — o PC manda quando termina de rodar.
 	mux.HandleFunc("POST /public/lab-devices/command-result", s.rateLimit(30, min, s.handleLabDeviceCommandResult))
+	// Long-poll do watchdog: segura até 50s e entrega o próximo comando na hora.
+	mux.HandleFunc("POST /public/lab-devices/wait-command", s.rateLimit(120, min, s.handleLabDeviceWaitCommand))
 	// Agente de shell interativo: o PC conecta e fica parado esperando (ver
 	// handlers_lab_device_shell.go) — autenticado pelo segredo de
 	// dispositivo na primeira mensagem, não por query string/header (rota é

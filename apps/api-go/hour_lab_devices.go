@@ -444,6 +444,25 @@ func authLabDeviceTx(ctx context.Context, tx labDeviceQuerier, deviceUUID, devic
 	return &secret, nil
 }
 
+// authLabDeviceNoAdopt autentica o PC SEM adotar: rotas secundárias (long-poll)
+// não podem criar segredo — isso é só do heartbeat. Se o authLabDeviceTx
+// "cunharia" um segredo, a transação é desfeita e o PC recebe 401.
+func (s *Server) authLabDeviceNoAdopt(ctx context.Context, deviceUUID, deviceSecret string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // só leitura na prática
+	minted, err := authLabDeviceTx(ctx, tx, deviceUUID, deviceSecret)
+	if err != nil {
+		return err
+	}
+	if minted != nil {
+		return errLabDeviceUnauthorized
+	}
+	return nil
+}
+
 func upsertLabDeviceHeartbeatTx(ctx context.Context, tx labDeviceQuerier, hb labHeartbeat) (*LabDeviceHeartbeatResult, error) {
 	// Antes de autenticar: se o app trocou de identidade (0.1.10+), costura o
 	// registro antigo na nova em vez de deixar o PC duplicado.

@@ -137,6 +137,60 @@ func (s sqlLabCommandStore) Get(ctx context.Context, deviceID, commandID string)
 	return &e, nil
 }
 
+// Long-poll: o watchdog segura esta requisição em vez de dormir 60s; o comando
+// sai em ~1s. Estado no banco (não em memória) → funciona com N réplicas.
+// labWaitCommandMax fica abaixo do WriteTimeout (60s, main.go).
+var (
+	labWaitCommandMax  = 50 * time.Second
+	labWaitCommandTick = time.Second
+)
+
+func waitForLabCommand(ctx context.Context, store labCommandStore, deviceUUID string, max, tick time.Duration) (*LabCommand, error) {
+	deadline := time.Now().Add(max)
+	for {
+		cmd, err := store.ClaimNext(ctx, deviceUUID)
+		if err != nil || cmd != nil {
+			return cmd, err
+		}
+		if time.Now().Add(tick).After(deadline) {
+			return nil, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, nil
+		case <-time.After(tick):
+		}
+	}
+}
+
+// POST /public/lab-devices/wait-command — {deviceId, deviceSecret}
+func (s *Server) handleLabDeviceWaitCommand(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var in struct {
+		DeviceID     string `json:"deviceId"`
+		DeviceSecret string `json:"deviceSecret"`
+	}
+	if err := decodeJSON(r, &in); err != nil || in.DeviceID == "" || len(in.DeviceID) > 100 {
+		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Corpo inválido"))
+		return
+	}
+	if err := s.authLabDeviceNoAdopt(r.Context(), in.DeviceID, in.DeviceSecret); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.markWatchdogSeen(r.Context(), in.DeviceID) // só o watchdog chama esta rota
+	cmd, err := waitForLabCommand(r.Context(), s.labCmds, in.DeviceID, labWaitCommandMax, labWaitCommandTick)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if cmd == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"command": map[string]any{"id": cmd.ID, "text": cmd.Text}})
+}
+
 const watchdogAppVersion = "wnsh-watchdog"
 
 // Presença do watchdog por PC (Redis, 5min). Com ele presente, o hour-timer-app

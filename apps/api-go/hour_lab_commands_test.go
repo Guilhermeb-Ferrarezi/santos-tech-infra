@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeLabCmds implementa labCommandStore em memória com a MESMA semântica do
@@ -180,6 +181,66 @@ func TestSendCommandEnfileiraComUsuarioEOrigem(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &out)
 	if out.CommandID == "" {
 		t.Fatalf("sem commandId: %s", w.Body)
+	}
+}
+
+func TestWaitForLabCommandVoltaNaHora(t *testing.T) {
+	f := newFakeLabCmds()
+	f.push("pc-1", LabCommand{ID: "a", Text: "x"})
+	start := time.Now()
+	c, err := waitForLabCommand(context.Background(), f, "pc-1", time.Second, 10*time.Millisecond)
+	if err != nil || c == nil || c.ID != "a" {
+		t.Fatalf("c=%v err=%v", c, err)
+	}
+	if time.Since(start) > 50*time.Millisecond {
+		t.Fatal("deveria responder sem esperar o tick")
+	}
+}
+
+func TestWaitForLabCommandPegaOQueChegaDurante(t *testing.T) {
+	f := newFakeLabCmds()
+	go func() { time.Sleep(30 * time.Millisecond); f.push("pc-1", LabCommand{ID: "b", Text: "y"}) }()
+	c, _ := waitForLabCommand(context.Background(), f, "pc-1", time.Second, 10*time.Millisecond)
+	if c == nil || c.ID != "b" {
+		t.Fatalf("c=%v", c)
+	}
+}
+
+func TestWaitForLabCommandEntregaEmOrdem(t *testing.T) {
+	f := newFakeLabCmds()
+	f.push("pc-1", LabCommand{ID: "primeiro", Text: "1"})
+	f.push("pc-1", LabCommand{ID: "segundo", Text: "2"})
+	c1, _ := waitForLabCommand(context.Background(), f, "pc-1", time.Second, 10*time.Millisecond)
+	c2, _ := waitForLabCommand(context.Background(), f, "pc-1", time.Second, 10*time.Millisecond)
+	if c1.ID != "primeiro" || c2.ID != "segundo" {
+		t.Fatalf("ordem errada: %s, %s", c1.ID, c2.ID)
+	}
+}
+
+func TestWaitForLabCommandTimeoutDevolveNil(t *testing.T) {
+	c, err := waitForLabCommand(context.Background(), newFakeLabCmds(), "pc-1", 40*time.Millisecond, 10*time.Millisecond)
+	if c != nil || err != nil {
+		t.Fatalf("c=%v err=%v", c, err)
+	}
+}
+
+func TestWaitForLabCommandRespeitaCancelamento(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	start := time.Now()
+	_, _ = waitForLabCommand(ctx, newFakeLabCmds(), "pc-1", 5*time.Second, 10*time.Millisecond)
+	if time.Since(start) > time.Second {
+		t.Fatal("não parou ao cancelar (cliente desconectou)")
+	}
+}
+
+func TestWaitCommandCorpoInvalido400(t *testing.T) {
+	s := testServer(Config{})
+	s.labCmds = newFakeLabCmds()
+	w := httptest.NewRecorder()
+	s.handleLabDeviceWaitCommand(w, httptest.NewRequest("POST", "/", strings.NewReader(`{`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d", w.Code)
 	}
 }
 
