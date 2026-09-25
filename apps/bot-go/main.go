@@ -146,7 +146,11 @@ func main() {
 	regrasVendaRepo := &RegrasVendaRepo{pool: pool}
 	regrasVendaFonte := NewRegrasVendaFonte(regrasVendaRepo, 30*time.Second, logger)
 
+	// Modo observador (observador.go): só age com observador_ligado na tela.
+	observador := NewObservador(NewObservadorRepo(pool), agentClient, logger)
+
 	depsBase := EngineDeps{
+		Observador:        observador,
 		TenantID:          cfg.TenantID,
 		DB:                pool,
 		Contacts:          contacts,
@@ -219,6 +223,7 @@ func main() {
 
 	// 13. Instancia Server
 	server := NewServer(cfg, engine, webhooks, pool, sender, logger, hub, logRepo, evoEngine, evolutionClient, voiceClient, redisClient)
+	server.observador = observador
 	server.regrasVenda = regrasVendaRepo
 	server.regrasFonte = regrasVendaFonte
 

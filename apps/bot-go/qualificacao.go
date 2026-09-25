@@ -32,6 +32,10 @@ type Qualificacao struct {
 	Motivacao       string // nas palavras do cliente
 	MotivacaoTipo   string // ver motivacoesValidas
 	Observacoes     string
+	// Compromissos (0045) — o que a pessoa disse que vai fazer, registrado pelo
+	// modo observador (observador.go), uma linha cada. Só leitura aqui: o Save
+	// não mexe nesta coluna.
+	Compromissos string
 
 	// Sinais do que ACONTECEU. Escritos pelo código a partir de fatos, nunca
 	// pelo modelo: um grau que o modelo atribui a si mesmo não classifica nada.
@@ -343,7 +347,7 @@ func (q Qualificacao) Vazia() bool {
 	return q.ParaQuem == "" && q.AlunoNome == "" && q.AlunoIdade == 0 &&
 		q.Interesse == "" && q.JaFazCurso == "" && q.Disponibilidade == "" &&
 		q.Motivacao == "" && q.MotivacaoTipo == "" && q.Observacoes == "" &&
-		q.Origem == ""
+		q.Origem == "" && q.Compromissos == ""
 }
 
 // ── como isso chega ao prompt ────────────────────────────────────────────────
@@ -389,6 +393,7 @@ func (q Qualificacao) BlocoDoDossie() string {
 		linha("Motivação", d)
 	}
 	linha("Outras anotações", q.Observacoes)
+	linha("O que a pessoa disse que ia fazer", strings.ReplaceAll(strings.TrimSpace(q.Compromissos), "\n", "; "))
 	if q.AulaMarcada {
 		b.WriteString("- Já tem aula experimental marcada.\n")
 	}

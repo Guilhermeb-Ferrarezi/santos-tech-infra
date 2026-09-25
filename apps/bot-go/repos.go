@@ -885,7 +885,8 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		       tc.followup_modo,
 		       tc.followup_dias_pos_experimental,
 		       COALESCE(tc.followup_responsavel_id, 0),
-		       tc.evolution_bot_reply_enabled
+		       tc.evolution_bot_reply_enabled,
+		       tc.observador_ligado
 		FROM tenant_config tc
 		JOIN tenants t ON t.id = tc.tenant_id
 		WHERE tc.tenant_id = $1
@@ -930,6 +931,7 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		&cfg.FollowupDiasPosExperimental,
 		&cfg.FollowupResponsavelID,
 		&cfg.EvolutionBotReplyEnabled,
+		&cfg.ObservadorLigado,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("TenantConfigRepo.Get: tenant %s não encontrado", tenantID)
@@ -1365,7 +1367,7 @@ func (r *QualificacaoRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		SELECT para_quem, aluno_nome, aluno_idade, interesse, ja_faz_curso,
 		       disponibilidade, motivacao, motivacao_tipo, observacoes,
 		       preco_informado, aula_marcada, turnos_respondendo, pedidos_de_preco,
-		       origem, origem_detalhe, origem_fonte
+		       origem, origem_detalhe, origem_fonte, compromissos
 		FROM lead_qualificacao
 		WHERE tenant_id = $1 AND contact_id = $2`
 	// Dentro da transação do Handle, usa a MESMA conexão. Pedir outra ao pool
@@ -1380,7 +1382,7 @@ func (r *QualificacaoRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		&q.ParaQuem, &q.AlunoNome, &q.AlunoIdade, &q.Interesse, &q.JaFazCurso,
 		&q.Disponibilidade, &q.Motivacao, &q.MotivacaoTipo, &q.Observacoes,
 		&q.PrecoInformado, &q.AulaMarcada, &q.TurnosRespondendo, &q.PedidosDePreco,
-		&q.Origem, &q.OrigemDetalhe, &q.OrigemFonte)
+		&q.Origem, &q.OrigemDetalhe, &q.OrigemFonte, &q.Compromissos)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Qualificacao{}, true // primeira conversa: vazio E confiável
 	}

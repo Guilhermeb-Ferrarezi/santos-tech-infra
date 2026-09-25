@@ -101,6 +101,8 @@ type dashConfig struct {
 	FollowupDiasPosExperimental int    `json:"followupDiasPosExperimental"`
 	FollowupResponsavelID       int    `json:"followupResponsavelId"`
 	FollowupResponsavelPadrao   int    `json:"followupResponsavelPadrao"`
+	// ObservadorLigado (0045) — ler as conversas com humano, sem responder.
+	ObservadorLigado bool `json:"observadorLigado"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -419,7 +421,8 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		       tc.origem_marcadores,
 		       tc.followup_modo,
 		       tc.followup_dias_pos_experimental,
-		       COALESCE(tc.followup_responsavel_id, 0)
+		       COALESCE(tc.followup_responsavel_id, 0),
+		       tc.observador_ligado
 		FROM tenant_config tc
 		WHERE tc.tenant_id = $1
 	`, tenantID).Scan(
@@ -433,6 +436,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		&voiceEnabled, &voiceProvider, &voiceID, &voiceModel,
 		&marcadoresRaw,
 		&cfg.FollowupModo, &cfg.FollowupDiasPosExperimental, &cfg.FollowupResponsavelID,
+		&cfg.ObservadorLigado,
 	)
 	if err != nil {
 		s.logger.Error("dash: get config", "err", err)
@@ -573,6 +577,7 @@ type dashConfigPatch struct {
 	FollowupModo                *string `json:"followupModo"`
 	FollowupDiasPosExperimental *int    `json:"followupDiasPosExperimental"`
 	FollowupResponsavelID       *int    `json:"followupResponsavelId"`
+	ObservadorLigado            *bool   `json:"observadorLigado"`
 }
 
 // jsonbOuNil devolve o JSON de uma lista, ou nil quando ela nem veio.
@@ -699,6 +704,7 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		      WHEN $28::int IS NULL THEN followup_responsavel_id
 		      WHEN $28::int = 0 THEN NULL
 		      ELSE $28::int END,
+		    observador_ligado = COALESCE($29, observador_ligado),
 		    updated_at     = now()
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
@@ -709,7 +715,8 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		body.NotifOnSuccess, body.NotifOnContainerDown,
 		body.VoiceEnabled, voiceProvider, body.VoiceID, body.VoiceModel,
 		marcadoresJSON,
-		body.FollowupModo, body.FollowupDiasPosExperimental, body.FollowupResponsavelID)
+		body.FollowupModo, body.FollowupDiasPosExperimental, body.FollowupResponsavelID,
+		body.ObservadorLigado)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)
@@ -850,10 +857,13 @@ type dashLead struct {
 	// Owner em texto continua para o que foi atribuído antes (migration 0043).
 	OwnerUserID    int          `json:"ownerUserId"`
 	ProximoRetorno *dashRetorno `json:"proximoRetorno,omitempty"`
-	Origin         string       `json:"origin"`
-	ConversationID string       `json:"conversationId"`
-	LastActivity   *time.Time   `json:"lastActivity"`
-	CreatedAt      time.Time    `json:"createdAt"`
+	// Compromissos — o que a pessoa disse que ia fazer (modo observador), uma
+	// linha cada.
+	Compromissos   string     `json:"compromissos,omitempty"`
+	Origin         string     `json:"origin"`
+	ConversationID string     `json:"conversationId"`
+	LastActivity   *time.Time `json:"lastActivity"`
+	CreatedAt      time.Time  `json:"createdAt"`
 }
 
 // dashRetorno — o próximo retorno pedido pelo cliente, para o card do CRM
@@ -884,8 +894,10 @@ func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
 		SELECT l.id::text, COALESCE(ct.display_name, ''), COALESCE(ci.external_id, ''),
 		       l.status, COALESCE(l.interest, ''), COALESCE(l.owner, ''), COALESCE(l.origin, 'oficial'),
 		       COALESCE(cv.id::text, ''), cv.last_inbound_at, l.created_at,
-		       COALESCE(l.owner_user_id, 0), rt.fire_at, COALESCE(rt.frase, '')
+		       COALESCE(l.owner_user_id, 0), rt.fire_at, COALESCE(rt.frase, ''),
+		       COALESCE(lq.compromissos, '')
 		FROM lead l
+		LEFT JOIN lead_qualificacao lq ON lq.tenant_id = l.tenant_id AND lq.contact_id = l.contact_id
 		JOIN contact ct ON ct.tenant_id = l.tenant_id AND ct.id = l.contact_id
 		LEFT JOIN LATERAL (
 			SELECT external_id FROM channel_identity
@@ -926,7 +938,7 @@ func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
 		var retornoFrase string
 		if err := rows.Scan(&l.ID, &l.ContactName, &l.Phone, &l.Status,
 			&l.Interest, &l.Owner, &l.Origin, &l.ConversationID, &l.LastActivity, &l.CreatedAt,
-			&l.OwnerUserID, &retornoEm, &retornoFrase); err != nil {
+			&l.OwnerUserID, &retornoEm, &retornoFrase, &l.Compromissos); err != nil {
 			s.logger.Error("dash: scan lead", "err", err)
 			jsonErr(w, "internal error", http.StatusInternalServerError)
 			return

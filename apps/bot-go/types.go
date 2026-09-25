@@ -159,6 +159,9 @@ type TenantConfig struct {
 	// EvolutionBotReplyEnabled — no número não-oficial é este toggle que diz se
 	// o bot responde (o engine do Evolution ignora a flag da conversa).
 	EvolutionBotReplyEnabled bool
+	// ObservadorLigado (0045) — com humano atendendo, o bot lê sem responder
+	// (observador.go).
+	ObservadorLigado bool
 }
 
 // ScheduleEntry — uma aula experimental já agendada, lida do data source
