@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { useStoredToken } from "./lib/useStoredToken";
 import { useTickingSeconds } from "./lib/useTickingSeconds";
+import { pollHourSession } from "./lib/sessionPolling";
 import "./index.css";
 
 const API_ORIGIN = "https://api.santos-tech.com";
@@ -30,25 +31,17 @@ function OverlayApp() {
   const { token } = useStoredToken();
   const [data, setData] = useState<PublicHourSession | null>(null);
 
+  // 404 = sessão apagada: para de consultar e volta ao "--:--" (quem limpa o
+  // token salvo é a janela principal). Falhas tentam de novo com backoff,
+  // silenciosas. Ver sessionPolling.ts (incidente de 25/09/2026).
   useEffect(() => {
     if (!token) return;
-    let cancelled = false;
-    async function poll() {
-      try {
-        const res = await fetch(`${API_ORIGIN}/public/hour-sessions/${token}`);
-        if (!res.ok) return;
-        const json: PublicHourSession = await res.json();
-        if (!cancelled) setData(json);
-      } catch {
-        // silencioso — o próximo poll tenta de novo
-      }
-    }
-    poll();
-    const id = setInterval(poll, 5_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
+    return pollHourSession<PublicHourSession>(token, {
+      origin: API_ORIGIN,
+      onData: setData,
+      onGone: () => setData(null),
+      onError: () => {},
+    });
   }, [token]);
 
   const displaySeconds = useTickingSeconds(data?.elapsedSeconds ?? 0, data?.status === "active");

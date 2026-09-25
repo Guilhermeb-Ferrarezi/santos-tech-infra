@@ -7,6 +7,7 @@ import { useLowBalanceNotifier } from "./lib/useLowBalanceNotifier";
 import { useDeviceHeartbeat } from "./lib/useDeviceHeartbeat";
 import { useTraySync } from "./lib/useTraySync";
 import { useAutoUpdate } from "./lib/useAutoUpdate";
+import { pollHourSession } from "./lib/sessionPolling";
 import { Titlebar } from "./components/Titlebar";
 import { OverlayPositionButton } from "./components/OverlayPositionButton";
 
@@ -176,38 +177,34 @@ function TimerScreen({
   token,
   onChangeSession,
   onSessionEnded,
+  onSessionGone,
   heartbeatOk,
 }: {
   token: string;
   onChangeSession: () => void;
   onSessionEnded: () => void;
+  onSessionGone: () => void;
   heartbeatOk: boolean;
 }) {
   const [data, setData] = useState<PublicHourSession | null>(null);
   const [error, setError] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function poll() {
-      try {
-        const res = await fetch(`${API_ORIGIN}/public/hour-sessions/${token}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json: PublicHourSession = await res.json();
-        if (!cancelled) {
+  // 404 = a sessão foi apagada no servidor: esquece o token e volta pro
+  // pareamento em vez de consultar em loop (ver sessionPolling.ts — o loop
+  // baniu o IP da escola inteira em 25/09/2026).
+  useEffect(
+    () =>
+      pollHourSession<PublicHourSession>(token, {
+        origin: API_ORIGIN,
+        onData: (json) => {
           setData(json);
           setError(false);
-        }
-      } catch {
-        if (!cancelled) setError(true);
-      }
-    }
-    poll();
-    const id = setInterval(poll, 5_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [token]);
+        },
+        onGone: onSessionGone,
+        onError: () => setError(true),
+      }),
+    [token, onSessionGone],
+  );
 
   // Sessão encerrada: tira o token do disco na hora. Ele fica em claro no
   // config.json e este PC atende vários clientes por dia — não pode continuar
@@ -295,6 +292,7 @@ export default function App() {
           token={token}
           onChangeSession={clearToken}
           onSessionEnded={purgeStoredToken}
+          onSessionGone={clearToken}
           heartbeatOk={heartbeatOk}
         />
       )}
