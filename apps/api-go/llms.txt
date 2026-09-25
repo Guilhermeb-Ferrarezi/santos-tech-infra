@@ -1202,8 +1202,11 @@ completo — não conta pra `pcsOcupados` de ninguém, nem gera `eventosPolitica
 `alunoOuGrupo`, `professorOuResponsavelId`/`professorOuResponsavelNome`, `conteudo`, `jogo`,
 `qtdPessoas`, `computadoresUsados` (nullable — `null` = não informado, ver abaixo),
 `dataInicio` (YYYY-MM-DD), `horaInicio`/`horaFim`
-(HH:MM:SS), `recorrencia` (nenhuma|semanal — só `aula_turma` usa `semanal`, forçado no
-servidor independente do que o cliente mandar), `diaSemana` (0-6, `time.Weekday`, só se
+(HH:MM:SS), `recorrencia` (nenhuma|semanal — `aula_turma` é sempre `semanal`, forçado no
+servidor; `aula_particular` aceita `semanal` se o cliente mandar (aluno sozinho com horário
+fixo) e qualquer outro valor/ausência vira `nenhuma`; os demais tipos são sempre `nenhuma`.
+**Turma de verdade = `tipo=aula_turma`**; particular semanal nunca é turma),
+`diaSemana` (0-6, `time.Weekday`, obrigatório e só usado se
 semanal), `dataFimRecorrencia` (só se semanal; `null` = recorrência **indefinida**, sem
 data de término conhecida — estado válido, não obrigatório), `dataFim` (só se
 `tipo=dia_inteiro` — último dia, inclusive, do banner; obrigatório e ≥ `dataInicio` nesse
@@ -1218,7 +1221,7 @@ por sinalizar visualmente que aquele evento tem PCs desconhecidos, já que o nú
 no painel de capacidade pode estar subestimado nesse horário. Continua validado como
 0–1000 quando um valor É enviado.
 
-**`dataFimRecorrencia` indefinida**: um `aula_turma` sem data de término conhecida grava
+**`dataFimRecorrencia` indefinida**: um evento semanal sem data de término conhecida grava
 `dataFimRecorrencia: null` em vez de forçar uma data-teto arbitrária. `GET /agenda/eventos`
 devolve o evento normalmente; resolver as ocorrências (semana/mês exibidos) é
 responsabilidade do cliente, que deve tratar `null` como "sem teto próprio, segue

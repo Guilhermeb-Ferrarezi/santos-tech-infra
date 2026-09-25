@@ -41,13 +41,17 @@ type agendaEventCreateInput struct {
 	DataInicio         string `json:"dataInicio" jsonschema:"data de início, formato YYYY-MM-DD"`
 	HoraInicio         string `json:"horaInicio" jsonschema:"hora de início, formato HH:MM"`
 	HoraFim            string `json:"horaFim" jsonschema:"hora de fim, formato HH:MM — precisa ser depois da hora de início"`
-	// diaSemana só se aplica (e é obrigatório) para tipo=aula_turma — a API
-	// força recorrencia="semanal" sozinha nesse caso, não é escolha do cliente.
-	DiaSemana *int `json:"diaSemana,omitempty" jsonschema:"dia da semana (0=domingo..6=sábado) — obrigatório se tipo=aula_turma, ignorado nos demais tipos"`
-	// dataFimRecorrencia null (omitido) numa aula_turma = recorrência
+	// recorrencia só é escolha do cliente em aula_particular (aluno sozinho com
+	// horário fixo); aula_turma é sempre semanal e os demais tipos nunca repetem
+	// — a API força isso sozinha.
+	Recorrencia string `json:"recorrencia,omitempty" jsonschema:"'semanal' pra aula_particular que se repete toda semana (aluno sozinho com horário fixo); omita pra particular avulsa. Ignorado nos demais tipos (aula_turma é sempre semanal). Aluno sozinho NUNCA vai como aula_turma"`
+	// diaSemana é obrigatório em evento semanal (aula_turma, ou aula_particular
+	// com recorrencia=semanal) e ignorado nos demais.
+	DiaSemana *int `json:"diaSemana,omitempty" jsonschema:"dia da semana (0=domingo..6=sábado) — obrigatório se tipo=aula_turma ou aula_particular semanal, ignorado nos demais"`
+	// dataFimRecorrencia null (omitido) num evento semanal = recorrência
 	// INDEFINIDA (sem data de término conhecida) — estado válido, não invente
 	// uma data-teto arbitrária só pra preencher o campo.
-	DataFimRecorrencia *string `json:"dataFimRecorrencia,omitempty" jsonschema:"data de fim da recorrência (YYYY-MM-DD), só pra tipo=aula_turma; omita pra recorrência indefinida (sem data de término conhecida) em vez de inventar uma data"`
+	DataFimRecorrencia *string `json:"dataFimRecorrencia,omitempty" jsonschema:"data de fim da recorrência (YYYY-MM-DD), só pra evento semanal; omita pra recorrência indefinida (sem data de término conhecida) em vez de inventar uma data"`
 	// dataFim é o último dia (inclusive) de um evento "dia_inteiro" — nada a
 	// ver com dataFimRecorrencia (recorrência semanal).
 	DataFim           *string `json:"dataFim,omitempty" jsonschema:"último dia (inclusive) do intervalo, só pra tipo=dia_inteiro"`
@@ -84,6 +88,9 @@ func (s *Server) addAgendaTools(srv *mcp.Server) {
 		}
 		if in.Tipo == "aula_turma" && in.DiaSemana == nil {
 			return errResult("tipo=aula_turma exige diaSemana (0=domingo..6=sábado)"), nil, nil
+		}
+		if in.Tipo == "aula_particular" && in.Recorrencia == "semanal" && in.DiaSemana == nil {
+			return errResult("aula_particular semanal exige diaSemana (0=domingo..6=sábado)"), nil, nil
 		}
 		return s.proxy(ctx, req, "POST", base+"/agenda/eventos", in)
 	})
