@@ -19,7 +19,7 @@ func TestModalidadeSemIdadeMandaPerguntarAntes(t *testing.T) {
 
 func TestModalidadeDezessetePraCimaEParticular(t *testing.T) {
 	for _, idade := range []int{17, 18, 34, 70} {
-		b := Qualificacao{AlunoIdade: idade}.BlocoDaModalidade()
+		b := paraEstaPessoa(Qualificacao{AlunoIdade: idade}.BlocoDaModalidade())
 		if !strings.Contains(b, "público do CURSO PARTICULAR") {
 			t.Errorf("%d anos deveria ir direto pro particular:\n%s", idade, b)
 		}
@@ -31,15 +31,17 @@ func TestModalidadeDezessetePraCimaEParticular(t *testing.T) {
 
 func TestModalidadeQuinzeDezesseisEZonaDeConversa(t *testing.T) {
 	for _, idade := range []int{15, 16} {
-		b := Qualificacao{AlunoIdade: idade}.BlocoDaModalidade()
+		b := paraEstaPessoa(Qualificacao{AlunoIdade: idade}.BlocoDaModalidade())
 		if !strings.Contains(b, "fim da faixa dos programas") {
 			t.Errorf("%d anos deveria cair na zona de conversa:\n%s", idade, b)
 		}
 	}
 }
 
+// Olha só a indicação da pessoa: desde que as faixas viraram configuráveis
+// (25/09/2026), o bloco lista TODAS as faixas, inclusive a do particular.
 func TestModalidadeCriancaDecidePeloInteresse(t *testing.T) {
-	b := Qualificacao{AlunoIdade: 12}.BlocoDaModalidade()
+	b := paraEstaPessoa(Qualificacao{AlunoIdade: 12}.BlocoDaModalidade())
 	if !strings.Contains(b, "idade de turma") {
 		t.Errorf("12 anos é idade de turma:\n%s", b)
 	}
