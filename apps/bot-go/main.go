@@ -141,6 +141,11 @@ func main() {
 	// quando a dependência é nil — o cliente que entrasse por ali seria atendido
 	// por um bot mais burro, em silêncio. Uma base compartilhada torna esse tipo
 	// de esquecimento impossível: capacidade nova entra uma vez, vale nos dois.
+	// Regras de venda editáveis na tela (0044): um cache só, lido pelos dois
+	// motores e invalidado pelo painel quando alguém salva.
+	regrasVendaRepo := &RegrasVendaRepo{pool: pool}
+	regrasVendaFonte := NewRegrasVendaFonte(regrasVendaRepo, 30*time.Second, logger)
+
 	depsBase := EngineDeps{
 		TenantID:          cfg.TenantID,
 		DB:                pool,
@@ -173,6 +178,7 @@ func main() {
 		GCalRepo:          NewGCalRepo(pool),
 		Lembretes:         NewLembreteRepo(pool),
 		Qualificacoes:     NewQualificacaoRepo(pool),
+		RegrasVenda:       regrasVendaFonte,
 	}
 
 	depsCloud := depsBase
@@ -213,6 +219,8 @@ func main() {
 
 	// 13. Instancia Server
 	server := NewServer(cfg, engine, webhooks, pool, sender, logger, hub, logRepo, evoEngine, evolutionClient, voiceClient, redisClient)
+	server.regrasVenda = regrasVendaRepo
+	server.regrasFonte = regrasVendaFonte
 
 	// 14. Inicia worker em background; workerDone fecha quando ele drena no shutdown.
 	workerDone := make(chan struct{})

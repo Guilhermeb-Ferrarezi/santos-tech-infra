@@ -159,6 +159,10 @@ type Server struct {
 	retryStream *RetryStream
 	// tenantCache cacheia debounce_ms por tenant no Redis (fail-open p/ o banco).
 	tenantCache *TenantCache
+	// Regras de venda da tela "Como o bot vende" (0044). regrasFonte é o
+	// mesmo cache que o engine lê — o save invalida para a próxima mensagem.
+	regrasVenda *RegrasVendaRepo
+	regrasFonte *RegrasVendaFonte
 	// session valida a sessão do painel (cookie access_token) no auth central.
 	session *SessionAuth
 	// bg roda o processamento dos webhooks fora do handler, com paralelismo
@@ -192,6 +196,7 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		gcalDrive:   NovoClienteDoDrive(cfg, logger),
 		gcalRepo:    NewGCalRepo(pool),
 		followup:    NewFollowupRepo(pool),
+		regrasVenda: &RegrasVendaRepo{pool: pool},
 		rdb:         rdb,
 		notifDedupe: newNotifDedupe(),
 		retryStream: NewRetryStream(rdb, cfg.RetryStreamKey, cfg.RetryStreamGroup, cfg.RetryStreamConsumer, logger),
@@ -248,6 +253,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/followup/{pageId}", da(s.handleDashMarcaResultado))
 	mux.Handle("GET /api/avaliacoes/pendentes", da(s.handleDashAvaliacoesPendentes))
 	mux.Handle("PATCH /api/avaliacoes/{telefone}", da(s.handleDashMarcaAvaliacao))
+	// Como o bot vende — regras de venda e vocabulário
+	s.rotasDeVendas(mux)
 	mux.HandleFunc("GET /api/ws", s.handleDashWS)
 	// OPTIONS preflight (sem auth)
 	mux.HandleFunc("OPTIONS /api/", func(w http.ResponseWriter, r *http.Request) {
