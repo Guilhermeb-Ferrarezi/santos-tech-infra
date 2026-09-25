@@ -168,6 +168,9 @@ type Server struct {
 	// bg roda o processamento dos webhooks fora do handler, com paralelismo
 	// limitado e esperado no shutdown (ver bgpool.go).
 	bg *bgPool
+	// observador — lê sem responder quando o bot do Evolution está desligado
+	// (observador.go). nil = desligado.
+	observador *Observador
 	// rateLimit segura o caminho de entrada antes de virar chamada ao LLM.
 	rateLimit *LLMRateLimiter
 }
@@ -804,6 +807,13 @@ func (s *Server) captureEvolutionLead(ctx context.Context, ev evolutionWebhook) 
 	}
 	if s.hub != nil {
 		s.hub.Broadcast(WSEvent{Type: "lead.new"})
+	}
+
+	// Bot desligado no número não-oficial = um humano atendendo por ele: o
+	// observador lê sem responder (se ligado na tela).
+	if text != "" && (s.evoEngine == nil || !s.evolutionBotReplyEnabled(ctx)) {
+		s.observaEvolution(ctx, phone, text)
+		return
 	}
 
 	// Bot responde via Evolution SOMENTE se o toggle estiver ligado e houver texto.

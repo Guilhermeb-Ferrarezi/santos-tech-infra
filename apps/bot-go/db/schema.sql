@@ -326,3 +326,19 @@ CREATE TABLE pending_booking (
   FOREIGN KEY (tenant_id, conversation_id)
     REFERENCES conversation (tenant_id, id) ON DELETE CASCADE
 );
+
+CREATE TABLE bot_turma_retrato (
+  tenant_id     uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+  turma_id      bigint      NOT NULL,
+  nome          text        NOT NULL,
+  curso         text        NOT NULL DEFAULT '',
+  horarios      jsonb       NOT NULL DEFAULT '[]'::jsonb,
+  inicio        date        NOT NULL,
+  fim_previsto  date        NOT NULL,
+  alunos        integer     NOT NULL,
+  capacidade    integer     NOT NULL,
+  vagas         integer     NOT NULL,
+  capturado_em  timestamptz NOT NULL,
+  sumiu_em      timestamptz,
+  PRIMARY KEY (tenant_id, turma_id)
+);

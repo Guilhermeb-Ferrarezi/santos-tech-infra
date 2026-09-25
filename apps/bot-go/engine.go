@@ -63,8 +63,11 @@ type EngineDeps struct {
 	// origem do cliente (Meta para 'whatsapp', Evolution para 'evolution'), em vez de
 	// usar sempre e.deps.Sender (que é o sender do canal do ADMIN/da conversa atual).
 	EvolutionSender ChatSender
-	Emitter         EventEmitter
-	Logger          *slog.Logger
+	// Observador — com humano no controle, lê a mensagem sem responder
+	// (observador.go). nil = desligado.
+	Observador *Observador
+	Emitter    EventEmitter
+	Logger     *slog.Logger
 	// Broadcast envia um evento WebSocket a todos os clientes do dashboard (opcional).
 	Broadcast func(ev WSEvent)
 	// LogRepo persiste logs de processamento para o painel de logs (opcional).
@@ -199,6 +202,7 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		convCtx         ConversationContext
 		llmReady        bool
 		held            bool // mensagem retida (quiet hours) — não marcar webhook done
+		observar        bool // humano no controle e observador ligado: ler sem responder
 	)
 
 	err := e.withTenant(ctx, func(tx pgx.Tx) error {
@@ -261,6 +265,10 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		// d) Humano no controle → ignora (a menos que o engine force o bot, ex.: Evolution)
 		if !conv.BotEnabled && !e.deps.ForceBotEnabled {
 			log.Info("bot desabilitado para esta conversa, ignorando mensagem")
+			// Modo observador: lê depois do commit (a conversa pode ter nascido
+			// agora, nesta transação), sem responder.
+			observar = cfg.ObservadorLigado && e.deps.Observador != nil &&
+				inbound.Content.Type == "text" && !cfg.IsAdminNumber(contactPhone)
 			return nil
 		}
 
@@ -391,6 +399,18 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 	})
 	if err != nil {
 		return fmt.Errorf("engine.Handle (fase 1): %w", err)
+	}
+
+	if observar {
+		obs, tenant, contato, conversa, texto := e.deps.Observador, inbound.TenantID, contactID, conv.ID, inbound.Content.Text
+		go func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					e.deps.Logger.Error("engine: panic no observador", "panic", rec, "stack", string(debug.Stack()))
+				}
+			}()
+			obs.Observa(context.Background(), tenant, contato, conversa, texto)
+		}()
 	}
 
 	// Mensagem retida (quiet hours): a inbound já foi marcada para retry; sinaliza

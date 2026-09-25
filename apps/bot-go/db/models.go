@@ -350,6 +350,21 @@ type BotProcessingLog struct {
 	CreatedAt      time.Time
 }
 
+type BotTurmaRetrato struct {
+	TenantID    string
+	TurmaID     int64
+	Nome        string
+	Curso       string
+	Horarios    json.RawMessage
+	Inicio      time.Time
+	FimPrevisto time.Time
+	Alunos      int
+	Capacidade  int
+	Vagas       int
+	CapturadoEm time.Time
+	SumiuEm     sql.NullTime
+}
+
 type ChannelIdentity struct {
 	ID            string
 	TenantID      string

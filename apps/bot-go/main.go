@@ -107,6 +107,15 @@ func main() {
 	// 8. Instancia AgentGoClient (Responder)
 	sitemapCache := NewSitemapCache(cfg.SiteURL)
 	agentClient := NewAgentGoClient(cfg.AgentGoURL, cfg.AgentGoSecret, cfg.BotModel, sitemapCache, notionClient)
+	// Turmas ao vivo (GET /portal/turmas-abertas e /agenda/horarios-livres na
+	// API central, mesmo host das Tarefas). Sem PLATFORM_API_TOKEN o bot segue
+	// sem dado de turma — o comportamento de antes.
+	if cfg.PlatformAPIToken != "" && cfg.AgentGoURL != "" {
+		agentClient.ComTurmas(NewTurmasFonte(NewTurmasAPIHTTP(cfg.AgentGoURL, cfg.PlatformAPIToken), NewTurmaRetratoRepo(pool), 5*time.Minute, logger))
+		logger.Info("turmas: consulta ao vivo ligada")
+	} else {
+		logger.Warn("turmas: sem PLATFORM_API_TOKEN, o bot não consulta turmas")
+	}
 
 	// 9. Instancia WhatsAppSender + cliente Evolution (canal não-oficial)
 	sender := NewWhatsAppSender(cfg.MetaAccessToken, cfg.MetaPhoneNumberID)
@@ -146,7 +155,11 @@ func main() {
 	regrasVendaRepo := &RegrasVendaRepo{pool: pool}
 	regrasVendaFonte := NewRegrasVendaFonte(regrasVendaRepo, 30*time.Second, logger)
 
+	// Modo observador (observador.go): só age com observador_ligado na tela.
+	observador := NewObservador(NewObservadorRepo(pool), agentClient, logger)
+
 	depsBase := EngineDeps{
+		Observador:        observador,
 		TenantID:          cfg.TenantID,
 		DB:                pool,
 		Contacts:          contacts,
@@ -219,6 +232,7 @@ func main() {
 
 	// 13. Instancia Server
 	server := NewServer(cfg, engine, webhooks, pool, sender, logger, hub, logRepo, evoEngine, evolutionClient, voiceClient, redisClient)
+	server.observador = observador
 	server.regrasVenda = regrasVendaRepo
 	server.regrasFonte = regrasVendaFonte
 

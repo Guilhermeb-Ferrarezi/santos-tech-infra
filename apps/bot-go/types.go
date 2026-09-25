@@ -135,6 +135,9 @@ type TenantConfig struct {
 	// EstadoAgenda — se dá para confiar em Schedule. Agenda vazia e Notion fora
 	// do ar são a mesma lista; sem isto o prompt não distingue.
 	EstadoAgenda EstadoAgenda
+	// Turmas — o que o bot pode afirmar sobre as turmas (consulta ao vivo ou
+	// retrato; ver turmas.go). Valor zero = sem dados = comportamento de antes.
+	Turmas EstadoTurmas
 	// Funcionamento e duração da aula experimental, para o prompt e para a
 	// validação em Go. Ficavam chumbados numa string do prompt.
 	EscolaAbre     string // "08:00"
@@ -159,6 +162,9 @@ type TenantConfig struct {
 	// EvolutionBotReplyEnabled — no número não-oficial é este toggle que diz se
 	// o bot responde (o engine do Evolution ignora a flag da conversa).
 	EvolutionBotReplyEnabled bool
+	// ObservadorLigado (0045) — com humano atendendo, o bot lê sem responder
+	// (observador.go).
+	ObservadorLigado bool
 }
 
 // ScheduleEntry — uma aula experimental já agendada, lida do data source

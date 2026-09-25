@@ -85,7 +85,7 @@ const prefixoLinhaVocabulario = "- NÃO escreva \""
 // Henrique, 25/09/2026). Tirar uma delas faz o bot inventar ou vazar. A tela
 // mostra a lista para ele saber que existe.
 var TravasDeHonestidade = []string{
-	"Só afirme que não há turma no horário da pessoa se a Base de Conhecimento listar os horários das turmas; se não listar, NÃO invente — siga para a aula experimental e a equipe encaixa.",
+	"Só afirme que não há turma no horário da pessoa se o bloco \"Turmas abertas agora\" (ou a Base de Conhecimento) listar os horários das turmas; se nenhum dos dois listar, NÃO invente — siga para a aula experimental e a equipe encaixa.",
 	"NUNCA fale mal de uma escola específica e NÃO afirme o que outras escolas oferecem ou deixam de oferecer. Quando comparar, compare com o FORMATO (turma), nunca com um concorrente.",
 	"NUNCA diga ao cliente os motivos da ESCOLA: que é difícil formar turma, que turma precisa de um mínimo de alunos com agenda batendo, que o marketing se divide entre muitos cursos, ou qualquer conta financeira (tempo de permanência, ticket). Isso orienta você; ao cliente, fale só do que ELE ganha.",
 }
