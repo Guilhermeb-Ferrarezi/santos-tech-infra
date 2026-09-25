@@ -23,9 +23,10 @@ type sessionEntry struct {
 	exp time.Time
 }
 
-// SessionAuth valida a sessão do auth central repassando os cookies da request
-// para /auth/me e exigindo papel Admin. Fail-closed: qualquer erro (URL vazia,
-// timeout, status != 200, JSON inválido, papel != Admin) resulta em negação.
+// SessionAuth valida a sessão do auth central repassando o cookie access_token
+// da request para /auth/me e exigindo papel Admin. Fail-closed: qualquer erro
+// (URL vazia, timeout, status != 200, JSON inválido, papel != Admin) resulta em
+// negação.
 //
 // O resultado é memorizado por um TTL curto, com chave no hash do token, para
 // não bater no auth a cada mensagem que o painel busca.
@@ -60,7 +61,7 @@ func (a *SessionAuth) Authorized(r *http.Request) bool {
 	if ok, hit := a.lookup(key); hit {
 		return ok
 	}
-	ok := a.check(r)
+	ok := a.check(r.Context(), tok)
 	a.store(key, ok)
 	return ok
 }
@@ -98,19 +99,20 @@ func (a *SessionAuth) store(key string, ok bool) {
 	a.cache[key] = sessionEntry{ok: ok, exp: time.Now().Add(a.ttl)}
 }
 
-// check consulta /auth/me repassando os cookies (e o Authorization, se houver).
-func (a *SessionAuth) check(r *http.Request) bool {
-	ctx, cancel := context.WithTimeout(r.Context(), a.client.Timeout)
+// check consulta /auth/me com EXATAMENTE o token que vira chave do cache — só
+// o cookie access_token, sem o Authorization nem os demais cookies da request.
+// Repassar mais que isso deixaria /auth/me validar uma credencial diferente da
+// memorizada: cookie qualquer + Bearer de admin gravaria "ok" para o cookie, e
+// o cookie sozinho passaria até o TTL, mesmo com o Bearer já revogado.
+func (a *SessionAuth) check(parent context.Context, tok string) bool {
+	ctx, cancel := context.WithTimeout(parent, a.client.Timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.url, nil)
 	if err != nil {
 		return false
 	}
-	req.Header.Set("Cookie", r.Header.Get("Cookie"))
-	if h := r.Header.Get("Authorization"); h != "" {
-		req.Header.Set("Authorization", h)
-	}
+	req.AddCookie(&http.Cookie{Name: "access_token", Value: tok})
 
 	resp, err := a.client.Do(req)
 	if err != nil {
