@@ -27,6 +27,11 @@ import (
 type ParteRegra string
 
 const (
+	// PartePrincipios — os princípios de venda do playbook (spec
+	// 2026-09-25-bot-playbook-venda). Não é regra de turma × particular: vai no
+	// bloco "# Como vender" (playbook.go), mas mora no mesmo documento para ter o
+	// mesmo "vazio = padrão" e o mesmo histórico.
+	PartePrincipios           ParteRegra = "principios"
 	ParteFaixaDesconhecida    ParteRegra = "faixaDesconhecida"
 	ParteFaixaParticular      ParteRegra = "faixaParticular"
 	ParteFaixaFimTurma        ParteRegra = "faixaFimTurma"
@@ -40,6 +45,7 @@ const (
 
 // PartesDasRegras — todas as partes, na ordem em que a tela mostra.
 var PartesDasRegras = []ParteRegra{
+	PartePrincipios,
 	ParteFaixaDesconhecida, ParteFaixaParticular, ParteFaixaFimTurma, ParteFaixaTurma,
 	ParteDecidir, ParteApresentarParticular, ParteContrasteSemTurma,
 	ParteContrasteComTurma, PartePorQue,
@@ -96,6 +102,12 @@ func PadraoRegrasVenda() RegrasVenda {
 	return RegrasVenda{
 		Faixas: FaixasIdade{IdadeParticular: 17, IdadeFimFaixaTurma: 15},
 		Textos: map[ParteRegra]string{
+			// Princípios aprovados pelo Henrique em 25/09/2026, como propostos na spec.
+			PartePrincipios: "- Pergunte mais do que fala. Descubra o porquê da pessoa — a dor, o motivo, o momento de vida — e ligue cada indicação a ele.\n" +
+				"- Valor desde a primeira mensagem. Toda resposta diz o que a pessoa ganha, não o que a escola tem.\n" +
+				"- Preço por último. O valor sai depois que você entendeu quem é a pessoa e ela entendeu o que ganha (a trava do sistema cuida do momento; você cuida do caminho).\n" +
+				"- Rapport. Use o nome, retome o que ela já contou, espelhe o jeito dela escrever.\n" +
+				"- Rápido e direto. Responda primeiro o que ela perguntou, curto; a pergunta de qualificação vem depois, no mesmo balão ou no seguinte.",
 			ParteFaixaDesconhecida: "Ainda não sei a idade do aluno. NÃO indique turma nem particular antes de saber — a idade é a próxima coisa a descobrir quando o assunto chegar em curso.",
 			ParteFaixaParticular:   "é público do CURSO PARTICULAR. NÃO ofereça turma: não existe turma para essa idade.",
 			ParteFaixaFimTurma:     "cabe em turma, mas está no fim da faixa dos programas (a progressão é de 4 a 6 anos). Entenda o objetivo antes de indicar: retorno rápido (emprego, mercado, algo específico) → curso particular; desenvolvimento contínuo com o conteúdo de um programa → turma.",
@@ -109,8 +121,7 @@ func PadraoRegrasVenda() RegrasVenda {
 			ParteContrasteSemTurma: "- Para esta pessoa a turma NÃO é opção aqui — a alternativa real dela é um curso em turma em outro lugar. Então você pode mostrar com franqueza por que a turma serve menos a ela: horário fixo que a rotina dela talvez não comporte, esperar a turma fechar para começar, ritmo e conteúdo pensados para a média da turma, atenção do professor dividida. Faça isso se ela comparar ou hesitar, sem exagero.",
 			ParteContrasteComTurma: "- NÃO diminua a turma: ela é o caminho principal para crianças e adolescentes e é produto da escola; compare só para mostrar o ganho do particular.",
 			PartePorQue: "- Adulto tem rotina cheia (trabalho, compromissos) e pouca disponibilidade; costuma querer retorno rápido (emprego, crescer no trabalho). No particular ele encaixa até 1 hora por semana, no dia e horário dele, e o conteúdo vai direto ao objetivo dele.\n" +
-				"- Para criança e adolescente, o programa em turma é o melhor caminho quando o conteúdo cabe nele: a criança aprende o que a família procurou E muito mais, com progressão por anos, convivência e troca com a turma.\n" +
-				"- Em venda, pergunte mais do que fala: descubra o porquê da pessoa (a dor, o motivo, o momento) e ligue a indicação a ele.",
+				"- Para criança e adolescente, o programa em turma é o melhor caminho quando o conteúdo cabe nele: a criança aprende o que a família procurou E muito mais, com progressão por anos, convivência e troca com a turma.",
 		},
 		Vocabulario: []TermoVocabulario{
 			{Evitar: "curso de adulto", Usar: "curso particular"},

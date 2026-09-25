@@ -92,6 +92,12 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	// Turmas abertas: dado real da plataforma, só para quem tem idade de turma.
 	sb.WriteString(context.Qualificacao.BlocoDasTurmas(cfg.RegrasVenda, cfg.Turmas, now))
 
+	// ── Como vender (playbook) ────────────────────────────────────────────────
+	//
+	// Depois de saber quem é a pessoa e que formato serve, e antes do horário:
+	// é o COMO conduzir. Princípios valem sempre (playbook.go).
+	sb.WriteString(BlocoComoVender(cfg.RegrasVenda))
+
 	// ── Agendamento de aulas ──────────────────────────────────────────────────
 	sb.WriteString("# Agendamento de aulas\n")
 	sb.WriteString("Você pode ajudar o cliente a agendar uma AULA EXPERIMENTAL (gratuita) ou uma aula do CURSO PARTICULAR (qualquer idade).\n")
