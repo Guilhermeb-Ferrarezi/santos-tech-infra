@@ -833,6 +833,17 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		e.convidaClienteDaConversa(ctx, conv, inbound, output.ClienteEmail)
 	}
 
+	// Fecha o ciclo da mensagem — e SÓ aqui.
+	//
+	// Enquanto esta marca não existir, a mensagem continua elegível para
+	// reprocessamento. É o que transforma uma falha momentânea do modelo num
+	// retry em vez de num cliente sem resposta: em 25/09 um 502 fez o bot
+	// registrar a mensagem como vista, falhar, e o retry desistir chamando de
+	// "duplicada" — enquanto logava sucesso.
+	if err == nil && e.deps.Messages != nil {
+		e.deps.Messages.MarcaRespondida(ctx, inbound.TenantID, inbound.ProviderMessageID)
+	}
+
 	return err
 }
 

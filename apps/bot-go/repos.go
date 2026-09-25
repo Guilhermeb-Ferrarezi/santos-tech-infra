@@ -354,15 +354,43 @@ func (r *MessageRepo) RecordInbound(ctx context.Context, tx pgx.Tx, wamid string
 		return false, fmt.Errorf("MessageRepo.RecordInbound marshal: %w", err)
 	}
 
-	tag, err := tx.Exec(ctx, `
+	// A pergunta é "já RESPONDI?", não "já vi?".
+	//
+	// O DO UPDATE devolve a linha quando ela já existe mas ainda não foi
+	// respondida — é assim que o retry consegue reprocessar uma mensagem que
+	// falhou. Reentrega de algo já respondido não casa com o WHERE e não
+	// devolve linha nenhuma, então continua sendo ignorada.
+	var id string
+	err = tx.QueryRow(ctx, `
 		INSERT INTO inbound_message (tenant_id, conversation_id, provider_message_id, content, received_at)
 		VALUES ($1, $2, $3, $4, now())
-		ON CONFLICT (tenant_id, provider_message_id) DO NOTHING
-	`, tenantID, convID, wamid, contentJSON)
+		ON CONFLICT (tenant_id, provider_message_id) DO UPDATE
+		  SET content = EXCLUDED.content
+		  WHERE inbound_message.respondida_em IS NULL
+		RETURNING id::text
+	`, tenantID, convID, wamid, contentJSON).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil // já respondida: é reentrega de verdade
+	}
 	if err != nil {
 		return false, fmt.Errorf("MessageRepo.RecordInbound: %w", err)
 	}
-	return tag.RowsAffected() == 1, nil
+	return true, nil
+}
+
+// MarcaRespondida fecha o ciclo da mensagem.
+//
+// Chamada só DEPOIS de a resposta ter saído. Enquanto não for chamada, a
+// mensagem continua elegível para reprocessamento — que é a diferença entre
+// uma falha momentânea do modelo custar um retry ou custar um cliente.
+func (r *MessageRepo) MarcaRespondida(ctx context.Context, tenantID TenantID, wamid string) {
+	if wamid == "" {
+		return
+	}
+	_, _ = r.pool.Exec(ctx, `
+		UPDATE inbound_message SET respondida_em = now()
+		WHERE tenant_id = $1 AND provider_message_id = $2 AND respondida_em IS NULL
+	`, tenantID, wamid)
 }
 
 // RecordOutbound persiste um balão de saída em outbound_message.
