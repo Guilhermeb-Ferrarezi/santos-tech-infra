@@ -423,21 +423,20 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		// sessão correspondente no banco, e sem resposta de graça pra devolver: a
 		// sessão já foi encerrada normalmente (logout/reset de senha/suspensão) OU
 		// este é um refresh token JÁ ROTACIONADO sendo reusado fora da janela de
-		// graça — indício de roubo (alguém copiou o token antes da rotação e está
-		// tentando usá-lo bem depois que o dono renovou). Não dá pra distinguir os
-		// dois casos aqui com certeza, então tratamos como suspeito por precaução:
-		// revoga TODAS as sessões do usuário, não só esta. Um logout/reset
-		// legítimo já não tem sessões pra revogar (no-op na prática); só o caso de
-		// roubo real paga o preço de perder as outras sessões — aceitável frente
-		// ao risco de acesso persistente indefinido. IMPORTANTE: só entra aqui em
-		// ErrNoRows (linha realmente ausente) — um erro de banco genérico
-		// (conexão instável, timeout) cai no ramo abaixo e NÃO revoga nada, pra
-		// não derrubar sessões legítimas por uma falha transitória.
-		if delErr := s.deleteUserSessions(r.Context(), uid); delErr != nil {
-			slog.Error("refresh: falha ao revogar sessões após possível reuso de refresh token", "uid", uid, "err", delErr)
-		} else {
-			slog.Warn("refresh: refresh token sem sessão correspondente — sessões revogadas por precaução", "uid", uid)
-		}
+		// graça — indício de roubo, MAS também o resultado normal de qualquer
+		// segundo consumidor da mesma conta (outra aba, outro dispositivo, o
+		// conector MCP do Claude) tentando renovar com um token que já foi
+		// rotacionado por quem chegou primeiro. Antes revogávamos TODAS as
+		// sessões do usuário por precaução; na prática isso pegava muito mais
+		// reuso benigno do que roubo real, e cada acionamento derrubava dashboard+
+		// extensão+MCP de uma vez, forçando login em tudo (ver conversa de
+		// 2026-09-25 — 0% de refresh bem-sucedido por 7 dias, causa raiz
+		// rastreada até esta linha). Sem sessão pra apagar, esse token já não dá
+		// acesso a nada sozinho — só devolvemos 401 e deixamos as OUTRAS sessões
+		// do usuário vivas. IMPORTANTE: só entra aqui em ErrNoRows (linha
+		// realmente ausente) — um erro de banco genérico (conexão instável,
+		// timeout) cai no ramo abaixo e não passa por aqui.
+		slog.Warn("refresh: refresh token sem sessão correspondente (rotacionado por outra sessão ou já encerrado)", "uid", uid)
 		writeErr(w, appErr(http.StatusUnauthorized, "UNAUTHORIZED", "Sessão expirada"))
 		return
 	}
