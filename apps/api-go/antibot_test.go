@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -232,5 +236,76 @@ func TestAntiBot404BurstIgnoraPollingPublico(t *testing.T) {
 	}
 	if n, _ := s.rdb.Exists(context.Background(), "global:ip-ban:"+ip).Result(); n == 0 {
 		t.Fatal("varredura fora do polling público ainda deveria banir")
+	}
+}
+
+// TestAntiBot404BurstVarreduraSobPrefixoPublicoAindaBane: a exceção do polling
+// público vale só pro FORMATO real das rotas (token de 64 hex, rotas exatas de
+// lab-devices). Um scanner varrendo caminhos inventados debaixo desses
+// prefixos (/public/hour-sessions/.env, /public/lab-devices/config.json) não
+// pode herdar a imunidade — senão a correção do incidente de 25/09/2026 vira
+// um buraco na detecção de varredura.
+func TestAntiBot404BurstVarreduraSobPrefixoPublicoAindaBane(t *testing.T) {
+	for _, prefix := range []string{"/public/hour-sessions/", "/public/lab-devices/"} {
+		s := testServerWithRedis(t, Config{})
+		h := s.antiBotCheck(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.NotFound(w, r)
+		}))
+		ip := "203.0.113.51"
+		for i := 0; i <= notFoundBurstMax; i++ {
+			r := httptest.NewRequest("GET", fmt.Sprintf("%sscan-%d.php", prefix, i), nil)
+			r.RemoteAddr = ip + ":1234"
+			h.ServeHTTP(httptest.NewRecorder(), r)
+		}
+		if n, _ := s.rdb.Exists(context.Background(), "global:ip-ban:"+ip).Result(); n == 0 {
+			t.Fatalf("varredura de caminho inventado sob %s deveria banir", prefix)
+		}
+	}
+}
+
+// TestIsPublicPollingPath fixa o formato exato que fica fora do burst de 404.
+func TestIsPublicPollingPath(t *testing.T) {
+	tok := strings.Repeat("ab", 32)
+	cases := map[string]bool{
+		"/public/hour-sessions/" + tok:                      true,
+		"/public/hour-sessions/" + tok + "/request-pause":   true,
+		"/public/hour-sessions/" + tok + "/request-end":     true,
+		"/public/lab-devices/heartbeat":                     true,
+		"/public/lab-devices/wait-command":                  true,
+		"/public/lab-devices/command-result":                true,
+		"/public/hour-sessions/.env":                        false,
+		"/public/hour-sessions/" + tok + "/.env":            false,
+		"/public/hour-sessions/" + tok[:63]:                 false,
+		"/public/hour-sessions/" + strings.Repeat("zz", 32): false,
+		"/public/hour-sessions/pair-by-code":                false,
+		"/public/lab-devices/config.json":                   false,
+		"/public/lab-devices/heartbeat/x":                   false,
+		"/caminho-qualquer":                                 false,
+	}
+	for path, want := range cases {
+		if got := isPublicPollingPath(path); got != want {
+			t.Errorf("isPublicPollingPath(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+// TestPublicLabDeviceRoutesEmSincroniaComRoutes: toda rota pública de
+// /public/lab-devices/ registrada em routes.go precisa estar em
+// publicLabDeviceRoutes — rota nova fora do mapa voltaria a contar 404 pro
+// burst e poderia banir o IP da escola inteira de novo.
+func TestPublicLabDeviceRoutesEmSincroniaComRoutes(t *testing.T) {
+	src, err := os.ReadFile("routes.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`"[A-Z]+ /public/lab-devices/([^"\s]+)"`)
+	found := re.FindAllStringSubmatch(string(src), -1)
+	if len(found) == 0 {
+		t.Fatal("nenhuma rota /public/lab-devices/ encontrada em routes.go — regex desatualizada?")
+	}
+	for _, m := range found {
+		if !publicLabDeviceRoutes[m[1]] {
+			t.Errorf("rota /public/lab-devices/%s falta em publicLabDeviceRoutes (antibot.go)", m[1])
+		}
 	}
 }

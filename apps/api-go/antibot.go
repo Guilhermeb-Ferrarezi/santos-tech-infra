@@ -265,8 +265,35 @@ func (s *Server) antiBotCheck(next http.Handler) http.Handler {
 // não cadastrado) e não varredura. Com NAT, uma única aba esquecida numa
 // sessão morta baniu o IP da escola inteira (25/09/2026), derrubando heartbeat
 // e cronômetro de todos os PCs. Essas rotas já têm rateLimit próprio por IP.
+//
+// Casa só o FORMATO real das rotas (token de 64 hex; rotas exatas de
+// lab-devices), não o prefixo: um scanner varrendo caminho inventado debaixo
+// desses prefixos (/public/hour-sessions/.env) continua contando pro burst.
 func isPublicPollingPath(path string) bool {
-	return strings.HasPrefix(path, "/public/hour-sessions/") || strings.HasPrefix(path, "/public/lab-devices/")
+	if rest, ok := strings.CutPrefix(path, "/public/lab-devices/"); ok {
+		return publicLabDeviceRoutes[rest]
+	}
+	rest, ok := strings.CutPrefix(path, "/public/hour-sessions/")
+	if !ok {
+		return false
+	}
+	token, action, _ := strings.Cut(rest, "/")
+	if !isValidHourSessionToken(token) {
+		return false
+	}
+	return action == "" || action == "request-pause" || action == "request-end"
+}
+
+// publicLabDeviceRoutes: rotas públicas de /public/lab-devices/ registradas em
+// routes.go (chamadas em loop pelo hour-timer-app de cada PC do laboratório).
+var publicLabDeviceRoutes = map[string]bool{
+	"heartbeat":      true,
+	"inventory":      true,
+	"icons":          true,
+	"screenshot":     true,
+	"command-result": true,
+	"wait-command":   true,
+	"shell-agent":    true,
 }
 
 // check404Burst bane o IP quando ele acumula muitos 404 numa janela curta.
