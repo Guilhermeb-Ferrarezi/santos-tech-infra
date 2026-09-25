@@ -495,6 +495,9 @@ func TestTodasAsToolsRegistradas(t *testing.T) {
 		"model3d", "model3d_upload",
 		// Agenda.
 		"agenda_events_list", "agenda_event_create",
+		// Dispositivos: PCs do laboratório (hour-lab-devices).
+		"devices_list", "device_commands", "device_control",
+		"device_command_run", "device_command_result",
 	}
 	got := map[string]bool{}
 	for _, tl := range res.Tools {

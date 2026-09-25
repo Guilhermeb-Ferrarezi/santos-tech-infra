@@ -98,6 +98,7 @@ func (s *Server) MCP() *mcp.Server {
 	s.addWorkspaceTools(srv)
 	s.addContentTools(srv)
 	s.addAgendaTools(srv)
+	s.addDeviceTools(srv)
 	s.addAdminTools(srv)
 	s.addResources(srv)
 	return srv
