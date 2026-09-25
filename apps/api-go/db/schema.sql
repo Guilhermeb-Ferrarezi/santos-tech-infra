@@ -381,9 +381,27 @@ CREATE TABLE IF NOT EXISTS hour_lab_devices (
   pending_pair_token  TEXT,
   pending_pair_token_expires_at TIMESTAMPTZ,
   ssh_public_key      TEXT,
-  diagnostic_note     TEXT
+  diagnostic_note     TEXT,
+  command_id          UUID,
+  command_text        TEXT,
+  command_sent_at     TIMESTAMPTZ,
+  command_result      TEXT,
+  command_result_at   TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_hour_lab_devices_last_seen ON hour_lab_devices(last_seen_at);
+
+CREATE TABLE IF NOT EXISTS hour_lab_device_commands (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  device_id    UUID NOT NULL REFERENCES hour_lab_devices(id) ON DELETE CASCADE,
+  user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  source       TEXT NOT NULL,
+  kind         TEXT NOT NULL,
+  text         TEXT NOT NULL DEFAULT '',
+  result       TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  delivered_at TIMESTAMPTZ,
+  result_at    TIMESTAMPTZ
+);
 
 -- Arquivos (Google Drive): o conteúdo real mora no Drive; aqui só guardamos
 -- metadados de pasta e a ACL de quem enxerga/envia arquivo em cada uma — por

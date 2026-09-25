@@ -50,10 +50,13 @@ type Server struct {
 	// labShellHub: conexões WS dos agentes de shell dos PCs de laboratório
 	// (ver handlers_lab_device_shell.go), indexadas por device_uuid.
 	labShellHub *shellHub
+	// labCmds: fila + auditoria de ações remotas nos PCs (hour_lab_device_commands).
+	labCmds labCommandStore
 }
 
 func NewServer(cfg Config, authDB, portalDB *pgxpool.Pool, rdb *redis.Client) *Server {
 	s := &Server{cfg: cfg, db: authDB, q: db.New(authDB), portalDB: portalDB, rdb: rdb, email: newEmailClient(cfg), r2: newR2(cfg), drive: newDriveClient(cfg), notion: newNotionAgendaClient(cfg), loki: newLokiClient(cfg.LokiURL), sentry: newSentryClient(cfg.SentryOrgSlug, cfg.SentryToken), posthog: newPostHogClient(cfg.PostHogHost, cfg.PostHogProjectID, cfg.PostHogAPIKey), instagram: newInstagramClient(cfg), facebook: newFacebookClient(cfg), vault: newVault(cfg.VaultSecret, cfg.VaultSalt), feriadosNacionais: newFeriadosNacionaisClient(), labShellHub: newShellHub()}
+	s.labCmds = sqlLabCommandStore{q: s.q}
 	if s.portalDB == nil {
 		s.portalDB = authDB
 	}

@@ -771,6 +771,26 @@ CREATE TABLE IF NOT EXISTS hour_lab_device_screenshots (
 );
 CREATE INDEX IF NOT EXISTS idx_hour_lab_screenshots_device
   ON hour_lab_device_screenshots(device_id, captured_at DESC);
+
+-- Fila + auditoria de ações remotas nos PCs (25/09/2026). kind='command' é
+-- fila: entregue UMA vez (delivered_at) — roda como SYSTEM, reexecutar é pior
+-- que perder. Os demais kinds são só trilha (quem travou/reiniciou/abriu shell).
+CREATE TABLE IF NOT EXISTS hour_lab_device_commands (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  device_id    UUID NOT NULL REFERENCES hour_lab_devices(id) ON DELETE CASCADE,
+  user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  source       TEXT NOT NULL,
+  kind         TEXT NOT NULL,
+  text         TEXT NOT NULL DEFAULT '',
+  result       TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  delivered_at TIMESTAMPTZ,
+  result_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_lab_cmds_pending
+  ON hour_lab_device_commands(device_id, created_at) WHERE kind = 'command' AND delivered_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_lab_cmds_device ON hour_lab_device_commands(device_id, created_at DESC);
+
 -- Coluna da 1a versão (base64 na própria linha do programa), substituída pelo
 -- icon_hash acima. Some junto com a próxima coleta de cada PC.
 ALTER TABLE hour_lab_device_programs DROP COLUMN IF EXISTS icon;
