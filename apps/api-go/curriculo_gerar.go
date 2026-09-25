@@ -182,7 +182,7 @@ func (s *Server) curriculoReescrever(ctx context.Context, rewriteID int64) error
 
 	in := briefCurriculoInput{Campo: contexto.Campo, MaxChars: maxChars, TextoOriginal: textoOriginal, Contexto: contexto.curriculoContexto}
 	brief := montarBriefCurriculoReescrita(in)
-	raw, err := s.claudeRaw(ctx, brief, curriculoModelo)
+	raw, err := s.claudeRaw(ctx, origemCurriculo, brief, curriculoModelo)
 	if err != nil {
 		msg := err.Error()
 		s.curriculoSetStatusFinal(ctx, rewriteID, "failed", &msg, nil)
@@ -196,7 +196,7 @@ func (s *Server) curriculoReescrever(ctx context.Context, rewriteID int64) error
 	if perr != nil {
 		in.ErroAnterior = perr.Error()
 		brief = montarBriefCurriculoReescrita(in)
-		raw, err = s.claudeRaw(ctx, brief, curriculoModelo)
+		raw, err = s.claudeRaw(ctx, origemCurriculo, brief, curriculoModelo)
 		if err != nil {
 			msg := err.Error()
 			s.curriculoSetStatusFinal(ctx, rewriteID, "failed", &msg, nil)

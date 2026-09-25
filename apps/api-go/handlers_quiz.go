@@ -167,8 +167,8 @@ func (s *Server) quizJevCaller(provider db.ApiRouterProvider) func(context.Conte
 func (s *Server) quizFallbackCaller() func(context.Context, string, string, string) (string, error) {
 	return func(ctx context.Context, prompt, imageB64, imageMime string) (string, error) {
 		if imageB64 != "" {
-			return s.claudeRawImagem(ctx, prompt, imageB64, imageMime, s.cfg.QuizFallbackModel, quizVisionBudget)
+			return s.claudeRawImagem(ctx, origemQuiz, prompt, imageB64, imageMime, s.cfg.QuizFallbackModel, quizVisionBudget)
 		}
-		return s.claudeRawCom(ctx, prompt, s.cfg.QuizFallbackModel, quizFallbackBudget)
+		return s.claudeRawCom(ctx, origemQuiz, prompt, s.cfg.QuizFallbackModel, quizFallbackBudget)
 	}
 }

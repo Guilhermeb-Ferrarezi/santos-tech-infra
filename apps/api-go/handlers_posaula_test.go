@@ -174,7 +174,7 @@ func TestEnqueuePosaulaSemFila(t *testing.T) {
 
 func TestClaudeRawSemSecret(t *testing.T) {
 	s := testServer(Config{AgentURL: "http://127.0.0.1:1"})
-	_, err := s.claudeRaw(context.Background(), "oi", "sonnet")
+	_, err := s.claudeRaw(context.Background(), origemPosaula, "oi", "sonnet")
 	if err == nil || !strings.Contains(err.Error(), "AGENT_INTERNAL_SECRET") {
 		t.Fatalf("sem secret deveria falhar com erro claro, veio %v", err)
 	}
@@ -199,7 +199,7 @@ func TestClaudeRawChamaAgentGo(t *testing.T) {
 	}))
 	defer srv.Close()
 	s := testServer(Config{AgentURL: srv.URL, AgentInternalSecret: "segredo"})
-	text, err := s.claudeRaw(context.Background(), "brief de teste", "sonnet")
+	text, err := s.claudeRaw(context.Background(), origemPosaula, "brief de teste", "sonnet")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestClaudeRawChamaAgentGo(t *testing.T) {
 		t.Errorf("Authorization=%q", gotAuth)
 	}
 	var req claudeGenerateRequest
-	if err := json.Unmarshal([]byte(gotBody), &req); err != nil || req.Task != "raw" || req.Brief != "brief de teste" || req.Model != "sonnet" {
+	if err := json.Unmarshal([]byte(gotBody), &req); err != nil || req.Task != "raw" || req.Origin != "posaula" || req.Brief != "brief de teste" || req.Model != "sonnet" {
 		t.Errorf("body=%s err=%v", gotBody, err)
 	}
 	if calls.Load() != 1 {
@@ -233,7 +233,7 @@ func TestClaudeRawRetentativa(t *testing.T) {
 	}))
 	defer srv.Close()
 	s := testServer(Config{AgentURL: srv.URL, AgentInternalSecret: "segredo"})
-	text, err := s.claudeRaw(context.Background(), "x", "sonnet")
+	text, err := s.claudeRaw(context.Background(), origemPosaula, "x", "sonnet")
 	if err != nil || text != "segunda vez" {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
@@ -249,7 +249,7 @@ func TestClaudeRawRetentativa(t *testing.T) {
 	}))
 	defer srv401.Close()
 	s2 := testServer(Config{AgentURL: srv401.URL, AgentInternalSecret: "errado"})
-	_, err = s2.claudeRaw(context.Background(), "x", "sonnet")
+	_, err = s2.claudeRaw(context.Background(), origemPosaula, "x", "sonnet")
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("401 deveria virar erro com o status, veio %v", err)
 	}
@@ -266,7 +266,7 @@ func TestClaudeRawRetentativa(t *testing.T) {
 	}))
 	defer srv500.Close()
 	s3 := testServer(Config{AgentURL: srv500.URL, AgentInternalSecret: "segredo"})
-	_, err = s3.claudeRaw(context.Background(), "x", "sonnet")
+	_, err = s3.claudeRaw(context.Background(), origemPosaula, "x", "sonnet")
 	if !errors.As(err, new(agentTransientError)) {
 		t.Errorf("5xx persistente deveria ser transitório, veio %v", err)
 	}
@@ -290,7 +290,7 @@ func TestClaudeRaw429ETransitorio(t *testing.T) {
 			_, _ = w.Write([]byte(`{"text":"passou"}`))
 		}))
 		s := testServer(Config{AgentURL: srv.URL, AgentInternalSecret: "segredo"})
-		text, err := s.claudeRaw(context.Background(), "x", "sonnet")
+		text, err := s.claudeRaw(context.Background(), origemPosaula, "x", "sonnet")
 		srv.Close()
 		if err != nil || text != "passou" {
 			t.Errorf("%d: text=%q err=%v — deveria retentar e passar", status, text, err)
@@ -307,7 +307,7 @@ func TestClaudeRaw429ETransitorio(t *testing.T) {
 	}))
 	defer srv429.Close()
 	s := testServer(Config{AgentURL: srv429.URL, AgentInternalSecret: "segredo"})
-	_, err := s.claudeRaw(context.Background(), "x", "sonnet")
+	_, err := s.claudeRaw(context.Background(), origemPosaula, "x", "sonnet")
 	if !errors.As(err, new(agentTransientError)) {
 		t.Errorf("429 persistente deveria ser transitório (asynq retenta com backoff), veio %v", err)
 	}
@@ -333,7 +333,7 @@ func TestClaudeRawRespeitaRetryAfter(t *testing.T) {
 	defer srv.Close()
 	s := testServer(Config{AgentURL: srv.URL, AgentInternalSecret: "segredo"})
 	inicio := time.Now()
-	if _, err := s.claudeRaw(context.Background(), "x", "sonnet"); err != nil {
+	if _, err := s.claudeRaw(context.Background(), origemPosaula, "x", "sonnet"); err != nil {
 		t.Fatal(err)
 	}
 	if d := time.Since(inicio); d < time.Second {

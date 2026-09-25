@@ -160,7 +160,7 @@ func (s *Server) curriculoGerarCompleto(ctx context.Context, id int64) error {
 
 	in := briefCurriculoCompletoInput{Perfil: gravado.Perfil, Respostas: gravado.Respostas, Contexto: gravado.Contexto}
 	brief := montarBriefCurriculoCompleto(in)
-	raw, err := s.claudeRaw(ctx, brief, curriculoModelo)
+	raw, err := s.claudeRaw(ctx, origemCurriculo, brief, curriculoModelo)
 	if err != nil {
 		msg := curriculoMensagemDeErro(err)
 		s.curriculoSetResultado(ctx, id, "failed", &msg, nil)
@@ -175,7 +175,7 @@ func (s *Server) curriculoGerarCompleto(ctx context.Context, id int64) error {
 		slog.Warn("curriculo: geração completa inválida, pedindo de novo", "id", id, "err", perr)
 		in.ErroAnterior = perr.Error()
 		brief = montarBriefCurriculoCompleto(in)
-		raw, err = s.claudeRaw(ctx, brief, curriculoModelo)
+		raw, err = s.claudeRaw(ctx, origemCurriculo, brief, curriculoModelo)
 		if err != nil {
 			msg := curriculoMensagemDeErro(err)
 			s.curriculoSetResultado(ctx, id, "failed", &msg, nil)

@@ -65,10 +65,21 @@ type agentTransientError struct{ err error }
 func (e agentTransientError) Error() string { return e.err.Error() }
 func (e agentTransientError) Unwrap() error { return e.err }
 
+// Origens das chamadas ao Claude — rotulam o gasto por função no painel de Uso
+// de IA (agent-go grava em claude_usage_events.origin). Sem isso tudo caía em
+// "raw" junto com o bot do WhatsApp.
+const (
+	origemPosaula   = "posaula"   // práticas do pós-aula e correção de resposta aberta
+	origemMaterial  = "material"  // material de aula (semente + aula)
+	origemCurriculo = "curriculo" // currículo do aluno
+	origemQuiz      = "quiz"      // fallback do /quiz/answer
+)
+
 type claudeGenerateRequest struct {
-	Task  string `json:"task"`
-	Brief string `json:"brief"`
-	Model string `json:"model"`
+	Task   string `json:"task"`
+	Origin string `json:"origin"`
+	Brief  string `json:"brief"`
+	Model  string `json:"model"`
 	// Imagem opcional (multimodal): mesmos campos que apps/agent-go espera em
 	// generateRequest (handlers_generate.go). Vazios pra quem já chama
 	// claudeRaw/claudeRawCom — não mudam o corpo enviado por eles. Só
@@ -84,16 +95,16 @@ type claudeGenerateResponse struct {
 // claudeRaw manda o brief inteiro como prompt e devolve o texto cru do modelo.
 // Sem secret configurado falha na hora, com erro claro (nunca panic, nunca
 // chamada sem auth). Nunca loga o secret nem o brief — só o tamanho.
-func (s *Server) claudeRaw(ctx context.Context, brief, model string) (string, error) {
-	return s.claudeRawCom(ctx, brief, model, claudeRawTimeout)
+func (s *Server) claudeRaw(ctx context.Context, origem, brief, model string) (string, error) {
+	return s.claudeRawCom(ctx, origem, brief, model, claudeRawTimeout)
 }
 
 // claudeRawCom é o claudeRaw com teto de tempo próprio por chamada — a
 // semente do Material vivo (posaula_material.go) pede 12 mil caracteres ao
 // opus, que não cabem nos 2 min do padrão. O cliente extra compartilha o
 // transporte (pool de conexões) do padrão; só o Timeout muda.
-func (s *Server) claudeRawCom(ctx context.Context, brief, model string, timeout time.Duration) (string, error) {
-	return s.claudeRawDo(ctx, claudeGenerateRequest{Task: "raw", Brief: brief, Model: model}, timeout)
+func (s *Server) claudeRawCom(ctx context.Context, origem, brief, model string, timeout time.Duration) (string, error) {
+	return s.claudeRawDo(ctx, claudeGenerateRequest{Task: "raw", Origin: origem, Brief: brief, Model: model}, timeout)
 }
 
 // claudeRawImagem é o caminho multimodal: mesmo mecanismo de retentativa de
@@ -101,9 +112,10 @@ func (s *Server) claudeRawCom(ctx context.Context, brief, model string, timeout 
 // agent-go anexa à leitura do Claude. Usado só por /quiz/answer (quiz.go) —
 // o Pós-aula continua no caminho só-texto (claudeRaw/claudeRawCom), que este
 // helper não altera.
-func (s *Server) claudeRawImagem(ctx context.Context, brief, imageB64, imageMime, model string, timeout time.Duration) (string, error) {
+func (s *Server) claudeRawImagem(ctx context.Context, origem, brief, imageB64, imageMime, model string, timeout time.Duration) (string, error) {
 	return s.claudeRawDo(ctx, claudeGenerateRequest{
 		Task:        "raw",
+		Origin:      origem,
 		Brief:       brief,
 		Model:       model,
 		ImageBase64: imageB64,
