@@ -840,16 +840,27 @@ func atoiDefault(v string, def int) int {
 // ── CRM: leads ────────────────────────────────────────────────────────────────
 
 type dashLead struct {
-	ID             string     `json:"id"`
-	ContactName    string     `json:"contactName"`
-	Phone          string     `json:"phone"`
-	Status         string     `json:"status"`
-	Interest       string     `json:"interest"`
-	Owner          string     `json:"owner"`
-	Origin         string     `json:"origin"`
-	ConversationID string     `json:"conversationId"`
-	LastActivity   *time.Time `json:"lastActivity"`
-	CreatedAt      time.Time  `json:"createdAt"`
+	ID          string `json:"id"`
+	ContactName string `json:"contactName"`
+	Phone       string `json:"phone"`
+	Status      string `json:"status"`
+	Interest    string `json:"interest"`
+	Owner       string `json:"owner"`
+	// OwnerUserID — o responsável como conta da plataforma (0 = ninguém). O
+	// Owner em texto continua para o que foi atribuído antes (migration 0043).
+	OwnerUserID    int          `json:"ownerUserId"`
+	ProximoRetorno *dashRetorno `json:"proximoRetorno,omitempty"`
+	Origin         string       `json:"origin"`
+	ConversationID string       `json:"conversationId"`
+	LastActivity   *time.Time   `json:"lastActivity"`
+	CreatedAt      time.Time    `json:"createdAt"`
+}
+
+// dashRetorno — o próximo retorno pedido pelo cliente, para o card do CRM
+// mostrar "Retornar em DD/MM" com a frase dele.
+type dashRetorno struct {
+	Em    time.Time `json:"em"`
+	Frase string    `json:"frase"`
 }
 
 // leadFunnelStatuses — estágios válidos do funil do CRM.
@@ -872,7 +883,8 @@ func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT l.id::text, COALESCE(ct.display_name, ''), COALESCE(ci.external_id, ''),
 		       l.status, COALESCE(l.interest, ''), COALESCE(l.owner, ''), COALESCE(l.origin, 'oficial'),
-		       COALESCE(cv.id::text, ''), cv.last_inbound_at, l.created_at
+		       COALESCE(cv.id::text, ''), cv.last_inbound_at, l.created_at,
+		       COALESCE(l.owner_user_id, 0), rt.fire_at, COALESCE(rt.frase, '')
 		FROM lead l
 		JOIN contact ct ON ct.tenant_id = l.tenant_id AND ct.id = l.contact_id
 		LEFT JOIN LATERAL (
@@ -890,6 +902,12 @@ func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
 			)
 			ORDER BY last_inbound_at DESC NULLS LAST LIMIT 1
 		) cv ON true
+		LEFT JOIN LATERAL (
+			SELECT fire_at, payload->>'rawPhrase' AS frase FROM scheduled_contacts
+			WHERE tenant_id = l.tenant_id AND contact_id = l.contact_id
+			  AND payload->>'kind' = 'reactivation' AND status = 'pending'
+			ORDER BY fire_at LIMIT 1
+		) rt ON true
 		WHERE l.tenant_id = $1
 		ORDER BY cv.last_inbound_at DESC NULLS LAST, l.created_at DESC, l.id DESC
 		LIMIT $2 OFFSET $3
@@ -904,11 +922,17 @@ func (s *Server) handleDashLeads(w http.ResponseWriter, r *http.Request) {
 	out := make([]dashLead, 0)
 	for rows.Next() {
 		var l dashLead
+		var retornoEm *time.Time
+		var retornoFrase string
 		if err := rows.Scan(&l.ID, &l.ContactName, &l.Phone, &l.Status,
-			&l.Interest, &l.Owner, &l.Origin, &l.ConversationID, &l.LastActivity, &l.CreatedAt); err != nil {
+			&l.Interest, &l.Owner, &l.Origin, &l.ConversationID, &l.LastActivity, &l.CreatedAt,
+			&l.OwnerUserID, &retornoEm, &retornoFrase); err != nil {
 			s.logger.Error("dash: scan lead", "err", err)
 			jsonErr(w, "internal error", http.StatusInternalServerError)
 			return
+		}
+		if retornoEm != nil {
+			l.ProximoRetorno = &dashRetorno{Em: *retornoEm, Frase: retornoFrase}
 		}
 		// Normaliza status legado para o funil.
 		if !leadFunnelStatuses[l.Status] {
@@ -1175,6 +1199,8 @@ func (s *Server) handleDashPatchLead(w http.ResponseWriter, r *http.Request) {
 		Status   *string `json:"status"`
 		Owner    *string `json:"owner"`
 		Interest *string `json:"interest"`
+		// 0 = tira o responsável (grava NULL); ausente preserva.
+		OwnerUserID *int `json:"ownerUserId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, "invalid body", http.StatusBadRequest)
@@ -1184,15 +1210,23 @@ func (s *Server) handleDashPatchLead(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid status", http.StatusBadRequest)
 		return
 	}
+	if body.OwnerUserID != nil && *body.OwnerUserID < 0 {
+		jsonErr(w, "invalid ownerUserId", http.StatusBadRequest)
+		return
+	}
 
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE lead SET
 		  status   = COALESCE($3, status),
 		  owner    = COALESCE($4, owner),
 		  interest = COALESCE($5, interest),
+		  owner_user_id = CASE
+		    WHEN $6::int IS NULL THEN owner_user_id
+		    WHEN $6::int = 0 THEN NULL
+		    ELSE $6::int END,
 		  updated_at = now()
 		WHERE tenant_id = $1 AND id = $2
-	`, tenantID, id, body.Status, body.Owner, body.Interest)
+	`, tenantID, id, body.Status, body.Owner, body.Interest, body.OwnerUserID)
 	if err != nil {
 		s.logger.Error("dash: patch lead", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)

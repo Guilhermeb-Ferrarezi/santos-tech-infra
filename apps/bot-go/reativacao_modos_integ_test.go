@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -338,5 +340,138 @@ func TestReativarEAvisarIntegracao(t *testing.T) {
 	must(pool.QueryRow(ctx, `SELECT count(*) FROM scheduled_contacts WHERE conversation_id IN ($1, $2) AND status = 'fired'`, convLivre, convHandoff).Scan(&n))
 	if n != 2 {
 		t.Errorf("retornos marcados como disparados: %d, queria 2", n)
+	}
+}
+
+// Fase 3: o CRM atribui uma conta ao lead; no dia do retorno, é ELA quem é
+// avisada — sino/e-mail pelo POST /avisos e WhatsApp no telefone de aviso dela,
+// não na lista de admins. A Tarefa vai para ela também.
+func TestAvisoAoResponsavelDoLeadIntegracao(t *testing.T) {
+	pool, ctx := poolDeTeste(t)
+	tenant := novoTenantDeTeste(t, ctx, pool)
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := pool.Exec(ctx, `UPDATE tenant_config SET admin_whatsapp_numbers = '["5516000000000"]', followup_dias_pos_experimental = 0 WHERE tenant_id = $1`, tenant)
+	must(err)
+
+	var contact, ident, conv, lead string
+	must(pool.QueryRow(ctx, `INSERT INTO contact (tenant_id, display_name) VALUES ($1, 'Vivian') RETURNING id`, tenant).Scan(&contact))
+	must(pool.QueryRow(ctx, `INSERT INTO channel_identity (tenant_id, contact_id, channel, external_id) VALUES ($1, $2, 'evolution', '5511900000009') RETURNING id`, tenant, contact).Scan(&ident))
+	must(pool.QueryRow(ctx, `INSERT INTO conversation (tenant_id, channel_identity_id, channel) VALUES ($1, $2, 'evolution') RETURNING id`, tenant, ident).Scan(&conv))
+	must(pool.QueryRow(ctx, `INSERT INTO lead (tenant_id, contact_id, status, owner) VALUES ($1, $2, 'em_atendimento', 'Rodrigo') RETURNING id`, tenant, contact).Scan(&lead))
+	_, err = pool.Exec(ctx, `INSERT INTO scheduled_contacts (tenant_id, contact_id, conversation_id, fire_at, payload)
+		VALUES ($1, $2, $3, now() + interval '10 days', '{"kind":"reactivation","rawPhrase":"me chama dia 5"}')`, tenant, contact, conv)
+	must(err)
+
+	s := &Server{cfg: Config{TenantID: tenant}, pool: pool, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	patchLead := func(body string) int {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPatch, "/api/leads/"+lead, strings.NewReader(body))
+		req.SetPathValue("id", lead)
+		s.handleDashPatchLead(rr, req)
+		return rr.Code
+	}
+	getLead := func() dashLead {
+		rr := httptest.NewRecorder()
+		s.handleDashLeads(rr, httptest.NewRequest(http.MethodGet, "/api/leads", nil))
+		var ls []dashLead
+		must(json.Unmarshal(rr.Body.Bytes(), &ls))
+		for _, l := range ls {
+			if l.ID == lead {
+				return l
+			}
+		}
+		t.Fatal("lead sumiu da lista")
+		return dashLead{}
+	}
+
+	// Card do CRM: o texto antigo segue, o retorno aparece com a frase.
+	l := getLead()
+	if l.Owner != "Rodrigo" || l.OwnerUserID != 0 || l.ProximoRetorno == nil || l.ProximoRetorno.Frase != "me chama dia 5" {
+		t.Fatalf("lead antes: %+v", l)
+	}
+	if code := patchLead(`{"ownerUserId":12}`); code != 200 {
+		t.Fatalf("PATCH ownerUserId = %d", code)
+	}
+	if code := patchLead(`{"ownerUserId":-1}`); code != http.StatusBadRequest {
+		t.Errorf("PATCH ownerUserId negativo = %d, queria 400", code)
+	}
+	if code := patchLead(`{"status":"aula_marcada"}`); code != 200 {
+		t.Fatal("PATCH de status falhou")
+	}
+	if l = getLead(); l.OwnerUserID != 12 || l.Owner != "Rodrigo" {
+		t.Fatalf("PATCH sem ownerUserId mexeu nele, ou não gravou: %+v", l)
+	}
+
+	// O retorno vence.
+	_, err = pool.Exec(ctx, `UPDATE scheduled_contacts SET fire_at = now() - interval '1 hour' WHERE conversation_id = $1`, conv)
+	must(err)
+
+	var mu sync.Mutex
+	var avisos, tarefas []map[string]any
+	plataforma := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/avisos":
+			avisos = append(avisos, m)
+			_, _ = w.Write([]byte(`{"ok":true,"telefone":"5516977776666","emailEnviado":true}`))
+		case "/tasks":
+			tarefas = append(tarefas, m)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer plataforma.Close()
+
+	evo := &senderGravador{}
+	w := NewWorker(WorkerDeps{
+		Config:          Config{TenantID: tenant, SiteURL: "https://santos-tech.com", AgentGoURL: plataforma.URL, PlatformAPIToken: "st_x", FollowUpResponsavelID: 30},
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Pool:            pool,
+		Scheduled:       &ScheduledContactRepo{pool: pool},
+		Sender:          &senderGravador{},
+		EvolutionSender: evo,
+	})
+	w.runReactivations(ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	var meu map[string]any
+	for _, a := range avisos {
+		if strings.Contains(fmt.Sprint(a["url"]), conv) {
+			meu = a
+		}
+	}
+	if meu == nil || meu["userId"] != float64(12) || meu["email"] != true || strings.ContainsAny(fmt.Sprint(meu["corpo"]), "*_") {
+		t.Fatalf("POST /avisos: %v", avisos)
+	}
+	achouTarefa := false
+	for _, tk := range tarefas {
+		if tk["responsavelId"] == float64(12) && strings.Contains(fmt.Sprint(tk["title"]), "Vivian") {
+			achouTarefa = true
+		}
+	}
+	if !achouTarefa {
+		t.Errorf("tarefa não foi para o responsável do lead: %v", tarefas)
+	}
+	var paraResp, paraAdmin int
+	for _, tx := range evo.textos {
+		if strings.HasPrefix(tx, "5516977776666|") && strings.Contains(tx, "Vivian") {
+			paraResp++
+		}
+		if strings.HasPrefix(tx, "5516000000000|") && strings.Contains(tx, "Vivian") {
+			paraAdmin++
+		}
+	}
+	if paraResp != 1 || paraAdmin != 0 {
+		t.Errorf("WhatsApp: responsável=%d admin=%d (queria 1 e 0)", paraResp, paraAdmin)
 	}
 }

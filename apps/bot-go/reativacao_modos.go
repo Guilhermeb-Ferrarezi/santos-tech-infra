@@ -187,3 +187,26 @@ func limpaMensagemDoModelo(s string) string {
 	}
 	return s
 }
+
+// responsavelDoRetorno — quem recebe o retorno: o responsável do lead no CRM,
+// senão o padrão da tela, senão o do ambiente. 0 = ninguém.
+func responsavelDoRetorno(doLead, daTela, doAmbiente int) int {
+	if doLead > 0 {
+		return doLead
+	}
+	return responsavelEfetivo(daTela, doAmbiente)
+}
+
+// avisoTituloMax — o mesmo limite do POST /avisos do api-go.
+const avisoTituloMax = 120
+
+// textoParaAvisoDaConta — título e corpo para o sino e o e-mail. Sem a
+// marcação do WhatsApp (*negrito*, _itálico_), que lá vira sujeira.
+func textoParaAvisoDaConta(p retornoPendente, aviso string) (titulo, corpo string) {
+	titulo = "Hoje é dia de retomar: " + p.quem()
+	if r := []rune(titulo); len(r) > avisoTituloMax {
+		titulo = string(r[:avisoTituloMax-1]) + "…"
+	}
+	corpo = strings.NewReplacer("*", "", "_", "").Replace(aviso)
+	return titulo, strings.TrimSpace(corpo)
+}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -57,6 +58,9 @@ type retornoPendente struct {
 	BotLigado       bool
 	Estado          string
 	UltimaDoCliente *time.Time
+
+	// Fase 3: o responsável do lead no CRM (conta da plataforma). 0 = ninguém.
+	ResponsavelLead int
 }
 
 // payloadDoRetorno — o que fica gravado junto com o pedido. A frase original
@@ -149,8 +153,10 @@ func (r *ScheduledContactRepo) PendingReactivations(ctx context.Context, limit i
 		       (sc.payload->>'aulaEm')::timestamptz,
 		       COALESCE(cv.bot_enabled, false),
 		       COALESCE(cv.state::text, ''),
-		       cv.last_inbound_at
+		       cv.last_inbound_at,
+		       COALESCE(ld.owner_user_id, 0)
 		FROM scheduled_contacts sc
+		LEFT JOIN lead ld ON ld.tenant_id = sc.tenant_id AND ld.contact_id = sc.contact_id
 		LEFT JOIN contact c ON c.id = sc.contact_id
 		LEFT JOIN conversation cv ON cv.tenant_id = sc.tenant_id AND cv.id = sc.conversation_id
 		-- O telefone da PRÓPRIA conversa; sem conversa, o primeiro do contato.
@@ -175,7 +181,8 @@ func (r *ScheduledContactRepo) PendingReactivations(ctx context.Context, limit i
 		var p retornoPendente
 		if err := rows.Scan(&p.ID, &p.TenantID, &p.ContactID, &p.ConvID, &p.FireAt,
 			&p.Frase, &p.Confianca, &p.Nome, &p.Telefone, &p.Canal, &p.Resumo,
-			&p.Kind, &p.CriadoEm, &p.AulaEm, &p.BotLigado, &p.Estado, &p.UltimaDoCliente); err != nil {
+			&p.Kind, &p.CriadoEm, &p.AulaEm, &p.BotLigado, &p.Estado, &p.UltimaDoCliente,
+			&p.ResponsavelLead); err != nil {
 			return nil, fmt.Errorf("ScheduledContactRepo.PendingReactivations: scan: %w", err)
 		}
 		out = append(out, p)
@@ -221,14 +228,15 @@ func (w *Worker) runReactivations(ctx context.Context) {
 		}
 
 		if acao.Avisar {
-			if err := w.avisaRetorno(ctx, p.TenantID, p.Canal, avisoComAcao(p, painel, acao, enviado)); err != nil {
+			responsavel := responsavelDoRetorno(p.ResponsavelLead, cfg.FollowupResponsavelID, w.deps.Config.FollowUpResponsavelID)
+			if err := w.avisaResponsavel(ctx, p, painel, responsavel, avisoComAcao(p, painel, acao, enviado)); err != nil {
 				w.deps.Logger.Error("runReactivations: aviso falhou", "id", p.ID, "err", err)
 				if enviado == "" {
 					_ = w.deps.Scheduled.MarkFollowUpFailed(ctx, p.ID, err.Error())
 					continue
 				}
 			}
-			w.criaTarefaDeRetorno(ctx, p, painel, cfg.FollowupResponsavelID)
+			w.criaTarefaDeRetorno(ctx, p, painel, responsavel)
 		}
 		if err := w.deps.Scheduled.MarkFollowUpSent(ctx, p.ID); err != nil {
 			w.deps.Logger.Error("runReactivations: erro ao marcar disparado", "id", p.ID, "err", err)
@@ -244,7 +252,7 @@ func (w *Worker) runReactivations(ctx context.Context) {
 		}
 		cfg := w.configDoTenant(ctx, cfgs, atrasados[0].TenantID)
 		for _, p := range atrasados {
-			w.criaTarefaDeRetorno(ctx, p, painel, cfg.FollowupResponsavelID)
+			w.criaTarefaDeRetorno(ctx, p, painel, responsavelDoRetorno(p.ResponsavelLead, cfg.FollowupResponsavelID, w.deps.Config.FollowUpResponsavelID))
 			if err := w.deps.Scheduled.MarkFollowUpSent(ctx, p.ID); err != nil {
 				w.deps.Logger.Error("runReactivations: erro ao marcar atrasado", "id", p.ID, "err", err)
 			}
@@ -265,11 +273,9 @@ func (w *Worker) avisaRetorno(ctx context.Context, tenant TenantID, canal, texto
 // canal a mais, não o principal: sem token ou com a API fora, o aviso de
 // WhatsApp já saiu e o retorno segue marcado — nunca trava a fila.
 //
-// responsavelDaTela é o escolhido em WhatsApp · Configurações (0 = o do
-// ambiente, FOLLOWUP_RESPONSAVEL_ID).
-func (w *Worker) criaTarefaDeRetorno(ctx context.Context, p retornoPendente, painel string, responsavelDaTela int) {
+// responsavel já vem resolvido (responsavelDoRetorno: lead → tela → ambiente).
+func (w *Worker) criaTarefaDeRetorno(ctx context.Context, p retornoPendente, painel string, responsavel int) {
 	cfg := w.deps.Config
-	responsavel := responsavelEfetivo(responsavelDaTela, cfg.FollowUpResponsavelID)
 	if cfg.PlatformAPIToken == "" || responsavel <= 0 {
 		return
 	}
@@ -465,4 +471,74 @@ func (r *ScheduledContactRepo) EnfileiraPosExperimental(ctx context.Context, ten
 		return 0, fmt.Errorf("ScheduledContactRepo.EnfileiraPosExperimental: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+// avisaResponsavel avisa quem cuida do retorno. Na plataforma (POST /avisos:
+// sino, push e e-mail de aviso da conta) e no WhatsApp: para o telefone de
+// aviso da conta, ou — sem telefone, sem token ou com a API fora — para os
+// administradores, como na fase 1. Erro só quando nenhum canal saiu.
+//
+// Por que não basta a Tarefa: ela é criada com o token da conta do Henrique, e
+// a Tarefa não notifica quem a criou — no caso padrão (ele mesmo responsável)
+// o sino nunca tocava.
+func (w *Worker) avisaResponsavel(ctx context.Context, p retornoPendente, painel string, responsavel int, texto string) error {
+	telefone, naPlataforma := w.avisaNaPlataforma(ctx, p, painel, responsavel, texto)
+	if telefone != "" {
+		sender := w.deps.Sender
+		if p.Canal == "evolution" && w.deps.EvolutionSender != nil {
+			sender = w.deps.EvolutionSender
+		}
+		if sender != nil {
+			if err := sender.SendText(ctx, telefone, texto); err == nil {
+				return nil
+			} else {
+				w.deps.Logger.Warn("avisaResponsavel: WhatsApp do responsável falhou, avisando admins", "err", err)
+			}
+		}
+	}
+	err := w.avisaRetorno(ctx, p.TenantID, p.Canal, texto)
+	if err != nil && naPlataforma {
+		return nil
+	}
+	return err
+}
+
+// avisaNaPlataforma chama o POST /avisos do api-go. Devolve o telefone de aviso
+// da conta ("" = não cadastrado) e se o aviso foi registrado.
+func (w *Worker) avisaNaPlataforma(ctx context.Context, p retornoPendente, painel string, responsavel int, texto string) (string, bool) {
+	cfg := w.deps.Config
+	if cfg.PlatformAPIToken == "" || responsavel <= 0 {
+		return "", false
+	}
+	titulo, corpo := textoParaAvisoDaConta(p, texto)
+	body, _ := json.Marshal(map[string]any{
+		"userId": responsavel,
+		"titulo": titulo,
+		"corpo":  corpo,
+		"url":    linkDaConversa(painel, p.ConvID),
+		"email":  true,
+	})
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.AgentGoURL+"/avisos", bytes.NewReader(body))
+	if err != nil {
+		return "", false
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.PlatformAPIToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		w.deps.Logger.Warn("avisaNaPlataforma: API indisponível", "err", err)
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		w.deps.Logger.Warn("avisaNaPlataforma: aviso não registrado", "status", resp.StatusCode, "responsavel", responsavel)
+		return "", false
+	}
+	var out struct {
+		Telefone string `json:"telefone"`
+	}
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&out)
+	return out.Telefone, true
 }

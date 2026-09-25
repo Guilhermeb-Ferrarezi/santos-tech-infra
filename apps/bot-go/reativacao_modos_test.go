@@ -211,3 +211,36 @@ func TestPatchDeConfigSemFollowupPreserva(t *testing.T) {
 		t.Errorf("zero enviado de propósito precisa chegar como zero: %+v", body)
 	}
 }
+
+// Fase 3: o responsável do lead no CRM vence o padrão da tela, que vence o do
+// ambiente.
+func TestResponsavelDoRetorno(t *testing.T) {
+	casos := []struct{ lead, tela, amb, want int }{
+		{12, 5, 30, 12},
+		{0, 5, 30, 5},
+		{0, 0, 30, 30},
+		{0, 0, 0, 0},
+	}
+	for _, c := range casos {
+		if got := responsavelDoRetorno(c.lead, c.tela, c.amb); got != c.want {
+			t.Errorf("responsavelDoRetorno(%d,%d,%d) = %d, queria %d", c.lead, c.tela, c.amb, got, c.want)
+		}
+	}
+}
+
+// O aviso vai também para o sino e o e-mail, onde a marcação do WhatsApp
+// (*negrito*, _itálico_) vira sujeira.
+func TestTextoParaAvisoDaConta(t *testing.T) {
+	p := retornoPendente{Nome: "Vivian", Telefone: "5511999990000"}
+	titulo, corpo := textoParaAvisoDaConta(p, "⏰ *Hoje é dia de retomar:* Vivian\n\nO que a pessoa disse: _\"em dezembro\"_")
+	if titulo != "Hoje é dia de retomar: Vivian (5511999990000)" {
+		t.Errorf("título = %q", titulo)
+	}
+	if strings.ContainsAny(corpo, "*_") || !strings.Contains(corpo, `"em dezembro"`) {
+		t.Errorf("corpo com marcação ou sem a frase: %q", corpo)
+	}
+	longo := retornoPendente{Nome: strings.Repeat("a", 200)}
+	if titulo, _ := textoParaAvisoDaConta(longo, ""); len([]rune(titulo)) > 120 {
+		t.Errorf("título passa do limite da API (%d)", len([]rune(titulo)))
+	}
+}
