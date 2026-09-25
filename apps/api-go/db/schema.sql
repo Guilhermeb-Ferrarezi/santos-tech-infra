@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS users (
   mfa_method       TEXT NOT NULL DEFAULT 'totp',
   login_disabled   BOOLEAN NOT NULL DEFAULT false,
   permissions      JSONB NOT NULL DEFAULT '{}',
+  -- Para onde vão os avisos desta conta (retorno a cliente etc.). NULL = e-mail
+  -- de login / o bot avisa os administradores. Ver avisos.go.
+  aviso_email      TEXT,
+  aviso_telefone   TEXT,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );

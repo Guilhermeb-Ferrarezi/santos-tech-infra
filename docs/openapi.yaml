@@ -423,6 +423,103 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
               example: { code: ACCOUNT_SUSPENDED, message: "Conta suspensa" }
 
+  /auth/me/avisos:
+    get:
+      tags: [Auth]
+      summary: Contatos de aviso da própria conta
+      description: |
+        Para onde vão os avisos desta conta (ex.: retorno a cliente do bot do
+        WhatsApp). `avisoEmail` vazio = usa `emailLogin`; `avisoTelefone` vazio =
+        o bot avisa os administradores.
+      responses:
+        "200":
+          description: Contatos atuais
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AvisosConta" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      tags: [Auth]
+      summary: Alterar os contatos de aviso da própria conta
+      description: |
+        Campo ausente preserva; `""` limpa e volta ao padrão. E-mail vira
+        minúsculas; telefone vira só dígitos (DDI + DDD + número, 10 a 15).
+        Rate limit: **20 req/min por IP**.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                avisoEmail: { type: string, example: "henrique@gmail.com" }
+                avisoTelefone: { type: string, example: "5516999990000" }
+      responses:
+        "200":
+          description: Contatos depois da alteração
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AvisosConta" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /avisos:
+    post:
+      tags: [Auth]
+      summary: Avisar uma conta (sino, push e e-mail)
+      description: |
+        Só admin (usado pelo bot-go no retorno a cliente, com PAT). Grava no sino,
+        manda o push e, com `email: true`, envia para o e-mail de aviso da conta
+        (ou o de login). Devolve o telefone de aviso para quem chamou mandar o
+        WhatsApp (`""` = não cadastrado). `url` só aceita caminho interno ou
+        `https://` de `santos-tech.com` e subdomínios.
+        Rate limit: **60 req/min por IP**.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, titulo]
+              properties:
+                userId: { type: integer, example: 30 }
+                titulo: { type: string, maxLength: 120 }
+                corpo: { type: string, maxLength: 4000 }
+                url: { type: string, example: "https://santos-tech.com/dashboard/admin/whats/conversas?c=..." }
+                email: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Aviso registrado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  telefone: { type: string }
+                  emailEnviado: { type: boolean }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Não é admin
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Conta não encontrada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /auth/mailboxes/institutional:
     get:
       tags: [Auth]
@@ -7402,6 +7499,13 @@ components:
           example: { code: NOT_CONFIGURED, message: "Roteador de APIs indisponível: API_VAULT_SECRET não configurada" }
 
   schemas:
+    AvisosConta:
+      type: object
+      properties:
+        emailLogin: { type: string, format: email }
+        avisoEmail: { type: string, description: "vazio = usa emailLogin" }
+        avisoTelefone: { type: string, description: "só dígitos; vazio = o bot avisa os administradores" }
+      required: [emailLogin, avisoEmail, avisoTelefone]
     Error:
       type: object
       description: Formato padrão de erro.

@@ -55,6 +55,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_method TEXT NOT NULL DEFAULT 'tot
 ALTER TABLE users ADD COLUMN IF NOT EXISTS login_disabled BOOLEAN NOT NULL DEFAULT false;
 -- Permissões individuais (somam com as do cargo). Mesmo formato de custom_roles.permissions.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '{}';
+-- Contatos de aviso da conta (avisos.go). NULL = e-mail de login / admins do bot.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS aviso_email TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS aviso_telefone TEXT;
 CREATE TABLE IF NOT EXISTS recovery_codes (
   id         BIGSERIAL PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

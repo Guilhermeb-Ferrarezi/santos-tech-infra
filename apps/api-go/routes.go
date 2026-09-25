@@ -20,6 +20,11 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Preferências de UI do usuário (merge no JSONB users.preferences — precisa de sessão)
 	mux.HandleFunc("PATCH /auth/me/preferences", s.rateLimit(30, min, s.authGuard(s.handlePreferencesUpdate)))
 
+	// Contatos de aviso da conta e o aviso direto a uma conta (avisos.go).
+	mux.HandleFunc("GET /auth/me/avisos", s.authGuard(s.handleGetMeAvisos))
+	mux.HandleFunc("PATCH /auth/me/avisos", s.rateLimit(20, min, s.authGuard(s.handlePatchMeAvisos)))
+	mux.HandleFunc("POST /avisos", s.rateLimit(60, min, s.adminGuard(s.handleCreateAviso)))
+
 	// Web Push — subscription do navegador atual (gestão da própria conta,
 	// precisa de sessão). Nova tarefa / novo email disparam envio via
 	// enqueuePush (ver queue.go); webhook de email novo fica em
