@@ -304,11 +304,14 @@ func (r *ConversationRepo) Save(ctx context.Context, tx pgx.Tx, conv Conversatio
 
 // SaveReactivation persiste uma reativação pedida pelo cliente via o engine.
 func (r *ConversationRepo) SaveReactivation(ctx context.Context, tx pgx.Tx, convID ConversationID, tenantID TenantID, contactID ContactID, sc *ScheduledContact) error {
+	// Dispara às 9h de Brasília do dia pedido. `$4::date` sozinho virava
+	// meia-noite UTC — o aviso chegaria às 21h do dia ANTERIOR. O payload
+	// guarda a frase original: é ela que dá contexto a quem vai retomar.
 	_, err := tx.Exec(ctx, `
 		INSERT INTO scheduled_contacts (tenant_id, contact_id, conversation_id, fire_at, status, payload)
-		VALUES ($1, $2, $3, $4::date, 'pending', '{"kind":"reactivation"}'::jsonb)
+		VALUES ($1, $2, $3, ($4::date + time '09:00') AT TIME ZONE 'America/Sao_Paulo', 'pending', $5::jsonb)
 		ON CONFLICT DO NOTHING
-	`, tenantID, contactID, convID, sc.ResolvedDate)
+	`, tenantID, contactID, convID, sc.ResolvedDate, string(payloadDoRetorno(sc)))
 	if err != nil {
 		return fmt.Errorf("ConversationRepo.SaveReactivation: %w", err)
 	}

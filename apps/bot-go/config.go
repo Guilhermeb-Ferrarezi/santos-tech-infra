@@ -33,6 +33,15 @@ type Config struct {
 	// Site oficial — fonte das rotas que o bot pode consultar (via sitemap.xml).
 	SiteURL string
 
+	// Plataforma (api.santos-tech.com) — onde o retorno ao cliente vira Tarefa
+	// com responsável e prazo (a Tarefa já dispara sino + push para quem recebe).
+	// Sem token, o aviso sai só pelo WhatsApp dos administradores.
+	PlatformAPIToken string
+	// FollowUpResponsavelID — conta que recebe os retornos enquanto o
+	// responsável por lead não existe (padrão: Henrique, id 30). Temporário: a
+	// fase 2 da spec leva isto para a tela de Configurações do bot.
+	FollowUpResponsavelID int
+
 	// Notion — agendamento de aulas (token de integração escopado + base de agenda).
 	// NotionExperimentalDSID: data source ("Agenda — Aulas Experimentais"). O bot lê
 	// os horários ocupados e grava os agendamentos AQUI — separado da agenda de aulas
@@ -180,6 +189,9 @@ func LoadConfig() Config {
 		AgentGoSecret: mustEnv("AGENT_GO_SECRET"),
 
 		SiteURL: strings.TrimRight(getEnv("SITE_URL", "https://santos-tech.com"), "/"),
+
+		PlatformAPIToken:      getEnv("PLATFORM_API_TOKEN", ""),
+		FollowUpResponsavelID: envInt("FOLLOWUP_RESPONSAVEL_ID", 30),
 
 		NotionToken: getEnv("NOTION_TOKEN", ""),
 		// Data source "Agenda de Aulas" — a agenda que a escola realmente usa.
