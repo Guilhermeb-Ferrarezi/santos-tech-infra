@@ -14,8 +14,11 @@ func TestInstagramClientSendPrivateReply(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		if r.URL.Query().Get("access_token") != "tok-123" {
-			t.Errorf("access_token ausente/errado na query: %q", r.URL.Query().Get("access_token"))
+		if r.URL.Query().Get("access_token") != "" {
+			t.Errorf("access_token não deveria ir na query string (vaza em logs/erros de transporte): %q", r.URL.Query().Get("access_token"))
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer tok-123" {
+			t.Errorf("Authorization=%q, queria \"Bearer tok-123\"", got)
 		}
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
