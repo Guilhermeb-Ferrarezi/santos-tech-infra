@@ -146,6 +146,10 @@ type Server struct {
 	// próprias, para começar sem o histórico de arquivos do app antigo.
 	gcalDrive *GCalClient
 	gcalRepo  *GCalRepo
+	// followup — o que aconteceu depois da aula experimental (0041). Nunca é
+	// nil em produção; os handlers checam mesmo assim porque um painel que
+	// responde 503 é melhor que um que derruba o processo.
+	followup *FollowupRepo
 	// rdb pode ser nil — o dedupe de notificações cai pro fallback in-memory.
 	rdb         *redis.Client
 	notifDedupe *notifDedupe
@@ -186,6 +190,7 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		gcal:        NewGCalClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL, logger),
 		gcalDrive:   NovoClienteDoDrive(cfg, logger),
 		gcalRepo:    NewGCalRepo(pool),
+		followup:    NewFollowupRepo(pool),
 		rdb:         rdb,
 		notifDedupe: newNotifDedupe(),
 		retryStream: NewRetryStream(rdb, cfg.RetryStreamKey, cfg.RetryStreamGroup, cfg.RetryStreamConsumer, logger),
@@ -237,6 +242,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/evolution/instances", da(s.handleDashEvolutionInstances))
 	mux.Handle("GET /api/audio/gaps", da(s.handleDashAudioGaps))
 	mux.Handle("POST /api/audio/gaps/{id}/resolve", da(s.handleDashResolveAudioGap))
+	// Acompanhamento pós-aula (0041)
+	mux.Handle("GET /api/followup", da(s.handleDashFollowup))
+	mux.Handle("PATCH /api/followup/{pageId}", da(s.handleDashMarcaResultado))
+	mux.Handle("GET /api/avaliacoes/pendentes", da(s.handleDashAvaliacoesPendentes))
+	mux.Handle("PATCH /api/avaliacoes/{telefone}", da(s.handleDashMarcaAvaliacao))
 	mux.HandleFunc("GET /api/ws", s.handleDashWS)
 	// OPTIONS preflight (sem auth)
 	mux.HandleFunc("OPTIONS /api/", func(w http.ResponseWriter, r *http.Request) {

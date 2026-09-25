@@ -22,13 +22,16 @@ func TestDedupPerguntaSeRespondeuNaoSeViu(t *testing.T) {
 	if err != nil {
 		t.Fatalf("não consegui ler repos.go: %v", err)
 	}
-	s := string(src)
+	s := semCR(string(src))
 
 	i := strings.Index(s, "func (r *MessageRepo) RecordInbound")
 	if i < 0 {
 		t.Fatal("RecordInbound sumiu")
 	}
 	fim := strings.Index(s[i:], "\n}")
+	if fim < 0 {
+		t.Fatal("não achei o fim de RecordInbound")
+	}
 	corpo := s[i : i+fim]
 
 	if !strings.Contains(corpo, "respondida_em IS NULL") {
@@ -46,7 +49,7 @@ func TestMarcaRespondidaSoDepoisDoSucesso(t *testing.T) {
 	if err != nil {
 		t.Fatalf("não consegui ler engine.go: %v", err)
 	}
-	s := string(src)
+	s := semCR(string(src))
 
 	chamada := strings.Index(s, "MarcaRespondida(")
 	if chamada < 0 {
@@ -75,7 +78,7 @@ func TestClienteSemRespostaViraAvisoParaOsAdmins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("não consegui ler worker.go: %v", err)
 	}
-	s := string(src)
+	s := semCR(string(src))
 
 	if !strings.Contains(s, "avisaMensagemSemResposta") {
 		t.Fatal("não existe aviso quando o bot desiste de responder alguém")
@@ -98,6 +101,14 @@ func TestClienteSemRespostaViraAvisoParaOsAdmins(t *testing.T) {
 		t.Error("o aviso não diz O QUE a pessoa escreveu")
 	}
 }
+
+// semCR normaliza a quebra de linha do FONTE lido em disco.
+//
+// Vários testes aqui leem o próprio código e procuram trechos com "\n". No
+// Windows o git entrega os arquivos com CRLF, e sem isto esses testes não
+// falham — eles estouram o slice e morrem de pânico, que é bem pior: a mensagem
+// não diz nada sobre o que se quebrou.
+func semCR(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
 
 func max0(n int) int {
 	if n < 0 {

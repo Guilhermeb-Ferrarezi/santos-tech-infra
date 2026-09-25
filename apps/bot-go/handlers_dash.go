@@ -1262,6 +1262,14 @@ type dashQualificacao struct {
 	AulaMarcada     bool   `json:"aulaMarcada"`
 	Respondidas     int    `json:"respondidas"`
 	AtualizadoEm    string `json:"atualizadoEm"`
+
+	// De onde a pessoa veio. `origemFonte` acompanha porque um anúncio que a
+	// Meta confirmou e uma lembrança do cliente não valem o mesmo — e quem lê o
+	// painel precisa saber qual dos dois está olhando.
+	Origem        string `json:"origem,omitempty"`
+	OrigemLabel   string `json:"origemLabel,omitempty"`
+	OrigemDetalhe string `json:"origemDetalhe,omitempty"`
+	OrigemFonte   string `json:"origemFonte,omitempty"`
 }
 
 // GET /api/qualificacoes — quem é cada lead, do mais quente para o mais frio.
@@ -1274,7 +1282,8 @@ func (s *Server) handleDashQualificacoes(w http.ResponseWriter, r *http.Request)
 		SELECT ci.external_id, coalesce(c.display_name, ''),
 		       q.para_quem, q.aluno_nome, q.aluno_idade, q.interesse, q.ja_faz_curso,
 		       q.disponibilidade, q.motivacao, q.motivacao_tipo, q.observacoes,
-		       q.preco_informado, q.aula_marcada, q.atualizado_em
+		       q.preco_informado, q.aula_marcada, q.atualizado_em,
+		       q.origem, q.origem_detalhe, q.origem_fonte
 		FROM lead_qualificacao q
 		JOIN contact c ON c.id = q.contact_id
 		JOIN channel_identity ci ON ci.contact_id = c.id
@@ -1298,7 +1307,8 @@ func (s *Server) handleDashQualificacoes(w http.ResponseWriter, r *http.Request)
 		if err := rows.Scan(&d.Phone, &d.ContactName,
 			&q.ParaQuem, &q.AlunoNome, &q.AlunoIdade, &q.Interesse, &q.JaFazCurso,
 			&q.Disponibilidade, &q.Motivacao, &q.MotivacaoTipo, &q.Observacoes,
-			&q.PrecoInformado, &q.AulaMarcada, &atualizado); err != nil {
+			&q.PrecoInformado, &q.AulaMarcada, &atualizado,
+			&q.Origem, &q.OrigemDetalhe, &q.OrigemFonte); err != nil {
 			s.logger.Error("dash: scan qualificação", "err", err)
 			continue
 		}
@@ -1317,6 +1327,8 @@ func (s *Server) handleDashQualificacoes(w http.ResponseWriter, r *http.Request)
 		d.MotivacaoTipo, d.Observacoes = q.MotivacaoTipo, q.Observacoes
 		d.PrecoInformado, d.AulaMarcada = q.PrecoInformado, q.AulaMarcada
 		d.Respondidas = q.Respondidas()
+		d.Origem, d.OrigemDetalhe, d.OrigemFonte = q.Origem, q.OrigemDetalhe, q.OrigemFonte
+		d.OrigemLabel = OrigemLegivel(q.Origem)
 		d.AtualizadoEm = atualizado.Format(time.RFC3339)
 		out = append(out, d)
 	}

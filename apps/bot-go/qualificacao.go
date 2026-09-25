@@ -47,6 +47,16 @@ type Qualificacao struct {
 	// contar campos deixaria passar exatamente o lead que a escola quer filtrar.
 	TurnosRespondendo int
 
+	// Origem — como a pessoa chegou até a escola. Ver origem.go.
+	//
+	// OrigemFonte diz QUEM afirmou, e existe porque as três procedências não
+	// valem o mesmo: o anúncio é fato que a Meta mandou, o marcador é o texto
+	// pronto do link (que o cliente pode ter editado) e o perguntado é a pessoa
+	// lembrando de memória. Sem isso, um relatório somaria certeza com palpite.
+	Origem        string
+	OrigemDetalhe string
+	OrigemFonte   string // "anuncio" | "marcador" | "perguntado"
+
 	// PedidosDePreco — quantas vezes a pessoa pediu o valor.
 	//
 	// A válvula de escape precisa de memória: "se insistir uma segunda vez,
@@ -262,6 +272,8 @@ func (q Qualificacao) Merge(novo Qualificacao) Qualificacao {
 			}
 		}
 	}
+	juntado = juntado.comOrigem(novo.Origem, novo.OrigemDetalhe, novo.OrigemFonte)
+
 	// Os sinais só andam para frente: preço informado não desinforma, aula
 	// marcada não desmarca por omissão do modelo.
 	//
@@ -283,11 +295,50 @@ func (q Qualificacao) Merge(novo Qualificacao) Qualificacao {
 	return juntado
 }
 
+// forcaDaFonte ordena quem afirmou a origem. Números, e não uma lista de ifs,
+// porque a regra é uma comparação: fonte mais forte corrige a mais fraca, fonte
+// mais fraca nunca apaga a mais forte.
+//
+// O caso real que isto resolve: a pessoa chega por um anúncio do Instagram, e
+// três mensagens depois o bot pergunta e ela responde "achei no Google" — porque
+// ninguém lembra por onde clicou. Sem a ordem, a lembrança sobrescreveria o fato.
+func forcaDaFonte(fonte string) int {
+	switch fonte {
+	case "anuncio":
+		return 3
+	case "marcador":
+		return 2
+	case "perguntado":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// comOrigem grava a origem quando ela é válida E vem de fonte pelo menos tão
+// confiável quanto a que já estava lá.
+func (q Qualificacao) comOrigem(origem, detalhe, fonte string) Qualificacao {
+	origem = strings.ToLower(strings.TrimSpace(origem))
+	if origem == "" || !OrigemValida(origem) {
+		return q
+	}
+	if forcaDaFonte(fonte) < forcaDaFonte(q.OrigemFonte) {
+		return q
+	}
+	q.Origem = origem
+	q.OrigemFonte = fonte
+	if d := limpaTextoDoCliente(detalhe, 160); d != "" {
+		q.OrigemDetalhe = d
+	}
+	return q
+}
+
 // Vazia diz se ainda não se sabe nada da pessoa.
 func (q Qualificacao) Vazia() bool {
 	return q.ParaQuem == "" && q.AlunoNome == "" && q.AlunoIdade == 0 &&
 		q.Interesse == "" && q.JaFazCurso == "" && q.Disponibilidade == "" &&
-		q.Motivacao == "" && q.MotivacaoTipo == "" && q.Observacoes == ""
+		q.Motivacao == "" && q.MotivacaoTipo == "" && q.Observacoes == "" &&
+		q.Origem == ""
 }
 
 // ── como isso chega ao prompt ────────────────────────────────────────────────
@@ -339,6 +390,11 @@ func (q Qualificacao) BlocoDoDossie() string {
 	if q.PrecoInformado {
 		b.WriteString("- Já sabe os valores (você já informou).\n")
 	}
+	if d := OrigemLegivel(q.Origem); d != "" {
+		// Vai para o dossiê para o bot NÃO perguntar de novo. Não é para ser
+		// dito ao cliente: "vi que você veio do nosso anúncio" assusta.
+		fmt.Fprintf(&b, "- Chegou até nós por: %s (não pergunte de novo, e não comente isso com ela).\n", d)
+	}
 	b.WriteString("\n")
 	return b.String()
 }
@@ -362,6 +418,22 @@ func (q Qualificacao) BlocoDasRegras() string {
 			fmt.Fprintf(&b, "%d. %s\n", i+1, p.pergunta)
 		}
 		b.WriteString("Encaixe a PRÓXIMA da lista quando fizer sentido na conversa. Não despeje todas.\n")
+	}
+
+	// A pergunta de origem.
+	//
+	// Fica FORA da lista acima de propósito. Aquelas perguntas servem para
+	// indicar o curso certo; esta serve à escola, não ao cliente, e entrar na
+	// mesma fila faria a conversa parecer cadastro. Por isso só aparece depois
+	// que a qualificação andou, e uma vez só.
+	//
+	// E o bloco inteiro some do prompt quando a origem já é conhecida — o que é
+	// o caso sempre que a pessoa veio de anúncio. Instrução que não muda nada
+	// custa token em toda mensagem.
+	if q.Origem == "" && q.Respondidas() >= 2 {
+		b.WriteString("\n## De onde ela veio\n")
+		b.WriteString("Ainda não sabemos como esta pessoa chegou até a escola. Em ALGUM momento natural desta conversa — nunca na primeira mensagem, nunca junto de outra pergunta — encaixe isso de leve, uma vez só: \"Ah, deixa eu te perguntar: como você chegou até a gente?\". Se ela não responder, NÃO insista nem volte ao assunto.\n")
+		b.WriteString("Quando ela responder, grave em \"qualificacao\".\"origem\".\n")
 	}
 
 	// A trava.
@@ -394,7 +466,11 @@ func mudouAlgo(antes, depois Qualificacao) bool {
 		antes.Disponibilidade != depois.Disponibilidade ||
 		antes.Motivacao != depois.Motivacao ||
 		antes.MotivacaoTipo != depois.MotivacaoTipo ||
-		antes.Observacoes != depois.Observacoes
+		antes.Observacoes != depois.Observacoes ||
+		// Responder de onde veio também é conversar. Só não conta quando a
+		// origem chegou pelo anúncio ou pelo marcador do link: ali ninguém
+		// respondeu nada, o canal é que contou.
+		(antes.Origem != depois.Origem && depois.OrigemFonte == "perguntado")
 }
 
 // limpaTextoDoCliente prepara texto escrito pelo CLIENTE para entrar no prompt.
