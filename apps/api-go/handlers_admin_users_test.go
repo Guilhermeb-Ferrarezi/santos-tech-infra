@@ -56,7 +56,7 @@ func TestCreateAdminUserEmailTooLong(t *testing.T) {
 	}
 }
 
-// role fora de {1,2,3} → 400 antes do banco.
+// role fora de {1,2,3,4} → 400 antes do banco.
 func TestCreateAdminUserBadRole(t *testing.T) {
 	s := testServer(Config{})
 	w := httptest.NewRecorder()
@@ -230,5 +230,24 @@ func TestDeleteAdminUserSelf(t *testing.T) {
 	s.handleDeleteAdminUser(w, reqAs(r, 42))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("auto-exclusão: code=%d, esperado 400", w.Code)
+	}
+}
+
+// Papel personalizado (4) no cadastro: a tela "Novo usuário" oferece e manda
+// o cargo junto; a API recusava com "role inválido" (achado em 25/09 ao criar a
+// conta de serviço do bot). Sem cargo, ou com cargo malformado → 400 antes do banco.
+func TestCreateAdminUserPapelPersonalizadoValidacao(t *testing.T) {
+	s := testServer(Config{})
+	for nome, body := range map[string]string{
+		"sem cargo":                 `{"localPart":"bot","name":"Bot","role":4}`,
+		"cargo vazio":               `{"localPart":"bot","name":"Bot","role":4,"customRoleId":""}`,
+		"cargo não é uuid":          `{"localPart":"bot","name":"Bot","role":4,"customRoleId":"xyz"}`,
+		"papel 5 continua inválido": `{"localPart":"bot","name":"Bot","role":5,"customRoleId":"80e8b231-406c-47ea-ad2d-b5db9afd7862"}`,
+	} {
+		w := httptest.NewRecorder()
+		s.handleCreateAdminUser(w, httptest.NewRequest("POST", "/auth/admin/users", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: code=%d, esperado 400", nome, w.Code)
+		}
 	}
 }

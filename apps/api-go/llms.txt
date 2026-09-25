@@ -183,7 +183,9 @@ tokens retornam no **corpo** (sem cookies).
 - `POST /auth/avatar` (multipart) — avatar → R2; `POST /auth/upload` — imagem → R2
 - `GET /auth/admin/users[?scope=all]` — lista contas @santos-tech.com; com
   `scope=all`, todos os usuários (qualquer domínio)
-- `POST /auth/admin/users {email|localPart,name,role,shared?,password?}` — cria
+- `POST /auth/admin/users {email|localPart,name,role,customRoleId?,shared?,password?}` —
+  `role` 1–4; o papel 4 (Personalizado) exige `customRoleId` de um cargo existente (senão
+  400) e nasce com ele; nos outros papéis o cargo é ignorado — cria
   conta; dois modos: (a) sem `password`: cria sem senha + convite por email (TTL 72h,
   `pending: true`); (b) com `password` (mín. 8 chars): cria já ativa, sem convite
   (`pending: false`). `email` completo (qualquer domínio) tem precedência sobre

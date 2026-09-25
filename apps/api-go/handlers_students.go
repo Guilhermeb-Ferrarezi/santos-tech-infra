@@ -156,7 +156,7 @@ func (s *Server) handleCreateStudent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	u, err := s.insertUserWithRoleAndPassword(r.Context(), email, nome, hash, RoleStudent)
+	u, err := s.insertUserWithRoleAndPassword(r.Context(), email, nome, hash, RoleStudent, nil)
 	if err != nil {
 		writeErr(w, err)
 		return

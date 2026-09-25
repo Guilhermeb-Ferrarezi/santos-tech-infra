@@ -28,8 +28,11 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 		LocalPart string `json:"localPart"`
 		Name      string `json:"name"`
 		Role      int16  `json:"role"`
-		Shared    bool   `json:"shared"`
-		Password  string `json:"password"`
+		// CustomRoleID: cargo do papel personalizado (role 4). Ignorado nos
+		// outros papéis.
+		CustomRoleID string `json:"customRoleId"`
+		Shared       bool   `json:"shared"`
+		Password     string `json:"password"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "corpo inválido"))
@@ -104,9 +107,34 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 	if body.Role == 0 {
 		body.Role = RoleStudent
 	}
-	if body.Role < RoleStudent || body.Role > RoleAdmin {
+	if body.Role < RoleStudent || body.Role > RoleCustom {
 		writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "role inválido"))
 		return
+	}
+	// Papel personalizado nasce com cargo: sem cargo nem permissões individuais
+	// (que só se dão na edição, com sudo) a conta não teria acesso a nada. A
+	// tela "Novo usuário" já exige o cargo; antes a API recusava o papel 4.
+	var customRoleID *string
+	if body.Role == RoleCustom {
+		body.CustomRoleID = strings.TrimSpace(body.CustomRoleID)
+		if body.CustomRoleID == "" {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "papel personalizado exige um cargo (customRoleId)"))
+			return
+		}
+		if !isValidUUID(body.CustomRoleID) {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "customRoleId deve ser UUID válido"))
+			return
+		}
+		cargo, err := s.getCustomRole(r.Context(), body.CustomRoleID)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if cargo == nil {
+			writeErr(w, appErr(http.StatusBadRequest, "VALIDATION_ERROR", "cargo não encontrado"))
+			return
+		}
+		customRoleID = &body.CustomRoleID
 	}
 	// Valida tamanho da senha antes de tocar no banco.
 	if body.Password != "" && (len(body.Password) < 8 || len(body.Password) > 128) {
@@ -131,7 +159,7 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, err)
 			return
 		}
-		u, err := s.insertUserWithRoleAndPassword(r.Context(), email, body.Name, pwdHash, body.Role)
+		u, err := s.insertUserWithRoleAndPassword(r.Context(), email, body.Name, pwdHash, body.Role, customRoleID)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -142,7 +170,7 @@ func (s *Server) handleCreateAdminUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u, err := s.insertUserWithRole(r.Context(), email, body.Name, body.Role)
+	u, err := s.insertUserWithRole(r.Context(), email, body.Name, body.Role, customRoleID)
 	if err != nil {
 		writeErr(w, err)
 		return

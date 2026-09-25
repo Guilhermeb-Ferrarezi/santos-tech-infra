@@ -1760,9 +1760,13 @@ paths:
                   description: Nome completo do usuário (obrigatório para contas normais; opcional para `shared`).
                 role:
                   type: integer
-                  description: "1=Aluno (padrão), 2=Professor, 3=Admin. Ignorado quando `shared=true`."
-                  enum: [1, 2, 3]
+                  description: "1=Aluno (padrão), 2=Professor, 3=Admin, 4=Personalizado (exige `customRoleId`). Ignorado quando `shared=true`."
+                  enum: [1, 2, 3, 4]
                   default: 1
+                customRoleId:
+                  type: string
+                  format: uuid
+                  description: "Cargo (custom role) do papel 4 — obrigatório nesse papel; cargo inexistente → 400. Ignorado nos demais papéis."
                 shared:
                   type: boolean
                   default: false

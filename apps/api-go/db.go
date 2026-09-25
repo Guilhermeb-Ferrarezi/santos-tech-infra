@@ -1246,19 +1246,20 @@ const staffDomain = "santos-tech.com"
 
 // insertUserWithRole cria um usuário SEM senha (password_hash NULL) e com o role
 // dado. Ele não consegue logar até definir a senha pelo convite (reset-password).
-func (s *Server) insertUserWithRole(ctx context.Context, email, name string, role int16) (*User, error) {
+// customRoleID: cargo do papel personalizado (nil nos demais papéis).
+func (s *Server) insertUserWithRole(ctx context.Context, email, name string, role int16, customRoleID *string) (*User, error) {
 	return scanUser(s.db.QueryRow(ctx,
-		`INSERT INTO users (email, name, role) VALUES ($1,$2,$3) RETURNING `+userCols,
-		email, name, role))
+		`INSERT INTO users (email, name, role, custom_role_id) VALUES ($1,$2,$3,$4::uuid) RETURNING `+userCols,
+		email, name, role, customRoleID))
 }
 
 // insertUserWithRoleAndPassword cria um usuário já ATIVO (com senha) e o role dado.
 // Diferente de insertUserWithRole, não requer convite: o usuário pode logar
 // imediatamente com o email e a senha fornecidos.
-func (s *Server) insertUserWithRoleAndPassword(ctx context.Context, email, name, passwordHash string, role int16) (*User, error) {
+func (s *Server) insertUserWithRoleAndPassword(ctx context.Context, email, name, passwordHash string, role int16, customRoleID *string) (*User, error) {
 	return scanUser(s.db.QueryRow(ctx,
-		`INSERT INTO users (email, name, password_hash, role) VALUES ($1,$2,$3,$4) RETURNING `+userCols,
-		email, name, passwordHash, role))
+		`INSERT INTO users (email, name, password_hash, role, custom_role_id) VALUES ($1,$2,$3,$4,$5::uuid) RETURNING `+userCols,
+		email, name, passwordHash, role, customRoleID))
 }
 
 // insertSharedMailbox cria uma caixa institucional @santos-tech.com SEM senha e com
