@@ -66,12 +66,12 @@ tags:
     description: Pagamentos (payments-go — prefixo /payments em produção)
   - name: Blog
     description: |
-      Blog institucional (santos-tech.com/blog) e blog de cursos para adultos
-      (santos-tech.com/adultos/blog) — mesmo motor/CMS, isolados via
+      Blog institucional (santos-tech.com/blog) e blog de cursos particulares
+      (santos-tech.com/particular/blog; até 25/09/2026 /adultos/blog) — mesmo motor/CMS, isolados via
       `blog_categories.audience` (`familia`|`adultos`; todo post herda a
       audiência da própria categoria). Endpoints públicos aceitam `?audience=`
       com default `familia` — o consumidor atual do blog institucional não
-      precisa mandar nada; só o novo /adultos/blog manda `audience=adultos`
+      precisa mandar nada; só o blog particular manda `audience=adultos`
       explicitamente. `/public/blog/*` é leitura 100% pública (sem
       cookie/token, só posts com status `published`). `/blog/*` é o
       CRUD admin — requer role Admin ou cargo personalizado com a permissão
@@ -3433,9 +3433,9 @@ paths:
           name: audience
           schema: { type: string, enum: [familia, adultos], default: familia }
           description: >
-            Isola o blog institucional do blog de cursos para adultos. Default
+            Isola o blog institucional do blog de cursos particulares. Default
             `familia` (comportamento do blog atual, que não manda esse
-            parâmetro) — o novo /adultos/blog manda `adultos` explicitamente.
+            parâmetro) — o blog particular (/particular/blog) manda `adultos`.
       responses:
         "200":
           description: Página de posts publicados.

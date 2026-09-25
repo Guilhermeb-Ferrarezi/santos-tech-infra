@@ -66,7 +66,8 @@ func blogListParams(r *http.Request) BlogListFilter {
 
 // defaultBlogAudience preserva o comportamento de hoje pra quem não manda o
 // parâmetro novo (o blog público atual em santos-tech.com/blog nunca vai
-// mandar ?audience=) — só o novo /adultos/blog manda audience=adultos.
+// mandar ?audience=) — só o blog de cursos particulares (/particular/blog,
+// até 25/09/2026 /adultos/blog) manda audience=adultos.
 func defaultBlogAudience(raw string) (string, error) {
 	if raw == "" {
 		return "familia", nil
