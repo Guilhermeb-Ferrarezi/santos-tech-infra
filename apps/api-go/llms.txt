@@ -82,8 +82,12 @@
   `{accessToken, refreshToken}` via `Authorization: Bearer` sem cookie)
 - `POST|GET /auth/logout?redirect=` — encerra e limpa cookies
 - `GET /auth/me` — `{user}`: id, email, username, name, role, customRoleId,
-  permissions, avatarUrl, mfaEnabled, mfaMethod, mfaTotp, mfaEmail,
-  emailVerified, suspendedAt, createdAt, preferences (JSONB livre de UI)
+  permissions, userPermissions, avatarUrl, mfaEnabled, mfaMethod, mfaTotp,
+  mfaEmail, emailVerified, suspendedAt, createdAt, preferences (JSONB livre de
+  UI). `permissions` (efetivas: individuais ∪ cargo) e `userPermissions` (só
+  as individuais, cru) vêm preenchidos pra qualquer role **≠ 3** (Admin);
+  admin sempre vê `null` nos dois (passa em tudo, sem consultar nada) — ver
+  "Permissões individuais" na seção de dispositivos abaixo.
 - `GET /auth/mailboxes/institutional` — `{emails}` (lista de string): emails com
   `login_disabled=true` (caixas institucionais). Sessão qualquer papel (não
   precisa admin, mesmo nível de `/auth/me`). Consumido pelo serviço `email`
@@ -180,10 +184,15 @@ tokens retornam no **corpo** (sem cookies).
   `@santos-tech.com` sem login — exige `localPart`; `name` vira opcional; nenhum
   convite é enviado; a conta não autentica por nenhum caminho. Resposta inclui
   `loginDisabled: true` para essas contas.
-- `PATCH /auth/admin/users/{id} {name?,role?,suspended?,quotaBytes?,password?}` —
+- `PATCH /auth/admin/users/{id} {name?,role?,customRoleId?,suspended?,quotaBytes?,password?,permissions?}` —
   atualiza campos (todos opcionais). Com `password` (mín. 8 chars): redefine a senha
-  diretamente (sem link de reset) e ativa a conta (`pending: false`). Pode ser
-  combinado com os demais campos no mesmo PATCH. (rate 20/min)
+  diretamente (sem link de reset) e ativa a conta (`pending: false`). `role=4`
+  (Custom) aceita `customRoleId` opcional — string vazia remove o cargo, ficam
+  só as permissões individuais. `permissions` substitui (não faz merge) o mapa
+  individual do usuário (ver "Permissões individuais" na seção de dispositivos
+  abaixo) e **exige sudo mode ativo**: sem elevação recente, `403 SUDO_REQUIRED`
+  — mesmo que os outros campos do PATCH não precisem. Pode ser combinado com os
+  demais campos no mesmo PATCH. Resposta inclui `user.permissions`. (rate 20/min)
 - `POST /auth/admin/users/{id}/invite` — reenvia convite; 400 se `loginDisabled`
   (rate 5/min)
 - `POST /auth/admin/users/{id}/send-reset {email?}` — gera e envia link de
@@ -452,7 +461,45 @@ bagunçar com quem estiver sentado na máquina. "Online/offline" não é campo �
 decida no cliente por `lastSeenAt` (heartbeat a cada ~30s do app; recomendado
 considerar offline acima de ~90s sem heartbeat).
 
-Admin:
+Todas as rotas abaixo (exceto o bloco "Público") exigem a permissão
+`dispositivos:<ação>` (individual ou de cargo — ver "Permissões individuais"
+mais abaixo); admin passa sempre, sem checar nada. Tabela ação → rotas:
+
+| Ação | Rotas |
+|------|-------|
+| `ver` | `GET /hour-lab-devices` · `GET /hour-lab-devices/{id}/commands[/{cmdId}]` · `GET /hour-lab-devices/{id}/programs` · `GET /hour-lab-devices/{id}/screenshots` · `GET /program-icons/{hash}` |
+| `controlar` | `POST /hour-lab-devices/{id}/message` · `/lock` · `/restart` · `/shutdown` · `/screenshot` · `DELETE /hour-lab-devices/{id}/screenshots/{shotId}` |
+| `executar` | `POST /hour-lab-devices/{id}/command` · `GET /hour-lab-devices/{id}/shell` (+ sudo) · `GET /hour-lab-devices/{id}/shell-check` (+ sudo) |
+| `gerenciar` | `POST /hour-lab-devices/pair` · `PATCH /hour-lab-devices/{id}` · `DELETE /hour-lab-devices/{id}` · `POST /hour-lab-devices/{id}/unpair` · `POST /hour-lab-devices/{id}/reset-secret` · `GET/POST /hour-lab-expected-programs` · `PATCH/DELETE /hour-lab-expected-programs/{id}` |
+
+Diferente do resto do painel admin (que usa `adminGuard`), estas rotas aceitam
+token OAuth (`aud=<client_id>`) — é o que permite o conector MCP do claude.ai
+operar a frota.
+
+#### Permissões individuais
+
+Mecanismo geral de autorização por recurso/ação (não é específico de
+dispositivos — vale pra `blog_posts`, `social`, `tarefas`, etc.; dispositivos é
+só o exemplo mais rico). Formato: `users.permissions` (JSONB)
+`{"<recurso>": ["<ação>", ...]}`, ex. `{"dispositivos": ["ver", "executar"]}`.
+Nomes batem em `^[a-z_]{1,40}$`, no máximo 60 recursos × 10 ações.
+
+- **Regra efetiva**: `permissão(u) = individuais(u) ∪ permissões-do-cargo(u)`
+  — o cargo só entra quando `role=4` (Custom) **e** o usuário tem
+  `customRoleId` atribuído; sem cargo, valem só as individuais. Admin
+  (`role=3`) passa em qualquer checagem sem consultar nada (nunca precisa de
+  entrada em `permissions`). Professor tem um bônus à parte por rota
+  (`allowTeacher` no guard), independente deste mapa.
+- **Edição exige sudo**: alterar `permissions` de um usuário
+  (`PATCH /auth/admin/users/{id}`) é equivalente a conceder controle sobre a
+  frota inteira (ex. `dispositivos:executar` = rodar PowerShell como SYSTEM em
+  qualquer PC) — por isso exige **sudo mode** ativo, mesma barreira das ações
+  destrutivas (`POST /auth/sudo/verify`). Sem elevação recente: `403
+  SUDO_REQUIRED`, mesmo que o resto do PATCH não precise.
+- Ver o mapa: `GET /auth/me` devolve `permissions` (efetivas) e
+  `userPermissions` (só individuais, cru) pra qualquer role ≠ 3; a tela de
+  edição em `/auth/admin/users` deve usar `userPermissions`, não `permissions`.
+
 - `GET /hour-lab-devices` — `{devices:[LabDevice]}`
 - `POST /hour-lab-devices/pair {deviceUuid, clientId}` → `{session}` · rate
   limit 30/min · fluxo do QR: o PC mostra um QR com o próprio deviceUuid, o
@@ -478,12 +525,28 @@ Admin:
   o PC no heartbeat seguinte
 - `POST /hour-lab-devices/{id}/shutdown` → 204 · rate limit 30/min — desliga
   o PC no heartbeat seguinte
-- `POST /hour-lab-devices/{id}/command {text}` → 204 · rate limit 30/min —
-  comando PowerShell livre, roda no watchdog (contexto SYSTEM); `text` até
-  4000 caracteres. `command.id` novo a cada envio (mesma ideia do `message`) —
-  o resultado chega depois via `POST /public/lab-devices/command-result` e
-  aparece em `commandResult`/`commandResultAt` no `LabDevice` da listagem;
-  mandar um comando novo zera o resultado do anterior
+- `POST /hour-lab-devices/{id}/command {text}` → **201** `{commandId}` · rate
+  limit 30/min — enfileira um comando PowerShell livre (`text` até 4000
+  caracteres) na fila `hour_lab_device_commands`, entregue no heartbeat
+  seguinte e executado no watchdog (contexto SYSTEM). Fila FIFO (mais antigo
+  primeiro), entrega **at-most-once**: se a resposta do PC se perder, o
+  comando NÃO é reentregue nem reexecutado — reexecutar um comando arbitrário
+  como SYSTEM é pior que perder um resultado; quem mandou vê "entregue, sem
+  resultado" no histórico. 404 `LAB_DEVICE_NOT_FOUND` se o dispositivo não
+  existir. O resultado chega depois via
+  `POST /public/lab-devices/command-result` — leia com
+  `GET /hour-lab-devices/{id}/commands/{cmdId}` (abaixo), não mais em
+  `commandResult`/`commandResultAt` do `LabDevice`.
+- `GET /hour-lab-devices/{id}/commands[?limit=]` → `{commands:[LabCommandEntry]}`
+  · histórico da fila/auditoria, mais recente primeiro; `limit` default 50,
+  teto 200. Cobre todo tipo de ação registrada, não só o comando livre:
+  `kind` = `command`|`lock`|`restart`|`shutdown`|`message`|`shell_open`|`shell_close`.
+- `GET /hour-lab-devices/{id}/commands/{cmdId}` → `{command:LabCommandEntry}` |
+  404 `COMMAND_NOT_FOUND`. `LabCommandEntry`: `id`, `kind`, `source`
+  (`painel`|`mcp_oauth`|`pat`|`api` — de onde veio o pedido), `text`, `result`
+  (null até chegar; só `kind=command` de fato devolve algo), `userId`
+  (nullable), `userName`, `createdAt`, `deliveredAt` (null = ainda na fila),
+  `resultAt` (null = sem resultado ainda).
 - `GET /hour-lab-devices/{id}/shell-check` → `{agentOnline}` · rate limit
   30/min — mesmo admin+sudo do `/shell` abaixo; existe pra rodar ANTES do WS
   (um handshake de WS que falha não deixa o JS ler o motivo — nem status
@@ -507,6 +570,21 @@ Público (sem auth — `deviceId` é a identidade):
   `screenshotRequested`, `lockRequested`, `restartRequested`,
   `shutdownRequested`) são entregues exatamente uma vez — a query seguinte já
   não os vê mais (exceto `message` e `command`, que o app deduplica pelo id).
+  `command` (`{id, text}`) sai da fila `hour_lab_device_commands` (mesma fila
+  de `POST /hour-lab-devices/{id}/command`, `ClaimNext` — FIFO, at-most-once)
+  — **mas só quando NÃO há watchdog recente**: se o watchdog do PC chamou
+  `wait-command` (abaixo) nos últimos 5min, o hour-timer-app comum NÃO recebe
+  o comando por aqui, evitando os dois executarem a mesma ação em duplicidade
+  (o comando roda como SYSTEM via watchdog; rodar de novo como o usuário
+  logado deixaria arquivo com dono errado).
+- `POST /public/lab-devices/wait-command {deviceId, deviceSecret}` → 200
+  `{command:{id,text}}` | 204 (nada em até 50s) | 401 `LAB_DEVICE_UNAUTHORIZED` ·
+  rate limit 120/min · long-poll usado pelo **watchdog**: segura a requisição
+  por até 50s fazendo poll interno de 1s no servidor, em vez do watchdog
+  dormir 60s e só então bater no heartbeat normal — comando sai em ~1s em vez
+  de até ~30-60s. Cada chamada marca a presença do watchdog (ver acima).
+  **Nunca adota um `deviceSecret` novo** (diferente do heartbeat) — dispositivo
+  já precisa estar pareado.
 - `POST /public/lab-devices/command-result {deviceId, deviceSecret, commandId, result}` →
   204 · rate limit 30/min — reporta o que o comando livre imprimiu.
   `commandId` precisa bater com o comando pendente ATUAL (`result` até 8000

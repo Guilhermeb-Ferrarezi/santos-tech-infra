@@ -46,19 +46,16 @@ apps/
                    deploy no Coolify — instalador Windows gerado via
                    `cargo tauri build`, distribuído manualmente pros PCs.
 
-                   **[PLANEJADO, não implementado ainda]** Provisionamento automático de
-                   chave SSH: no startup, o app verifica se já existe uma chave (ex.
-                   `~/.ssh/id_ed25519` no Windows do PC de laboratório). Se não existir,
-                   gera um par de chaves ali mesmo e manda a **pública** pra api-go
-                   (endpoint a definir — provavelmente junto do heartbeat existente em
-                   `/public/lab-devices/heartbeat`, ou uma rota nova tipo
-                   `/hour-lab-devices/{id}/ssh-key`), associada ao `device_uuid` já
-                   existente. Objetivo: eliminar a necessidade de alguém rodar comandos
-                   manualmente em cada PC da frota (ex. instalação do Docker/miner) —
-                   com a chave pública centralizada, dá pra autorizar acesso SSH
-                   remoto a qualquer PC já pareado sem precisar pedir senha/rodar
-                   script na hora. **Nunca gerar/transmitir a chave privada** — só a
-                   pública sai da máquina.
+                   Chave SSH do próprio PC: no primeiro heartbeat, o app gera sua PRÓPRIA
+                   chave localmente e manda a **pública** no campo `sshPublicKey` de
+                   `POST /public/lab-devices/heartbeat`, associada ao `device_uuid` já
+                   existente (a privada nunca sai da máquina). Isso identifica o PC, mas
+                   NÃO é o mecanismo de acesso admin — para isso, ver `infra/fleet/README.md`
+                   e `infra/fleet/fix-ssh-santos-fleet.ps1`: a conta local dedicada
+                   `santos-fleet` (fora da tela de logon) autoriza a chave do admin da
+                   frota em `C:\ProgramData\ssh\administrators_authorized_keys`, o que
+                   permite SSH remoto pra rodar comandos em qualquer PC já provisionado
+                   sem precisar de senha nem acesso físico à máquina.
   santos-hub/  ← App desktop (Tauri v2 + React) "central de downloads" pros PCs da
                    empresa: lista o catálogo (GET /public/downloads, sem login) e
                    baixa/abre cada item no app padrão do Windows (instalador do

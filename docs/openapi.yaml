@@ -84,6 +84,12 @@ tags:
       (posse) é a credencial, não cookie/sessão. `/hour-lab-devices` identifica
       e controla os PCs do laboratório (hour-timer-app); `/public/lab-devices/heartbeat`
       é a contraparte sem autenticação usada pelo app (device_uuid local é a identidade).
+
+      As rotas de `/hour-lab-devices/*` exigem a permissão `dispositivos:<ação>`
+      (individual ou de cargo — admin sempre passa, sem checar nada); ver a
+      permissão exigida em cada rota abaixo. Diferente do resto do painel
+      admin (`adminGuard`), essas rotas aceitam token OAuth (`aud=<client_id>`)
+      — é o que permite o conector MCP do claude.ai operar a frota.
   - name: Downloads
     description: |
       Catálogo de downloads do Santos Hub (app Tauri Windows distribuído nos PCs
@@ -398,7 +404,10 @@ paths:
       summary: Perfil do usuário autenticado
       description: |
         Retorna o perfil do usuário do `access_token` (cookie ou Bearer). Inclui
-        `permissions` resolvidas quando o papel é Custom (`role = 4`).
+        `permissions` (efetivas: individuais ∪ cargo, se houver) e
+        `userPermissions` (só as individuais, cru — usado pela tela de edição)
+        para qualquer papel **diferente** de Admin (`role = 3`); admin sempre
+        vê `null` nos dois (passa em toda checagem sem consultar nada).
       responses:
         "200":
           description: Perfil atual
@@ -1692,11 +1701,22 @@ paths:
       summary: Atualizar usuário
       description: |
         Atualiza campos do usuário (todos opcionais — só os enviados são alterados).
-        Um admin não pode suspender a própria conta (`SELF_ACTION`).
+        Um admin não pode suspender a própria conta (`SELF_ACTION`) nem alterar
+        o próprio papel (`role`, mesmo código).
 
         Com o campo `password` preenchido (mín. 8 chars, máx. 128), redefine a
         senha do usuário imediatamente (hash argon2id) e marca a conta como ativa
         (`pending: false`). Pode ser combinado com outros campos no mesmo PATCH.
+
+        `permissions` define as permissões **individuais** do usuário (mapa
+        recurso → lista de ações, ex. `{"dispositivos": ["ver", "executar"]}`;
+        nomes `^[a-z_]{1,40}$`, no máximo 60 recursos × 10 ações). Alterar este
+        campo exige **sudo mode** (confirmação recente de identidade via
+        `POST /auth/sudo/verify`) — sem ele, `403 SUDO_REQUIRED`, mesmo que o
+        resto do PATCH (nome, role, etc.) não exija sudo.
+
+        `customRoleId` é opcional mesmo com `role=4` (Custom): sem cargo, valem
+        só as permissões individuais. String vazia remove o cargo atribuído.
 
         Rate limit: **20 req/min por IP**.
       parameters:
@@ -1717,8 +1737,15 @@ paths:
                   description: Novo nome do usuário.
                 role:
                   type: integer
-                  description: "1=Aluno, 2=Professor, 3=Admin."
-                  enum: [1, 2, 3]
+                  description: "1=Aluno, 2=Professor, 3=Admin, 4=Custom (permissões via cargo + individuais)."
+                  enum: [1, 2, 3, 4]
+                customRoleId:
+                  type: [string, "null"]
+                  format: uuid
+                  description: |
+                    ID do custom_role (só faz sentido com `role=4`). Opcional —
+                    string vazia (`""`) equivale a `null` (remove o cargo, ficam
+                    só as permissões individuais).
                 suspended:
                   type: boolean
                   description: Suspender (`true`) ou reativar (`false`) a conta.
@@ -1727,6 +1754,16 @@ paths:
                   format: int64
                   minimum: 0
                   description: Cota de armazenamento em bytes (0 = sem limite).
+                permissions:
+                  type: object
+                  description: |
+                    Permissões individuais do usuário (mapa recurso → ações).
+                    Substitui o mapa inteiro (não faz merge). Exige sudo mode
+                    ativo — ver descrição acima.
+                  additionalProperties:
+                    type: array
+                    items: { type: string }
+                  example: { dispositivos: ["ver", "executar"] }
                 password:
                   type: string
                   format: password
@@ -1737,7 +1774,7 @@ paths:
                     diretamente (sem link de reset) e ativa a conta (`pending: false`).
       responses:
         "200":
-          description: Usuário atualizado
+          description: Usuário atualizado (`user.permissions` reflete o mapa individual salvo).
           content:
             application/json:
               schema:
@@ -1746,13 +1783,19 @@ paths:
                   user: { $ref: "#/components/schemas/AdminUser" }
                 required: [user]
         "400":
-          description: Validação falhou ou auto-suspensão bloqueada
+          description: Validação falhou (inclui `permissions` fora do formato) ou auto-suspensão/auto-alteração de papel bloqueada
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
               example: { code: SELF_ACTION, message: "você não pode suspender a própria conta" }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Alterou `permissions` sem sudo mode ativo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: SUDO_REQUIRED, message: "Confirme sua identidade para alterar permissões" }
         "404":
           description: Usuário não encontrado
           content:
@@ -5525,9 +5568,10 @@ paths:
       tags: [Horas]
       summary: Lista os PCs do laboratório (hour-timer-app) já vistos
       description: |
-        Admin-only. Cada PC aparece depois do primeiro heartbeat. "Online/offline"
-        não é um campo — decida no cliente a partir de `lastSeenAt` (heartbeat a
-        cada ~30s; recomendado considerar offline acima de ~90s sem heartbeat).
+        Exige `dispositivos:ver`. Cada PC aparece depois do primeiro heartbeat.
+        "Online/offline" não é um campo — decida no cliente a partir de
+        `lastSeenAt` (heartbeat a cada ~30s; recomendado considerar offline
+        acima de ~90s sem heartbeat).
       responses:
         "200":
           description: Lista de dispositivos.
@@ -5539,20 +5583,26 @@ paths:
                   devices: { type: array, items: { $ref: "#/components/schemas/LabDevice" } }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:ver.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-devices/pair:
     post:
       tags: [Horas]
       summary: Pareia um PC via QR — inicia sessão e entrega o token no heartbeat seguinte
       description: |
-        Admin-only. Fluxo do QR: o PC (ainda sem sessão) mostra um QR com o
-        próprio `deviceUuid`; o admin escaneia com o celular (já autenticado),
-        abre `/admin/horas/parear/:deviceUuid` no dashboard e escolhe o
-        cliente — chamando este endpoint. Inicia a sessão (mesma lógica de
-        `POST /hour-sessions`) e deixa o token pronto pra entrega automática
-        no próximo heartbeat do PC (`pending_pair_token`, mesmo padrão de
-        entrega única de `unpairRequested`/`message`) — nada é digitado no
-        PC. Rate limit 30/min.
+        Exige `dispositivos:gerenciar`. Fluxo do QR: o PC (ainda sem sessão)
+        mostra um QR com o próprio `deviceUuid`; o admin escaneia com o
+        celular (já autenticado), abre `/admin/horas/parear/:deviceUuid` no
+        dashboard e escolhe o cliente — chamando este endpoint. Inicia a
+        sessão (mesma lógica de `POST /hour-sessions`) e deixa o token pronto
+        pra entrega automática no próximo heartbeat do PC
+        (`pending_pair_token`, mesmo padrão de entrega única de
+        `unpairRequested`/`message`) — nada é digitado no PC. Rate limit 30/min.
       requestBody:
         required: true
         content:
@@ -5578,14 +5628,21 @@ paths:
           description: Cliente ou dispositivo não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:gerenciar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-devices/{id}:
     patch:
       tags: [Horas]
       summary: Renomeia um PC do laboratório
       description: |
-        Admin-only. Nome é sempre atribuído pelo admin, nunca pelo próprio app —
-        evita bagunça de nomes dados por quem estiver sentado no PC. Rate limit 30/min.
+        Exige `dispositivos:gerenciar`. Nome é sempre atribuído pelo admin,
+        nunca pelo próprio app — evita bagunça de nomes dados por quem estiver
+        sentado no PC. Rate limit 30/min.
       parameters:
         - name: id
           in: path
@@ -5615,13 +5672,20 @@ paths:
           description: Dispositivo não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:gerenciar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
     delete:
       tags: [Horas]
       summary: Remove o registro de um PC do laboratório
       description: |
-        Admin-only. Remove a linha (nome, histórico de heartbeat) — não afeta
-        nenhuma sessão que o PC já rodou. Se o mesmo PC mandar heartbeat de
-        novo depois, a linha é recriada do zero. Rate limit 30/min.
+        Exige `dispositivos:gerenciar`. Remove a linha (nome, histórico de
+        heartbeat) — não afeta nenhuma sessão que o PC já rodou. Se o mesmo PC
+        mandar heartbeat de novo depois, a linha é recriada do zero. Rate
+        limit 30/min.
       parameters:
         - name: id
           in: path
@@ -5634,15 +5698,22 @@ paths:
           description: Dispositivo não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:gerenciar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-devices/{id}/unpair:
     post:
       tags: [Horas]
       summary: Força o PC a voltar pra tela de colar link
       description: |
-        Admin-only. Não afeta a sessão em si (pausar/encerrar é
-        `/hour-sessions/{id}/...`), só solta o pareamento local do PC — entregue
-        no heartbeat seguinte (até ~30s de atraso). Rate limit 30/min.
+        Exige `dispositivos:gerenciar`. Não afeta a sessão em si
+        (pausar/encerrar é `/hour-sessions/{id}/...`), só solta o pareamento
+        local do PC — entregue no heartbeat seguinte (até ~30s de atraso).
+        Rate limit 30/min.
       parameters:
         - name: id
           in: path
@@ -5655,15 +5726,21 @@ paths:
           description: Dispositivo não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:gerenciar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-devices/{id}/message:
     post:
       tags: [Horas]
       summary: Manda um aviso pra aparecer na tela do PC
       description: |
-        Admin-only. Entregue no heartbeat seguinte (até ~30s de atraso); o app
-        deduplica pelo id da mensagem, então enviar o mesmo texto de novo exibe
-        de novo. Rate limit 30/min.
+        Exige `dispositivos:controlar`. Entregue no heartbeat seguinte (até
+        ~30s de atraso); o app deduplica pelo id da mensagem, então enviar o
+        mesmo texto de novo exibe de novo. Rate limit 30/min.
       parameters:
         - name: id
           in: path
@@ -5687,15 +5764,21 @@ paths:
           description: Dispositivo não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:controlar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-devices/{id}/lock:
     post:
       tags: [Horas]
       summary: Trava a tela do PC
       description: |
-        Admin-only. Entregue no heartbeat seguinte (até ~30s de atraso).
-        Regravar por cima de um pedido pendente é inofensivo. Rate limit
-        30/min.
+        Exige `dispositivos:controlar`. Entregue no heartbeat seguinte (até
+        ~30s de atraso). Regravar por cima de um pedido pendente é inofensivo.
+        Rate limit 30/min.
       parameters:
         - name: id
           in: path
@@ -5708,14 +5791,20 @@ paths:
           description: Dispositivo não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:controlar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-devices/{id}/restart:
     post:
       tags: [Horas]
       summary: Reinicia o PC
       description: |
-        Admin-only. Entregue no heartbeat seguinte (até ~30s de atraso).
-        Rate limit 30/min.
+        Exige `dispositivos:controlar`. Entregue no heartbeat seguinte (até
+        ~30s de atraso). Rate limit 30/min.
       parameters:
         - name: id
           in: path
@@ -5728,14 +5817,20 @@ paths:
           description: Dispositivo não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:controlar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-devices/{id}/shutdown:
     post:
       tags: [Horas]
       summary: Desliga o PC
       description: |
-        Admin-only. Entregue no heartbeat seguinte (até ~30s de atraso).
-        Rate limit 30/min.
+        Exige `dispositivos:controlar`. Entregue no heartbeat seguinte (até
+        ~30s de atraso). Rate limit 30/min.
       parameters:
         - name: id
           in: path
@@ -5748,17 +5843,26 @@ paths:
           description: Dispositivo não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:controlar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-devices/{id}/command:
     post:
       tags: [Horas]
-      summary: Roda um comando PowerShell livre no PC
+      summary: Enfileira um comando PowerShell livre no PC
       description: |
-        Admin-only. O comando sai no heartbeat seguinte (até ~30s de atraso)
-        e roda no watchdog (contexto SYSTEM). O resultado chega depois via
-        POST /public/lab-devices/command-result e aparece em
-        commandResult/commandResultAt na listagem — mandar um comando novo
-        zera o resultado do anterior. Rate limit 30/min.
+        Exige `dispositivos:executar`. Entra na fila (`hour_lab_device_commands`,
+        FIFO, entrega **at-most-once**) e sai no heartbeat seguinte (até ~30s
+        de atraso), rodando no watchdog (contexto SYSTEM) — com o watchdog
+        ausente há mais de 5min, o hour-timer-app comum NÃO recebe o comando
+        (ver nota da tag Horas / llms.txt: "Permissões individuais" e
+        "Fila de comandos"). O resultado chega depois via
+        `POST /public/lab-devices/command-result` — leia com
+        `GET /hour-lab-devices/{id}/commands/{cmdId}`. Rate limit 30/min.
       parameters:
         - name: id
           in: path
@@ -5774,14 +5878,119 @@ paths:
                 text: { type: string, maxLength: 4000 }
               required: [text]
       responses:
-        "204":
-          description: Comando registrado.
+        "201":
+          description: Comando enfileirado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  commandId: { type: string, format: uuid }
+                required: [commandId]
         "400":
           description: Comando vazio ou maior que 4000 caracteres.
         "404":
           description: Dispositivo não encontrado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: LAB_DEVICE_NOT_FOUND, message: "Dispositivo não encontrado" }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:executar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
+
+  /hour-lab-devices/{id}/commands:
+    get:
+      tags: [Horas]
+      summary: Histórico de comandos enfileirados pra um PC
+      description: |
+        Exige `dispositivos:ver`. Lista da mais recente pra mais antiga
+        (`ORDER BY created_at DESC`). Inclui todo tipo de ação registrada na
+        fila/auditoria — `command`, `lock`, `restart`, `shutdown`, `message`,
+        `shell_open`, `shell_close` — não só o comando PowerShell livre de
+        `POST .../command`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+          description: Máximo de entradas (default 50, teto 200).
+      responses:
+        "200":
+          description: Página do histórico, mais recente primeiro.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  commands: { type: array, items: { $ref: "#/components/schemas/LabCommandEntry" } }
+                required: [commands]
+        "404":
+          description: Dispositivo não encontrado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: LAB_DEVICE_NOT_FOUND, message: "Dispositivo não encontrado" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:ver.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
+
+  /hour-lab-devices/{id}/commands/{cmdId}:
+    get:
+      tags: [Horas]
+      summary: Detalhe (com resultado) de um comando enfileirado
+      description: |
+        Exige `dispositivos:ver`. Use pra checar se um comando enfileirado em
+        `POST .../command` (ou `/lock`, `/restart`, `/shutdown`, `/message`)
+        já foi entregue (`deliveredAt`) e/ou já tem resultado
+        (`result`/`resultAt` — só `command` de fato devolve resultado; os
+        demais ficam com `result: null`).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: cmdId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Comando encontrado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  command: { $ref: "#/components/schemas/LabCommandEntry" }
+                required: [command]
+        "404":
+          description: Dispositivo ou comando não encontrado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: COMMAND_NOT_FOUND, message: "Comando não encontrado" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:ver.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /public/lab-devices/heartbeat:
     post:
@@ -6058,7 +6267,7 @@ paths:
       tags: [Horas]
       summary: PNG do ícone de um programa
       description: |
-        Admin-only. A URL é o próprio conteúdo (sha256), então a imagem nunca
+        Exige `dispositivos:ver`. A URL é o próprio conteúdo (sha256), então a imagem nunca
         muda: `Cache-Control: public, max-age=31536000, immutable` deixa o
         navegador buscar cada ícone uma única vez, e o JSON do inventário não
         precisa carregar imagem nenhuma.
@@ -6083,7 +6292,7 @@ paths:
       tags: [Horas]
       summary: Inventário do PC cruzado com os programas esperados
       description: |
-        Admin-only. `expected` é o cadastro de `/hour-lab-expected-programs` com
+        Exige `dispositivos:ver`. `expected` é o cadastro de `/hour-lab-expected-programs` com
         `installed` resolvido para este PC; `installed` é a lista completa que a
         máquina reportou. `collectedAt` nulo = o PC nunca mandou inventário
         (app anterior à 0.1.2, ou ainda não adotado).
@@ -6132,7 +6341,7 @@ paths:
       tags: [Horas]
       summary: Pede uma captura de tela do PC
       description: |
-        Admin-only. Rate limit 30/min. Só marca o pedido: o comando é entregue
+        Exige `dispositivos:controlar`. Rate limit 30/min. Só marca o pedido: o comando é entregue
         no próximo heartbeat (até ~30s), o PC tira a foto, **mostra um aviso na
         própria tela** e envia a imagem. Não há captura periódica nem
         silenciosa, e quem pediu fica registrado junto da captura — a tela de um
@@ -6157,7 +6366,7 @@ paths:
       tags: [Horas]
       summary: Capturas de tela do PC, mais recente primeiro
       description: |
-        Admin-only. `url` é assinada e vale 10 minutos. Só as 20 capturas mais
+        Exige `dispositivos:ver`. `url` é assinada e vale 10 minutos. Só as 20 capturas mais
         recentes por PC são mantidas; as anteriores são apagadas na captura
         seguinte.
       parameters:
@@ -6194,7 +6403,7 @@ paths:
       tags: [Horas]
       summary: Apaga uma captura de tela
       description: |
-        Admin-only. Rate limit 60/min. Apaga o registro **e** o arquivo no R2 —
+        Exige `dispositivos:controlar`. Rate limit 60/min. Apaga o registro **e** o arquivo no R2 —
         se o arquivo não sair, a resposta é erro: responder "apagado" com a
         imagem ainda no bucket seria pior que não ter o botão.
       parameters:
@@ -6295,11 +6504,61 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /public/lab-devices/wait-command:
+    post:
+      tags: [Horas]
+      summary: Long-poll do watchdog por um comando pendente (sem login, autenticado pelo segredo do dispositivo)
+      description: |
+        Usado pelo **watchdog** (contexto SYSTEM), não pelo hour-timer-app
+        comum: segura a requisição até **50s** esperando um comando entrar na
+        fila (poll interno de 1s no servidor), em vez do watchdog dormir
+        60s e só então bater no heartbeat normal — o comando sai em ~1s ao
+        invés de até ~30-60s. Cada chamada marca a presença do watchdog
+        (heartbeat de 5min); enquanto ele está presente, o hour-timer-app
+        comum (rodando como o usuário logado) NÃO recebe o mesmo comando pelo
+        heartbeat, evitando os dois executarem a mesma ação em duplicidade.
+        **Nunca adota um novo `deviceSecret`** (diferente do heartbeat) — o
+        dispositivo já precisa estar pareado. Rate limit 120/min.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceId: { type: string, format: uuid }
+                deviceSecret: { type: string }
+              required: [deviceId, deviceSecret]
+      responses:
+        "200":
+          description: Comando disponível.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  command:
+                    type: object
+                    properties:
+                      id: { type: string, format: uuid }
+                      text: { type: string }
+                    required: [id, text]
+                required: [command]
+        "204":
+          description: Nenhum comando em até 50s (poll normal — não é erro).
+        "400":
+          description: deviceId ausente ou inválido.
+        "401":
+          description: Segredo do dispositivo ausente ou inválido (LAB_DEVICE_UNAUTHORIZED).
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /hour-lab-expected-programs:
     get:
       tags: [Horas]
       summary: Lista os programas esperados nos PCs do laboratório
-      description: Admin-only. Ordenado por nome.
+      description: Exige `dispositivos:gerenciar`. Ordenado por nome.
       responses:
         "200":
           description: Programas cadastrados.
@@ -6317,7 +6576,7 @@ paths:
       tags: [Horas]
       summary: Cadastra um programa esperado
       description: |
-        Admin-only. Rate limit 30/min. `matchPattern` é procurado por substring,
+        Exige `dispositivos:gerenciar`. Rate limit 30/min. `matchPattern` é procurado por substring,
         sem diferenciar caixa, no nome que o Windows exibe — omitido, o `label`
         é usado. Curingas do LIKE (`%`, `_`, `\`) são recusados: um `%` solto
         casaria com qualquer programa e marcaria todo PC como em dia.
@@ -6349,7 +6608,7 @@ paths:
     patch:
       tags: [Horas]
       summary: Edita um programa esperado
-      description: Admin-only. Rate limit 30/min. Mesmas regras do POST.
+      description: Exige `dispositivos:gerenciar`. Rate limit 30/min. Mesmas regras do POST.
       parameters:
         - name: id
           in: path
@@ -6384,8 +6643,8 @@ paths:
       tags: [Horas]
       summary: Remove um programa esperado
       description: |
-        Admin-only. Rate limit 30/min. Some da checagem dos PCs; nada é
-        desinstalado de máquina nenhuma.
+        Exige `dispositivos:gerenciar`. Rate limit 30/min. Some da checagem dos
+        PCs; nada é desinstalado de máquina nenhuma.
       parameters:
         - name: id
           in: path
@@ -7266,7 +7525,18 @@ components:
           format: date-time
         permissions:
           type: [object, "null"]
-          description: "Permissões resolvidas quando role=4 (mapa recurso → ações)."
+          description: |
+            Permissões EFETIVAS (individuais ∪ cargo) para qualquer role ≠ 3
+            (Admin); mapa recurso → ações. `null` para Admin (passa sempre).
+          additionalProperties:
+            type: array
+            items: { type: string }
+        userPermissions:
+          type: [object, "null"]
+          description: |
+            Só as permissões INDIVIDUAIS do usuário (sem o cargo), cru — é o
+            que a tela de edição em `/auth/admin/users` deve mostrar/editar.
+            Mesma regra de `null` para Admin.
           additionalProperties:
             type: array
             items: { type: string }
@@ -7414,8 +7684,12 @@ components:
           type: string
         role:
           type: integer
-          description: "1=Aluno, 2=Professor, 3=Admin."
-          enum: [1, 2, 3]
+          description: "1=Aluno, 2=Professor, 3=Admin, 4=Custom."
+          enum: [1, 2, 3, 4]
+        customRoleId:
+          type: [string, "null"]
+          format: uuid
+          description: ID do custom_role quando role=4 (null = sem cargo, só permissões individuais).
         suspendedAt:
           type: [string, "null"]
           format: date-time
@@ -7439,6 +7713,12 @@ components:
             true = caixa institucional compartilhada sem login. A conta não
             autentica por nenhum caminho (senha, OAuth, "esqueci a senha") e
             não recebe convite.
+        permissions:
+          type: [object, "null"]
+          description: Permissões individuais do usuário (mapa recurso → ações). Ver `PATCH /auth/admin/users/{id}`.
+          additionalProperties:
+            type: array
+            items: { type: string }
       required: [id, email, name, role, suspendedAt, createdAt, mfaEnabled, quotaBytes, pending, loginDisabled]
 
     OAuthClient:
@@ -8049,6 +8329,43 @@ components:
           nullable: true
           description: "Chave pública SSH mandada no primeiro heartbeat (ver POST /public/lab-devices/heartbeat); null = máquina não manda (imagem antiga, ou não provisionada via autounattend.xml)."
       required: [id, deviceUuid, createdAt]
+
+    LabCommandEntry:
+      type: object
+      description: |
+        Uma entrada da fila/auditoria de ações remotas de um PC
+        (`hour_lab_device_commands`). Entrega **at-most-once**: se a resposta
+        do PC se perder, o comando NÃO é reentregue (rodar de novo como
+        SYSTEM é pior que perder) — quem mandou vê "entregue, sem resultado".
+      properties:
+        id: { type: string, format: uuid }
+        kind:
+          type: string
+          enum: [command, lock, restart, shutdown, message, shell_open, shell_close]
+          description: Tipo de ação. Só `command` (PowerShell livre) de fato produz `result`.
+        source:
+          type: string
+          enum: [painel, mcp_oauth, pat, api]
+          description: Origem de quem mandou — cookie de sessão do painel, token OAuth (conector MCP), PAT (`st_...`) ou outro client de API.
+        text: { type: string, description: "Texto do comando/mensagem enviado." }
+        result:
+          type: [string, "null"]
+          description: "Resultado reportado pelo PC via POST /public/lab-devices/command-result. null até chegar (ou pra kind que não devolve resultado)."
+        userId:
+          type: [integer, "null"]
+          format: int64
+          description: "Quem mandou (null se a ação não tiver usuário associado)."
+        userName: { type: string, description: "Nome de quem mandou, resolvido no momento da leitura." }
+        createdAt: { type: string, format: date-time }
+        deliveredAt:
+          type: [string, "null"]
+          format: date-time
+          description: "Quando o PC recebeu (ClaimNext) — null = ainda na fila."
+        resultAt:
+          type: [string, "null"]
+          format: date-time
+          description: "Quando o resultado chegou — null se ainda não veio (ou kind sem resultado)."
+      required: [id, kind, source, text, result, userId, userName, createdAt, deliveredAt, resultAt]
 
     ExpectedProgram:
       type: object
