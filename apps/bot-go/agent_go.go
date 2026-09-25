@@ -141,7 +141,7 @@ func (c *AgentGoClient) callAPI(ctx context.Context, body agentGoRequest) (agent
 
 	return result, nil
 }
-
+
 // ComTurmas liga a consulta de turmas ao vivo ao cliente. nil desliga.
 func (c *AgentGoClient) ComTurmas(f *TurmasFonte) *AgentGoClient {
 	c.turmas = f
