@@ -483,7 +483,8 @@ paths:
       tags: [Auth]
       summary: Avisar uma conta (sino, push e e-mail)
       description: |
-        Só admin (usado pelo bot-go no retorno a cliente, com PAT). Grava no sino,
+        Admin ou cargo com `avisos:write` (usado pelo bot-go no retorno a cliente,
+        com o PAT da conta de serviço). Grava no sino,
         manda o push e, com `email: true`, envia para o e-mail de aviso da conta
         (ou o de login). Devolve o telefone de aviso para quem chamou mandar o
         WhatsApp (`""` = não cadastrado). `url` só aceita caminho interno ou

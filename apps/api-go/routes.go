@@ -23,7 +23,10 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// Contatos de aviso da conta e o aviso direto a uma conta (avisos.go).
 	mux.HandleFunc("GET /auth/me/avisos", s.authGuard(s.handleGetMeAvisos))
 	mux.HandleFunc("PATCH /auth/me/avisos", s.rateLimit(20, min, s.authGuard(s.handlePatchMeAvisos)))
-	mux.HandleFunc("POST /avisos", s.rateLimit(60, min, s.adminGuard(s.handleCreateAviso)))
+	// avisos:write em vez de adminGuard: admin continua passando, e a conta de
+	// serviço do bot (cargo "Bot de vendas") avisa sem precisar ser admin —
+	// o bot não deve rodar com um token de administrador.
+	mux.HandleFunc("POST /avisos", s.rateLimit(60, min, s.permGuard("avisos", "write", false, s.handleCreateAviso)))
 
 	// Web Push — subscription do navegador atual (gestão da própria conta,
 	// precisa de sessão). Nova tarefa / novo email disparam envio via

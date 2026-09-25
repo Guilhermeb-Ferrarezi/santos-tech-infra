@@ -97,8 +97,8 @@
   para onde vão os avisos da própria conta (`{emailLogin, avisoEmail, avisoTelefone}`).
   Ausente preserva; `""` limpa (e-mail volta ao de login; sem telefone, o bot avisa os
   admins). Telefone só dígitos, 10–15. 400 `VALIDATION_ERROR` se inválido.
-- `POST /avisos {userId, titulo, corpo?, url?, email?}` — **admin** (o bot usa com
-  PAT): sino + push e, com `email:true`, e-mail para o contato de aviso da conta.
+- `POST /avisos {userId, titulo, corpo?, url?, email?}` — admin OU cargo com
+  `avisos:write` (o bot usa com o PAT da conta de serviço): sino + push e, com `email:true`, e-mail para o contato de aviso da conta.
   → `{ok, telefone, emailEnviado}`; `telefone` é o de aviso (`""` = não cadastrado).
   `url` só caminho interno ou https de `*.santos-tech.com`. 404 conta inexistente.
 - `GET /auth/google[?return_to=/caminho]` · `GET /auth/google/callback` — OAuth
