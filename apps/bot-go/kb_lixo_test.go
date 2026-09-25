@@ -66,7 +66,9 @@ func TestGeradorDeFichaPodeRecusar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("não consegui ler worker.go: %v", err)
 	}
-	s := string(src)
+	// Checkout no Windows vem com CRLF: sem normalizar, o "\n}\n" abaixo
+	// nunca casa e o recorte estoura.
+	s := strings.ReplaceAll(string(src), "\r\n", "\n")
 
 	i := strings.Index(s, "func (w *Worker) handleKBGap")
 	if i < 0 {
