@@ -8,6 +8,7 @@ SELECT id::text, tipo, titulo, aluno_ou_grupo,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
   COALESCE(data_fim::text, '')::text AS data_fim,
+  portal_class_id,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at
@@ -22,6 +23,7 @@ SELECT id::text, tipo, titulo, aluno_ou_grupo,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
   COALESCE(data_fim::text, '')::text AS data_fim,
+  portal_class_id,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at
@@ -46,6 +48,7 @@ RETURNING id::text, tipo, titulo, aluno_ou_grupo,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
   COALESCE(data_fim::text, '')::text AS data_fim,
+  portal_class_id,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at;
@@ -67,9 +70,14 @@ RETURNING id::text, tipo, titulo, aluno_ou_grupo,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
   COALESCE(data_fim::text, '')::text AS data_fim,
+  portal_class_id,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at;
+
+-- name: SetAgendaEventoPortalClass :execrows
+UPDATE agenda_eventos SET portal_class_id = sqlc.narg(portal_class_id), updated_at = now()
+WHERE id = sqlc.arg(id)::uuid;
 
 -- name: DeleteAgendaEvento :execrows
 DELETE FROM agenda_eventos WHERE id=$1::uuid;

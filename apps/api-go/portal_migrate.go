@@ -67,6 +67,16 @@ CREATE INDEX IF NOT EXISTS idx_class_schedule_class ON class_schedule(class_id);
 -- painel. Só o sync escreve nelas; turma criada à mão fica com NULL e é
 -- ignorada pelo sync (nunca é sobrescrita).
 ALTER TABLE class ADD COLUMN IF NOT EXISTS notion_key TEXT;
+
+-- Turmas ao vivo pro bot de vendas (spec 2026-09-25-bot-turmas-ao-vivo,
+-- dashboard). capacity: quantos alunos a turma comporta (decisão do Henrique:
+-- 10). bot_validada_*: um humano conferiu início, fim, matrículas e horários e
+-- liberou a turma pro bot falar dela — sem isso o bot não enxerga a turma
+-- (fail-closed: turma importada do Notion com data chutada e 0 matrículas
+-- nunca vira "10 vagas").
+ALTER TABLE class ADD COLUMN IF NOT EXISTS capacity INTEGER NOT NULL DEFAULT 10 CHECK (capacity BETWEEN 1 AND 50);
+ALTER TABLE class ADD COLUMN IF NOT EXISTS bot_validada_em TIMESTAMPTZ;
+ALTER TABLE class ADD COLUMN IF NOT EXISTS bot_validada_por INTEGER;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_class_notion_key ON class(notion_key) WHERE notion_key IS NOT NULL;
 ALTER TABLE class_schedule ADD COLUMN IF NOT EXISTS notion_page_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_class_schedule_notion ON class_schedule(notion_page_id) WHERE notion_page_id IS NOT NULL;

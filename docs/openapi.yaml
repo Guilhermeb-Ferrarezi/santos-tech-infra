@@ -58,6 +58,16 @@ tags:
     description: Servidor OAuth 2.0 ("Entrar com Santos Tech") — authorization code + PKCE S256
   - name: Admin
     description: Gestão administrativa (requer role Admin)
+  - name: Agenda
+    description: |
+      Agenda universal do laboratório (aulas, Arena, dias inteiros) com o motor de
+      capacidade de 10 PCs. Guard `agenda:read|write|delete` (admin/professor ou cargo
+      com a permissão). Detalhes de regra em `apps/api-go/llms.txt`, seção Agenda.
+  - name: TurmasAoVivo
+    description: |
+      O que o bot de vendas consulta para falar de turma com dado real: turmas com
+      vaga (Portal + Agenda) e horários livres para abrir turma. Spec:
+      `dashboard/docs/superpowers/specs/2026-09-25-bot-turmas-ao-vivo-design.md`.
   - name: System
     description: Saúde do serviço
   - name: Observabilidade
@@ -66,12 +76,12 @@ tags:
     description: Pagamentos (payments-go — prefixo /payments em produção)
   - name: Blog
     description: |
-      Blog institucional (santos-tech.com/blog) e blog de cursos para adultos
-      (santos-tech.com/adultos/blog) — mesmo motor/CMS, isolados via
+      Blog institucional (santos-tech.com/blog) e blog de cursos particulares
+      (santos-tech.com/particular/blog; até 25/09/2026 /adultos/blog) — mesmo motor/CMS, isolados via
       `blog_categories.audience` (`familia`|`adultos`; todo post herda a
       audiência da própria categoria). Endpoints públicos aceitam `?audience=`
       com default `familia` — o consumidor atual do blog institucional não
-      precisa mandar nada; só o novo /adultos/blog manda `audience=adultos`
+      precisa mandar nada; só o blog particular manda `audience=adultos`
       explicitamente. `/public/blog/*` é leitura 100% pública (sem
       cookie/token, só posts com status `published`). `/blog/*` é o
       CRUD admin — requer role Admin ou cargo personalizado com a permissão
@@ -3433,9 +3443,9 @@ paths:
           name: audience
           schema: { type: string, enum: [familia, adultos], default: familia }
           description: >
-            Isola o blog institucional do blog de cursos para adultos. Default
+            Isola o blog institucional do blog de cursos particulares. Default
             `familia` (comportamento do blog atual, que não manda esse
-            parâmetro) — o novo /adultos/blog manda `adultos` explicitamente.
+            parâmetro) — o blog particular (/particular/blog) manda `adultos`.
       responses:
         "200":
           description: Página de posts publicados.
@@ -7427,6 +7437,200 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /agenda/eventos:
+    get:
+      tags: [Agenda]
+      summary: Lista todos os eventos
+      description: Sem paginação nem filtro — o volume de uma escola é baixo; o cliente resolve as ocorrências semanais.
+      responses:
+        "200":
+          description: Eventos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  eventos: { type: array, items: { $ref: "#/components/schemas/AgendaEvento" } }
+                required: [eventos]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Sem permissão agenda:read, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    post:
+      tags: [Agenda]
+      summary: Cria evento
+      description: |
+        Valida e roda o motor de conflito antes de gravar. `aula_turma` é sempre semanal;
+        `aula_particular` é semanal só se `recorrencia: "semanal"`; os demais tipos nunca
+        repetem. Rate limit 30/min.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgendaEventoInput" }
+      responses:
+        "201":
+          description: Criado
+          content: { application/json: { schema: { type: object, properties: { evento: { $ref: "#/components/schemas/AgendaEvento" } } } } }
+        "400": { description: "Validação, ou AGENDA_CAPACIDADE_EXCEDIDA (teto de 10 PCs, sem override)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: "AGENDA_CONFLITO_POLITICA — Arena sobre aula; reenvie com confirmarConflito:true", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /agenda/eventos/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Agenda]
+      summary: Um evento
+      responses:
+        "200": { description: Evento, content: { application/json: { schema: { type: object, properties: { evento: { $ref: "#/components/schemas/AgendaEvento" } } } } } }
+        "404": { description: AGENDA_EVENTO_NOT_FOUND, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    put:
+      tags: [Agenda]
+      summary: Substitui o evento inteiro
+      description: Mesmas regras do POST. NÃO mexe na ligação com a turma do Portal (`portalClassId`) — ver `PUT /agenda/eventos/{id}/turma`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgendaEventoInput" }
+      responses:
+        "200": { description: Atualizado, content: { application/json: { schema: { type: object, properties: { evento: { $ref: "#/components/schemas/AgendaEvento" } } } } } }
+        "400": { description: Validação ou capacidade, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: AGENDA_EVENTO_NOT_FOUND, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: AGENDA_CONFLITO_POLITICA, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      tags: [Agenda]
+      summary: Remove o evento
+      responses:
+        "204": { description: Removido }
+        "404": { description: AGENDA_EVENTO_NOT_FOUND, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /agenda/eventos/check:
+    post:
+      tags: [Agenda]
+      summary: Dry-run do motor de conflito (nunca grava)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgendaEventoInput" }
+      responses:
+        "200":
+          description: Resultado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  capacidadeExcedida: { type: boolean }
+                  pcsOcupados: { type: integer }
+                  eventosCapacidade: { type: array, items: { $ref: "#/components/schemas/AgendaEvento" } }
+                  eventosPolitica: { type: array, items: { $ref: "#/components/schemas/AgendaEvento" } }
+  /agenda/eventos/{id}/turma:
+    put:
+      tags: [Agenda, TurmasAoVivo]
+      summary: Liga (ou desliga) o evento à turma do Portal
+      description: |
+        Rota própria de propósito: o PUT do evento substitui o evento inteiro e quem
+        manda o corpo sem este campo apagaria a ligação. `aula_turma` só liga em turma de
+        grupo; `aula_particular` só em turma particular; os demais tipos nunca. `null`
+        desliga. Permissão `agenda:write`, rate limit 30/min.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                portalClassId: { type: [integer, "null"], description: "class.id do Portal; null desliga" }
+              required: [portalClassId]
+      responses:
+        "200": { description: Evento com a ligação nova, content: { application/json: { schema: { type: object, properties: { evento: { $ref: "#/components/schemas/AgendaEvento" } } } } } }
+        "400": { description: "BAD_REQUEST ou AGENDA_TURMA_TIPO_INCOMPATIVEL", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "AGENDA_EVENTO_NOT_FOUND ou TURMA_NOT_FOUND", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /agenda/horarios-livres:
+    get:
+      tags: [TurmasAoVivo]
+      summary: Horários livres para abrir turma nova
+      description: |
+        Por dia pedido, os trechos de `[abre, fecha]` sem nenhum evento **semanal** em
+        vigor (turma ou particular) que caibam `duracao` minutos. Avulsos (Arena,
+        experimental) não bloqueiam. O horário de funcionamento vem por parâmetro (é
+        config de quem consulta). Permissão `agenda:read`.
+      parameters:
+        - { name: abre, in: query, required: true, schema: { type: string, example: "08:00" } }
+        - { name: fecha, in: query, required: true, schema: { type: string, example: "22:00" } }
+        - { name: duracao, in: query, required: true, description: "minutos, 15–480", schema: { type: integer } }
+        - { name: dias, in: query, required: true, description: "CSV de 0 (domingo) a 6 (sábado), sem repetir", schema: { type: string, example: "1,2,3,4,5,6" } }
+      responses:
+        "200":
+          description: Janelas livres
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  geradoEm: { type: string, format: date-time }
+                  janelas: { type: array, items: { $ref: "#/components/schemas/JanelaLivre" } }
+                required: [geradoEm, janelas]
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /agenda/feriados:
+    get:
+      tags: [Agenda]
+      summary: Feriados nacionais (BrasilAPI) + municipais do ano
+      parameters:
+        - { name: ano, in: query, required: true, schema: { type: integer, minimum: 2000, maximum: 2100 } }
+      responses:
+        "200": { description: Feriados, content: { application/json: { schema: { type: object, properties: { feriados: { type: array, items: { type: object, properties: { data: { type: string, format: date }, nome: { type: string }, tipo: { type: string, enum: [nacional, municipal] } } } } } } } } }
+        "400": { description: ano inválido, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /portal/turmas-abertas:
+    get:
+      tags: [TurmasAoVivo]
+      summary: Turmas de grupo abertas, com vaga e andamento
+      description: |
+        Só entra turma de grupo, liberada para o bot (`botValidadaEm`), com fim ≥ hoje e
+        com pelo menos um horário `aula_turma` ligado na Agenda. Turma cheia vem com
+        `vagas: 0`. `vagas = max(0, capacidade − matrículas)`. Permissão
+        `portal_turmas:read`.
+      parameters:
+        - { name: curso, in: query, required: false, description: "id do curso", schema: { type: integer } }
+        - { name: diaSemana, in: query, required: false, description: "0–6: só turmas com aula nesse dia", schema: { type: integer } }
+      responses:
+        "200":
+          description: Turmas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  geradoEm: { type: string, format: date-time }
+                  turmas: { type: array, items: { $ref: "#/components/schemas/TurmaAberta" } }
+                required: [geradoEm, turmas]
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /portal/classes/{classId}/bot-validacao:
+    parameters:
+      - { name: classId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [TurmasAoVivo]
+      summary: Libera a turma para o bot de vendas
+      description: |
+        Um humano conferiu início, fim, matrículas e horários. Recusa com 400
+        `TURMA_NAO_LIBERAVEL` (motivo em `message`) se a turma for particular, se o fim
+        já passou ou se não houver horário `aula_turma` ligado. Permissão
+        `portal_turmas:write`, rate limit 20/min.
+      responses:
+        "200": { description: Turma liberada, content: { application/json: { schema: { type: object, properties: { class: { $ref: "#/components/schemas/PortalClass" } } } } } }
+        "400": { description: TURMA_NAO_LIBERAVEL, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Turma não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      tags: [TurmasAoVivo]
+      summary: Tira a turma do bot de vendas
+      responses:
+        "200": { description: Turma retirada, content: { application/json: { schema: { type: object, properties: { class: { $ref: "#/components/schemas/PortalClass" } } } } } }
+        "404": { description: Turma não encontrada, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
 components:
   securitySchemes:
     cookieAuth:
@@ -7499,6 +7703,78 @@ components:
           example: { code: NOT_CONFIGURED, message: "Roteador de APIs indisponível: API_VAULT_SECRET não configurada" }
 
   schemas:
+    AgendaEventoInput:
+      type: object
+      required: [tipo, titulo, dataInicio, horaInicio, horaFim]
+      properties:
+        tipo: { type: string, enum: [aula_turma, aula_particular, aula_experimental, avulso, corujao, mix, dia_inteiro] }
+        titulo: { type: string }
+        alunoOuGrupo: { type: [string, "null"] }
+        professorOuResponsavelId: { type: [integer, "null"] }
+        conteudo: { type: [string, "null"] }
+        jogo: { type: [string, "null"] }
+        qtdPessoas: { type: [integer, "null"] }
+        computadoresUsados: { type: [integer, "null"], description: "null = não informado (fica fora da soma de capacidade)" }
+        dataInicio: { type: string, format: date }
+        horaInicio: { type: string, example: "19:30" }
+        horaFim: { type: string, example: "21:30" }
+        recorrencia: { type: string, enum: [nenhuma, semanal], description: "Só é escolha do cliente em aula_particular; aula_turma é sempre semanal" }
+        diaSemana: { type: [integer, "null"], minimum: 0, maximum: 6, description: "Obrigatório em evento semanal" }
+        dataFimRecorrencia: { type: [string, "null"], format: date, description: "null = recorrência indefinida" }
+        dataFim: { type: [string, "null"], format: date, description: "Só dia_inteiro" }
+        statusPreparo: { type: [string, "null"], enum: [nao_aplica, pendente, pronto, null] }
+        notas: { type: string }
+        confirmarConflito: { type: boolean }
+    AgendaEvento:
+      allOf:
+        - $ref: "#/components/schemas/AgendaEventoInput"
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            professorOuResponsavelNome: { type: string }
+            portalClassId: { type: [integer, "null"], description: "Turma do Portal ligada (só leitura; ver PUT /agenda/eventos/{id}/turma)" }
+            createdBy: { type: [integer, "null"] }
+            createdByNome: { type: string }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+    JanelaLivre:
+      type: object
+      required: [diaSemana, horaInicio, horaFim]
+      properties:
+        diaSemana: { type: integer, minimum: 0, maximum: 6 }
+        horaInicio: { type: string, example: "08:00" }
+        horaFim: { type: string, example: "13:00" }
+    TurmaAberta:
+      type: object
+      required: [id, nome, curso, horarios, inicio, fimPrevisto, mesesDeAndamento, alunos, capacidade, vagas, divergente]
+      properties:
+        id: { type: integer }
+        nome: { type: string }
+        curso: { type: object, properties: { id: { type: integer }, nome: { type: string } } }
+        horarios: { type: array, items: { $ref: "#/components/schemas/JanelaLivre" }, description: "Horários da Agenda ligados à turma (valem para o bot)" }
+        inicio: { type: string, format: date }
+        fimPrevisto: { type: string, format: date }
+        mesesDeAndamento: { type: integer, description: "Meses completos desde o início (0 se ainda não começou)" }
+        alunos: { type: integer, description: "Matrículas no Portal" }
+        capacidade: { type: integer }
+        vagas: { type: integer }
+        divergente: { type: boolean, description: "Horário da Agenda ≠ grade do Portal (class_schedule)" }
+    PortalClass:
+      type: object
+      description: Turma do Portal (recorte — a API do Portal está documentada em llms.txt).
+      properties:
+        id: { type: string }
+        name: { type: string }
+        courseId: { type: string }
+        currentModuleId: { type: string }
+        startDate: { type: string, format: date-time }
+        endDate: { type: string, format: date-time }
+        individualClass: { type: boolean }
+        capacity: { type: integer, minimum: 1, maximum: 50 }
+        botValidadaEm: { type: [string, "null"], format: date-time }
+        botValidadaPor: { type: [integer, "null"] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     AvisosConta:
       type: object
       properties:

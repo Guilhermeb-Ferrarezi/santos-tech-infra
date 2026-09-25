@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func agendaReq(method, id, body string, userID int64) *http.Request {
@@ -200,5 +201,65 @@ func TestValidateAgendaEventoInputComputadoresUsadosNilValido(t *testing.T) {
 	}
 	if err := validateAgendaEventoInput(&in); err != nil {
 		t.Fatalf("computadoresUsados nil não deveria ser rejeitado: %v", err)
+	}
+}
+
+func TestAgendaTipoCombinaComTurma(t *testing.T) {
+	casos := []struct {
+		tipo       string
+		individual bool
+		ok         bool
+	}{
+		{"aula_turma", false, true},
+		{"aula_turma", true, false},
+		{"aula_particular", true, true},
+		{"aula_particular", false, false},
+		{"aula_experimental", false, false},
+		{"mix", false, false},
+		{"dia_inteiro", true, false},
+	}
+	for _, c := range casos {
+		if got := agendaTipoCombinaComTurma(c.tipo, c.individual); got != c.ok {
+			t.Fatalf("%s individual=%v: got %v, want %v", c.tipo, c.individual, got, c.ok)
+		}
+	}
+}
+
+func TestMotivoTurmaNaoLiberavel(t *testing.T) {
+	hoje := time.Date(2026, 9, 25, 15, 0, 0, 0, time.UTC)
+	fim := func(d string) time.Time { x, _ := time.Parse("2006-01-02", d); return x }
+	casos := []struct {
+		nome      string
+		c         portalClassDTO
+		horarios  int
+		temMotivo bool
+		contem    string
+	}{
+		{"grupo ok", portalClassDTO{EndDate: fim("2027-08-01")}, 1, false, ""},
+		{"particular", portalClassDTO{IndividualClass: true, EndDate: fim("2027-08-01")}, 1, true, "particular"},
+		{"vencida", portalClassDTO{EndDate: fim("2026-09-22")}, 1, true, "fim"},
+		{"termina hoje ainda vale", portalClassDTO{EndDate: fim("2026-09-25")}, 1, false, ""},
+		{"sem horário", portalClassDTO{EndDate: fim("2027-08-01")}, 0, true, "horário"},
+	}
+	for _, c := range casos {
+		m := motivoTurmaNaoLiberavel(&c.c, c.horarios, hoje)
+		if (m != "") != c.temMotivo || !strings.Contains(m, c.contem) {
+			t.Fatalf("%s: motivo=%q", c.nome, m)
+		}
+	}
+}
+
+func TestHorariosDaTurmaIgnoraLigacaoIncoerente(t *testing.T) {
+	id := int64(22)
+	outra := int64(23)
+	evs := []AgendaEvento{
+		{ID: "a", Tipo: "aula_turma", Recorrencia: "semanal", PortalClassID: &id},
+		{ID: "b", Tipo: "aula_particular", Recorrencia: "semanal", PortalClassID: &id}, // mudou de tipo depois de ligado
+		{ID: "c", Tipo: "aula_turma", Recorrencia: "semanal", PortalClassID: &outra},
+		{ID: "d", Tipo: "aula_turma", Recorrencia: "semanal"},
+	}
+	got := horariosDaTurma(evs, id)
+	if len(got) != 1 || got[0].ID != "a" {
+		t.Fatalf("esperava só o evento a, got %+v", got)
 	}
 }

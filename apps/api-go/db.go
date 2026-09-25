@@ -1016,6 +1016,14 @@ ALTER TABLE agenda_eventos ADD CONSTRAINT agenda_eventos_tipo_check
 -- capacidade sobrando. O CHECK (>= 0) já é satisfeito por NULL, não precisa recriar.
 ALTER TABLE agenda_eventos ALTER COLUMN computadores_usados DROP NOT NULL;
 
+-- Ligação do evento com a turma do Portal (class.id). Sem FK: o Portal pode
+-- viver em outro banco (PORTAL_DATABASE_URL). Quem liga/desliga é a rota
+-- própria PUT /agenda/eventos/{id}/turma — o PUT do evento não toca esta
+-- coluna, senão um cliente que manda o evento inteiro sem ela apagaria a
+-- ligação. Ver spec 2026-09-25-bot-turmas-ao-vivo (dashboard).
+ALTER TABLE agenda_eventos ADD COLUMN IF NOT EXISTS portal_class_id INTEGER;
+CREATE INDEX IF NOT EXISTS idx_agenda_eventos_portal_class ON agenda_eventos(portal_class_id) WHERE portal_class_id IS NOT NULL;
+
 -- Registra quando alguém confirma criar/editar um evento de Arena apesar do
 -- aviso de conflito de política (Arena em cima de aula) — dá visibilidade de
 -- intervenção ao Henrique/Rodrigo sem bloquear quem precisa vender.

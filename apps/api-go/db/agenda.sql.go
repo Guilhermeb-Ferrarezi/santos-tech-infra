@@ -43,6 +43,7 @@ SELECT id::text, tipo, titulo, aluno_ou_grupo,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
   COALESCE(data_fim::text, '')::text AS data_fim,
+  portal_class_id,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at
@@ -67,6 +68,7 @@ type GetAgendaEventoRow struct {
 	DiaSemana                  *int16
 	DataFimRecorrencia         string
 	DataFim                    string
+	PortalClassID              pgtype.Int4
 	StatusPreparo              *string
 	Notas                      string
 	CreatedBy                  pgtype.Int4
@@ -96,6 +98,7 @@ func (q *Queries) GetAgendaEvento(ctx context.Context, dollar_1 pgtype.UUID) (Ge
 		&i.DiaSemana,
 		&i.DataFimRecorrencia,
 		&i.DataFim,
+		&i.PortalClassID,
 		&i.StatusPreparo,
 		&i.Notas,
 		&i.CreatedBy,
@@ -125,6 +128,7 @@ RETURNING id::text, tipo, titulo, aluno_ou_grupo,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
   COALESCE(data_fim::text, '')::text AS data_fim,
+  portal_class_id,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at
@@ -169,6 +173,7 @@ type InsertAgendaEventoRow struct {
 	DiaSemana                  *int16
 	DataFimRecorrencia         string
 	DataFim                    string
+	PortalClassID              pgtype.Int4
 	StatusPreparo              *string
 	Notas                      string
 	CreatedBy                  pgtype.Int4
@@ -217,6 +222,7 @@ func (q *Queries) InsertAgendaEvento(ctx context.Context, arg InsertAgendaEvento
 		&i.DiaSemana,
 		&i.DataFimRecorrencia,
 		&i.DataFim,
+		&i.PortalClassID,
 		&i.StatusPreparo,
 		&i.Notas,
 		&i.CreatedBy,
@@ -281,6 +287,7 @@ SELECT id::text, tipo, titulo, aluno_ou_grupo,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
   COALESCE(data_fim::text, '')::text AS data_fim,
+  portal_class_id,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at
@@ -306,6 +313,7 @@ type ListAgendaEventosRow struct {
 	DiaSemana                  *int16
 	DataFimRecorrencia         string
 	DataFim                    string
+	PortalClassID              pgtype.Int4
 	StatusPreparo              *string
 	Notas                      string
 	CreatedBy                  pgtype.Int4
@@ -342,6 +350,7 @@ func (q *Queries) ListAgendaEventos(ctx context.Context) ([]ListAgendaEventosRow
 			&i.DiaSemana,
 			&i.DataFimRecorrencia,
 			&i.DataFim,
+			&i.PortalClassID,
 			&i.StatusPreparo,
 			&i.Notas,
 			&i.CreatedBy,
@@ -432,6 +441,24 @@ func (q *Queries) ListAgendaFeriadosMunicipaisAno(ctx context.Context, ano int32
 	return items, nil
 }
 
+const setAgendaEventoPortalClass = `-- name: SetAgendaEventoPortalClass :execrows
+UPDATE agenda_eventos SET portal_class_id = $1, updated_at = now()
+WHERE id = $2::uuid
+`
+
+type SetAgendaEventoPortalClassParams struct {
+	PortalClassID pgtype.Int4
+	ID            pgtype.UUID
+}
+
+func (q *Queries) SetAgendaEventoPortalClass(ctx context.Context, arg SetAgendaEventoPortalClassParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setAgendaEventoPortalClass, arg.PortalClassID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateAgendaEvento = `-- name: UpdateAgendaEvento :one
 UPDATE agenda_eventos SET
   tipo=$1, titulo=$2, aluno_ou_grupo=$3,
@@ -449,6 +476,7 @@ RETURNING id::text, tipo, titulo, aluno_ou_grupo,
   data_inicio::text, hora_inicio::text, hora_fim::text,
   recorrencia, dia_semana, COALESCE(data_fim_recorrencia::text, '')::text AS data_fim_recorrencia,
   COALESCE(data_fim::text, '')::text AS data_fim,
+  portal_class_id,
   status_preparo, notas,
   created_by, COALESCE((SELECT name FROM users WHERE id = created_by), '')::text AS created_by_nome,
   created_at, updated_at
@@ -493,6 +521,7 @@ type UpdateAgendaEventoRow struct {
 	DiaSemana                  *int16
 	DataFimRecorrencia         string
 	DataFim                    string
+	PortalClassID              pgtype.Int4
 	StatusPreparo              *string
 	Notas                      string
 	CreatedBy                  pgtype.Int4
@@ -541,6 +570,7 @@ func (q *Queries) UpdateAgendaEvento(ctx context.Context, arg UpdateAgendaEvento
 		&i.DiaSemana,
 		&i.DataFimRecorrencia,
 		&i.DataFim,
+		&i.PortalClassID,
 		&i.StatusPreparo,
 		&i.Notas,
 		&i.CreatedBy,
