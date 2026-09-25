@@ -372,6 +372,14 @@ func (m *SessionManager) claudeArgsLive(conv *Conversation, mediaGlob string) []
 // Observação: o MCP do GitHub recebe o token no PRÓPRIO env do servidor MCP
 // (writeMCPConfig em mcp.go), então não depende deste env do processo Claude.
 func (s *Server) claudeEnv(ctx context.Context, conv *Conversation) []string {
+	return s.claudeEnvCom(ctx, conv, credencial{})
+}
+
+// claudeEnvCom é o claudeEnv com a credencial escolhida pra esta chamada: com
+// cred.apiKey, o CLI roda com ANTHROPIC_API_KEY (custo real, na chave) e o token
+// da assinatura NÃO entra no ambiente — só uma credencial por processo, sem
+// depender da precedência do CLI. Sem apiKey, é o caminho da assinatura de sempre.
+func (s *Server) claudeEnvCom(ctx context.Context, conv *Conversation, cred credencial) []string {
 	env := []string{}
 	// Repassa só variáveis de runtime essenciais do ambiente do container (sem segredos).
 	for _, key := range []string{
@@ -393,7 +401,9 @@ func (s *Server) claudeEnv(ctx context.Context, conv *Conversation) []string {
 	// Sem token injetado o CLI cai na credencial do volume e morre com "OAuth
 	// session expired" — que ia pro stdout descartado. Silêncio em cima de
 	// silêncio: o bot ficou mudo em produção sem uma linha de log explicando.
-	if tok := strings.TrimSpace(os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")); tok != "" {
+	if cred.apiKey != "" {
+		env = append(env, "ANTHROPIC_API_KEY="+cred.apiKey)
+	} else if tok := strings.TrimSpace(os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")); tok != "" {
 		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
 	} else if tok, err := s.oauthToken(ctx); err != nil {
 		slog.Error("credencial do Claude ilegível no banco; o CLI vai rodar sem token", "err", err)
@@ -520,7 +530,7 @@ func (m *SessionManager) handleEvent(ctx context.Context, conv *Conversation, ev
 		usage, _ := ev["usage"].(map[string]any)
 		emit(turnEvent{Type: "result", Data: ev})
 		_ = m.s.insertMessage(ctx, &Message{ConversationID: conv.ID, Role: "system", Kind: "result", Content: ev, Usage: usage})
-		m.s.recordUsage(ctx, "session", "", conv.Model, conv.ID, usageFromMap(ev))
+		m.s.recordUsage(ctx, usageMeta{source: "session", model: conv.Model, convID: conv.ID}, usageFromMap(ev))
 	}
 }
 

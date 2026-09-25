@@ -48,22 +48,37 @@ func int64FromAny(v any) int64 {
 	return int64(f)
 }
 
+// usageMeta identifica uma invocação do CLI no painel de gastos.
+type usageMeta struct {
+	source  string // 'generate' | 'generate_stream' | 'session'
+	task    string // task do /claude/generate ("raw", "email", ...)
+	origin  string // quem pediu ("bot", "posaula", ...) — "" quando não declarado
+	billing string // credencial que rodou: billingSubscription | billingAPIKey
+	model   string
+	convID  string // "" = sem conversa (generate/generate_stream são stateless)
+}
+
 // recordUsage persiste uma invocação do CLI claude para o painel de gastos. Nunca
 // propaga erro pro chamador (best-effort: falha em registrar custo não pode derrubar
-// a geração) — só loga um warning. convID vazio = sem conversa associada (source
-// "generate"/"generate_stream", que são stateless).
-func (s *Server) recordUsage(ctx context.Context, source, task, model, convID string, f usageFields) {
+// a geração) — só loga um warning.
+func (s *Server) recordUsage(ctx context.Context, m usageMeta, f usageFields) {
+	if m.billing == "" {
+		m.billing = billingSubscription
+	}
+	if s.onUsage != nil {
+		s.onUsage(m, f)
+	}
 	if s.q == nil {
 		return
 	}
 	var conv pgtype.UUID
-	if convID != "" {
-		conv = uuidFromStr(convID)
+	if m.convID != "" {
+		conv = uuidFromStr(m.convID)
 	}
 	if err := s.q.InsertUsageEvent(ctx, agentdb.InsertUsageEventParams{
-		Source:           source,
-		Task:             task,
-		Model:            model,
+		Source:           m.source,
+		Task:             m.task,
+		Model:            m.model,
 		ConversationID:   conv,
 		TotalCostUsd:     f.TotalCostUSD,
 		InputTokens:      f.InputTokens,
@@ -72,7 +87,9 @@ func (s *Server) recordUsage(ctx context.Context, source, task, model, convID st
 		CacheWriteTokens: f.CacheWriteTokens,
 		DurationMs:       f.DurationMS,
 		IsError:          f.IsError,
+		Origin:           m.origin,
+		Billing:          m.billing,
 	}); err != nil {
-		slog.Warn("recordUsage: insert falhou", "source", source, "err", err)
+		slog.Warn("recordUsage: insert falhou", "source", m.source, "err", err)
 	}
 }

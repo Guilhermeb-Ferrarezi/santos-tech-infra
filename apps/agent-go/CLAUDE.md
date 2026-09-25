@@ -155,7 +155,12 @@ rate limit por rota+IP).
 | GET | `/claude/designs/{id}/c/{token}/{path...}` | **sem authGuard** — casca do canvas (sem path) e assets de `telas/`/`assets/`; token assinado no caminho |
 | GET/POST/DELETE | `/claude/designs/{id}/share` | status / cria (ou devolve o ativo) / revoga o link público |
 | GET | `/claude/share/{token}/{path...}` | **público, sem login** — link de compartilhamento (só `telas/` e `assets/`, CSP com `sandbox`) |
-| POST | `/claude/generate` | geração one-shot stateless `{task, brief, tone?}` → `{subject, html, text}` |
+| POST | `/claude/generate` | geração one-shot stateless `{task, brief, tone?, origin?}` → `{subject, html, text}`. `origin` = quem pediu (`bot`, `bot-tarefas`, `posaula`, `material`, `curriculo`, `quiz`…) — rotula o gasto e, no bot, decide a credencial |
+| GET | `/claude/usage` | gastos (admin): `since`, `total/today/week/month` (com `apiCostUsd`), `daily`, `source`, `task`, `origin[]` (30d por função, com `weekCostUsd` e `apiCostUsd`) |
+| GET | `/claude/billing` | cobrança do bot (admin): `{botUsesApiKey, apiKeyConfigured, apiKeyHint, updatedAt}` — a chave nunca sai |
+| PUT | `/claude/billing` | `{botUsesApiKey}` — liga/desliga a troca; ligar sem chave → 400 `API_KEY_MISSING` |
+| PUT | `/claude/billing/api-key` | `{apiKey}` — valida na Anthropic (`GET /v1/models`) e grava cifrada; recusada → 400 `INVALID_API_KEY`; 5/min |
+| DELETE | `/claude/billing/api-key` | apaga a chave e desliga a troca |
 | POST | `/claude/auth/login` | inicia OAuth (PTY) → `{state, authUrl}`; ou `{token}` direto |
 | POST | `/claude/auth/callback` | `{state, code}` → captura e cifra o token |
 | POST | `/claude/auth/logout` | limpa o token |
@@ -176,6 +181,14 @@ então não precisa do papel admin. **Segunda exceção:** `GET /claude/designs/
 roda **fora** do `authGuard` — vive num iframe de origem opaca, sem cookie, e é o token
 assinado da query `?t=` que autentica (ver a seção "Claude Design" acima).
 
+**Cobrança (assinatura × chave de API)** — todo CLI roda com o token da **assinatura**; o
+`total_cost_usd` gravado em `claude_usage_events` é então só **simulação** (preço de tabela da
+API). O bot pode rodar com uma **chave de API** (custo real, limite próprio): chave cifrada em
+`claude_billing`, trocada pela tela `/admin/whats/uso` do dashboard. Só vai pra chave quando
+quem chama é serviço interno (`INTERNAL_SECRET`), `origin` é `bot`/`bot-tarefas` e a troca está
+ligada (`credencialPara` em `billing.go`); o ambiente do CLI leva **uma** credencial só
+(`claudeEnvCom`). Cada evento grava `origin` e `billing` (`subscription`/`api_key`).
+
 ## Rodar (local)
 
 ```bash
@@ -186,8 +199,10 @@ docker compose -f infra/docker-compose.yml up -d postgres redis
 cd apps/agent-go && go run .   # exige o `claude` CLI no PATH
 ```
 
-Migrações (`claude_conversations`, `claude_messages`, `claude_credentials`) rodam no boot
-(`migrate()` em `db.go`, idempotente). A tabela `users` é compartilhada e não é criada aqui.
+Migrações (`claude_conversations`, `claude_messages`, `claude_credentials`, `claude_usage_events`,
+`claude_billing`) rodam no boot (`migrate()` em `db.go`, idempotente). A tabela `users` é
+compartilhada e não é criada aqui. SQL novo: rode `usage_pg_test.go` contra um Postgres
+descartável (`AGENT_TEST_DATABASE_URL`, instruções no arquivo) antes do push.
 
 ## Variáveis de ambiente
 

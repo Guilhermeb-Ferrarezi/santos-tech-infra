@@ -374,9 +374,18 @@ Auth: sessão do auth central ou PAT (`st_...`).
   a pergunta é recusada sozinha. `tool_use` traz `id`
 - `POST /claude/conversations/{id}/model|compact|clear` · `POST /claude/stop-all`
 - `POST /claude/auth/session` — sessão mobile; `POST /claude/push/register`
-- `GET /claude/usage` (**admin**) — gastos do CLI claude (todas as origens:
-  generate/generate_stream/session): `{total,today,month:{costUsd,calls},
-  daily:[{day,costUsd,calls}] (30d), source:[{source,costUsd,calls}] (30d)}`
+- `GET /claude/usage` (**admin**) — gastos do CLI claude. `costUsd` é SIMULAÇÃO (preço
+  de tabela da API) do que rodou na assinatura; `apiCostUsd` é o que rodou com chave de
+  API (custo real). `{since, total,today,week,month:{costUsd,apiCostUsd,calls,...},
+  daily:[{day,costUsd,calls}] (30d), source:[...] (30d), task:[...] (30d),
+  origin:[{origin,costUsd,calls,weekCostUsd,apiCostUsd,...}] (30d, por função:
+  bot, bot-tarefas, posaula, material, curriculo, quiz, sessao, email...; "raw" =
+  histórico antes da separação)}`
+- `POST /claude/generate` aceita `origin` opcional (quem pediu) — rotula o gasto.
+- `GET /claude/billing` · `PUT /claude/billing {botUsesApiKey}` ·
+  `PUT /claude/billing/api-key {apiKey}` (valida na Anthropic) ·
+  `DELETE /claude/billing/api-key` (**admin**) — troca do bot da assinatura pra chave
+  de API. A chave nunca volta nas respostas (só `apiKeyHint`, 4 últimos).
 
 ## WhatsApp Agent — `api.santos-tech.com/whats`
 

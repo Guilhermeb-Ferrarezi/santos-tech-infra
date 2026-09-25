@@ -74,9 +74,20 @@ CREATE TABLE IF NOT EXISTS claude_usage_events (
   cache_write_tokens BIGINT NOT NULL DEFAULT 0,
   duration_ms        BIGINT NOT NULL DEFAULT 0,
   is_error           BOOLEAN NOT NULL DEFAULT false,
-  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  origin             TEXT NOT NULL DEFAULT '',                 -- quem pediu ("bot", "posaula", ...)
+  billing            TEXT NOT NULL DEFAULT 'subscription'      -- 'subscription' | 'api_key'
 );
 CREATE INDEX IF NOT EXISTS idx_usage_created ON claude_usage_events(created_at DESC);
+
+-- Cobrança do bot: chave de API cifrada + liga/desliga (linha única).
+CREATE TABLE IF NOT EXISTS claude_billing (
+  id               INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  bot_uses_api_key BOOLEAN NOT NULL DEFAULT false,
+  api_key_enc      BYTEA,
+  api_key_hint     TEXT NOT NULL DEFAULT '',
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- Links públicos (somente leitura) de projetos do Claude Design. Um ativo por
 -- projeto; revogar marca revoked_at e o link para de responder na hora.

@@ -2,11 +2,11 @@
 INSERT INTO claude_usage_events (
   source, task, model, conversation_id,
   total_cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-  duration_ms, is_error
+  duration_ms, is_error, origin, billing
 ) VALUES (
   $1, $2, $3, $4,
   $5, $6, $7, $8, $9,
-  $10, $11
+  $10, $11, $12, $13
 );
 
 -- name: UsageSummary :one
@@ -16,7 +16,8 @@ SELECT
   COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
   COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
   COALESCE(SUM(cache_read_tokens), 0)::bigint AS cache_read_tokens,
-  COALESCE(SUM(cache_write_tokens), 0)::bigint AS cache_write_tokens
+  COALESCE(SUM(cache_write_tokens), 0)::bigint AS cache_write_tokens,
+  COALESCE(SUM(total_cost_usd) FILTER (WHERE billing = 'api_key'), 0)::float8 AS api_cost_usd
 FROM claude_usage_events
 WHERE created_at >= $1;
 
@@ -57,4 +58,32 @@ SELECT
 FROM claude_usage_events
 WHERE created_at >= $1 AND task <> ''
 GROUP BY task
+ORDER BY cost_usd DESC;
+
+-- name: UsageSince :one
+-- Data do primeiro registro — é o "desde quando" do acumulado no painel.
+SELECT MIN(created_at)::timestamptz AS first_at FROM claude_usage_events;
+
+-- name: UsageByOrigin :many
+-- Gasto por FUNÇÃO (quem pediu): sessão interativa → 'sessao'; senão a origem
+-- declarada pelo chamador ("bot", "posaula", ...); senão a task. O "raw" que sobra
+-- é o histórico de antes da coluna origin existir (não dá pra reatribuir).
+-- api_* = só o que rodou com chave de API (custo real); o resto é simulação.
+SELECT
+  (CASE WHEN source = 'session' THEN 'sessao'
+        WHEN origin <> '' THEN origin
+        ELSE task END)::text AS origin_key,
+  COALESCE(SUM(total_cost_usd), 0)::float8 AS cost_usd,
+  COUNT(*)::bigint AS calls,
+  COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+  COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+  COALESCE(SUM(cache_read_tokens), 0)::bigint AS cache_read_tokens,
+  COALESCE(SUM(cache_write_tokens), 0)::bigint AS cache_write_tokens,
+  COALESCE(SUM(total_cost_usd) FILTER (WHERE created_at >= sqlc.arg(week_since)), 0)::float8 AS week_cost_usd,
+  (COUNT(*) FILTER (WHERE created_at >= sqlc.arg(week_since)))::bigint AS week_calls,
+  COALESCE(SUM(total_cost_usd) FILTER (WHERE billing = 'api_key'), 0)::float8 AS api_cost_usd,
+  (COUNT(*) FILTER (WHERE billing = 'api_key'))::bigint AS api_calls
+FROM claude_usage_events
+WHERE created_at >= sqlc.arg(since)
+GROUP BY origin_key
 ORDER BY cost_usd DESC;

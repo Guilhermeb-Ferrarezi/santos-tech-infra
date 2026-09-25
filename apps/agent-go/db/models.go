@@ -19,6 +19,14 @@ type ApiKey struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+type ClaudeBilling struct {
+	ID            int32
+	BotUsesApiKey bool
+	ApiKeyEnc     []byte
+	ApiKeyHint    string
+	UpdatedAt     pgtype.Timestamptz
+}
+
 type ClaudeConversation struct {
 	ID             pgtype.UUID
 	UserID         int64
@@ -82,6 +90,8 @@ type ClaudeUsageEvent struct {
 	DurationMs       int64
 	IsError          bool
 	CreatedAt        pgtype.Timestamptz
+	Origin           string
+	Billing          string
 }
 
 type User struct {

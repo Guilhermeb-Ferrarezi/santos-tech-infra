@@ -15,11 +15,11 @@ const insertUsageEvent = `-- name: InsertUsageEvent :exec
 INSERT INTO claude_usage_events (
   source, task, model, conversation_id,
   total_cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-  duration_ms, is_error
+  duration_ms, is_error, origin, billing
 ) VALUES (
   $1, $2, $3, $4,
   $5, $6, $7, $8, $9,
-  $10, $11
+  $10, $11, $12, $13
 )
 `
 
@@ -35,6 +35,8 @@ type InsertUsageEventParams struct {
 	CacheWriteTokens int64
 	DurationMs       int64
 	IsError          bool
+	Origin           string
+	Billing          string
 }
 
 func (q *Queries) InsertUsageEvent(ctx context.Context, arg InsertUsageEventParams) error {
@@ -50,8 +52,86 @@ func (q *Queries) InsertUsageEvent(ctx context.Context, arg InsertUsageEventPara
 		arg.CacheWriteTokens,
 		arg.DurationMs,
 		arg.IsError,
+		arg.Origin,
+		arg.Billing,
 	)
 	return err
+}
+
+const usageByOrigin = `-- name: UsageByOrigin :many
+SELECT
+  (CASE WHEN source = 'session' THEN 'sessao'
+        WHEN origin <> '' THEN origin
+        ELSE task END)::text AS origin_key,
+  COALESCE(SUM(total_cost_usd), 0)::float8 AS cost_usd,
+  COUNT(*)::bigint AS calls,
+  COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+  COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+  COALESCE(SUM(cache_read_tokens), 0)::bigint AS cache_read_tokens,
+  COALESCE(SUM(cache_write_tokens), 0)::bigint AS cache_write_tokens,
+  COALESCE(SUM(total_cost_usd) FILTER (WHERE created_at >= $1), 0)::float8 AS week_cost_usd,
+  (COUNT(*) FILTER (WHERE created_at >= $1))::bigint AS week_calls,
+  COALESCE(SUM(total_cost_usd) FILTER (WHERE billing = 'api_key'), 0)::float8 AS api_cost_usd,
+  (COUNT(*) FILTER (WHERE billing = 'api_key'))::bigint AS api_calls
+FROM claude_usage_events
+WHERE created_at >= $2
+GROUP BY origin_key
+ORDER BY cost_usd DESC
+`
+
+type UsageByOriginParams struct {
+	WeekSince pgtype.Timestamptz
+	Since     pgtype.Timestamptz
+}
+
+type UsageByOriginRow struct {
+	OriginKey        string
+	CostUsd          float64
+	Calls            int64
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	WeekCostUsd      float64
+	WeekCalls        int64
+	ApiCostUsd       float64
+	ApiCalls         int64
+}
+
+// Gasto por FUNÇÃO (quem pediu): sessão interativa → 'sessao'; senão a origem
+// declarada pelo chamador ("bot", "posaula", ...); senão a task. O "raw" que sobra
+// é o histórico de antes da coluna origin existir (não dá pra reatribuir).
+// api_* = só o que rodou com chave de API (custo real); o resto é simulação.
+func (q *Queries) UsageByOrigin(ctx context.Context, arg UsageByOriginParams) ([]UsageByOriginRow, error) {
+	rows, err := q.db.Query(ctx, usageByOrigin, arg.WeekSince, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UsageByOriginRow
+	for rows.Next() {
+		var i UsageByOriginRow
+		if err := rows.Scan(
+			&i.OriginKey,
+			&i.CostUsd,
+			&i.Calls,
+			&i.InputTokens,
+			&i.OutputTokens,
+			&i.CacheReadTokens,
+			&i.CacheWriteTokens,
+			&i.WeekCostUsd,
+			&i.WeekCalls,
+			&i.ApiCostUsd,
+			&i.ApiCalls,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const usageBySource = `-- name: UsageBySource :many
@@ -82,7 +162,12 @@ func (q *Queries) UsageBySource(ctx context.Context, createdAt pgtype.Timestampt
 	var items []UsageBySourceRow
 	for rows.Next() {
 		var i UsageBySourceRow
-		if err := rows.Scan(&i.Source, &i.CostUsd, &i.Calls, &i.Tokens); err != nil {
+		if err := rows.Scan(
+			&i.Source,
+			&i.CostUsd,
+			&i.Calls,
+			&i.Tokens,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -118,6 +203,9 @@ type UsageByTaskRow struct {
 	CacheWriteTokens int64
 }
 
+// "task" só é preenchido pelas chamadas de /claude/generate (email, raw = bot do
+// WhatsApp, diagram, ...); sessões interativas (source='session') ficam de fora
+// (task=”) — é o que permite separar quanto o bot pesa vs. o resto no painel.
 func (q *Queries) UsageByTask(ctx context.Context, createdAt pgtype.Timestamptz) ([]UsageByTaskRow, error) {
 	rows, err := q.db.Query(ctx, usageByTask, createdAt)
 	if err != nil {
@@ -127,7 +215,15 @@ func (q *Queries) UsageByTask(ctx context.Context, createdAt pgtype.Timestamptz)
 	var items []UsageByTaskRow
 	for rows.Next() {
 		var i UsageByTaskRow
-		if err := rows.Scan(&i.Task, &i.CostUsd, &i.Calls, &i.InputTokens, &i.OutputTokens, &i.CacheReadTokens, &i.CacheWriteTokens); err != nil {
+		if err := rows.Scan(
+			&i.Task,
+			&i.CostUsd,
+			&i.Calls,
+			&i.InputTokens,
+			&i.OutputTokens,
+			&i.CacheReadTokens,
+			&i.CacheWriteTokens,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -166,7 +262,12 @@ func (q *Queries) UsageDaily(ctx context.Context, createdAt pgtype.Timestamptz) 
 	var items []UsageDailyRow
 	for rows.Next() {
 		var i UsageDailyRow
-		if err := rows.Scan(&i.Day, &i.CostUsd, &i.Calls, &i.Tokens); err != nil {
+		if err := rows.Scan(
+			&i.Day,
+			&i.CostUsd,
+			&i.Calls,
+			&i.Tokens,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -177,6 +278,18 @@ func (q *Queries) UsageDaily(ctx context.Context, createdAt pgtype.Timestamptz) 
 	return items, nil
 }
 
+const usageSince = `-- name: UsageSince :one
+SELECT MIN(created_at)::timestamptz AS first_at FROM claude_usage_events
+`
+
+// Data do primeiro registro — é o "desde quando" do acumulado no painel.
+func (q *Queries) UsageSince(ctx context.Context) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, usageSince)
+	var first_at pgtype.Timestamptz
+	err := row.Scan(&first_at)
+	return first_at, err
+}
+
 const usageSummary = `-- name: UsageSummary :one
 SELECT
   COALESCE(SUM(total_cost_usd), 0)::float8 AS total_cost_usd,
@@ -184,7 +297,8 @@ SELECT
   COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
   COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
   COALESCE(SUM(cache_read_tokens), 0)::bigint AS cache_read_tokens,
-  COALESCE(SUM(cache_write_tokens), 0)::bigint AS cache_write_tokens
+  COALESCE(SUM(cache_write_tokens), 0)::bigint AS cache_write_tokens,
+  COALESCE(SUM(total_cost_usd) FILTER (WHERE billing = 'api_key'), 0)::float8 AS api_cost_usd
 FROM claude_usage_events
 WHERE created_at >= $1
 `
@@ -196,11 +310,20 @@ type UsageSummaryRow struct {
 	OutputTokens     int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
+	ApiCostUsd       float64
 }
 
 func (q *Queries) UsageSummary(ctx context.Context, createdAt pgtype.Timestamptz) (UsageSummaryRow, error) {
 	row := q.db.QueryRow(ctx, usageSummary, createdAt)
 	var i UsageSummaryRow
-	err := row.Scan(&i.TotalCostUsd, &i.Calls, &i.InputTokens, &i.OutputTokens, &i.CacheReadTokens, &i.CacheWriteTokens)
+	err := row.Scan(
+		&i.TotalCostUsd,
+		&i.Calls,
+		&i.InputTokens,
+		&i.OutputTokens,
+		&i.CacheReadTokens,
+		&i.CacheWriteTokens,
+		&i.ApiCostUsd,
+	)
 	return i, err
 }
