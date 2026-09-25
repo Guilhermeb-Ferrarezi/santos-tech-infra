@@ -84,9 +84,15 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString(context.Qualificacao.BlocoDoDossie())
 	sb.WriteString(context.Qualificacao.BlocoDasRegras())
 
+	// ── Turma ou curso particular ─────────────────────────────────────────────
+	//
+	// Depois da qualificação (a idade vem dela) e antes do agendamento: primeiro
+	// se sabe quem é, depois qual formato serve, só então se marca horário.
+	sb.WriteString(context.Qualificacao.BlocoDaModalidade())
+
 	// ── Agendamento de aulas ──────────────────────────────────────────────────
 	sb.WriteString("# Agendamento de aulas\n")
-	sb.WriteString("Você pode ajudar o cliente a agendar uma AULA EXPERIMENTAL (gratuita) ou uma AULA INDIVIDUAL de adulto.\n")
+	sb.WriteString("Você pode ajudar o cliente a agendar uma AULA EXPERIMENTAL (gratuita) ou uma aula do CURSO PARTICULAR (qualquer idade).\n")
 	fmt.Fprintf(&sb, "Horário de funcionamento: todos os dias das %s às %s.\n",
 		horaLegivel(cfg.EscolaAbre, "8h"), horaLegivel(cfg.EscolaFecha, "22h"))
 	dur := cfg.AulaDuracaoMin
