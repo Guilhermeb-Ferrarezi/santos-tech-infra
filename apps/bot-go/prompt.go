@@ -88,7 +88,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	//
 	// Depois da qualificação (a idade vem dela) e antes do agendamento: primeiro
 	// se sabe quem é, depois qual formato serve, só então se marca horário.
-	sb.WriteString(context.Qualificacao.BlocoDaModalidade())
+	sb.WriteString(context.Qualificacao.BlocoDaModalidadeCom(cfg.RegrasVenda))
 
 	// ── Agendamento de aulas ──────────────────────────────────────────────────
 	sb.WriteString("# Agendamento de aulas\n")

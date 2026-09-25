@@ -71,6 +71,9 @@ type EngineDeps struct {
 	LogRepo *ProcessingLogRepo
 	// Sleep é injetável para testes (padrão: time.Sleep).
 	Sleep func(time.Duration)
+	// RegrasVenda — regras de venda editáveis na tela (pode ser nil: vale o
+	// padrão do código).
+	RegrasVenda *RegrasVendaFonte
 	// TenantCfgRepo permite ao engine persistir entradas de KB (opcional).
 	TenantCfgRepo *TenantConfigRepo
 	// Pending — fila de dúvidas de clientes aguardando o admin (ciclo admin→cliente).
@@ -216,6 +219,9 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		cfg.EscolaFecha = e.deps.EscolaFecha
 		cfg.AulaDuracaoMin = e.deps.AulaDuracaoMin
 		cfg.AgendaAutoConfirm = e.deps.AgendaAutoConfirm
+		// Regras de venda da tela (0044). Nunca falha: sem banco, vale a
+		// última lida ou o padrão do código.
+		cfg.RegrasVenda = e.deps.RegrasVenda.Regras(ctx, inbound.TenantID)
 
 		// b) Resolve contact + channel identity
 		contact, chIdentity, err := e.deps.Contacts.FindByChannelIdentity(ctx, tx, inbound.Channel, inbound.ExternalID)

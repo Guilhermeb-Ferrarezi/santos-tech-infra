@@ -152,6 +152,10 @@ type TenantConfig struct {
 	FollowupModo                string
 	FollowupDiasPosExperimental int
 	FollowupResponsavelID       int
+	// RegrasVenda — as regras de venda da tela "Como o bot vende" (0044),
+	// como estão salvas; vazio = padrão. Setado pelo engine (RegrasVendaFonte),
+	// não vem da linha de tenant_config.
+	RegrasVenda RegrasVenda
 	// EvolutionBotReplyEnabled — no número não-oficial é este toggle que diz se
 	// o bot responde (o engine do Evolution ignora a flag da conversa).
 	EvolutionBotReplyEnabled bool
