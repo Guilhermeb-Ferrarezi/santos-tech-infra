@@ -111,6 +111,36 @@ func TestMarcadorComOrigemInvalidaEIgnorado(t *testing.T) {
 	}
 }
 
+// O painel é a porta por onde a configuração errada entra. Origem inválida
+// gravada aqui contamina todo relatório que vier depois — e não dá para limpar
+// retroativamente, porque ninguém sabe o que a pessoa quis dizer.
+func TestLimpaMarcadoresDescartaConfiguracaoErrada(t *testing.T) {
+	saida := LimpaMarcadores([]MarcadorOrigem{
+		{Marcador: "  vim pelo site  ", Origem: " SITE "}, // passa, normalizado
+		{Marcador: "vim pelo tiktok", Origem: "tiktok"},   // origem inexistente
+		{Marcador: "   ", Origem: "google"},               // marcador vazio casaria com tudo
+		{Marcador: "li no blog", Origem: ""},              // sem origem
+		{Marcador: "vim pelo Google", Origem: "google"},   // passa
+	})
+	if len(saida) != 2 {
+		t.Fatalf("esperava 2 marcadores válidos, veio %d: %+v", len(saida), saida)
+	}
+	if saida[0].Marcador != "vim pelo site" || saida[0].Origem != "site" {
+		t.Errorf("não normalizou espaço e caixa: %+v", saida[0])
+	}
+}
+
+// Lista vazia tem que voltar array, nunca nil: o painel edita uma lista, e nil
+// vira `null` no JSON, que quebra o .map na primeira renderização.
+func TestLimpaMarcadoresNuncaDevolveNil(t *testing.T) {
+	if s := LimpaMarcadores(nil); s == nil {
+		t.Error("devolveu nil; o painel recebe null e quebra")
+	}
+	if s := LimpaMarcadores([]MarcadorOrigem{{Marcador: "x", Origem: "invalida"}}); s == nil || len(s) != 0 {
+		t.Errorf("esperava array vazio, veio %v", s)
+	}
+}
+
 func TestOrigemLegivelNaoInventaDesconhecida(t *testing.T) {
 	if s := OrigemLegivel(""); s != "" {
 		t.Errorf("origem vazia virou %q; não saber e ter respondido não são a mesma coisa", s)
