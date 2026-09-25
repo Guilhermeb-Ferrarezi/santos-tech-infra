@@ -126,6 +126,26 @@ type MarcadorOrigem struct {
 	Origem   string `json:"origem"`   // chave de origensValidas
 }
 
+// LimpaMarcadores prepara a lista que veio do painel para ir ao banco.
+//
+// Descarta em vez de gravar, de propósito: marcador apontando para uma origem
+// fora do vocabulário é configuração errada, e origem inválida no banco
+// contamina todo relatório que vier depois — sem jeito de limpar
+// retroativamente. Marcador sem texto também sai: ele casaria com tudo, e a
+// primeira mensagem de qualquer pessoa passaria a ter origem.
+func LimpaMarcadores(entrada []MarcadorOrigem) []MarcadorOrigem {
+	limpos := []MarcadorOrigem{}
+	for _, m := range entrada {
+		m.Marcador = strings.TrimSpace(m.Marcador)
+		m.Origem = strings.ToLower(strings.TrimSpace(m.Origem))
+		if m.Marcador == "" || !OrigemValida(m.Origem) {
+			continue
+		}
+		limpos = append(limpos, m)
+	}
+	return limpos
+}
+
 // origemPorMarcador procura, no texto da PRIMEIRA mensagem, um dos marcadores
 // configurados pela escola.
 //
