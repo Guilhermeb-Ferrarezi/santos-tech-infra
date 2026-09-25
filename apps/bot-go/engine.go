@@ -595,6 +595,25 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 		// o) Handoff
 		if output.Handoff {
 			newState = StateHandoff
+
+			// Passar para um humano significa SAIR DA FRENTE.
+			//
+			// Antes, o bot avisava os admins e continuava respondendo por cima:
+			// a coordenação entrava na conversa e o bot seguia falando junto,
+			// às vezes contradizendo quem tinha assumido. Handoff que não cala
+			// o bot não é handoff, é aviso.
+			//
+			// O bot volta quando alguém religar pelo painel — é decisão de
+			// pessoa, não de tempo, porque só ela sabe se o assunto terminou.
+			if e.deps.Convs != nil {
+				if err := e.deps.Convs.SetBotEnabled(ctx, tx, inbound.TenantID, conv.ID, false); err != nil {
+					// Não derruba a transação: perder o silêncio é ruim, perder
+					// o aviso aos admins seria pior.
+					log.Error("handoff: não consegui silenciar o bot", "err", err, "conversa", conv.ID)
+				} else {
+					log.Info("handoff: bot silenciado, humano assume", "conversa", conv.ID)
+				}
+			}
 			handoffEvent := DomainEvent{
 				TenantID:    inbound.TenantID,
 				AggregateID: conv.ID,
