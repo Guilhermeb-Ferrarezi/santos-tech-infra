@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -54,6 +53,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_bytes BIGINT NOT NULL DEFAULT 5
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_method TEXT NOT NULL DEFAULT 'totp';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS login_disabled BOOLEAN NOT NULL DEFAULT false;
+-- Permissões individuais (somam com as do cargo). Mesmo formato de custom_roles.permissions.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '{}';
 CREATE TABLE IF NOT EXISTS recovery_codes (
   id         BIGSERIAL PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1152,7 +1153,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 // uuid colunas vêm com ::text pra escanear direto em string.
-const userCols = `id, email, username, name, password_hash, avatar_url, role, custom_role_id::text, mfa_enabled, totp_secret, suspended_at, created_at, preferences, quota_bytes, email_verified_at, mfa_method, login_disabled`
+const userCols = `id, email, username, name, password_hash, avatar_url, role, custom_role_id::text, mfa_enabled, totp_secret, suspended_at, created_at, preferences, quota_bytes, email_verified_at, mfa_method, login_disabled, permissions`
 
 // userCols com prefixo "u." pra queries com JOIN em sessions.
 var userCols2 = "u." + strings.ReplaceAll(userCols, ", ", ", u.")
@@ -1160,7 +1161,7 @@ var userCols2 = "u." + strings.ReplaceAll(userCols, ", ", ", u.")
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Name, &u.PasswordHash, &u.AvatarURL,
-		&u.Role, &u.CustomRoleID, &u.MFAEnabled, &u.TOTPSecret, &u.SuspendedAt, &u.CreatedAt, &u.Preferences, &u.QuotaBytes, &u.EmailVerifiedAt, &u.MFAMethod, &u.LoginDisabled)
+		&u.Role, &u.CustomRoleID, &u.MFAEnabled, &u.TOTPSecret, &u.SuspendedAt, &u.CreatedAt, &u.Preferences, &u.QuotaBytes, &u.EmailVerifiedAt, &u.MFAMethod, &u.LoginDisabled, &u.Permissions)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -1471,12 +1472,9 @@ func (s *Server) buildProfile(ctx context.Context, u *User) *UserProfile {
 		v := u.SuspendedAt.UTC().Format(time.RFC3339)
 		p.SuspendedAt = &v
 	}
-	if u.Role == RoleCustom && u.CustomRoleID != nil {
-		if cr, err := s.cachedCustomRole(ctx, *u.CustomRoleID); err != nil {
-			slog.Error("falha ao carregar permissões do cargo customizado", "customRoleID", *u.CustomRoleID, "err", err)
-		} else if cr != nil {
-			p.Permissions = cr.Permissions
-		}
+	if u.Role != RoleAdmin {
+		p.Permissions = s.effectivePerms(ctx, u)
+		p.UserPermissions = u.Permissions
 	}
 	return p
 }

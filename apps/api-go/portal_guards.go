@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -57,10 +58,8 @@ func (s *Server) invalidateCustomRoleCache(ctx context.Context, roleID string) {
 	}
 }
 
-// permGuard libera a rota para admin (sempre), professor (se allowTeacher) e
-// cargos personalizados (role 4) cujo cargo tenha a permissão resource:action.
-// allowTeacher reflete o modelo atual: leitura é admin+professor; escrita é
-// admin-only (professor não escreve) — exceto correção, que professor faz.
+// permGuard libera a rota para admin (sempre), professor (se allowTeacher), ou
+// quem tiver resource:action nas permissões individuais ou do cargo.
 func (s *Server) permGuard(resource, action string, allowTeacher bool, next http.HandlerFunc) http.HandlerFunc {
 	return s.authGuard(func(w http.ResponseWriter, r *http.Request) {
 		u, err := s.cachedUserByID(r.Context(), userIDFrom(r))
@@ -68,36 +67,12 @@ func (s *Server) permGuard(resource, action string, allowTeacher bool, next http
 			writeErr(w, err)
 			return
 		}
-		if u != nil {
-			if u.Role == RoleAdmin {
-				next(w, r)
-				return
-			}
-			if allowTeacher && u.Role == RoleTeacher {
-				next(w, r)
-				return
-			}
-			if u.Role == RoleCustom && u.CustomRoleID != nil && s.customRoleHasPerm(r.Context(), *u.CustomRoleID, resource, action) {
-				next(w, r)
-				return
-			}
+		if hasPerm(u, s.rolePermsOf(r.Context(), u), resource, action, allowTeacher) {
+			next(w, r)
+			return
 		}
 		writeErr(w, appErr(http.StatusForbidden, "FORBIDDEN", "Acesso restrito"))
 	})
-}
-
-// customRoleHasPerm carrega o cargo (via cache Redis) e verifica se resource tem a ação.
-func (s *Server) customRoleHasPerm(ctx context.Context, roleID, resource, action string) bool {
-	cr, err := s.cachedCustomRole(ctx, roleID)
-	if err != nil || cr == nil {
-		return false
-	}
-	for _, a := range cr.Permissions[resource] {
-		if a == action {
-			return true
-		}
-	}
-	return false
 }
 
 // portalRead: leitura de uma área (ex.: "portal_metas") — admin/professor OU
@@ -141,18 +116,10 @@ func (s *Server) portalAnyRead(next http.HandlerFunc) http.HandlerFunc {
 				next(w, r)
 				return
 			}
-			if u.Role == RoleCustom && u.CustomRoleID != nil {
-				if cr, err := s.cachedCustomRole(r.Context(), *u.CustomRoleID); err == nil && cr != nil {
-					for res, acts := range cr.Permissions {
-						if strings.HasPrefix(res, "portal_") {
-							for _, a := range acts {
-								if a == "read" {
-									next(w, r)
-									return
-								}
-							}
-						}
-					}
+			for res, acts := range s.effectivePerms(r.Context(), u) {
+				if strings.HasPrefix(res, "portal_") && slices.Contains(acts, "read") {
+					next(w, r)
+					return
 				}
 			}
 		}

@@ -338,25 +338,16 @@ func (s *Server) writeTokenResponse(w http.ResponseWriter, r *http.Request, u *U
 // canAuthorizeOAuthClient verifica se o usuário tem permissão para autorizar
 // o client OAuth. Regras:
 //   - Admin (role=3) → sempre permitido.
-//   - Custom role (role=4) → permitido se permissions.oauth_clients contém o
+//   - Qualquer outro role → permitido se as permissões efetivas (individuais
+//     somadas às do cargo, quando role=4) tiverem oauth_clients contendo o
 //     clientID ou "*" (wildcard).
-//   - Student / Teacher → negado por padrão.
+//   - Sem essa permissão → negado por padrão.
 func (s *Server) canAuthorizeOAuthClient(ctx context.Context, u *User, clientID string) bool {
 	if u.Role == RoleAdmin {
 		return true
 	}
-	if u.Role != RoleCustom || u.CustomRoleID == nil {
-		return false
-	}
-	// cachedCustomRole (não uma query direta): esta checagem roda em todo
-	// POST /oauth/authorize/confirm de um custom role, e o cargo já tem um
-	// cache dedicado de 2min (cache.go), invalidado em update/delete — reler
-	// direto do Postgres aqui não ganhava consistência nenhuma, só custo.
-	cr, err := s.cachedCustomRole(ctx, *u.CustomRoleID)
-	if err != nil || cr == nil {
-		return false
-	}
-	for _, c := range cr.Permissions["oauth_clients"] {
+	perms := s.effectivePerms(ctx, u)
+	for _, c := range perms["oauth_clients"] {
 		if c == "*" || c == clientID {
 			return true
 		}

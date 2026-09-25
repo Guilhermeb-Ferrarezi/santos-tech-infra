@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
   email_verified_at TIMESTAMPTZ,
   mfa_method       TEXT NOT NULL DEFAULT 'totp',
   login_disabled   BOOLEAN NOT NULL DEFAULT false,
+  permissions      JSONB NOT NULL DEFAULT '{}',
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );

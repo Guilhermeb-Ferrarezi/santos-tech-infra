@@ -27,29 +27,31 @@ type User struct {
 	HasTOTPSecret   bool    `json:"hasTotpSecret"` // derivado de TOTPSecret; sobrevive ao cache Redis
 	SuspendedAt     *time.Time
 	CreatedAt       time.Time
-	Preferences     json.RawMessage // JSONB de preferências de UI (free-form)
-	EmailVerifiedAt *time.Time      // quando o usuário confirmou o próprio email (nil = nunca)
-	MFAMethod       string          // método 2FA preferido: 'totp' (app autenticador) ou 'email'
-	QuotaBytes      int64           // limite de armazenamento da caixa (mailbox), em bytes
-	LoginDisabled   bool            // true = caixa compartilhada institucional, sem login por nenhum caminho
+	Preferences     json.RawMessage     // JSONB de preferências de UI (free-form)
+	EmailVerifiedAt *time.Time          // quando o usuário confirmou o próprio email (nil = nunca)
+	MFAMethod       string              // método 2FA preferido: 'totp' (app autenticador) ou 'email'
+	QuotaBytes      int64               // limite de armazenamento da caixa (mailbox), em bytes
+	LoginDisabled   bool                // true = caixa compartilhada institucional, sem login por nenhum caminho
+	Permissions     map[string][]string // permissões individuais (users.permissions); somam com as do cargo
 }
 
 // UserProfile é o que vai pro cliente (sem dados sensíveis).
 type UserProfile struct {
-	ID            int64               `json:"id"`
-	Email         string              `json:"email"`
-	Username      *string             `json:"username"`
-	Name          string              `json:"name"`
-	Role          int16               `json:"role"`
-	CustomRoleID  *string             `json:"customRoleId"`
-	AvatarURL     *string             `json:"avatarUrl"`
-	MFAEnabled    bool                `json:"mfaEnabled"`
-	EmailVerified bool                `json:"emailVerified"`
-	MFAMethod     string              `json:"mfaMethod"`
-	MFATotp       bool                `json:"mfaTotp"`  // autenticador configurado (totp_secret presente)
-	MFAEmail      bool                `json:"mfaEmail"` // 2FA por email disponível (email verificado)
-	SuspendedAt   *string             `json:"suspendedAt"`
-	Permissions   map[string][]string `json:"permissions"`
-	CreatedAt     string              `json:"createdAt"`
-	Preferences   json.RawMessage     `json:"preferences"`
+	ID              int64               `json:"id"`
+	Email           string              `json:"email"`
+	Username        *string             `json:"username"`
+	Name            string              `json:"name"`
+	Role            int16               `json:"role"`
+	CustomRoleID    *string             `json:"customRoleId"`
+	AvatarURL       *string             `json:"avatarUrl"`
+	MFAEnabled      bool                `json:"mfaEnabled"`
+	EmailVerified   bool                `json:"emailVerified"`
+	MFAMethod       string              `json:"mfaMethod"`
+	MFATotp         bool                `json:"mfaTotp"`  // autenticador configurado (totp_secret presente)
+	MFAEmail        bool                `json:"mfaEmail"` // 2FA por email disponível (email verificado)
+	SuspendedAt     *string             `json:"suspendedAt"`
+	Permissions     map[string][]string `json:"permissions"`
+	UserPermissions map[string][]string `json:"userPermissions"` // só as individuais (tela de edição)
+	CreatedAt       string              `json:"createdAt"`
+	Preferences     json.RawMessage     `json:"preferences"`
 }
