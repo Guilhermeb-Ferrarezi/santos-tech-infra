@@ -192,3 +192,10 @@ Descrição de `device_command_run` avisa que roda como SYSTEM e que o texto fic
 5. SSH por usuário (seção 3).
 6. Front (seção 6).
 7. Bug do shell (seção 7).
+
+## Padrões do repo que se aplicam
+
+- Todo SQL novo em `apps/api-go/db/query/*.sql` via sqlc (padrão 6 do `CLAUDE.md`), nada inline.
+- Rotas novas/alteradas → `docs/openapi.yaml` e `apps/api-go/llms.txt` no mesmo commit.
+- Gate antes de commit: `gofmt -l`, `go vet`, `go build`, `go test` (api-go e mcp-go);
+  `bun run lint` + `bun run build` no dashboard. `/security-review` nas partes de auth.
