@@ -19,14 +19,42 @@ import (
 //   - SITUAÇÕES — fichas que valem em certos casos, escolhidas aqui em Go pelo
 //     dossiê da pessoa.
 
-// BlocoComoVender escreve o bloco "# Como vender" do prompt.
-func BlocoComoVender(regras RegrasVenda) string {
+// BlocoComoVender escreve o bloco "# Como vender" do prompt: os princípios e,
+// quando houver, as fichas já escolhidas para esta conversa
+// (SelecionaSituacoes).
+func BlocoComoVender(regras RegrasVenda, situacoes []Situacao) string {
 	r := regras.Resolvida()
 	var b strings.Builder
 	b.WriteString("# Como vender\n")
 	b.WriteString("Princípios (valem em toda conversa):\n")
 	b.WriteString(r.Textos[PartePrincipios] + "\n\n")
+	if len(situacoes) > 0 {
+		b.WriteString("## Situações que você pode reconhecer\n")
+		b.WriteString("São aprendizados da escola com clientes reais. Se esta conversa se encaixar numa delas, siga o RACIOCÍNIO dela com as suas palavras (não copie o texto). Quando usar uma, coloque o id dela (ex.: \"s1\") em \"situacoesUsadas\".\n")
+		for i, s := range situacoes {
+			b.WriteString(textoDaSituacao(i, s))
+		}
+		b.WriteString("\n")
+	}
 	return b.String()
+}
+
+// uuidsDasSituacoesUsadas traduz os ids curtos que o modelo devolveu para os
+// uuids das fichas que ESTAVAM no prompt. Id inventado, repetido ou fora da
+// lista é descartado: um uso que o modelo infla sozinho não mede nada.
+func uuidsDasSituacoesUsadas(noPrompt []Situacao, curtos []string) []string {
+	visto := map[string]bool{}
+	var out []string
+	for _, c := range curtos {
+		c = strings.ToLower(strings.TrimSpace(c))
+		for i, s := range noPrompt {
+			if c == idCurtoDaSituacao(i) && !visto[s.ID] {
+				visto[s.ID] = true
+				out = append(out, s.ID)
+			}
+		}
+	}
+	return out
 }
 
 // Tetos das fichas no prompt. Cada mensagem paga o tamanho do prompt; com

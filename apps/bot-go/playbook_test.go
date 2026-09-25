@@ -143,3 +143,54 @@ func TestSelecionaSituacoesRespeitaOsTetos(t *testing.T) {
 		t.Errorf("teto de caracteres: %d fichas, %d caracteres (teto %d)", len(got), total, maxCaracteresSituacoes)
 	}
 }
+
+// ── Fichas no prompt e o que o modelo diz que usou ───────────────────────────
+
+func TestFichasEscolhidasEntramNoPromptComIdCurto(t *testing.T) {
+	cfg := TenantConfig{Situacoes: []Situacao{
+		{ID: "uuid-a", Titulo: "Gostou, mas vai espaçar", Sinais: "vou espaçar", Conduzir: "registre o retorno", Estado: "ativa"},
+		{ID: "uuid-b", Titulo: "Mãe preocupada com tela", Conduzir: "pergunte o que ele joga", Estado: "ativa"},
+	}}
+	p := promptDeTeste(cfg, Qualificacao{})
+	for _, esperado := range []string{
+		"## Situações que você pode reconhecer",
+		"### [s1] Gostou, mas vai espaçar",
+		"Quando reconhecer: vou espaçar",
+		"### [s2] Mãe preocupada com tela",
+		"\"situacoesUsadas\"",
+	} {
+		if !strings.Contains(p, esperado) {
+			t.Errorf("prompt sem %q", esperado)
+		}
+	}
+	if strings.Contains(p, "uuid-a") {
+		t.Error("o uuid não vai ao prompt, só o id curto")
+	}
+	if sem := promptDeTeste(TenantConfig{}, Qualificacao{}); strings.Contains(sem, "## Situações que você pode reconhecer") {
+		t.Error("sem ficha ativa, o bloco de situações não aparece")
+	}
+}
+
+// O modelo só pode "ter usado" o que estava no prompt: id inventado, repetido
+// ou fora da lista é descartado. Um número de uso que o modelo infla sozinho
+// não mede nada.
+func TestIdsUsadosSoValemOsQueEstavamNoPrompt(t *testing.T) {
+	escolhidas := []Situacao{{ID: "uuid-a"}, {ID: "uuid-b"}}
+	got := uuidsDasSituacoesUsadas(escolhidas, []string{"s2", "s9", " S1 ", "s2", "uuid-a", ""})
+	if strings.Join(got, ",") != "uuid-b,uuid-a" {
+		t.Errorf("esperado uuid-b,uuid-a — veio %v", got)
+	}
+	if got := uuidsDasSituacoesUsadas(nil, []string{"s1"}); len(got) != 0 {
+		t.Errorf("sem ficha no prompt nada conta; veio %v", got)
+	}
+}
+
+func TestParserLeSituacoesUsadas(t *testing.T) {
+	out, err := ParseModelReply(`{"bubbles":["oi"],"answered":true,"answeredFromKb":false,"situacoesUsadas":["s1"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.SituacoesUsadas) != 1 || out.SituacoesUsadas[0] != "s1" {
+		t.Errorf("situacoesUsadas não lido: %v", out.SituacoesUsadas)
+	}
+}

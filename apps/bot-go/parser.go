@@ -24,6 +24,7 @@ type rawResponderOutput struct {
 	BookingActions    json.RawMessage `json:"bookingActions"`
 	ClienteEmail      string          `json:"clienteEmail"`
 	Qualificacao      json.RawMessage `json:"qualificacao"`
+	SituacoesUsadas   []string        `json:"situacoesUsadas"`
 }
 
 // ParseModelReply extrai e parseia o JSON de resposta do LLM.
@@ -54,15 +55,16 @@ func ParseModelReply(raw string) (ResponderOutput, error) {
 	}
 
 	out := ResponderOutput{
-		Bubbles:        bubbles,
-		Answered:       *r.Answered,
-		AnsweredFromKb: *r.AnsweredFromKb,
-		CitedEntryIDs:  r.CitedEntryIDs,
-		Handoff:        r.Handoff,
-		Smalltalk:      r.Smalltalk,
-		CancelaAula:    r.CancelaAula,
-		ClienteEmail:   strings.TrimSpace(r.ClienteEmail),
-		KBEntry:        r.KBEntry,
+		Bubbles:         bubbles,
+		Answered:        *r.Answered,
+		AnsweredFromKb:  *r.AnsweredFromKb,
+		CitedEntryIDs:   r.CitedEntryIDs,
+		Handoff:         r.Handoff,
+		Smalltalk:       r.Smalltalk,
+		CancelaAula:     r.CancelaAula,
+		ClienteEmail:    strings.TrimSpace(r.ClienteEmail),
+		KBEntry:         r.KBEntry,
+		SituacoesUsadas: r.SituacoesUsadas,
 	}
 
 	// scheduledContact: descarta se malformado, sem falhar

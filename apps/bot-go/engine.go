@@ -77,6 +77,8 @@ type EngineDeps struct {
 	// RegrasVenda — regras de venda editáveis na tela (pode ser nil: vale o
 	// padrão do código).
 	RegrasVenda *RegrasVendaFonte
+	// Playbook — fichas de situação ativas (pode ser nil: só princípios).
+	Playbook *PlaybookFonte
 	// TenantCfgRepo permite ao engine persistir entradas de KB (opcional).
 	TenantCfgRepo *TenantConfigRepo
 	// Pending — fila de dúvidas de clientes aguardando o admin (ciclo admin→cliente).
@@ -359,6 +361,12 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 			}
 		}
 
+		// j2) Playbook: as fichas que servem para ESTA pessoa, escolhidas pelo
+		// dossiê que acabou de ser lido. Nunca em conversa de admin.
+		if !cfg.IsAdminConversation && e.deps.Playbook != nil {
+			cfg.Situacoes = SelecionaSituacoes(convCtx.Qualificacao, e.deps.Playbook.Ativas(ctx, inbound.TenantID))
+		}
+
 		// k) Quiet hours — verifica se deve suspender o processamento
 		if cfg.QuietHoursStart != nil && cfg.QuietHoursEnd != nil {
 			hold := QuietHoursHoldMs(inbound.ReceivedAt, cfg.Timezone, *cfg.QuietHoursStart, *cfg.QuietHoursEnd)
@@ -473,13 +481,21 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 
 	wamid := inbound.ProviderMessageID
 
+	// Fichas do playbook que o modelo diz ter seguido — só as que estavam no
+	// prompt contam. Vão para a medição (uso por ficha) e para o reasoning.
+	situacoesUsadas := uuidsDasSituacoesUsadas(cfg.Situacoes, output.SituacoesUsadas)
+	if len(situacoesUsadas) > 0 {
+		e.deps.Playbook.RegistraUso(ctx, inbound.TenantID, contactID, conv.ID, situacoesUsadas)
+	}
+
 	// Serializa o output do LLM para armazenar como reasoning no primeiro balão.
 	var reasoningJSON *string
 	if rb, err := json.Marshal(map[string]any{
-		"answered":       output.Answered,
-		"answeredFromKb": output.AnsweredFromKb,
-		"citedEntryIds":  output.CitedEntryIDs,
-		"handoff":        output.Handoff,
+		"answered":        output.Answered,
+		"answeredFromKb":  output.AnsweredFromKb,
+		"citedEntryIds":   output.CitedEntryIDs,
+		"handoff":         output.Handoff,
+		"situacoesUsadas": situacoesUsadas,
 	}); err == nil {
 		s := string(rb)
 		reasoningJSON = &s

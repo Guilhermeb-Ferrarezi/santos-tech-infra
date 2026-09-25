@@ -159,6 +159,10 @@ type TenantConfig struct {
 	// como estão salvas; vazio = padrão. Setado pelo engine (RegrasVendaFonte),
 	// não vem da linha de tenant_config.
 	RegrasVenda RegrasVenda
+	// Situacoes — fichas do playbook escolhidas para ESTA conversa pelo
+	// dossiê (SelecionaSituacoes). Setado pelo engine; a ordem define o id
+	// curto ("s1"…) que o modelo vê.
+	Situacoes []Situacao
 	// EvolutionBotReplyEnabled — no número não-oficial é este toggle que diz se
 	// o bot responde (o engine do Evolution ignora a flag da conversa).
 	EvolutionBotReplyEnabled bool
@@ -436,8 +440,11 @@ type ResponderOutput struct {
 	Answered       bool
 	AnsweredFromKb bool
 	CitedEntryIDs  []string
-	Handoff        bool
-	Smalltalk      bool // saudação/agradecimento/conversa fiada — não conta como gap de KB
+	// SituacoesUsadas — ids curtos ("s1"…) das fichas do playbook que o modelo
+	// diz ter seguido. O engine descarta o que não estava no prompt.
+	SituacoesUsadas []string
+	Handoff         bool
+	Smalltalk       bool // saudação/agradecimento/conversa fiada — não conta como gap de KB
 	// CancelaAula — o cliente disse que NÃO vai à aula marcada. Libera o
 	// horário; o bot não decide sozinho, só reconhece o que foi dito.
 	CancelaAula       bool

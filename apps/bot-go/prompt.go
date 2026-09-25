@@ -96,7 +96,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	//
 	// Depois de saber quem é a pessoa e que formato serve, e antes do horário:
 	// é o COMO conduzir. Princípios valem sempre (playbook.go).
-	sb.WriteString(BlocoComoVender(cfg.RegrasVenda))
+	sb.WriteString(BlocoComoVender(cfg.RegrasVenda, cfg.Situacoes))
 
 	// ── Agendamento de aulas ──────────────────────────────────────────────────
 	sb.WriteString("# Agendamento de aulas\n")
@@ -212,7 +212,8 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("  \"qualificacao\": {\"paraQuem\":\"\",\"alunoNome\":\"\",\"alunoIdade\":0,\"interesse\":\"\",\"jaFazCurso\":\"\",\"disponibilidade\":\"\",\"motivacao\":\"\",\"motivacaoTipo\":\"\",\"observacoes\":\"\",\"precoInformado\":false,\"origem\":\"\"},\n")
 	sb.WriteString("  \"schedulingRequest\": {\"kind\":\"experimental\",\"studentName\":\"...\",\"age\":0,\"course\":\"...\",\"proposedDay\":\"quinta\",\"proposedDate\":\"2026-07-30\",\"proposedTime\":\"19h30\",\"proposedPeriod\":\"Noite\",\"clienteConfirmou\":true,\"notes\":\"...\"},\n")
 	sb.WriteString("  \"scheduledContact\": {\"rawPhrase\":\"...\",\"resolvedDate\":\"YYYY-MM-DD\",\"confidence\":0.9},\n")
-	sb.WriteString("  \"quotedReplies\": [{\"bubble\":0,\"ref\":\"m2\"}]\n")
+	sb.WriteString("  \"quotedReplies\": [{\"bubble\":0,\"ref\":\"m2\"}],\n")
+	sb.WriteString("  \"situacoesUsadas\": []\n")
 	sb.WriteString("}\n")
 	sb.WriteString("\n")
 	sb.WriteString("Definição de cada campo:\n")
@@ -231,6 +232,7 @@ func BuildPrompt(cfg TenantConfig, context ConversationContext, inboundText stri
 	sb.WriteString("- \"schedulingRequest\": preencha SOMENTE depois que o cliente ACEITAR um horário concreto. Enquanto você estiver propondo, negociando ou esperando resposta, OMITA o campo inteiro. \"clienteConfirmou\" é obrigatório e só pode ser true quando a última mensagem do cliente aceita aquele horário; se ele só perguntou, pediu outro, ou não respondeu ainda, não mande o campo. kind: \"experimental\" ou \"individual\". Inclua studentName, age (0 se adulto/não informado), course, proposedDay, proposedDate, proposedTime (ex.: \"19h30\"), proposedPeriod (Manhã/Tarde/Noite) e notes. Em \"notes\" escreva um RESUMO do atendimento em 2 a 4 frases, para quem for dar a aula chegar com contexto: o que a pessoa procura, para quem é, o que já sabe ou já tentou, o que a preocupa (preço, horário, distância) e o que foi combinado. Escreva para um colega ler, não para o cliente. CRÍTICO: \"proposedDate\" deve ser a DATA EXATA no formato YYYY-MM-DD que você está propondo — CALCULE a partir da data atual informada acima (ex.: cliente diz \"30 de julho\" → \"2026-07-30\"; \"sábado que vem\" → a data daquele sábado). SEMPRE preencha proposedDate; é ela que define o dia gravado. \"proposedDay\" é só o rótulo humano (\"quinta\"). Omita o campo inteiro se não for agendamento.\n")
 	sb.WriteString("- \"scheduledContact\": preencha SOMENTE se o cliente pediu para ser contatado numa data futura. Campos: rawPhrase (frase exata), resolvedDate (YYYY-MM-DD), confidence (0.0–1.0). Omita o campo inteiro se não aplicável.\n")
 	sb.WriteString("- \"quotedReplies\": array de {bubble: índice-0-based, ref: \"mN\"} quando um balão responde diretamente a uma mensagem anterior. Omita o campo inteiro se não aplicável.\n")
+	sb.WriteString("- \"situacoesUsadas\": ids (ex.: \"s1\") das situações do bloco \"Como vender\" cujo raciocínio você seguiu NESTA resposta. [] se nenhuma. Só ids que estão lá.\n")
 	sb.WriteString("\n")
 	sb.WriteString("Exemplos rápidos:\n")
 	sb.WriteString("  KB tem a info         → answeredFromKb:true,  handoff:false, answered:true\n")
