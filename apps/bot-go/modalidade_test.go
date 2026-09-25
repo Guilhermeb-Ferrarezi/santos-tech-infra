@@ -151,3 +151,21 @@ func TestModalidadeContrasteComTurmaSoQuandoTurmaNaoEOpcao(t *testing.T) {
 		}
 	}
 }
+
+// Henrique, 25/09/2026: a escola já pôs aluno em turma com 3–4 meses de aula,
+// com reposição. Quando o bot indicar turma em andamento, a fala deixa claro
+// que a turma é recente e que a reposição basta para acompanhar. E turma nova
+// o bot não abre sozinho: sugere e leva para um humano decidir.
+func TestModalidadeTurmaEmAndamentoEAbrirTurma(t *testing.T) {
+	b := Qualificacao{AlunoIdade: 12}.BlocoDaModalidade()
+	for _, esperado := range []string{
+		"turma já em andamento",
+		"a turma é recente",
+		"reposição de aulas",
+		"NÃO prometa abrir turma",
+	} {
+		if !strings.Contains(b, esperado) {
+			t.Errorf("bloco sem %q:\n%s", esperado, b)
+		}
+	}
+}

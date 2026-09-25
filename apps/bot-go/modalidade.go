@@ -57,7 +57,13 @@ func (q Qualificacao) BlocoDaModalidade() string {
 	fmt.Fprintf(&b, "2. %d anos ou mais: curso particular.\n", idadeAdultoParticular)
 	fmt.Fprintf(&b, "3. %d–16 anos: cabe em turma, mas é o fim da faixa. Entenda o objetivo antes de indicar.\n", idadeFimDaFaixaTurma)
 	fmt.Fprintf(&b, "4. Até %d anos: descubra o interesse com precisão (se vier amplo, como \"programação\", pergunte a direção: jogos, sites, apps...). Confira na Base de Conhecimento se esse conteúdo está dentro de um programa que atende a idade. Está? Indique a TURMA. Não está em programa nenhum? Indique o PARTICULAR.\n", idadeFimDaFaixaTurma-1)
-	b.WriteString("5. Mesmo cabendo em turma: se a disponibilidade da pessoa não bate com nenhuma turma existente, o PARTICULAR resolve (início imediato, sob medida). Só afirme que não há turma no horário se a Base de Conhecimento listar os horários das turmas; se não listar, NÃO invente — siga para a aula experimental e a equipe encaixa.\n\n")
+	b.WriteString("5. Mesmo cabendo em turma: se a disponibilidade da pessoa não bate com nenhuma turma existente, o PARTICULAR resolve (início imediato, sob medida). Só afirme que não há turma no horário se a Base de Conhecimento listar os horários das turmas; se não listar, NÃO invente — siga para a aula experimental e a equipe encaixa.\n")
+	// Turma em andamento e turma nova (Henrique, 25/09/2026). A escola já pôs
+	// aluno em turma com 3–4 meses de aula, com reposição — o corte oficial
+	// ainda não está definido. Abrir turma é decisão humana: o bot enxerga a
+	// oportunidade, mas não promete.
+	b.WriteString("6. Se indicar uma turma já em andamento: deixe claro que a turma é recente, que teve poucos meses de aula, e que a reposição de aulas é suficiente para o aluno acompanhar o ponto em que a turma está.\n")
+	b.WriteString("7. Se nenhuma turma serve mas o horário da pessoa parece livre na escola: NÃO prometa abrir turma. Diga que vai levar a possibilidade de abrir uma turma nesse horário para a equipe avaliar, e ofereça o particular ou a experimental enquanto isso.\n\n")
 
 	// Ancoragem (Henrique, 25/09/2026, da experiência de quem mais atendeu):
 	// muita gente carrega, sem perceber, a imagem de que aprender é numa sala
