@@ -17,6 +17,8 @@ type AgentGoClient struct {
 	http    *http.Client
 	sitemap *SitemapCache
 	notion  *NotionClient
+	// turmas — turmas ao vivo da plataforma (nil = sem PLATFORM_API_TOKEN).
+	turmas *TurmasFonte
 
 	// modelo — qual Claude atende o cliente.
 	//
@@ -71,6 +73,10 @@ func (c *AgentGoClient) Respond(ctx context.Context, conv Conversation, convCtx 
 	// Agenda de aulas (Notion) para o bot propor horários de agendamento.
 	if c.notion != nil && !cfg.IsAdminConversation {
 		cfg.Schedule, cfg.EstadoAgenda = c.notion.Schedule(ctx)
+	}
+	// Turmas da plataforma (ou o retrato, se a consulta falhar).
+	if c.turmas != nil && !cfg.IsAdminConversation {
+		cfg.Turmas = c.turmas.Estado(ctx, cfg.TenantID, horaOuPadrao(cfg.EscolaAbre, "08:00"), horaOuPadrao(cfg.EscolaFecha, "22:00"))
 	}
 	prompt := BuildPrompt(cfg, convCtx, inboundText, time.Now())
 
@@ -134,4 +140,19 @@ func (c *AgentGoClient) callAPI(ctx context.Context, body agentGoRequest) (agent
 	}
 
 	return result, nil
+}
+
+// ComTurmas liga a consulta de turmas ao vivo ao cliente. nil desliga.
+func (c *AgentGoClient) ComTurmas(f *TurmasFonte) *AgentGoClient {
+	c.turmas = f
+	return c
+}
+
+// horaOuPadrao: o funcionamento vem do ambiente; vazio vira o padrão, porque a
+// consulta de horários livres recusa parâmetro vazio.
+func horaOuPadrao(h, padrao string) string {
+	if h == "" {
+		return padrao
+	}
+	return h
 }

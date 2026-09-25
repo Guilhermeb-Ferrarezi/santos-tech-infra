@@ -135,6 +135,9 @@ type TenantConfig struct {
 	// EstadoAgenda — se dá para confiar em Schedule. Agenda vazia e Notion fora
 	// do ar são a mesma lista; sem isto o prompt não distingue.
 	EstadoAgenda EstadoAgenda
+	// Turmas — o que o bot pode afirmar sobre as turmas (consulta ao vivo ou
+	// retrato; ver turmas.go). Valor zero = sem dados = comportamento de antes.
+	Turmas EstadoTurmas
 	// Funcionamento e duração da aula experimental, para o prompt e para a
 	// validação em Go. Ficavam chumbados numa string do prompt.
 	EscolaAbre     string // "08:00"
