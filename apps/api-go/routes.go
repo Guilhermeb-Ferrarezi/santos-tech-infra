@@ -467,6 +467,10 @@ func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /hour-lab-devices/{id}/restart", s.rateLimit(30, min, s.adminGuard(s.handleRestartLabDevice)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/shutdown", s.rateLimit(30, min, s.adminGuard(s.handleShutdownLabDevice)))
 	mux.HandleFunc("POST /hour-lab-devices/{id}/command", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceCommand)))
+	// Histórico/resultado da fila (Task 7 troca adminGuard por permGuard, junto
+	// com o resto das rotas de dispositivo).
+	mux.HandleFunc("GET /hour-lab-devices/{id}/commands", s.adminGuard(s.handleListLabDeviceCommands))
+	mux.HandleFunc("GET /hour-lab-devices/{id}/commands/{cmdId}", s.adminGuard(s.handleGetLabDeviceCommand))
 	mux.HandleFunc("GET /hour-lab-devices/{id}/programs", s.adminGuard(s.handleGetLabDevicePrograms))
 	// Shell interativo: bem mais sensível que os "dispara e esquece" acima —
 	// admin sozinho não basta, exige sudo (re-confirmação de identidade

@@ -765,27 +765,6 @@ func (s *Server) requestLabDeviceShutdown(ctx context.Context, id string) error 
 	return nil
 }
 
-// sendLabDeviceCommand grava um comando PowerShell livre pro PC rodar no
-// próximo heartbeat. command_id novo a cada envio (mesma ideia do message_id)
-// é o que permite mandar o MESMO texto de novo e o app reconhecer como um
-// pedido novo. Zera o resultado anterior: um resultado velho ao lado de um
-// comando novo confundiria mais do que ajudaria.
-func (s *Server) sendLabDeviceCommand(ctx context.Context, id, text string) error {
-	tag, err := s.db.Exec(ctx, `
-		UPDATE hour_lab_devices
-		SET command_id = gen_random_uuid(), command_text = $2, command_sent_at = now(),
-			command_result = NULL, command_result_at = NULL
-		WHERE id = $1::uuid`,
-		id, text)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return errLabDeviceNotFound
-	}
-	return nil
-}
-
 // storeLabDeviceCommandResult grava o resultado que o PC reportou. Autentica
 // pelo segredo do dispositivo (rota pública, mesmo padrão do heartbeat) e só
 // aceita quando commandID bate com o comando pendente atual — um resultado

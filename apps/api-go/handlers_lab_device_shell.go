@@ -255,6 +255,12 @@ func (s *Server) handleLabDeviceShellWS(w http.ResponseWriter, r *http.Request) 
 		adminConn.Close(websocket.StatusInternalError, "falha ao iniciar sessão no agente")
 		return
 	}
+	// Sessão realmente começou (agente confirmou o start) — auditoria a
+	// partir daqui. shell_close vai num defer com um ctx que sobrevive ao
+	// cancelamento de r.Context() (a conexão já caiu quando ele roda).
+	s.auditLabDevice(r, id, "shell_open", "")
+	r2 := r.WithContext(context.WithoutCancel(r.Context()))
+	defer s.auditLabDevice(r2, id, "shell_close", "")
 	defer func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = wsjson.Write(stopCtx, agent.conn, shellControl{Type: "stop"})

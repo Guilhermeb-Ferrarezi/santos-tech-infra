@@ -185,11 +185,10 @@ func (s *Server) handleLabDeviceHeartbeat(w http.ResponseWriter, r *http.Request
 	if res.ShutdownRequested {
 		resp["shutdownRequested"] = true
 	}
-	if res.CommandID != nil {
-		// Igual ao message: sempre volta (não só na entrega), e o app
-		// deduplica localmente pelo id — o resultado (POST
-		// /public/lab-devices/command-result) chega bem depois de rodar.
-		resp["command"] = map[string]any{"id": *res.CommandID, "text": *res.CommandText}
+	// Comando sai da FILA (hour_lab_device_commands), não mais da coluna
+	// command_* — que ficou só como espelho pro dashboard atual.
+	if cmd := s.nextLabCommandForHeartbeat(r.Context(), in.DeviceID, in.AppVersion); cmd != nil {
+		resp["command"] = map[string]any{"id": cmd.ID, "text": cmd.Text}
 	}
 	if res.DeviceSecret != nil {
 		// Única vez que o segredo trafega — o app PRECISA persistir agora.
@@ -250,9 +249,17 @@ func (s *Server) handleLabDeviceCommandResult(w http.ResponseWriter, r *http.Req
 	if len(in.Result) > maxCommandResultLength {
 		in.Result = in.Result[:maxCommandResultLength]
 	}
+	// Espelho legado primeiro: autentica o PC (segredo do dispositivo) e grava
+	// a coluna command_* que o dashboard atual ainda lê.
 	if err := s.storeLabDeviceCommandResult(r.Context(), in.DeviceID, in.DeviceSecret, in.CommandID, in.Result); err != nil {
 		writeErr(w, err)
 		return
+	}
+	if s.labCmds != nil {
+		if _, err := s.labCmds.StoreResult(r.Context(), in.DeviceID, in.CommandID, in.Result); err != nil {
+			writeErr(w, err)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -416,6 +423,7 @@ func (s *Server) handleSendLabDeviceMessage(w http.ResponseWriter, r *http.Reque
 		writeErr(w, err)
 		return
 	}
+	s.auditLabDevice(r, id, "message", in.Text)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -430,6 +438,7 @@ func (s *Server) handleLockLabDevice(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	s.auditLabDevice(r, id, "lock", "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -444,6 +453,7 @@ func (s *Server) handleRestartLabDevice(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
+	s.auditLabDevice(r, id, "restart", "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -458,13 +468,15 @@ func (s *Server) handleShutdownLabDevice(w http.ResponseWriter, r *http.Request)
 		writeErr(w, err)
 		return
 	}
+	s.auditLabDevice(r, id, "shutdown", "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // POST /hour-lab-devices/{id}/command — {text} — comando PowerShell livre,
-// rodado pelo watchdog (contexto SYSTEM) no próximo heartbeat. O resultado
-// chega depois, em POST /public/lab-devices/command-result — ver GET
-// /hour-lab-devices pra ler commandResult/commandResultAt.
+// enfileirado (hour_lab_device_commands) e entregue só pro watchdog (contexto
+// SYSTEM) no próximo heartbeat. O resultado chega depois, em POST
+// /public/lab-devices/command-result — ver GET
+// /hour-lab-devices/{id}/commands/{cmdId} pra ler o resultado.
 func (s *Server) handleSendLabDeviceCommand(w http.ResponseWriter, r *http.Request) {
 	id, err := hourUUIDFrom(r, "id", errLabDeviceNotFound)
 	if err != nil {
@@ -484,11 +496,12 @@ func (s *Server) handleSendLabDeviceCommand(w http.ResponseWriter, r *http.Reque
 		writeErr(w, appErr(http.StatusBadRequest, "BAD_REQUEST", "Comando obrigatório (até 4000 caracteres)"))
 		return
 	}
-	if err := s.sendLabDeviceCommand(r.Context(), id, in.Text); err != nil {
+	cmdID, err := s.labCmds.Enqueue(r.Context(), id, userIDFrom(r), requestTokenSource(r, s.cfg.JWTSecret), in.Text)
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusCreated, map[string]any{"commandId": cmdID})
 }
 
 // Tetos dos campos de texto que o heartbeat traz pra exibição.
