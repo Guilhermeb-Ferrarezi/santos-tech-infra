@@ -76,6 +76,33 @@ docs/
   openapi.yaml            ← contrato OpenAPI 3.1 da Auth API (fonte de verdade dos endpoints)
 ```
 
+## ⚠️ WhatsApp do bot (`apps/bot-go`) — qual canal está em uso (verificado em 25/09/2026)
+
+Leia antes de mexer em envio de mensagem, aviso a admin ou "número do bot". Já houve
+confusão sobre isso.
+
+- ✅ **O canal em uso é a API oficial da Meta (Cloud API)**, número do bot
+  **+55 16 99144-5664**. Todos os clientes chegam por ele: 102 eventos em 30 dias, contra
+  0 no Evolution. Os avisos aos admins também saem por ele. **Decisão do Henrique
+  (25/09): continuar na Meta.** Não migrar para o Evolution sem ele pedir.
+- ⚠️ **Janela de 24h da Meta:** texto livre só vai para quem mandou mensagem ao número
+  nas últimas 24h, **inclusive os admins**. Fora disso, só com modelo aprovado. O aviso
+  por WhatsApp ao Henrique pode não chegar se ele não escreveu ao bot no dia; sino,
+  e-mail e Tarefa não dependem disso. Resolver essa entrega foi **adiado pelo Henrique**
+  (25/09). Não implementar por conta.
+- 💤 **Evolution (canal não-oficial) está inativo.** No código, `channel = 'evolution'`.
+  - A instância **"guilherme"** é o **número pessoal do Guilherme** (16 99612-9511), usado
+    nos testes do começo do bot. Está desconectada desde 29/06/2026.
+    **Não apagar:** decisão do Henrique, mesmo guardando o WhatsApp pessoal dele.
+  - A instância **"Santos Tech"** nunca foi pareada.
+  - `EVOLUTION_INSTANCE=Guilherme` no Coolify (G maiúsculo) não bate com nenhuma
+    instância. Todo envio pelo Evolution dá 404, e isso é **esperado** enquanto ele
+    estiver inativo.
+  - Nada depende do Evolution hoje: o bot no Evolution está desligado, o aviso de deploy
+    está desligado e só há 10 leads antigos com essa origem.
+- **Para testar aviso de retorno ou de admin, use o canal `whatsapp`** (oficial). Um teste
+  com canal `evolution` falha no WhatsApp e parece bug, mas não é.
+
 ## ⚠️ Monorepo na Coolify — `watch_paths` ao adicionar um app novo
 
 Este repo é um **monorepo**: vários apps da Coolify apontam para ele. Sem `watch_paths`,
