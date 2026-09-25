@@ -54,7 +54,9 @@ type WorkerDeps struct {
 	Contacts  *ContactRepo
 	AgentGo   *AgentGoClient
 	TenantCfg *TenantConfigRepo
-	Sender    ChatSender
+	// Messages — grava no histórico a mensagem de reativação (reativacao.go).
+	Messages *MessageRepo
+	Sender   ChatSender
 	// EvolutionSender — sender do canal não-oficial (Evolution). Usado para notificar
 	// o admin pelo MESMO canal de origem do cliente (quando payload.channel='evolution'),
 	// para que a resposta do admin volte e seja roteada pelo canal certo.
@@ -98,6 +100,9 @@ func NewWorker(deps WorkerDeps) *Worker {
 		}
 		if deps.TenantCfg == nil {
 			deps.TenantCfg = NewTenantConfigRepo(deps.Pool)
+		}
+		if deps.Messages == nil {
+			deps.Messages = NewMessageRepo(deps.Pool)
 		}
 	}
 

@@ -146,6 +146,15 @@ type TenantConfig struct {
 	// a escola publica o link. Ver origem.go. Vazio = ninguém configurou ainda,
 	// e a origem passa a depender de anúncio ou de perguntar.
 	OrigemMarcadores []MarcadorOrigem
+
+	// Follow-up e reativação (0042) — escolhidos em WhatsApp · Configurações.
+	// Ver reativacao_modos.go. FollowupResponsavelID 0 = o do ambiente.
+	FollowupModo                string
+	FollowupDiasPosExperimental int
+	FollowupResponsavelID       int
+	// EvolutionBotReplyEnabled — no número não-oficial é este toggle que diz se
+	// o bot responde (o engine do Evolution ignora a flag da conversa).
+	EvolutionBotReplyEnabled bool
 }
 
 // ScheduleEntry — uma aula experimental já agendada, lida do data source
