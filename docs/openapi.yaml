@@ -1701,8 +1701,9 @@ paths:
       summary: Atualizar usuário
       description: |
         Atualiza campos do usuário (todos opcionais — só os enviados são alterados).
-        Um admin não pode suspender a própria conta (`SELF_ACTION`) nem alterar
-        o próprio papel (`role`, mesmo código).
+        Um admin não pode suspender a própria conta (`SELF_ACTION`) nem mudar o
+        próprio `role` para um valor diferente de Admin (evita se rebaixar e,
+        se for o único admin, travar o sistema sem ninguém com acesso admin).
 
         Com o campo `password` preenchido (mín. 8 chars, máx. 128), redefine a
         senha do usuário imediatamente (hash argon2id) e marca a conta como ativa
@@ -6286,6 +6287,12 @@ paths:
           description: Hash desconhecido ou fora do formato (ICON_NOT_FOUND).
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:ver.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-devices/{id}/programs:
     get:
@@ -6335,6 +6342,12 @@ paths:
           description: Dispositivo não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:ver.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-devices/{id}/screenshot:
     post:
@@ -6360,6 +6373,12 @@ paths:
           description: R2 não configurado no servidor (SCREENSHOT_STORAGE_UNSET).
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:controlar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-devices/{id}/screenshots:
     get:
@@ -6397,6 +6416,12 @@ paths:
                         url: { type: string, description: "URL assinada (10min)." }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:ver.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-devices/{id}/screenshots/{shotId}:
     delete:
@@ -6422,6 +6447,12 @@ paths:
           description: Captura não encontrada (SCREENSHOT_NOT_FOUND).
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:controlar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /public/lab-devices/screenshot:
     post:
@@ -6572,6 +6603,12 @@ paths:
                     items: { $ref: "#/components/schemas/ExpectedProgram" }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:gerenciar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
     post:
       tags: [Horas]
       summary: Cadastra um programa esperado
@@ -6603,6 +6640,12 @@ paths:
           description: Nome vazio/longo demais, ou padrão com curinga.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:gerenciar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /hour-lab-expected-programs/{id}:
     patch:
@@ -6639,6 +6682,12 @@ paths:
           description: Programa não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:gerenciar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
     delete:
       tags: [Horas]
       summary: Remove um programa esperado
@@ -6657,6 +6706,12 @@ paths:
           description: Programa não encontrado.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Sem a permissão dispositivos:gerenciar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: FORBIDDEN, message: "Acesso restrito" }
 
   /auth/admin/drive-folders/browse:
     get:

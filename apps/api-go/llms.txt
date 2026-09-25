@@ -535,8 +535,10 @@ Nomes batem em `^[a-z_]{1,40}$`, no máximo 60 recursos × 10 ações.
   resultado" no histórico. 404 `LAB_DEVICE_NOT_FOUND` se o dispositivo não
   existir. O resultado chega depois via
   `POST /public/lab-devices/command-result` — leia com
-  `GET /hour-lab-devices/{id}/commands/{cmdId}` (abaixo), não mais em
-  `commandResult`/`commandResultAt` do `LabDevice`.
+  `GET /hour-lab-devices/{id}/commands/{cmdId}` (abaixo), a fonte de verdade.
+  `commandResult`/`commandResultAt` no `LabDevice` da listagem continuam
+  existindo como espelho legado (só do ÚLTIMO comando, pro dashboard atual) —
+  não sirva deles pra ler histórico ou resultado de um comando específico.
 - `GET /hour-lab-devices/{id}/commands[?limit=]` → `{commands:[LabCommandEntry]}`
   · histórico da fila/auditoria, mais recente primeiro; `limit` default 50,
   teto 200. Cobre todo tipo de ação registrada, não só o comando livre:
