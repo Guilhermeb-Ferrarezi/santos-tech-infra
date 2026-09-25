@@ -123,6 +123,42 @@ func (r *LembreteRepo) Agendar(ctx context.Context, tenantID TenantID, notionPag
 		}
 		criados++
 	}
+
+	// Aula marcada em cima da hora não tem lembrete nenhum a mandar — as três
+	// janelas já passaram. Até aqui isso também a fazia DESAPARECER: esta tabela
+	// é o único lugar do Postgres que liga uma aula a um telefone e a um
+	// horário, e sem linha a aula não existia para AulaDaConversa (o bot não
+	// sabia que o cliente tinha aula) nem para o acompanhamento pós-aula (a
+	// coordenação nunca era perguntada se a pessoa apareceu).
+	//
+	// Então grava-se uma linha de REGISTRO. `status='dispensado'` a mantém fora
+	// do worker, que só procura 'pendente'; `kind='registro'` não colide com as
+	// três janelas no UNIQUE. Cancelar a aula continua cancelando esta também,
+	// porque CancelarDaAula apaga por página, não por tipo.
+	if criados == 0 {
+		var convArg any
+		if convID != "" {
+			convArg = convID
+		}
+		canal := channel
+		if canal == "" {
+			canal = "whatsapp"
+		}
+		_, err := r.pool.Exec(ctx, `
+			INSERT INTO booking_reminder
+			  (tenant_id, notion_page_id, conversation_id, client_phone, channel, aluno,
+			   kind, aula_em, enviar_em, status)
+			VALUES ($1, $2, $3::uuid, $4, $5, $6, 'registro', $7, $7, 'dispensado')
+			ON CONFLICT (tenant_id, notion_page_id, kind) DO UPDATE SET
+			  aula_em   = EXCLUDED.aula_em,
+			  enviar_em = EXCLUDED.enviar_em,
+			  status    = CASE WHEN booking_reminder.status = 'cancelado'
+			                   THEN 'dispensado' ELSE booking_reminder.status END
+		`, tenantID, notionPageID, convArg, phone, canal, aluno, aulaEm)
+		if err != nil {
+			return 0, fmt.Errorf("LembreteRepo.Agendar (registro): %w", err)
+		}
+	}
 	return criados, nil
 }
 
