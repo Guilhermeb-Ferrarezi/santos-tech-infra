@@ -63,7 +63,7 @@ func (q Qualificacao) BlocoDaModalidade() string {
 	// ainda não está definido. Abrir turma é decisão humana: o bot enxerga a
 	// oportunidade, mas não promete.
 	b.WriteString("6. Se indicar uma turma já em andamento: deixe claro que a turma é recente, que teve poucos meses de aula, e que a reposição de aulas é suficiente para o aluno acompanhar o ponto em que a turma está.\n")
-	b.WriteString("7. Se nenhuma turma serve mas o horário da pessoa parece livre na escola: NÃO prometa abrir turma. Diga que vai levar a possibilidade de abrir uma turma nesse horário para a equipe avaliar, e ofereça o particular ou a experimental enquanto isso.\n\n")
+	b.WriteString("7. Se nenhuma turma serve mas o horário da pessoa parece livre na escola: NÃO prometa abrir turma. Registre em \"qualificacao.observacoes\" a linha \"Oportunidade de turma nova: <dia e horário> — <curso>\" (é por ela que a equipe fica sabendo, na ficha do lead no CRM). Diga que vai passar a possibilidade para a equipe avaliar, e ofereça o particular ou a experimental enquanto isso.\n\n")
 
 	// Ancoragem (Henrique, 25/09/2026, da experiência de quem mais atendeu):
 	// muita gente carrega, sem perceber, a imagem de que aprender é numa sala

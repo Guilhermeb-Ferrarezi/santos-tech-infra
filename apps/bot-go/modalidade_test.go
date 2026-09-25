@@ -163,6 +163,7 @@ func TestModalidadeTurmaEmAndamentoEAbrirTurma(t *testing.T) {
 		"a turma é recente",
 		"reposição de aulas",
 		"NÃO prometa abrir turma",
+		"Oportunidade de turma nova",
 	} {
 		if !strings.Contains(b, esperado) {
 			t.Errorf("bloco sem %q:\n%s", esperado, b)
