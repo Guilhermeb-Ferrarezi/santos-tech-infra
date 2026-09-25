@@ -314,6 +314,10 @@ func parseQualificacao(raw json.RawMessage) *Qualificacao {
 		// ClientePediuPreco — observação sobre ESTE turno. O código conta as
 		// vezes; o modelo não controla contador nenhum.
 		ClientePediuPreco bool `json:"clientePediuPreco"`
+		// Origem — só quando a PESSOA contar como chegou. Vocabulário fechado
+		// (ver origem.go): qualquer coisa fora dele é descartada em vez de
+		// gravada, porque origem inventada contamina todo relatório depois.
+		Origem string `json:"origem"`
 	}
 	if err := json.Unmarshal(raw, &q); err != nil {
 		return nil
@@ -333,7 +337,15 @@ func parseQualificacao(raw json.RawMessage) *Qualificacao {
 	if q.ClientePediuPreco {
 		out.PedidosDePreco = 1
 	}
-	if out.Vazia() && !out.PrecoInformado && out.PedidosDePreco == 0 {
+	// A origem que o modelo manda é sempre a mais fraca das três: é a pessoa
+	// lembrando por onde chegou. Marcada como tal, ela nunca sobrescreve o
+	// anúncio que a Meta confirmou — ver comOrigem.
+	if o := strings.ToLower(strings.TrimSpace(q.Origem)); OrigemValida(o) {
+		out.Origem = o
+		out.OrigemFonte = "perguntado"
+		out.OrigemDetalhe = "a pessoa contou na conversa"
+	}
+	if out.Vazia() && !out.PrecoInformado && out.PedidosDePreco == 0 && out.Origem == "" {
 		return nil
 	}
 	return &out

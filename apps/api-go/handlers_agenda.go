@@ -72,10 +72,17 @@ func validateAgendaEventoInput(in *AgendaEventoInput) error {
 		}
 	}
 
-	// Só aula_turma é recorrente — regra fixa da spec, não é escolha do usuário.
-	if in.Tipo == "aula_turma" {
+	// aula_turma é sempre semanal (regra fixa da spec). aula_particular pode ser
+	// semanal — aluno sozinho com horário fixo — ou avulsa, à escolha do cliente;
+	// sem isso a particular recorrente tinha que entrar como aula_turma e passava
+	// por turma pra quem lê a Agenda (ex.: consulta de turmas do bot). Os demais
+	// tipos nunca repetem.
+	switch {
+	case in.Tipo == "aula_turma":
 		in.Recorrencia = "semanal"
-	} else {
+	case in.Tipo == "aula_particular" && in.Recorrencia == "semanal":
+		// mantém
+	default:
 		in.Recorrencia = "nenhuma"
 	}
 	if in.Recorrencia == "semanal" {

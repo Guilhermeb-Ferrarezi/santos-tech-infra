@@ -89,6 +89,10 @@ type dashConfig struct {
 	VoiceProvider *string `json:"voiceProvider"` // "openai" | "elevenlabs"
 	VoiceID       *string `json:"voiceId"`
 	VoiceModel    *string `json:"voiceModel"`
+
+	// OrigemMarcadores — os textos prontos dos links `wa.me`, um por lugar onde
+	// a escola publica o link. Ver origem.go.
+	OrigemMarcadores *[]MarcadorOrigem `json:"origemMarcadores"`
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -381,6 +385,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 	// painel receber sempre um valor concreto (e o PATCH poder omitir).
 	var voiceEnabled bool
 	var voiceProvider, voiceID, voiceModel string
+	var marcadoresRaw []byte
 
 	err := s.pool.QueryRow(ctx, `
 		SELECT tc.bot_name, tc.bot_gender, tc.bot_enabled_by_default,
@@ -402,7 +407,8 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		       tc.voice_enabled,
 		       tc.voice_provider,
 		       tc.voice_id,
-		       tc.voice_model
+		       tc.voice_model,
+		       tc.origem_marcadores
 		FROM tenant_config tc
 		WHERE tc.tenant_id = $1
 	`, tenantID).Scan(
@@ -414,6 +420,7 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 		&cfg.NotifPhone, &cfg.NotifInstance, &cfg.NotifEnabled,
 		&cfg.NotifOnSuccess, &cfg.NotifOnContainerDown,
 		&voiceEnabled, &voiceProvider, &voiceID, &voiceModel,
+		&marcadoresRaw,
 	)
 	if err != nil {
 		s.logger.Error("dash: get config", "err", err)
@@ -446,6 +453,13 @@ func (s *Server) handleDashGetConfig(w http.ResponseWriter, r *http.Request) {
 	cfg.VoiceProvider = &voiceProvider
 	cfg.VoiceID = &voiceID
 	cfg.VoiceModel = &voiceModel
+	// Sempre um array concreto, nunca null: o painel edita uma lista, e uma
+	// lista que chega null vira `.map of undefined` na primeira renderização.
+	marcadores := []MarcadorOrigem{}
+	if len(marcadoresRaw) > 0 {
+		_ = json.Unmarshal(marcadoresRaw, &marcadores)
+	}
+	cfg.OrigemMarcadores = &marcadores
 
 	if kbRaw != nil && *kbRaw != "" && *kbRaw != "null" {
 		_ = json.Unmarshal([]byte(*kbRaw), &cfg.KBContent)
@@ -538,6 +552,9 @@ type dashConfigPatch struct {
 	VoiceProvider               *string    `json:"voiceProvider"`
 	VoiceID                     *string    `json:"voiceId"`
 	VoiceModel                  *string    `json:"voiceModel"`
+
+	// nil = não mandou (preserva); [] = mandou vazio (esvazia mesmo).
+	OrigemMarcadores *[]MarcadorOrigem `json:"origemMarcadores"`
 }
 
 // jsonbOuNil devolve o JSON de uma lista, ou nil quando ela nem veio.
@@ -571,6 +588,12 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 	adminNumbersJSON := jsonbOuNil(body.AdminWhatsAppNumbers)
 	captureDisabledJSON := jsonbOuNil(body.EvolutionCaptureDisabled)
 	kbJSON := jsonbOuNil(body.KBContent)
+
+	var marcadoresJSON *string
+	if body.OrigemMarcadores != nil {
+		limpos := LimpaMarcadores(*body.OrigemMarcadores)
+		marcadoresJSON = jsonbOuNil(&limpos)
+	}
 
 	// Mantém a coluna legada em sincronia (primeiro número da lista).
 	var legacyAdmin *string
@@ -643,6 +666,7 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		    voice_provider = COALESCE($22, voice_provider),
 		    voice_id       = COALESCE($23, voice_id),
 		    voice_model    = COALESCE($24, voice_model),
+		    origem_marcadores = COALESCE($25::jsonb, origem_marcadores),
 		    updated_at     = now()
 		WHERE tenant_id = $7
 	`, body.BotName, body.BotGender, body.BotEnabledByDefault,
@@ -651,7 +675,8 @@ func (s *Server) handleDashPatchConfig(w http.ResponseWriter, r *http.Request) {
 		body.EvolutionBotReplyEnabled, body.EvolutionLeadCaptureEnabled, captureDisabledJSON,
 		body.NotifPhone, body.NotifInstance, body.NotifEnabled,
 		body.NotifOnSuccess, body.NotifOnContainerDown,
-		body.VoiceEnabled, voiceProvider, body.VoiceID, body.VoiceModel)
+		body.VoiceEnabled, voiceProvider, body.VoiceID, body.VoiceModel,
+		marcadoresJSON)
 	if err != nil {
 		s.logger.Error("dash: patch config", "err", err)
 		jsonErr(w, "internal error", http.StatusInternalServerError)
@@ -1262,6 +1287,14 @@ type dashQualificacao struct {
 	AulaMarcada     bool   `json:"aulaMarcada"`
 	Respondidas     int    `json:"respondidas"`
 	AtualizadoEm    string `json:"atualizadoEm"`
+
+	// De onde a pessoa veio. `origemFonte` acompanha porque um anúncio que a
+	// Meta confirmou e uma lembrança do cliente não valem o mesmo — e quem lê o
+	// painel precisa saber qual dos dois está olhando.
+	Origem        string `json:"origem,omitempty"`
+	OrigemLabel   string `json:"origemLabel,omitempty"`
+	OrigemDetalhe string `json:"origemDetalhe,omitempty"`
+	OrigemFonte   string `json:"origemFonte,omitempty"`
 }
 
 // GET /api/qualificacoes — quem é cada lead, do mais quente para o mais frio.
@@ -1274,7 +1307,8 @@ func (s *Server) handleDashQualificacoes(w http.ResponseWriter, r *http.Request)
 		SELECT ci.external_id, coalesce(c.display_name, ''),
 		       q.para_quem, q.aluno_nome, q.aluno_idade, q.interesse, q.ja_faz_curso,
 		       q.disponibilidade, q.motivacao, q.motivacao_tipo, q.observacoes,
-		       q.preco_informado, q.aula_marcada, q.atualizado_em
+		       q.preco_informado, q.aula_marcada, q.atualizado_em,
+		       q.origem, q.origem_detalhe, q.origem_fonte
 		FROM lead_qualificacao q
 		JOIN contact c ON c.id = q.contact_id
 		JOIN channel_identity ci ON ci.contact_id = c.id
@@ -1298,7 +1332,8 @@ func (s *Server) handleDashQualificacoes(w http.ResponseWriter, r *http.Request)
 		if err := rows.Scan(&d.Phone, &d.ContactName,
 			&q.ParaQuem, &q.AlunoNome, &q.AlunoIdade, &q.Interesse, &q.JaFazCurso,
 			&q.Disponibilidade, &q.Motivacao, &q.MotivacaoTipo, &q.Observacoes,
-			&q.PrecoInformado, &q.AulaMarcada, &atualizado); err != nil {
+			&q.PrecoInformado, &q.AulaMarcada, &atualizado,
+			&q.Origem, &q.OrigemDetalhe, &q.OrigemFonte); err != nil {
 			s.logger.Error("dash: scan qualificação", "err", err)
 			continue
 		}
@@ -1317,6 +1352,8 @@ func (s *Server) handleDashQualificacoes(w http.ResponseWriter, r *http.Request)
 		d.MotivacaoTipo, d.Observacoes = q.MotivacaoTipo, q.Observacoes
 		d.PrecoInformado, d.AulaMarcada = q.PrecoInformado, q.AulaMarcada
 		d.Respondidas = q.Respondidas()
+		d.Origem, d.OrigemDetalhe, d.OrigemFonte = q.Origem, q.OrigemDetalhe, q.OrigemFonte
+		d.OrigemLabel = OrigemLegivel(q.Origem)
 		d.AtualizadoEm = atualizado.Format(time.RFC3339)
 		out = append(out, d)
 	}

@@ -142,7 +142,8 @@ func designCSPWithAncestors(ancestors string) string {
 		"script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com",
 		"connect-src 'none'",
 		"form-action 'none'",
-		"base-uri 'none'",
+		// 'self' e não 'none': o canvas injeta <base href> na tela (assets relativos).
+		"base-uri 'self'",
 		"frame-ancestors " + ancestors,
 		"sandbox allow-scripts allow-forms",
 	}, "; ")

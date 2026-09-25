@@ -354,6 +354,7 @@ func TestAgendaEventCreateValidacaoLocal(t *testing.T) {
 		{"tipo inválido", map[string]any{"titulo": "T", "tipo": "invalido", "dataInicio": "2026-09-04", "horaInicio": "20:00", "horaFim": "22:00"}},
 		{"sem dataInicio", map[string]any{"titulo": "T", "tipo": "avulso", "horaInicio": "20:00", "horaFim": "22:00"}},
 		{"aula_turma sem diaSemana", map[string]any{"titulo": "T", "tipo": "aula_turma", "dataInicio": "2026-09-01", "horaInicio": "19:00", "horaFim": "20:00"}},
+		{"aula_particular semanal sem diaSemana", map[string]any{"titulo": "T", "tipo": "aula_particular", "recorrencia": "semanal", "dataInicio": "2026-09-01", "horaInicio": "19:00", "horaFim": "20:00"}},
 	}
 	for _, tc := range cases {
 		res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "agenda_event_create", Arguments: tc.args})
@@ -399,6 +400,36 @@ func TestAgendaEventCreateNaoInventaComputadoresUsadosNemDataFimRecorrencia(t *t
 	}
 	if _, has := gotBody["dataFimRecorrencia"]; has {
 		t.Fatalf("dataFimRecorrencia não deveria ir no corpo quando omitido: %v", gotBody)
+	}
+}
+
+// Particular semanal precisa chegar na API com recorrencia=semanal; sem isso a
+// API grava como avulsa e o aluno some das semanas seguintes.
+func TestAgendaEventCreateParticularSemanalRepassaRecorrencia(t *testing.T) {
+	var gotBody map[string]any
+	fakeAuth := httptest.NewServer(authMeOK(3, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"evento":{"id":"1"}}`))
+	}))
+	defer fakeAuth.Close()
+
+	session := newTestSession(t, Config{AuthBaseURL: fakeAuth.URL}, nil, "Bearer st_x")
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "agenda_event_create",
+		Arguments: map[string]any{
+			"tipo": "aula_particular", "titulo": "Walisson", "recorrencia": "semanal",
+			"dataInicio": "2026-09-02", "horaInicio": "14:00", "horaFim": "15:00", "diaSemana": 3,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("tool falhou: %s", toolText(t, res))
+	}
+	if gotBody["recorrencia"] != "semanal" {
+		t.Fatalf("recorrencia deveria ir como semanal no corpo: %v", gotBody)
 	}
 }
 

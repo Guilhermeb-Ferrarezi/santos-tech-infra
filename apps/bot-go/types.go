@@ -142,6 +142,10 @@ type TenantConfig struct {
 	AulaDuracaoMin int    // 60
 	// AgendaAutoConfirm — muda o que o prompt manda o bot dizer sobre horário.
 	AgendaAutoConfirm bool
+	// OrigemMarcadores — os textos prontos dos links `wa.me`, um por lugar onde
+	// a escola publica o link. Ver origem.go. Vazio = ninguém configurou ainda,
+	// e a origem passa a depender de anúncio ou de perguntar.
+	OrigemMarcadores []MarcadorOrigem
 }
 
 // ScheduleEntry — uma aula experimental já agendada, lida do data source
@@ -313,6 +317,12 @@ type InboundMessage struct {
 	ReceivedAt        time.Time
 	// WasVoice: a mensagem original do cliente era nota de voz (modo espelho).
 	WasVoice bool
+
+	// Origem/OrigemDetalhe — de onde o lead veio, quando o próprio canal conta.
+	// Hoje só o anúncio Click-to-WhatsApp preenche isto, e só na primeira
+	// mensagem da conversa. Ver origem.go.
+	Origem        string
+	OrigemDetalhe string
 }
 
 // MessageContent — conteúdo de uma mensagem (texto, imagem, áudio...).

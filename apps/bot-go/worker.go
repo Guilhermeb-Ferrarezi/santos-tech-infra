@@ -336,6 +336,9 @@ func (w *Worker) notificaAdmin(ctx context.Context, ev DomainEvent) error {
 		switch ntype, _ := ev.Payload["type"].(string); ntype {
 		case "BOOKING":
 			texto = "📅 *Novo pedido de agendamento:*\n\n" + question
+		case "REACTIVATION":
+			// Retorno ao cliente (reativacao.go): o texto já vem montado.
+			texto = question
 		case "BOOKING_CONFIRMED":
 			// Já vem escrito inteiro, com emoji próprio ("✅ Aula marcada",
 			// "🚨 Remarcação incompleta"). Sem este case caía no genérico e o
@@ -666,6 +669,10 @@ func (w *Worker) followUpLoop(ctx context.Context) {
 
 // runFollowUps busca e processa os follow-ups pendentes em paralelo.
 func (w *Worker) runFollowUps(ctx context.Context) {
+	// Retornos pedidos pelo cliente ("me chama dia X") — fila própria, que
+	// ninguém lia antes (ver reativacao.go).
+	w.runReactivations(ctx)
+
 	cfg := w.deps.Config
 	rows, err := w.deps.Scheduled.PendingFollowUps(ctx, cfg.FollowUpConcurrency)
 	if err != nil {

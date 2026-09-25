@@ -24,8 +24,9 @@ import (
 
 // designScreen é uma tela do projeto, como aparece no seletor do canvas.
 type designScreen struct {
-	Path  string `json:"path"`  // relativo ao workdir: "telas/login.html"
-	Title string `json:"title"` // <title> do HTML, ou o nome do arquivo
+	Path      string `json:"path"`      // relativo ao workdir: "telas/login.html"
+	Title     string `json:"title"`     // <title> do HTML, ou o nome do arquivo
+	UpdatedAt string `json:"updatedAt"` // mtime (RFC3339) — "editada há 2 min" no seletor
 }
 
 // maxDesignScreens limita a listagem: o seletor é uma lista, não um explorador.
@@ -79,10 +80,12 @@ func listDesignScreens(workdir string) ([]designScreen, error) {
 	}
 	out := make([]designScreen, 0, len(names))
 	for _, n := range names {
-		out = append(out, designScreen{
-			Path:  "telas/" + n,
-			Title: screenTitle(filepath.Join(workdir, "telas", n)),
-		})
+		full := filepath.Join(workdir, "telas", n)
+		sc := designScreen{Path: "telas/" + n, Title: screenTitle(full)}
+		if info, err := os.Stat(full); err == nil {
+			sc.UpdatedAt = info.ModTime().UTC().Format(time.RFC3339)
+		}
+		out = append(out, sc)
 	}
 	return out, nil
 }

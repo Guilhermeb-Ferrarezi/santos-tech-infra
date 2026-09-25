@@ -142,7 +142,7 @@ func (d DossieCliente) Markdown(agora time.Time) string {
 	if falta := q.Falta(); len(falta) > 0 {
 		b.WriteString("**Ainda não sabemos:**\n\n")
 		for _, p := range falta {
-			fmt.Fprintf(&b, "- %s\n", p.pergunta)
+			fmt.Fprintf(&b, "- %s\n", p.texto(q))
 		}
 		b.WriteString("\n")
 	}

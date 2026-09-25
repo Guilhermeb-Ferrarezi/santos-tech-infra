@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Canvas</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+  #stage { position: absolute; inset: 0; overflow: hidden; }
+  #stage iframe {
+    position: absolute; top: 0; left: 0; border: 0; background: #fff;
+    width: 100%; height: 100%; transform-origin: 0 0;
+  }
+  #stage iframe.back { visibility: hidden; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+// Casca do canvas do Claude Design (agent-go/canvas_shell.html).
+//
+// Carrega UMA vez; o painel injeta o HTML de cada tela por postMessage e a casca
+// renderiza num iframe srcdoc. Dois iframes (frente/fundo): o novo carrega escondido
+// e só troca quando termina — sem flash branco, com a rolagem preservada.
+//
+// Isolamento: esta página chega com CSP `sandbox allow-scripts allow-forms`, então roda
+// em origem opaca, e cada iframe filho ganha OUTRA origem opaca (a casca não lê o DOM
+// dele). Por isso um script pequeno (RUNTIME) vai injetado em cada tela: ele reporta
+// rolagem, intercepta links entre telas e faz o "inspecionar", tudo por mensagem.
+(function () {
+  "use strict";
+  var stage = document.getElementById("stage");
+  // Base dos assets relativos: .../designs/{id}/c/{token}/ (a própria URL da casca).
+  var root = location.href.replace(/[?#].*$/, "").replace(/[^/]*$/, "");
+  var scale = 1, inspect = false;
+  var front = null, back = null, loading = false, pending = null;
+  var scrolls = {}; // path -> {x,y} da última rolagem vista
+  var current = null; // path na frente
+
+  function toParent(msg) { parent.postMessage(msg, "*"); }
+
+  // Script que roda DENTRO de cada tela. Config via window.__STX (JSON embutido).
+  var RUNTIME = String(function () {
+    var C = window.__STX || {};
+    function send(m) { m.__stx = 1; parent.postMessage(m, "*"); }
+    var on = !!C.inspect, alvo = null, estilo = null;
+    function seletor(el) {
+      var partes = [];
+      while (el && el.nodeType === 1 && partes.length < 5 && el !== document.body) {
+        var p = el.tagName.toLowerCase();
+        if (el.id) { partes.unshift(p + "#" + el.id); break; }
+        var cls = (el.getAttribute("class") || "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
+        if (cls.length) p += "." + cls.join(".");
+        var pai = el.parentElement;
+        if (pai) {
+          var irmaos = Array.prototype.filter.call(pai.children, function (c) { return c.tagName === el.tagName; });
+          if (irmaos.length > 1) p += ":nth-of-type(" + (irmaos.indexOf(el) + 1) + ")";
+        }
+        partes.unshift(p);
+        el = pai;
+      }
+      return partes.join(" > ");
+    }
+    function setInspect(v) {
+      on = v;
+      if (!estilo) {
+        estilo = document.createElement("style");
+        estilo.textContent = "[data-stx-hover]{outline:2px solid #6366f1 !important;outline-offset:2px !important;cursor:crosshair !important}";
+        (document.head || document.documentElement).appendChild(estilo);
+      }
+      if (!on && alvo) { alvo.removeAttribute("data-stx-hover"); alvo = null; }
+    }
+    document.addEventListener("mouseover", function (e) {
+      if (!on) return;
+      if (alvo) alvo.removeAttribute("data-stx-hover");
+      alvo = e.target;
+      if (alvo && alvo.setAttribute) alvo.setAttribute("data-stx-hover", "1");
+    }, true);
+    document.addEventListener("click", function (e) {
+      if (on) {
+        e.preventDefault(); e.stopPropagation();
+        var el = e.target;
+        if (!el || !el.tagName) return;
+        // o destaque de hover é nosso, não do design: fora do HTML enviado ao agente
+        if (el.removeAttribute) el.removeAttribute("data-stx-hover");
+        send({ k: "inspect", selector: seletor(el), html: (el.outerHTML || "").slice(0, 600), tag: el.tagName.toLowerCase() });
+        if (on && el.setAttribute) el.setAttribute("data-stx-hover", "1");
+        return;
+      }
+      var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+      if (!a) return;
+      var h = a.getAttribute("href") || "";
+      if (!h || h.charAt(0) === "#" || /^javascript:/i.test(h)) return;
+      e.preventDefault();
+      send({ k: "nav", href: a.href });
+    }, true);
+    window.addEventListener("message", function (e) {
+      if (e.source === parent && e.data && typeof e.data.__stxInspect === "boolean") setInspect(e.data.__stxInspect);
+    });
+    var t = null;
+    window.addEventListener("scroll", function () {
+      clearTimeout(t);
+      t = setTimeout(function () { send({ k: "scroll", x: scrollX, y: scrollY }); }, 120);
+    }, { passive: true });
+    window.addEventListener("load", function () {
+      if (on) setInspect(true);
+      if (C.follow) window.scrollTo(0, document.documentElement.scrollHeight);
+      else if (C.scroll) window.scrollTo(C.scroll.x, C.scroll.y);
+    });
+  });
+
+  function esc(s) { return String(s).replace(/</g, "\\u003c"); }
+
+  // Monta o documento da tela: <base> + config + runtime logo após <head> (antes de
+  // qualquer URL relativa). HTML parcial (rascunho em streaming) também funciona.
+  function build(html, path, opts) {
+    var dir = path.replace(/[^/]*$/, "");
+    var cfg = { scroll: opts.scroll || null, follow: !!opts.follow, inspect: inspect };
+    var inj = '<base href="' + root + dir + '">' +
+      "<script>window.__STX=" + esc(JSON.stringify(cfg)) + ";(" + RUNTIME + ")();<\/script>";
+    var m = /<head[^>]*>/i.exec(html);
+    if (m) return html.slice(0, m.index + m[0].length) + inj + html.slice(m.index + m[0].length);
+    m = /<html[^>]*>/i.exec(html);
+    if (m) return html.slice(0, m.index + m[0].length) + "<head>" + inj + "</head>" + html.slice(m.index + m[0].length);
+    var d = /^\s*<!doctype[^>]*>/i.exec(html);
+    if (d) return d[0] + inj + html.slice(d[0].length);
+    return inj + html;
+  }
+
+  function applyScale(f) {
+    f.style.width = (100 / scale) + "%";
+    f.style.height = (100 / scale) + "%";
+    f.style.transform = scale === 1 ? "" : "scale(" + scale + ")";
+  }
+
+  function newFrame() {
+    var f = document.createElement("iframe");
+    f.className = "back";
+    f.setAttribute("title", "Tela");
+    applyScale(f);
+    stage.appendChild(f);
+    return f;
+  }
+
+  function render(job) {
+    if (loading) { pending = job; return; } // o mais novo vence
+    loading = true;
+    var f = newFrame();
+    back = f;
+    var samePath = job.path === current;
+    var opts = { follow: job.draft, scroll: job.draft ? null : (samePath || job.keepScroll) ? scrolls[job.path] : null };
+    f.addEventListener("load", function () {
+      if (front) front.remove();
+      f.className = "";
+      front = f; back = null; current = job.path;
+      loading = false;
+      toParent({ source: "santos-design-canvas", type: "rendered", path: job.path, draft: !!job.draft });
+      if (pending) { var p = pending; pending = null; render(p); }
+    }, { once: true });
+    f.srcdoc = build(job.html, job.path, opts);
+  }
+
+  window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (!d || typeof d !== "object") return;
+    if (e.source === parent) {
+      if (d.type === "render" && typeof d.html === "string" && typeof d.path === "string") {
+        render({ html: d.html, path: d.path, draft: !!d.draft, keepScroll: !!d.keepScroll });
+      } else if (d.type === "zoom" && typeof d.scale === "number" && d.scale >= 0.1 && d.scale <= 4) {
+        scale = d.scale;
+        if (front) applyScale(front);
+        if (back) applyScale(back);
+      } else if (d.type === "inspect") {
+        inspect = !!d.on;
+        if (front && front.contentWindow) front.contentWindow.postMessage({ __stxInspect: inspect }, "*");
+      }
+      return;
+    }
+    // Da tela da frente: só ela fala (a de fundo ainda está carregando).
+    if (!front || e.source !== front.contentWindow || !d.__stx) return;
+    if (d.k === "scroll" && current) {
+      scrolls[current] = { x: +d.x || 0, y: +d.y || 0 };
+    } else if (d.k === "nav" && typeof d.href === "string") {
+      if (d.href.indexOf(root) !== 0) return; // link pra fora do projeto: ignora
+      var rel = d.href.slice(root.length).replace(/[?#].*$/, "");
+      if (/^telas\/[^/]+\.html$/.test(rel)) toParent({ source: "santos-design-canvas", type: "navigate", path: rel });
+    } else if (d.k === "inspect") {
+      // Mesmo contrato do inspetor antigo (web/src/lib/design/inspect.ts).
+      toParent({ source: "santos-design-inspect", selector: String(d.selector || ""), html: String(d.html || ""), tag: String(d.tag || "") });
+    }
+  });
+
+  toParent({ source: "santos-design-canvas", type: "ready" });
+})();
+</script>
+</body>
+</html>

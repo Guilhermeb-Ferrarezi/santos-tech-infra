@@ -237,17 +237,14 @@ func (s *Server) oauthTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		if s.tryGraceReplay(r.Context(), w, hash) {
 			return
 		}
-		// Mesma detecção de reuso de handleRefresh (ver comentário lá): JWT válido
-		// sem sessão correspondente, e sem resposta de graça pra devolver, é
-		// indício de token já rotacionado sendo reusado fora da janela de graça.
-		// Usamos tokenUID (do JWT), não o uid de consumeSessionByHash — este
-		// último vem zerado quando a linha não existe. Só entra aqui em
-		// ErrNoRows; erro de banco genérico cai no ramo seguinte, sem revogar nada.
-		if delErr := s.deleteUserSessions(r.Context(), tokenUID); delErr != nil {
-			slog.Error("oauth_token_refresh: falha ao revogar sessões após possível reuso", "uid", tokenUID, "err", delErr)
-		} else {
-			slog.Warn("oauth_token_refresh: refresh token sem sessão correspondente — sessões revogadas por precaução", "uid", tokenUID)
-		}
+		// Mesma detecção de reuso de handleRefresh (ver comentário lá, e a
+		// conversa de 2026-09-25 que rastreou a causa raiz até essa revogação em
+		// massa): sem sessão pra apagar, o token já não dá acesso a nada sozinho —
+		// só devolvemos 401 e deixamos as OUTRAS sessões do usuário vivas, em vez
+		// de derrubar dashboard+extensão+MCP inteiros por um reuso benigno (ex.:
+		// outra sessão do mesmo usuário já rotacionou este token). Só entra aqui
+		// em ErrNoRows; erro de banco genérico cai no ramo seguinte.
+		slog.Warn("oauth_token_refresh: refresh token sem sessão correspondente (rotacionado por outra sessão ou já encerrado)", "uid", tokenUID)
 		writeErr(w, appErr(http.StatusUnauthorized, "INVALID_GRANT", "Sessão expirada"))
 		return
 	}

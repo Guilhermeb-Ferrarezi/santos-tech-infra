@@ -89,6 +89,62 @@ func TestValidateAgendaEventoInputNormalizaRecorrencia(t *testing.T) {
 	}
 }
 
+// aula_particular pode ser semanal (aluno com horário fixo) ou avulsa — a
+// escolha é do cliente. Os demais tipos continuam com a regra fixa.
+func TestValidateAgendaEventoInputParticularRecorrencia(t *testing.T) {
+	dia := 3
+	pcs := 1
+	semanal := AgendaEventoInput{
+		Tipo: "aula_particular", Titulo: "Walisson", DataInicio: "2026-09-02",
+		HoraInicio: "14:00", HoraFim: "15:00", ComputadoresUsados: &pcs,
+		Recorrencia: "semanal", DiaSemana: &dia,
+	}
+	if err := validateAgendaEventoInput(&semanal); err != nil {
+		t.Fatalf("particular semanal deveria ser aceita: %v", err)
+	}
+	if semanal.Recorrencia != "semanal" || semanal.DiaSemana == nil || *semanal.DiaSemana != 3 {
+		t.Fatalf("particular semanal deveria manter recorrencia/diaSemana, got %q %v", semanal.Recorrencia, semanal.DiaSemana)
+	}
+
+	// Sem recorrencia (ou valor desconhecido) = avulsa: comportamento de antes.
+	for _, rec := range []string{"", "nenhuma", "mensal"} {
+		avulsa := AgendaEventoInput{
+			Tipo: "aula_particular", Titulo: "Lorena", DataInicio: "2026-09-28",
+			HoraInicio: "15:15", HoraFim: "16:15", ComputadoresUsados: &pcs,
+			Recorrencia: rec, DiaSemana: &dia,
+		}
+		if err := validateAgendaEventoInput(&avulsa); err != nil {
+			t.Fatalf("particular recorrencia=%q deveria ser aceita: %v", rec, err)
+		}
+		if avulsa.Recorrencia != "nenhuma" || avulsa.DiaSemana != nil {
+			t.Fatalf("particular recorrencia=%q deveria virar avulsa, got %q %v", rec, avulsa.Recorrencia, avulsa.DiaSemana)
+		}
+	}
+
+	// Semanal sem dia da semana continua 400.
+	semDia := AgendaEventoInput{
+		Tipo: "aula_particular", Titulo: "Igor", DataInicio: "2026-09-02",
+		HoraInicio: "14:00", HoraFim: "15:00", ComputadoresUsados: &pcs,
+		Recorrencia: "semanal",
+	}
+	if err := validateAgendaEventoInput(&semDia); err == nil {
+		t.Fatal("particular semanal sem diaSemana deveria ser rejeitada")
+	}
+
+	// Experimental pedindo semanal continua forçada pra nenhuma.
+	exp := AgendaEventoInput{
+		Tipo: "aula_experimental", Titulo: "Exp", DataInicio: "2026-09-02",
+		HoraInicio: "14:00", HoraFim: "15:00", ComputadoresUsados: &pcs,
+		Recorrencia: "semanal", DiaSemana: &dia,
+	}
+	if err := validateAgendaEventoInput(&exp); err != nil {
+		t.Fatalf("não esperava erro: %v", err)
+	}
+	if exp.Recorrencia != "nenhuma" {
+		t.Fatalf("experimental deveria forçar recorrencia=nenhuma, got %q", exp.Recorrencia)
+	}
+}
+
 func TestValidateAgendaEventoInputRecorrenciaMaxSpan(t *testing.T) {
 	dia := 2
 	fim := "9999-12-31"

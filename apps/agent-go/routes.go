@@ -58,6 +58,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /claude/designs/{id}/preview/{path...}", s.rateLimit(600, min, s.handleDesignPreview))
 	// Telas do projeto (seletor do canvas) e link público de compartilhamento.
 	mux.HandleFunc("GET /claude/designs/{id}/files", s.authGuard(s.handleDesignFiles))
+	// Canvas: código-fonte da tela (admin) e a casca + assets (token assinado no caminho).
+	mux.HandleFunc("GET /claude/designs/{id}/source", s.authGuard(s.handleDesignSource))
+	mux.HandleFunc("GET /claude/designs/{id}/c/{token}/{path...}", s.rateLimit(900, min, s.handleDesignCanvas))
 	mux.HandleFunc("GET /claude/designs/{id}/share", s.authGuard(s.handleDesignShareGet))
 	mux.HandleFunc("POST /claude/designs/{id}/share", s.rateLimit(20, min, s.authGuard(s.handleDesignShareCreate)))
 	mux.HandleFunc("DELETE /claude/designs/{id}/share", s.authGuard(s.handleDesignShareRevoke))
