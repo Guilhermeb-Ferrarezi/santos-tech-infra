@@ -503,8 +503,17 @@ func (w *Worker) avisaResponsavel(ctx context.Context, p retornoPendente, painel
 	return err
 }
 
+// Tentativas do POST /avisos. Um deploy do api-go deixa a rota em 503 por um
+// ou dois segundos — foi assim que o sino de um retorno se perdeu em 25/09.
+// Três tentativas com espera crescente (2s, 4s) cobrem o reinício sem segurar a
+// fila de retornos por muito tempo. Variável para o teste encurtar a espera.
+const tentativasAvisoPlataforma = 3
+
+var esperaAvisoPlataforma = 2 * time.Second
+
 // avisaNaPlataforma chama o POST /avisos do api-go. Devolve o telefone de aviso
-// da conta ("" = não cadastrado) e se o aviso foi registrado.
+// da conta ("" = não cadastrado) e se o aviso foi registrado. Tenta de novo em
+// erro de rede ou 5xx; 4xx é erro do pedido, repetir não muda nada.
 func (w *Worker) avisaNaPlataforma(ctx context.Context, p retornoPendente, painel string, responsavel int, texto string) (string, bool) {
 	cfg := w.deps.Config
 	if cfg.PlatformAPIToken == "" || responsavel <= 0 {
@@ -518,27 +527,44 @@ func (w *Worker) avisaNaPlataforma(ctx context.Context, p retornoPendente, paine
 		"url":    linkDaConversa(painel, p.ConvID),
 		"email":  true,
 	})
+	for tentativa := 1; tentativa <= tentativasAvisoPlataforma; tentativa++ {
+		tel, ok, repetir := w.postAviso(ctx, body, responsavel)
+		if ok || !repetir || tentativa == tentativasAvisoPlataforma {
+			return tel, ok
+		}
+		select {
+		case <-ctx.Done():
+			return "", false
+		case <-time.After(esperaAvisoPlataforma * time.Duration(tentativa)):
+		}
+	}
+	return "", false
+}
+
+// postAviso faz uma tentativa. repetir = vale tentar de novo (rede ou 5xx).
+func (w *Worker) postAviso(ctx context.Context, body []byte, responsavel int) (tel string, ok, repetir bool) {
+	cfg := w.deps.Config
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.AgentGoURL+"/avisos", bytes.NewReader(body))
 	if err != nil {
-		return "", false
+		return "", false, false
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.PlatformAPIToken)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		w.deps.Logger.Warn("avisaNaPlataforma: API indisponível", "err", err)
-		return "", false
+		return "", false, true
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		w.deps.Logger.Warn("avisaNaPlataforma: aviso não registrado", "status", resp.StatusCode, "responsavel", responsavel)
-		return "", false
+		return "", false, resp.StatusCode >= 500
 	}
 	var out struct {
 		Telefone string `json:"telefone"`
 	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&out)
-	return out.Telefone, true
+	return out.Telefone, true, false
 }
