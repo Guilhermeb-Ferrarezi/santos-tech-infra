@@ -466,6 +466,9 @@ CREATE TABLE IF NOT EXISTS agenda_eventos (
   -- NULL para recorrência semanal = indefinida (sem data de término conhecida).
   data_fim_recorrencia        DATE,
   data_fim                    DATE,
+  -- Turma do Portal (class.id) a que este horário pertence. Sem FK: o Portal
+  -- pode viver em outro banco. Só a rota PUT /agenda/eventos/{id}/turma grava.
+  portal_class_id             INTEGER,
   status_preparo               TEXT CHECK (status_preparo IN ('nao_aplica','pendente','pronto')),
   notas                       TEXT NOT NULL DEFAULT '',
   created_by                  INTEGER REFERENCES users(id) ON DELETE SET NULL,

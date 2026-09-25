@@ -334,6 +334,7 @@ func (s *Server) registerSocialRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /agenda/eventos/{id}", s.rateLimit(30, min, s.permGuard("agenda", "write", true, s.handleUpdateAgendaEvento)))
 	mux.HandleFunc("DELETE /agenda/eventos/{id}", s.permGuard("agenda", "delete", true, s.handleDeleteAgendaEvento))
 	mux.HandleFunc("POST /agenda/eventos/check", s.rateLimit(60, min, s.permGuard("agenda", "write", true, s.handleCheckAgendaEvento)))
+	mux.HandleFunc("PUT /agenda/eventos/{id}/turma", s.rateLimit(30, min, s.permGuard("agenda", "write", true, s.handleSetAgendaEventoTurma)))
 	mux.HandleFunc("GET /agenda/feriados", s.permGuard("agenda", "read", true, s.handleListAgendaFeriados))
 	mux.HandleFunc("GET /agenda/feriados-municipais", s.adminGuard(s.handleListAgendaFeriadosMunicipais))
 	mux.HandleFunc("POST /agenda/feriados-municipais", s.rateLimit(20, min, s.adminGuard(s.handleCreateAgendaFeriadoMunicipal)))
