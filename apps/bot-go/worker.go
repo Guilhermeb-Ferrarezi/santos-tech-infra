@@ -565,6 +565,19 @@ func (w *Worker) processRetry(ctx context.Context, ev WebhookEvent) {
 		if mErr := w.deps.Webhook.MarkFailed(ctx, ev.ID, err.Error()); mErr != nil {
 			log.Error("retryLoop: erro ao marcar webhook failed", "err", mErr)
 		}
+		// Na terceira tentativa, alguém precisa saber.
+		//
+		// O backoff é exponencial e sem teto: da quarta tentativa em diante os
+		// intervalos passam de uma hora, e na prática a mensagem morre ali. Sem
+		// este aviso, o que acontece é o que aconteceu em 25/09 — uma pessoa
+		// escreveu para a escola e nunca foi respondida, e ninguém soube.
+		//
+		// Três tentativas porque as duas primeiras cobrem instabilidade
+		// passageira do modelo, que se resolve sozinha em segundos. Avisar na
+		// primeira encheria o WhatsApp de alarme falso.
+		if ev.Attempts+1 == 3 {
+			w.avisaMensagemSemResposta(ctx, inbound, err)
+		}
 	default:
 		if mErr := w.deps.Webhook.MarkDone(ctx, ev.ID); mErr != nil {
 			log.Error("retryLoop: erro ao marcar webhook done", "err", mErr)
@@ -934,4 +947,60 @@ func (w *Worker) limpaEventosDoGoogle(ctx context.Context, notionPageID string) 
 		}
 	}
 	w.deps.GCalRepo.EsquecerAula(ctx, tenantID, notionPageID)
+}
+
+// avisaMensagemSemResposta conta aos admins que alguém escreveu e não foi
+// respondido.
+//
+// É o contrário do silêncio que causou o incidente de 25/09: a falha existia,
+// ficava no log, e a pessoa do outro lado simplesmente não recebia nada. Um
+// lead perdido sem ninguém saber é pior que um erro visível.
+func (w *Worker) avisaMensagemSemResposta(ctx context.Context, inbound InboundMessage, causa error) {
+	if w.deps.Outbox == nil || w.deps.Pool == nil {
+		return
+	}
+	texto := strings.TrimSpace(inbound.Content.Text)
+	if texto == "" && inbound.Content.Transcript != nil {
+		texto = strings.TrimSpace(*inbound.Content.Transcript)
+	}
+	if len([]rune(texto)) > 140 {
+		texto = string([]rune(texto)[:140]) + "…"
+	}
+	if texto == "" {
+		texto = "(mensagem sem texto)"
+	}
+
+	msg := fmt.Sprintf("🚨 NÃO CONSEGUI RESPONDER este cliente, já tentei 3 vezes.\n\nDe: %s\nEle escreveu: \"%s\"\n\nAlguém precisa responder à mão. Motivo técnico: %s",
+		inbound.ExternalID, texto, causa)
+
+	ev := DomainEvent{
+		TenantID:    inbound.TenantID,
+		AggregateID: ConversationID(""),
+		Type:        "notification.requested",
+		Payload: map[string]any{
+			"type":    "BOOKING_CONFIRMED", // manda o texto cru, sem prefixo
+			"channel": inbound.Channel,
+			"message": msg,
+		},
+		OccurredAt: time.Now(),
+	}
+	tx, err := w.deps.Pool.Begin(ctx)
+	if err != nil {
+		w.deps.Logger.Error("aviso de mensagem sem resposta: begin", "err", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", string(inbound.TenantID)); err != nil {
+		w.deps.Logger.Error("aviso de mensagem sem resposta: set tenant", "err", err)
+		return
+	}
+	if err := w.deps.Outbox.Emit(ctx, tx, ev); err != nil {
+		w.deps.Logger.Error("aviso de mensagem sem resposta: emit", "err", err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		w.deps.Logger.Error("aviso de mensagem sem resposta: commit", "err", err)
+		return
+	}
+	w.deps.Logger.Warn("avisei os admins: cliente ficou sem resposta", "de", inbound.ExternalID)
 }
