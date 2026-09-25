@@ -448,51 +448,60 @@ func (s *Server) registerHourSessionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /public/hour-sessions/pair-by-code", s.rateLimit(15, min, s.handlePairHourSessionByCode))
 }
 
+// devPerm: guard das rotas de dispositivos — admin sempre; demais só com
+// dispositivos:<ação> (individual ou do cargo). Ao contrário do adminGuard,
+// aceita token OAuth: é o que deixa o conector MCP do claude.ai operar a frota
+// (decisão de 25/09/2026, spec acesso-remoto-frota §2).
+func (s *Server) devPerm(action string, h http.HandlerFunc) http.HandlerFunc {
+	return s.permGuard("dispositivos", action, false, h)
+}
+
 // registerLabDeviceRoutes: identificação/controle dos PCs do laboratório
 // (hour-timer-app). Heartbeat é público (device_uuid local é a identidade,
-// sem login); listar/renomear/despairar/mandar aviso é admin-only.
+// sem login); as rotas autenticadas exigem dispositivos:ver/controlar/
+// executar/gerenciar (admin sempre passa — ver devPerm).
 func (s *Server) registerLabDeviceRoutes(mux *http.ServeMux) {
 	const min = time.Minute
-	mux.HandleFunc("GET /hour-lab-devices", s.adminGuard(s.handleListLabDevices))
-	mux.HandleFunc("POST /hour-lab-devices/pair", s.rateLimit(30, min, s.adminGuard(s.handlePairLabDevice)))
-	mux.HandleFunc("PATCH /hour-lab-devices/{id}", s.rateLimit(30, min, s.adminGuard(s.handleRenameLabDevice)))
-	mux.HandleFunc("DELETE /hour-lab-devices/{id}", s.rateLimit(30, min, s.adminGuard(s.handleDeleteLabDevice)))
-	mux.HandleFunc("POST /hour-lab-devices/{id}/unpair", s.rateLimit(30, min, s.adminGuard(s.handleUnpairLabDevice)))
-	mux.HandleFunc("POST /hour-lab-devices/{id}/message", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceMessage)))
-	mux.HandleFunc("POST /hour-lab-devices/{id}/reset-secret", s.rateLimit(30, min, s.adminGuard(s.handleResetLabDeviceSecret)))
+	mux.HandleFunc("GET /hour-lab-devices", s.devPerm("ver", s.handleListLabDevices))
+	mux.HandleFunc("POST /hour-lab-devices/pair", s.rateLimit(30, min, s.devPerm("gerenciar", s.handlePairLabDevice)))
+	mux.HandleFunc("PATCH /hour-lab-devices/{id}", s.rateLimit(30, min, s.devPerm("gerenciar", s.handleRenameLabDevice)))
+	mux.HandleFunc("DELETE /hour-lab-devices/{id}", s.rateLimit(30, min, s.devPerm("gerenciar", s.handleDeleteLabDevice)))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/unpair", s.rateLimit(30, min, s.devPerm("gerenciar", s.handleUnpairLabDevice)))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/message", s.rateLimit(30, min, s.devPerm("controlar", s.handleSendLabDeviceMessage)))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/reset-secret", s.rateLimit(30, min, s.devPerm("gerenciar", s.handleResetLabDeviceSecret)))
 	// Comandos remotos: travar tela / reiniciar / desligar / rodar PowerShell
 	// livre — entregues no próximo heartbeat (até ~30s), executados pelo
 	// watchdog em contexto SYSTEM.
-	mux.HandleFunc("POST /hour-lab-devices/{id}/lock", s.rateLimit(30, min, s.adminGuard(s.handleLockLabDevice)))
-	mux.HandleFunc("POST /hour-lab-devices/{id}/restart", s.rateLimit(30, min, s.adminGuard(s.handleRestartLabDevice)))
-	mux.HandleFunc("POST /hour-lab-devices/{id}/shutdown", s.rateLimit(30, min, s.adminGuard(s.handleShutdownLabDevice)))
-	mux.HandleFunc("POST /hour-lab-devices/{id}/command", s.rateLimit(30, min, s.adminGuard(s.handleSendLabDeviceCommand)))
-	// Histórico/resultado da fila (Task 7 troca adminGuard por permGuard, junto
-	// com o resto das rotas de dispositivo).
-	mux.HandleFunc("GET /hour-lab-devices/{id}/commands", s.adminGuard(s.handleListLabDeviceCommands))
-	mux.HandleFunc("GET /hour-lab-devices/{id}/commands/{cmdId}", s.adminGuard(s.handleGetLabDeviceCommand))
-	mux.HandleFunc("GET /hour-lab-devices/{id}/programs", s.adminGuard(s.handleGetLabDevicePrograms))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/lock", s.rateLimit(30, min, s.devPerm("controlar", s.handleLockLabDevice)))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/restart", s.rateLimit(30, min, s.devPerm("controlar", s.handleRestartLabDevice)))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/shutdown", s.rateLimit(30, min, s.devPerm("controlar", s.handleShutdownLabDevice)))
+	mux.HandleFunc("POST /hour-lab-devices/{id}/command", s.rateLimit(30, min, s.devPerm("executar", s.handleSendLabDeviceCommand)))
+	// Histórico/resultado da fila.
+	mux.HandleFunc("GET /hour-lab-devices/{id}/commands", s.devPerm("ver", s.handleListLabDeviceCommands))
+	mux.HandleFunc("GET /hour-lab-devices/{id}/commands/{cmdId}", s.devPerm("ver", s.handleGetLabDeviceCommand))
+	mux.HandleFunc("GET /hour-lab-devices/{id}/programs", s.devPerm("ver", s.handleGetLabDevicePrograms))
 	// Shell interativo: bem mais sensível que os "dispara e esquece" acima —
-	// admin sozinho não basta, exige sudo (re-confirmação de identidade
-	// recente, ver handlers_sudo.go). Sem rate limit próprio: é um WS de
-	// longa duração, não uma rajada de requests.
-	mux.HandleFunc("GET /hour-lab-devices/{id}/shell", s.adminGuard(s.sudoGuard(s.handleLabDeviceShellWS)))
-	mux.HandleFunc("GET /hour-lab-devices/{id}/shell-check", s.rateLimit(30, min, s.adminGuard(s.sudoGuard(s.handleLabDeviceShellCheck))))
-	// Captura de tela sob demanda: pedir é admin, a imagem chega pelo próprio
-	// PC (rota pública abaixo) e o histórico fica com quem pediu registrado.
-	mux.HandleFunc("POST /hour-lab-devices/{id}/screenshot", s.rateLimit(30, min, s.adminGuard(s.handleRequestLabDeviceScreenshot)))
-	mux.HandleFunc("GET /hour-lab-devices/{id}/screenshots", s.adminGuard(s.handleListLabDeviceScreenshots))
-	mux.HandleFunc("DELETE /hour-lab-devices/{id}/screenshots/{shotId}", s.rateLimit(60, min, s.adminGuard(s.handleDeleteLabDeviceScreenshot)))
-	// Imagem do ícone por hash de conteúdo — admin-only como o resto do
+	// dispositivos:executar sozinho não basta, exige sudo (re-confirmação de
+	// identidade recente, ver handlers_sudo.go). Sem rate limit próprio: é um
+	// WS de longa duração, não uma rajada de requests.
+	mux.HandleFunc("GET /hour-lab-devices/{id}/shell", s.devPerm("executar", s.sudoGuard(s.handleLabDeviceShellWS)))
+	mux.HandleFunc("GET /hour-lab-devices/{id}/shell-check", s.rateLimit(30, min, s.devPerm("executar", s.sudoGuard(s.handleLabDeviceShellCheck))))
+	// Captura de tela sob demanda: pedir exige dispositivos:controlar, a
+	// imagem chega pelo próprio PC (rota pública abaixo) e o histórico fica
+	// com quem pediu registrado.
+	mux.HandleFunc("POST /hour-lab-devices/{id}/screenshot", s.rateLimit(30, min, s.devPerm("controlar", s.handleRequestLabDeviceScreenshot)))
+	mux.HandleFunc("GET /hour-lab-devices/{id}/screenshots", s.devPerm("ver", s.handleListLabDeviceScreenshots))
+	mux.HandleFunc("DELETE /hour-lab-devices/{id}/screenshots/{shotId}", s.rateLimit(60, min, s.devPerm("controlar", s.handleDeleteLabDeviceScreenshot)))
+	// Imagem do ícone por hash de conteúdo — mesma leitura do resto do
 	// domínio; a resposta é cacheável pra sempre (a URL é o próprio conteúdo).
-	mux.HandleFunc("GET /program-icons/{hash}", s.adminGuard(s.handleLabProgramIcon))
+	mux.HandleFunc("GET /program-icons/{hash}", s.devPerm("ver", s.handleLabProgramIcon))
 
 	// Programas esperados nos PCs do lab (cadastro do admin) — o cruzamento com
 	// o inventário de cada PC sai em /hour-lab-devices/{id}/programs.
-	mux.HandleFunc("GET /hour-lab-expected-programs", s.adminGuard(s.handleListExpectedPrograms))
-	mux.HandleFunc("POST /hour-lab-expected-programs", s.rateLimit(30, min, s.adminGuard(s.handleCreateExpectedProgram)))
-	mux.HandleFunc("PATCH /hour-lab-expected-programs/{id}", s.rateLimit(30, min, s.adminGuard(s.handleUpdateExpectedProgram)))
-	mux.HandleFunc("DELETE /hour-lab-expected-programs/{id}", s.rateLimit(30, min, s.adminGuard(s.handleDeleteExpectedProgram)))
+	mux.HandleFunc("GET /hour-lab-expected-programs", s.devPerm("gerenciar", s.handleListExpectedPrograms))
+	mux.HandleFunc("POST /hour-lab-expected-programs", s.rateLimit(30, min, s.devPerm("gerenciar", s.handleCreateExpectedProgram)))
+	mux.HandleFunc("PATCH /hour-lab-expected-programs/{id}", s.rateLimit(30, min, s.devPerm("gerenciar", s.handleUpdateExpectedProgram)))
+	mux.HandleFunc("DELETE /hour-lab-expected-programs/{id}", s.rateLimit(30, min, s.devPerm("gerenciar", s.handleDeleteExpectedProgram)))
 
 	// Heartbeat a cada ~30s por PC — limite folgado pra cobrir reconexões/retries.
 	mux.HandleFunc("POST /public/lab-devices/heartbeat", s.rateLimit(120, min, s.handleLabDeviceHeartbeat))

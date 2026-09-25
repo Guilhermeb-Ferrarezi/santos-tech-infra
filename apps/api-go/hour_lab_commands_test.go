@@ -258,3 +258,43 @@ func TestSendCommandDeviceInexistente404(t *testing.T) {
 		t.Fatalf("code=%d", w.Code)
 	}
 }
+
+func mustAccessToken(t *testing.T, s *Server, uid int64) string {
+	t.Helper()
+	s.cfg.JWTRefreshSecret = "x-refresh" // generateTokens exige os dois segredos
+	access, _, err := generateTokens(s.cfg.JWTSecret, s.cfg.JWTRefreshSecret, uid, "biel@santos-tech.com", "Gabriel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return access
+}
+
+func TestDispositivosExecutarNegaSemPermissao(t *testing.T) {
+	s := testServerWithRedis(t, Config{JWTSecret: "x"})
+	// usuário 55 só com dispositivos:ver, direto no cache (sem Postgres)
+	u := &User{ID: 55, Role: RoleCustom, Permissions: map[string][]string{"dispositivos": {"ver"}}}
+	b, _ := json.Marshal(u)
+	if err := s.rdb.Set(context.Background(), cacheUserKey(55), b, time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeLabCmds()
+	s.labCmds = f
+	chamou := false
+	h := s.devPerm("executar", func(http.ResponseWriter, *http.Request) { chamou = true })
+	tok := mustAccessToken(t, s, 55)
+	r := httptest.NewRequest("POST", "/hour-lab-devices/x/command", strings.NewReader(`{"text":"x"}`))
+	r.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != http.StatusForbidden || chamou {
+		t.Fatalf("code=%d chamou=%v", w.Code, chamou)
+	}
+	hv := s.devPerm("ver", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest("GET", "/hour-lab-devices", nil)
+	r2.Header.Set("Authorization", "Bearer "+tok)
+	hv(w2, r2)
+	if w2.Code != 204 {
+		t.Fatalf("ver deveria passar: %d %s", w2.Code, w2.Body)
+	}
+}
