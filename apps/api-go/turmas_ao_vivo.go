@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -18,6 +19,16 @@ import (
 // laboratório. As duas se ligam por agenda_eventos.portal_class_id.
 
 var errTurmaPortalNotFound = appErr(http.StatusNotFound, "TURMA_NOT_FOUND", "Turma não encontrada")
+
+// validaCapacidadeTurma: nil = não informado (vale o padrão/valor atual). O
+// teto de 50 espelha o CHECK da coluna — sem ele um número absurdo viraria 500
+// do banco em vez de 400 legível.
+func validaCapacidadeTurma(c *int) error {
+	if c != nil && (*c < 1 || *c > 50) {
+		return validationErr("capacidade deve ficar entre 1 e 50 alunos")
+	}
+	return nil
+}
 
 // agendaTipoCombinaComTurma: aula_turma só se liga a turma de grupo e
 // aula_particular só a turma particular. Os demais tipos (experimental,
@@ -109,4 +120,102 @@ func (s *Server) handleSetAgendaEventoTurma(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"evento": ev})
+}
+
+// motivoTurmaNaoLiberavel diz por que a turma não pode aparecer pro bot, ou
+// "" se pode. Cada motivo vira texto de tela — é o que a pessoa corrige.
+func motivoTurmaNaoLiberavel(c *portalClassDTO, horariosLigados int, hoje time.Time) string {
+	switch {
+	case c.IndividualClass:
+		return "Aula particular não aparece para o bot — só turma de grupo"
+	case c.EndDate.Before(truncaDia(hoje)):
+		return "O fim da turma já passou — corrija o fim antes de liberar"
+	case horariosLigados == 0:
+		return "Ligue pelo menos um horário da Agenda (aula de turma) a esta turma antes de liberar"
+	}
+	return ""
+}
+
+func truncaDia(t time.Time) time.Time {
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
+}
+
+// horariosDaTurma: eventos aula_turma da Agenda ligados à turma. Ligação
+// incoerente (outro tipo apontando pra turma — ex.: evento que mudou de tipo
+// depois de ligado) é ignorada: fail-closed.
+func horariosDaTurma(eventos []AgendaEvento, classID int64) []AgendaEvento {
+	var out []AgendaEvento
+	for _, e := range eventos {
+		if e.PortalClassID != nil && *e.PortalClassID == classID && e.Tipo == "aula_turma" && e.Recorrencia == "semanal" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// POST /portal/classes/{classId}/bot-validacao — um humano conferiu a turma e
+// libera pro bot de vendas falar dela.
+func (s *Server) handlePortalLiberarTurmaBot(w http.ResponseWriter, r *http.Request) {
+	s.setTurmaBotValidada(w, r, true)
+}
+
+// DELETE /portal/classes/{classId}/bot-validacao — tira a turma do bot.
+func (s *Server) handlePortalRetirarTurmaBot(w http.ResponseWriter, r *http.Request) {
+	s.setTurmaBotValidada(w, r, false)
+}
+
+func (s *Server) setTurmaBotValidada(w http.ResponseWriter, r *http.Request, liberar bool) {
+	id, err := portalPathID(r, "classId")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.portalCanAccessClass(r.Context(), userIDFrom(r), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	class, err := s.portalGetClass(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeErr(w, notFoundErr("Turma"))
+		return
+	}
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if liberar {
+		eventos, err := s.listAgendaEventos(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if motivo := motivoTurmaNaoLiberavel(class, len(horariosDaTurma(eventos, id)), time.Now()); motivo != "" {
+			writeErr(w, appErr(http.StatusBadRequest, "TURMA_NAO_LIBERAVEL", motivo))
+			return
+		}
+		_, err = s.portalDB.Exec(r.Context(),
+			`UPDATE class SET bot_validada_em = NOW(), bot_validada_por = $2, updated_at = NOW() WHERE id = $1`, id, userIDFrom(r))
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+	} else {
+		if _, err := s.portalDB.Exec(r.Context(),
+			`UPDATE class SET bot_validada_em = NULL, bot_validada_por = NULL, updated_at = NOW() WHERE id = $1`, id); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	class, err = s.portalGetClass(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	acao := "class_bot_liberar"
+	if !liberar {
+		acao = "class_bot_retirar"
+	}
+	s.portalLogActivity(r, acao, "class", class.ID, nil)
+	writeJSON(w, http.StatusOK, map[string]any{"class": class})
 }

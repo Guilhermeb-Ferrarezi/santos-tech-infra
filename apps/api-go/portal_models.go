@@ -229,9 +229,15 @@ type portalClassDTO struct {
 	// condição da matrícula do aluno. As duas convivem — e a turma precisa da
 	// sua, porque uma turma pode existir antes de ter qualquer matrícula (é o
 	// caso de tudo que veio do sync do Notion).
-	IndividualClass bool      `json:"individualClass"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	IndividualClass bool `json:"individualClass"`
+	// Capacity: quantos alunos a turma comporta (vaga = capacity − matrículas).
+	Capacity int `json:"capacity"`
+	// BotValidadaEm/Por: um humano liberou a turma pro bot de vendas (nil =
+	// o bot não enxerga a turma). Ver turmas_ao_vivo.go.
+	BotValidadaEm  *time.Time `json:"botValidadaEm"`
+	BotValidadaPor *int64     `json:"botValidadaPor"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
 }
 
 // portalStudentDTO é um aluno matriculado numa turma. Individual marca a
@@ -467,6 +473,8 @@ type portalClassInput struct {
 	StartDate       string `json:"startDate"`
 	DurationWeeks   int    `json:"durationWeeks"`
 	IndividualClass *bool  `json:"individualClass"`
+	// Capacity: nil = não mexe (PATCH) / padrão 10 (criação).
+	Capacity *int `json:"capacity"`
 }
 
 func (in *portalClassInput) validateCreate() error {
@@ -483,7 +491,7 @@ func (in *portalClassInput) validateCreate() error {
 	if in.DurationWeeks < 1 || in.DurationWeeks > 104 {
 		return validationErr("durationWeeks deve ficar entre 1 e 104")
 	}
-	return nil
+	return validaCapacidadeTurma(in.Capacity)
 }
 
 type portalAddStudentsInput struct {

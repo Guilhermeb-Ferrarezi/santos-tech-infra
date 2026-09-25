@@ -1654,8 +1654,10 @@ DELETE /portal/phases/{phaseId}
 GET    /portal/classes?page=1&limit=20&q=
 POST   /portal/classes
 GET    /portal/classes/{classId}
-PATCH  /portal/classes/{classId}
+PATCH  /portal/classes/{classId}                  body parcial; capacity? (1–50)
 DELETE /portal/classes/{classId}
+POST   /portal/classes/{classId}/bot-validacao    libera a turma pro bot de vendas (portal_turmas:write)
+DELETE /portal/classes/{classId}/bot-validacao    tira a turma do bot
 GET    /portal/classes/{classId}/students
 POST   /portal/classes/{classId}/students
 PATCH  /portal/classes/{classId}/students/{studentId}  body {individual, contractedLessons?, contratoDriveFileId?, contractedContent?, contractDate?}
@@ -1669,6 +1671,15 @@ PATCH  /portal/rooms/{roomId}
 PATCH  /portal/rooms/{roomId}/status
 DELETE /portal/rooms/{roomId}
 ```
+
+**Turma (`class`)** devolve `individualClass` (particular × grupo), `capacity` (alunos que
+a turma comporta, padrão 10, 1–50 — fora disso 400; vaga = `capacity − matrículas`) e
+`botValidadaEm`/`botValidadaPor` (`null` = o bot de vendas NÃO enxerga a turma). Liberar
+(`POST .../bot-validacao`) é o humano dizendo "conferi início, fim, matrículas e horários":
+recusa com 400 `TURMA_NAO_LIBERAVEL` (motivo em `message`) se a turma for particular, se o
+fim já passou, ou se nenhum evento `aula_turma` da Agenda estiver ligado a ela (ver
+`PUT /agenda/eventos/{id}/turma`). Editar início/fim/capacidade depois NÃO tira a
+liberação. Spec: `dashboard/docs/superpowers/specs/2026-09-25-bot-turmas-ao-vivo-design.md`.
 
 `DELETE /portal/students/{studentId}` é outra coisa, e bem mais grave, que
 desmatricular: varre toda tabela do Portal que tenha `user_id` (o schema é

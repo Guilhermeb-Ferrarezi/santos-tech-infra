@@ -181,3 +181,83 @@ func TestLigaEventoATurmaIntegracao(t *testing.T) {
 func intPtr(v int) *int { return &v }
 
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }
+
+func TestLiberacaoDaTurmaParaOBotIntegracao(t *testing.T) {
+	s, pool := servidorTurmasAoVivo(t)
+	const rotaPost = "POST /portal/classes/{classId}/bot-validacao"
+	const rotaDel = "DELETE /portal/classes/{classId}/bot-validacao"
+	const rotaPatch = "PATCH /portal/classes/{classId}"
+
+	grupo := criaTurmaPortal(t, pool, "Turma Programação", false, "2026-08-01", "2099-08-01")
+	particular := criaTurmaPortal(t, pool, "Walisson", true, "2026-09-08", "2099-03-08")
+	vencida := criaTurmaPortal(t, pool, "Turma vencida", false, "2025-01-01", "2026-01-01")
+
+	motivo := func(out map[string]any) string { m, _ := out["message"].(string); return m }
+
+	// Sem horário ligado: recusa com motivo.
+	code, out := chamaHandler(t, rotaPost, s.handlePortalLiberarTurmaBot, "POST", "/portal/classes/"+itoa(grupo)+"/bot-validacao", "")
+	if code != 400 || out["code"] != "TURMA_NAO_LIBERAVEL" || !strings.Contains(motivo(out), "horário") {
+		t.Fatalf("sem horário ligado: %d %v", code, out)
+	}
+	// Particular: recusa.
+	code, out = chamaHandler(t, rotaPost, s.handlePortalLiberarTurmaBot, "POST", "/portal/classes/"+itoa(particular)+"/bot-validacao", "")
+	if code != 400 || !strings.Contains(motivo(out), "particular") {
+		t.Fatalf("particular: %d %v", code, out)
+	}
+	// Fim vencido: recusa, mesmo com horário ligado.
+	evVencida := criaEventoAgenda(t, pool, "aula_turma", "Turma vencida", 2, "10:00", "11:00", nil)
+	if _, err := pool.Exec(context.Background(), `UPDATE agenda_eventos SET portal_class_id=$1 WHERE id=$2::uuid`, vencida, evVencida); err != nil {
+		t.Fatal(err)
+	}
+	code, out = chamaHandler(t, rotaPost, s.handlePortalLiberarTurmaBot, "POST", "/portal/classes/"+itoa(vencida)+"/bot-validacao", "")
+	if code != 400 || !strings.Contains(motivo(out), "fim") {
+		t.Fatalf("vencida: %d %v", code, out)
+	}
+	// Inexistente: 404.
+	if code, _ := chamaHandler(t, rotaPost, s.handlePortalLiberarTurmaBot, "POST", "/portal/classes/999999/bot-validacao", ""); code != 404 {
+		t.Fatalf("inexistente deveria ser 404, got %d", code)
+	}
+
+	// Caminho feliz: com horário ligado, libera e grava quem/quando.
+	ev := criaEventoAgenda(t, pool, "aula_turma", "Turma Programação", 6, "13:00", "15:00", nil)
+	if _, err := pool.Exec(context.Background(), `UPDATE agenda_eventos SET portal_class_id=$1 WHERE id=$2::uuid`, grupo, ev); err != nil {
+		t.Fatal(err)
+	}
+	code, out = chamaHandler(t, rotaPost, s.handlePortalLiberarTurmaBot, "POST", "/portal/classes/"+itoa(grupo)+"/bot-validacao", "")
+	class, _ := out["class"].(map[string]any)
+	if code != 200 || class["botValidadaEm"] == nil || class["botValidadaPor"] != float64(1) || class["capacity"] != float64(10) {
+		t.Fatalf("liberar: %d %v", code, out)
+	}
+
+	// Capacidade: PATCH aceita 1–50, recusa fora disso, e não tira a liberação.
+	code, out = chamaHandler(t, rotaPatch, s.handlePortalUpdateClass, "PATCH", "/portal/classes/"+itoa(grupo), `{"capacity":8}`)
+	class, _ = out["class"].(map[string]any)
+	if code != 200 || class["capacity"] != float64(8) || class["botValidadaEm"] == nil {
+		t.Fatalf("PATCH capacity: %d %v", code, out)
+	}
+	for _, v := range []string{"0", "51", "-3"} {
+		if code, _ := chamaHandler(t, rotaPatch, s.handlePortalUpdateClass, "PATCH", "/portal/classes/"+itoa(grupo), `{"capacity":`+v+`}`); code != 400 {
+			t.Fatalf("capacity=%s deveria ser 400, got %d", v, code)
+		}
+	}
+	// PATCH sem capacity preserva a capacidade.
+	code, out = chamaHandler(t, rotaPatch, s.handlePortalUpdateClass, "PATCH", "/portal/classes/"+itoa(grupo), `{"name":"Turma Programação B"}`)
+	class, _ = out["class"].(map[string]any)
+	if code != 200 || class["capacity"] != float64(8) {
+		t.Fatalf("PATCH sem capacity: %d %v", code, out)
+	}
+
+	// GET da turma devolve individualClass de verdade (antes vinha sempre false).
+	code, out = chamaHandler(t, "GET /portal/classes/{classId}", s.handlePortalGetClass, "GET", "/portal/classes/"+itoa(particular), "")
+	class, _ = out["class"].(map[string]any)
+	if code != 200 || class["individualClass"] != true {
+		t.Fatalf("GET particular: %d %v", code, out)
+	}
+
+	// Retirar.
+	code, out = chamaHandler(t, rotaDel, s.handlePortalRetirarTurmaBot, "DELETE", "/portal/classes/"+itoa(grupo)+"/bot-validacao", "")
+	class, _ = out["class"].(map[string]any)
+	if code != 200 || class["botValidadaEm"] != nil || class["botValidadaPor"] != nil {
+		t.Fatalf("retirar: %d %v", code, out)
+	}
+}
