@@ -261,3 +261,84 @@ func TestLiberacaoDaTurmaParaOBotIntegracao(t *testing.T) {
 		t.Fatalf("retirar: %d %v", code, out)
 	}
 }
+
+func TestConsultasDoBotIntegracao(t *testing.T) {
+	s, pool := servidorTurmasAoVivo(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `INSERT INTO course (id, name) VALUES (7, 'Programação'), (5, 'Informática')`); err != nil {
+		t.Fatal(err)
+	}
+	liberada := criaTurmaPortal(t, pool, "Turma Programação", false, "2026-08-01", "2099-08-01")
+	naoLiberada := criaTurmaPortal(t, pool, "Turma Informática", false, "2026-03-01", "2099-03-01")
+	vencida := criaTurmaPortal(t, pool, "Turma velha", false, "2024-01-01", "2025-01-01")
+	if _, err := pool.Exec(ctx, `UPDATE class SET course_id = 7 WHERE id = $1; `, liberada); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE class SET bot_validada_em = now(), bot_validada_por = 1, capacity = 10 WHERE id = ANY($1)`, []int64{liberada, naoLiberada, vencida}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE class SET bot_validada_em = NULL WHERE id = $1`, naoLiberada); err != nil {
+		t.Fatal(err)
+	}
+	for _, uid := range []int{101, 102, 103} {
+		if _, err := pool.Exec(ctx, `INSERT INTO enrollment (user_id, class_id) VALUES ($1, $2)`, uid, liberada); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pcs := 10
+	for _, c := range []struct {
+		id  int64
+		dia int
+		ini string
+		fim string
+	}{{liberada, 6, "13:00", "15:00"}, {naoLiberada, 2, "19:30", "21:30"}, {vencida, 1, "10:00", "11:00"}} {
+		ev := criaEventoAgenda(t, pool, "aula_turma", "t", c.dia, c.ini, c.fim, &pcs)
+		if _, err := pool.Exec(ctx, `UPDATE agenda_eventos SET portal_class_id = $1 WHERE id = $2::uuid`, c.id, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	criaEventoAgenda(t, pool, "aula_particular", "Walisson", 3, "18:00", "19:00", nil)
+	if _, err := pool.Exec(ctx, `INSERT INTO class_schedule (class_id, day_of_week, start_time, end_time) VALUES ($1, 6, '13:00', '15:00')`, liberada); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out := chamaHandler(t, "GET /portal/turmas-abertas", s.handleTurmasAbertas, "GET", "/portal/turmas-abertas", "")
+	turmas, _ := out["turmas"].([]any)
+	if code != 200 || len(turmas) != 1 || out["geradoEm"] == nil {
+		t.Fatalf("só a liberada e em vigor deveria vir: %d %v", code, out)
+	}
+	tu := turmas[0].(map[string]any)
+	curso, _ := tu["curso"].(map[string]any)
+	if tu["id"] != float64(liberada) || tu["alunos"] != float64(3) || tu["vagas"] != float64(7) || tu["capacidade"] != float64(10) ||
+		tu["divergente"] != false || curso["nome"] != "Programação" || tu["fimPrevisto"] != "2099-08-01" {
+		t.Fatalf("turma: %v", tu)
+	}
+	// Filtros.
+	code, out = chamaHandler(t, "GET /portal/turmas-abertas", s.handleTurmasAbertas, "GET", "/portal/turmas-abertas?diaSemana=2", "")
+	if turmas, _ := out["turmas"].([]any); code != 200 || len(turmas) != 0 {
+		t.Fatalf("diaSemana=2 não tem turma liberada: %d %v", code, out)
+	}
+	code, out = chamaHandler(t, "GET /portal/turmas-abertas", s.handleTurmasAbertas, "GET", "/portal/turmas-abertas?curso=5", "")
+	if turmas, _ := out["turmas"].([]any); code != 200 || len(turmas) != 0 {
+		t.Fatalf("curso=5 não tem turma liberada: %d %v", code, out)
+	}
+	if code, _ := chamaHandler(t, "GET /portal/turmas-abertas", s.handleTurmasAbertas, "GET", "/portal/turmas-abertas?curso=abc", ""); code != 400 {
+		t.Fatalf("curso inválido deveria ser 400, got %d", code)
+	}
+
+	// Horários livres: sábado 08–18, 60 min. Turma 13–15 ocupa; a vencida
+	// (segunda) não conta porque o evento continua semanal — ocupa a sala
+	// enquanto existir na Agenda, independentemente da turma do Portal.
+	code, out = chamaHandler(t, "GET /agenda/horarios-livres", s.handleHorariosLivres, "GET", "/agenda/horarios-livres?abre=08:00&fecha=18:00&duracao=60&dias=6,3", "")
+	janelas, _ := out["janelas"].([]any)
+	if code != 200 || len(janelas) != 3 {
+		t.Fatalf("horários livres: %d %v", code, out)
+	}
+	primeira := janelas[0].(map[string]any)
+	if primeira["diaSemana"] != float64(3) || primeira["horaInicio"] != "08:00" || primeira["horaFim"] != "18:00" {
+		t.Fatalf("quarta: particular 18–19 fica fora do expediente 08–18: %v", janelas)
+	}
+	if code, _ := chamaHandler(t, "GET /agenda/horarios-livres", s.handleHorariosLivres, "GET", "/agenda/horarios-livres?abre=08:00", ""); code != 400 {
+		t.Fatalf("parâmetros faltando deveria ser 400, got %d", code)
+	}
+}

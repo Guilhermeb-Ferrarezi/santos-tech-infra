@@ -190,7 +190,7 @@ func (s *Server) setTurmaBotValidada(w http.ResponseWriter, r *http.Request, lib
 			writeErr(w, err)
 			return
 		}
-		if motivo := motivoTurmaNaoLiberavel(class, len(horariosDaTurma(eventos, id)), time.Now()); motivo != "" {
+		if motivo := motivoTurmaNaoLiberavel(class, len(horariosDaTurma(eventos, id)), hojeNaEscola(time.Now())); motivo != "" {
 			writeErr(w, appErr(http.StatusBadRequest, "TURMA_NAO_LIBERAVEL", motivo))
 			return
 		}
