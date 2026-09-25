@@ -143,7 +143,8 @@ func (s *Server) respondeVersaoGravada(w http.ResponseWriter, v VersaoRegras, er
 		jsonErr(w, strings.TrimPrefix(err.Error(), ErrRegrasInvalidas.Error()+": "), http.StatusBadRequest)
 		return
 	case errors.Is(err, ErrVersaoDesatualizada):
-		jsonErr(w, "alguém salvou uma versão mais nova — recarregue antes de salvar", http.StatusConflict)
+		// Código, não frase: a tela reconhece e mostra o aviso em português.
+		jsonErr(w, "stale_version", http.StatusConflict)
 		return
 	case errors.Is(err, ErrVersaoNaoEncontrada):
 		jsonErr(w, "versão não encontrada", http.StatusNotFound)

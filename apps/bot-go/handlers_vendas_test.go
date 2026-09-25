@@ -109,7 +109,7 @@ func TestRotasDeVendasFluxoCompleto(t *testing.T) {
 
 	// Base velha: 409.
 	rec = pede(t, h, "PATCH", "/api/vendas/regras", `{"versaoBase":"","regras":{}}`)
-	if rec.Code != http.StatusConflict {
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "stale_version") {
 		t.Errorf("base velha: esperado 409, veio %d %s", rec.Code, rec.Body)
 	}
 
