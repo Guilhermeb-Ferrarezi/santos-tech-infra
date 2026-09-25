@@ -66,15 +66,19 @@ func TestGeradorDeFichaPodeRecusar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("não consegui ler worker.go: %v", err)
 	}
-	// Checkout no Windows vem com CRLF: sem normalizar, o "\n}\n" abaixo
-	// nunca casa e o recorte estoura.
-	s := strings.ReplaceAll(string(src), "\r\n", "\n")
+	// No Windows o git entrega o arquivo com CRLF. Sem normalizar, procurar
+	// "\n}\n" não acha nada e o recorte abaixo estoura o slice — o teste morria
+	// de pânico em vez de falhar dizendo o que estava errado.
+	s := semCR(string(src))
 
 	i := strings.Index(s, "func (w *Worker) handleKBGap")
 	if i < 0 {
 		t.Fatal("handleKBGap sumiu")
 	}
 	fim := strings.Index(s[i:], "\n}\n")
+	if fim < 0 {
+		t.Fatal("não achei o fim de handleKBGap")
+	}
 	corpo := s[i : i+fim]
 
 	if !strings.Contains(corpo, `util`) {
@@ -95,13 +99,13 @@ func TestHandoffSilenciaOBot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("não consegui ler engine.go: %v", err)
 	}
-	s := string(src)
+	s := semCR(string(src))
 
 	i := strings.Index(s, "if output.Handoff {")
 	if i < 0 {
 		t.Fatal("o bloco de handoff sumiu")
 	}
-	bloco := s[i : i+1200]
+	bloco := s[i:min(i+1200, len(s))]
 	if !strings.Contains(bloco, "SetBotEnabled") {
 		t.Error("o handoff não desliga o bot para a conversa")
 	}

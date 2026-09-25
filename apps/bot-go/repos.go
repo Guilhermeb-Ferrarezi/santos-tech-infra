@@ -880,7 +880,8 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		       tc.voice_enabled,
 		       tc.voice_provider,
 		       tc.voice_id,
-		       tc.voice_model
+		       tc.voice_model,
+		       tc.origem_marcadores
 		FROM tenant_config tc
 		JOIN tenants t ON t.id = tc.tenant_id
 		WHERE tc.tenant_id = $1
@@ -902,6 +903,7 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 	var quietStart, quietEnd *string
 	var allowedRaw []byte
 	var adminNumbersRaw []byte
+	var marcadoresRaw []byte
 
 	err := row.Scan(
 		&cfg.BotName, &cfg.BotGender,
@@ -919,6 +921,7 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 		&cfg.VoiceProvider,
 		&cfg.VoiceID,
 		&cfg.VoiceModel,
+		&marcadoresRaw,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("TenantConfigRepo.Get: tenant %s não encontrado", tenantID)
@@ -935,6 +938,11 @@ func (r *TenantConfigRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 	}
 	if len(adminNumbersRaw) > 0 {
 		_ = json.Unmarshal(adminNumbersRaw, &cfg.AdminWhatsAppNumbers)
+	}
+	if len(marcadoresRaw) > 0 {
+		// Erro aqui é configuração torta, não falha de sistema: o bot segue sem
+		// identificar origem por link, que é degradação aceitável.
+		_ = json.Unmarshal(marcadoresRaw, &cfg.OrigemMarcadores)
 	}
 
 	return &cfg, nil
@@ -1348,7 +1356,8 @@ func (r *QualificacaoRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 	const sql = `
 		SELECT para_quem, aluno_nome, aluno_idade, interesse, ja_faz_curso,
 		       disponibilidade, motivacao, motivacao_tipo, observacoes,
-		       preco_informado, aula_marcada, turnos_respondendo, pedidos_de_preco
+		       preco_informado, aula_marcada, turnos_respondendo, pedidos_de_preco,
+		       origem, origem_detalhe, origem_fonte
 		FROM lead_qualificacao
 		WHERE tenant_id = $1 AND contact_id = $2`
 	// Dentro da transação do Handle, usa a MESMA conexão. Pedir outra ao pool
@@ -1362,7 +1371,8 @@ func (r *QualificacaoRepo) Get(ctx context.Context, tx pgx.Tx, tenantID TenantID
 	err := linha.Scan(
 		&q.ParaQuem, &q.AlunoNome, &q.AlunoIdade, &q.Interesse, &q.JaFazCurso,
 		&q.Disponibilidade, &q.Motivacao, &q.MotivacaoTipo, &q.Observacoes,
-		&q.PrecoInformado, &q.AulaMarcada, &q.TurnosRespondendo, &q.PedidosDePreco)
+		&q.PrecoInformado, &q.AulaMarcada, &q.TurnosRespondendo, &q.PedidosDePreco,
+		&q.Origem, &q.OrigemDetalhe, &q.OrigemFonte)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Qualificacao{}, true // primeira conversa: vazio E confiável
 	}
@@ -1384,8 +1394,8 @@ func (r *QualificacaoRepo) Save(ctx context.Context, tenantID TenantID, contactI
 		  (tenant_id, contact_id, para_quem, aluno_nome, aluno_idade, interesse,
 		   ja_faz_curso, disponibilidade, motivacao, motivacao_tipo, observacoes,
 		   preco_informado, aula_marcada, turnos_respondendo, pedidos_de_preco,
-		   perguntas_respondidas, atualizado_em)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, now())
+		   perguntas_respondidas, origem, origem_detalhe, origem_fonte, atualizado_em)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now())
 		ON CONFLICT (tenant_id, contact_id) DO UPDATE SET
 		  para_quem       = coalesce(nullif(EXCLUDED.para_quem, ''),       lead_qualificacao.para_quem),
 		  aluno_nome      = coalesce(nullif(EXCLUDED.aluno_nome, ''),      lead_qualificacao.aluno_nome),
@@ -1401,11 +1411,21 @@ func (r *QualificacaoRepo) Save(ctx context.Context, tenantID TenantID, contactI
 		  turnos_respondendo = greatest(EXCLUDED.turnos_respondendo, lead_qualificacao.turnos_respondendo),
 		  pedidos_de_preco   = greatest(EXCLUDED.pedidos_de_preco,   lead_qualificacao.pedidos_de_preco),
 		  perguntas_respondidas = greatest(EXCLUDED.perguntas_respondidas, lead_qualificacao.perguntas_respondidas),
+		  -- A origem anda em bloco: ou os três campos mudam juntos, ou nenhum.
+		  -- Detalhe apontando para uma origem que já foi substituída é pior que
+		  -- detalhe nenhum. A REGRA DE QUEM VENCE (anúncio > marcador >
+		  -- perguntado) mora no Go, em comOrigem — aqui só se garante que vazio
+		  -- não apaga cheio.
+		  origem         = coalesce(nullif(EXCLUDED.origem, ''),         lead_qualificacao.origem),
+		  origem_detalhe = CASE WHEN nullif(EXCLUDED.origem, '') IS NOT NULL
+		                        THEN EXCLUDED.origem_detalhe ELSE lead_qualificacao.origem_detalhe END,
+		  origem_fonte   = CASE WHEN nullif(EXCLUDED.origem, '') IS NOT NULL
+		                        THEN EXCLUDED.origem_fonte ELSE lead_qualificacao.origem_fonte END,
 		  atualizado_em = now()
 	`, tenantID, contactID, q.ParaQuem, q.AlunoNome, q.AlunoIdade, q.Interesse,
 		q.JaFazCurso, q.Disponibilidade, q.Motivacao, q.MotivacaoTipo, q.Observacoes,
 		q.PrecoInformado, q.AulaMarcada, q.TurnosRespondendo, q.PedidosDePreco,
-		q.Respondidas())
+		q.Respondidas(), q.Origem, q.OrigemDetalhe, q.OrigemFonte)
 	if err != nil {
 		return fmt.Errorf("QualificacaoRepo.Save: %w", err)
 	}

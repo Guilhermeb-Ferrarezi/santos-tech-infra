@@ -334,6 +334,15 @@ func (e *ConversationEngine) Handle(ctx context.Context, inbound InboundMessage)
 				e.deps.Logger.Error("qualificacao: não consegui ler o dossiê; não vou gravar neste turno",
 					"contato", contact.ID)
 			}
+			// De onde a pessoa veio, quando o próprio canal conta — o anúncio
+			// que a Meta confirmou, ou o texto pronto do link. Precisa ser lido
+			// AQUI, antes de chamar o modelo: a Meta só manda o bloco `referral`
+			// na primeira mensagem da conversa, e se não for aproveitado agora,
+			// some para sempre. Ver origem.go.
+			if dossieConfiavel {
+				convCtx.Qualificacao = origemDaChegada(
+					convCtx.Qualificacao, inbound, cfg, len(recentTurns) == 0)
+			}
 		}
 
 		// k) Quiet hours — verifica se deve suspender o processamento

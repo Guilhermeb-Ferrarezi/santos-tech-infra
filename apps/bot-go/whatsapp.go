@@ -398,6 +398,22 @@ type metaWebhookMessage struct {
 	Sticker *struct {
 		ID string `json:"id"`
 	} `json:"sticker"`
+
+	// Referral — de onde a pessoa veio, quando veio de um anúncio Click-to-WhatsApp
+	// (Instagram ou Facebook). A Meta manda este bloco **só na primeira mensagem**
+	// da conversa, e só nesse caso: quem digita o número na mão, salva o contato ou
+	// clica num link wa.me comum chega sem nada aqui.
+	//
+	// É a única origem que dá para saber sem perguntar. Guardar custa nada e não
+	// dá para recuperar depois — se não for lido nesta mensagem, some.
+	Referral *struct {
+		SourceURL  string `json:"source_url"`
+		SourceID   string `json:"source_id"`
+		SourceType string `json:"source_type"` // "ad" | "post"
+		Headline   string `json:"headline"`
+		Body       string `json:"body"`
+		CtwaCLID   string `json:"ctwa_clid"`
+	} `json:"referral"`
 }
 
 type metaWebhookContact struct {
@@ -498,7 +514,7 @@ func ParseMetaWebhook(body []byte, phoneNumberID string) ([]InboundMessage, erro
 					}
 				}
 
-				msgs = append(msgs, InboundMessage{
+				im := InboundMessage{
 					TenantID:          "",
 					Channel:           "whatsapp",
 					ExternalID:        m.From,
@@ -506,7 +522,12 @@ func ParseMetaWebhook(body []byte, phoneNumberID string) ([]InboundMessage, erro
 					ProviderMessageID: m.ID,
 					Content:           content,
 					ReceivedAt:        receivedAt,
-				})
+				}
+				if r := m.Referral; r != nil {
+					im.Origem = origemDoAnuncio(r.SourceURL)
+					im.OrigemDetalhe = detalheDoAnuncio(r.SourceType, r.SourceID, r.Headline, r.SourceURL)
+				}
+				msgs = append(msgs, im)
 			}
 		}
 	}
