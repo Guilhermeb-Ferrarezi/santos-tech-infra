@@ -32,8 +32,7 @@ func (q *Queries) GetUserAvisos(ctx context.Context, id int32) (GetUserAvisosRow
 const updateUserAvisos = `-- name: UpdateUserAvisos :one
 UPDATE users SET
   aviso_email    = CASE WHEN $1::bool    THEN $2::text    ELSE aviso_email END,
-  aviso_telefone = CASE WHEN $3::bool THEN $4::text ELSE aviso_telefone END,
-  updated_at     = now()
+  aviso_telefone = CASE WHEN $3::bool THEN $4::text ELSE aviso_telefone END
 WHERE id = $5
 RETURNING email, aviso_email, aviso_telefone
 `
@@ -53,6 +52,7 @@ type UpdateUserAvisosRow struct {
 }
 
 // set_* = false preserva a coluna; true grava o valor (NULL volta ao padrão).
+// Sem updated_at: a tabela users de produção não tem essa coluna.
 func (q *Queries) UpdateUserAvisos(ctx context.Context, arg UpdateUserAvisosParams) (UpdateUserAvisosRow, error) {
 	row := q.db.QueryRow(ctx, updateUserAvisos,
 		arg.SetEmail,
