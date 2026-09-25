@@ -26,6 +26,10 @@ func (s *Server) rotasDeVendas(mux *http.ServeMux) {
 	mux.Handle("GET /api/vendas/regras/versoes/{id}", da(s.handleVendasVersao))
 	mux.Handle("POST /api/vendas/regras/versoes/{id}/restaurar", da(s.handleVendasRestaura))
 	mux.Handle("GET /api/vendas/vocabulario/ocorrencias", da(s.handleVendasOcorrencias))
+	// Playbook: fichas de situação (handlers_playbook.go)
+	mux.Handle("GET /api/vendas/situacoes", da(s.handleSituacoes))
+	mux.Handle("POST /api/vendas/situacoes", da(s.handleCriaSituacao))
+	mux.Handle("PATCH /api/vendas/situacoes/{id}", da(s.handleEditaSituacao))
 }
 
 // versaoNaTela — o que a tela precisa saber da versão em vigor.

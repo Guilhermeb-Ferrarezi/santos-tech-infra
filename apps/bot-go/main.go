@@ -154,6 +154,9 @@ func main() {
 	// motores e invalidado pelo painel quando alguém salva.
 	regrasVendaRepo := &RegrasVendaRepo{pool: pool}
 	regrasVendaFonte := NewRegrasVendaFonte(regrasVendaRepo, 30*time.Second, logger)
+	// Playbook de venda (0047): mesmo esquema — um cache só, dos dois motores.
+	playbookRepo := &PlaybookRepo{pool: pool}
+	playbookFonte := NewPlaybookFonte(playbookRepo, 30*time.Second, logger)
 
 	// Modo observador (observador.go): só age com observador_ligado na tela.
 	observador := NewObservador(NewObservadorRepo(pool), agentClient, logger)
@@ -192,6 +195,7 @@ func main() {
 		Lembretes:         NewLembreteRepo(pool),
 		Qualificacoes:     NewQualificacaoRepo(pool),
 		RegrasVenda:       regrasVendaFonte,
+		Playbook:          playbookFonte,
 	}
 
 	depsCloud := depsBase
@@ -235,6 +239,8 @@ func main() {
 	server.observador = observador
 	server.regrasVenda = regrasVendaRepo
 	server.regrasFonte = regrasVendaFonte
+	server.playbook = playbookRepo
+	server.playbookFonte = playbookFonte
 
 	// 14. Inicia worker em background; workerDone fecha quando ele drena no shutdown.
 	workerDone := make(chan struct{})

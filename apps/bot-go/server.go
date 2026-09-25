@@ -163,6 +163,10 @@ type Server struct {
 	// mesmo cache que o engine lê — o save invalida para a próxima mensagem.
 	regrasVenda *RegrasVendaRepo
 	regrasFonte *RegrasVendaFonte
+	// Playbook (0047): fichas de situação. playbookFonte é o mesmo cache que
+	// o engine lê — criar/editar invalida para a próxima mensagem.
+	playbook      *PlaybookRepo
+	playbookFonte *PlaybookFonte
 	// session valida a sessão do painel (cookie access_token) no auth central.
 	session *SessionAuth
 	// bg roda o processamento dos webhooks fora do handler, com paralelismo
@@ -200,6 +204,7 @@ func NewServer(cfg Config, engine *ConversationEngine, webhook *WebhookRepo, poo
 		gcalRepo:    NewGCalRepo(pool),
 		followup:    NewFollowupRepo(pool),
 		regrasVenda: &RegrasVendaRepo{pool: pool},
+		playbook:    &PlaybookRepo{pool: pool},
 		rdb:         rdb,
 		notifDedupe: newNotifDedupe(),
 		retryStream: NewRetryStream(rdb, cfg.RetryStreamKey, cfg.RetryStreamGroup, cfg.RetryStreamConsumer, logger),

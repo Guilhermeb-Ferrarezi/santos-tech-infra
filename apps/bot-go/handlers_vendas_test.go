@@ -27,6 +27,8 @@ func servidorDeVendas(t *testing.T) (*Server, http.Handler) {
 		regrasVenda: repo,
 		regrasFonte: NewRegrasVendaFonte(repo, time.Minute, nil),
 	}
+	s.playbook = &PlaybookRepo{pool: pool}
+	s.playbookFonte = NewPlaybookFonte(s.playbook, time.Minute, nil)
 	mux := http.NewServeMux()
 	s.rotasDeVendas(mux)
 	return s, mux
@@ -66,6 +68,9 @@ func TestRotasDeVendasSemCredencialDa401(t *testing.T) {
 		{"GET", "/api/vendas/regras/versoes/x"},
 		{"POST", "/api/vendas/regras/versoes/x/restaurar"},
 		{"GET", "/api/vendas/vocabulario/ocorrencias"},
+		{"GET", "/api/vendas/situacoes"},
+		{"POST", "/api/vendas/situacoes"},
+		{"PATCH", "/api/vendas/situacoes/x"},
 	} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(rota.metodo, rota.url, strings.NewReader("{}")))
