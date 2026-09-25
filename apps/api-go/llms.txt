@@ -1268,6 +1268,12 @@ a janela de exibição.
 - `POST /agenda/eventos/check {AgendaEventoInput}` — dry-run do motor de conflito, NUNCA
   grava; usado pelo formulário do front pra feedback de capacidade em tempo real → 200
   `{capacidadeExcedida, pcsOcupados, eventosCapacidade, eventosPolitica}`
+- `PUT /agenda/eventos/{id}/turma {portalClassId: int|null}` — liga (ou, com `null`, desliga)
+  o evento à turma do Portal (`class.id`). Rota própria: o `PUT` do evento **não** toca a
+  ligação, então um cliente que manda o evento inteiro sem ela não a apaga. `aula_turma` só
+  liga em turma de grupo e `aula_particular` só em turma particular (senão 400
+  `AGENDA_TURMA_TIPO_INCOMPATIVEL`); demais tipos nunca ligam · evento ou turma inexistente
+  → 404 · 200 `{evento}`
 - `GET /agenda/feriados?ano=YYYY` — `{feriados:[AgendaFeriado]}`, nacionais (BrasilAPI,
   cache 24h) + municipais, juntos · `ano` fora de 2000–2100 → 400
 - `GET|POST /agenda/feriados-municipais`, `DELETE /agenda/feriados-municipais/{id}` —
@@ -1298,7 +1304,8 @@ fixo) e qualquer outro valor/ausência vira `nenhuma`; os demais tipos são semp
 semanal), `dataFimRecorrencia` (só se semanal; `null` = recorrência **indefinida**, sem
 data de término conhecida — estado válido, não obrigatório), `dataFim` (só se
 `tipo=dia_inteiro` — último dia, inclusive, do banner; obrigatório e ≥ `dataInicio` nesse
-caso, `null` pros demais tipos), `statusPreparo` (nao_aplica|pendente|pronto —
+caso, `null` pros demais tipos), `portalClassId` (só leitura — turma do Portal ligada por
+`PUT /agenda/eventos/{id}/turma`; `null` = sem turma), `statusPreparo` (nao_aplica|pendente|pronto —
 `nao_aplica` forçado pra tipos de aula e pra `dia_inteiro`, default `pendente` pra tipos de
 Arena), `notas`, `createdBy`/`createdByNome`.
 

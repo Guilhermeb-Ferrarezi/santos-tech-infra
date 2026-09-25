@@ -202,3 +202,24 @@ func TestValidateAgendaEventoInputComputadoresUsadosNilValido(t *testing.T) {
 		t.Fatalf("computadoresUsados nil não deveria ser rejeitado: %v", err)
 	}
 }
+
+func TestAgendaTipoCombinaComTurma(t *testing.T) {
+	casos := []struct {
+		tipo       string
+		individual bool
+		ok         bool
+	}{
+		{"aula_turma", false, true},
+		{"aula_turma", true, false},
+		{"aula_particular", true, true},
+		{"aula_particular", false, false},
+		{"aula_experimental", false, false},
+		{"mix", false, false},
+		{"dia_inteiro", true, false},
+	}
+	for _, c := range casos {
+		if got := agendaTipoCombinaComTurma(c.tipo, c.individual); got != c.ok {
+			t.Fatalf("%s individual=%v: got %v, want %v", c.tipo, c.individual, got, c.ok)
+		}
+	}
+}

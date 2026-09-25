@@ -32,7 +32,10 @@ type AgendaEvento struct {
 	// DataFim: último dia (inclusive) de um evento "dia_inteiro" que abrange
 	// vários dias consecutivos — distinto de DataFimRecorrencia (recorrência
 	// semanal). Só usado quando Tipo == "dia_inteiro".
-	DataFim       *string   `json:"dataFim"`
+	DataFim *string `json:"dataFim"`
+	// PortalClassID: turma do Portal a que este horário pertence (só leitura
+	// aqui — quem grava é PUT /agenda/eventos/{id}/turma, nunca o PUT do evento).
+	PortalClassID *int64    `json:"portalClassId"`
 	StatusPreparo *string   `json:"statusPreparo"`
 	Notas         string    `json:"notas"`
 	CreatedBy     *int64    `json:"createdBy"`
@@ -174,7 +177,7 @@ func mkAgendaEvento(
 	professorID pgtype.Int4, professorNome string,
 	conteudo, jogo *string, qtdPessoas pgtype.Int4, pcs pgtype.Int4,
 	dataInicio, horaInicio, horaFim, recorrencia string, diaSemana *int16, dataFimRecorrencia, dataFim string,
-	statusPreparo *string, notas string, createdBy pgtype.Int4, createdByNome string,
+	portalClassID pgtype.Int4, statusPreparo *string, notas string, createdBy pgtype.Int4, createdByNome string,
 	createdAt, updatedAt pgtype.Timestamptz,
 ) AgendaEvento {
 	return AgendaEvento{
@@ -183,7 +186,7 @@ func mkAgendaEvento(
 		Conteudo: conteudo, Jogo: jogo, QtdPessoas: pgInt4ToIntPtr(qtdPessoas), ComputadoresUsados: pgInt4ToIntPtr(pcs),
 		DataInicio: dataInicio, HoraInicio: horaInicio, HoraFim: horaFim,
 		Recorrencia: recorrencia, DiaSemana: int16PtrToIntPtr(diaSemana), DataFimRecorrencia: strPtrOrNil(dataFimRecorrencia),
-		DataFim: strPtrOrNil(dataFim), StatusPreparo: statusPreparo, Notas: notas,
+		DataFim: strPtrOrNil(dataFim), PortalClassID: pgInt4ToInt64Ptr(portalClassID), StatusPreparo: statusPreparo, Notas: notas,
 		CreatedBy: pgInt4ToInt64Ptr(createdBy), CreatedByNome: createdByNome,
 		CreatedAt: createdAt.Time, UpdatedAt: updatedAt.Time,
 	}
@@ -192,28 +195,28 @@ func mkAgendaEvento(
 func agendaEventoFromList(r db.ListAgendaEventosRow) AgendaEvento {
 	return mkAgendaEvento(r.ID, r.Tipo, r.Titulo, r.AlunoOuGrupo, r.ProfessorOuResponsavelID, r.ProfessorOuResponsavelNome,
 		r.Conteudo, r.Jogo, r.QtdPessoas, r.ComputadoresUsados, r.DataInicio, r.HoraInicio, r.HoraFim,
-		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.DataFim, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
+		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.DataFim, r.PortalClassID, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
 		r.CreatedAt, r.UpdatedAt)
 }
 
 func agendaEventoFromGet(r db.GetAgendaEventoRow) AgendaEvento {
 	return mkAgendaEvento(r.ID, r.Tipo, r.Titulo, r.AlunoOuGrupo, r.ProfessorOuResponsavelID, r.ProfessorOuResponsavelNome,
 		r.Conteudo, r.Jogo, r.QtdPessoas, r.ComputadoresUsados, r.DataInicio, r.HoraInicio, r.HoraFim,
-		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.DataFim, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
+		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.DataFim, r.PortalClassID, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
 		r.CreatedAt, r.UpdatedAt)
 }
 
 func agendaEventoFromInsert(r db.InsertAgendaEventoRow) AgendaEvento {
 	return mkAgendaEvento(r.ID, r.Tipo, r.Titulo, r.AlunoOuGrupo, r.ProfessorOuResponsavelID, r.ProfessorOuResponsavelNome,
 		r.Conteudo, r.Jogo, r.QtdPessoas, r.ComputadoresUsados, r.DataInicio, r.HoraInicio, r.HoraFim,
-		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.DataFim, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
+		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.DataFim, r.PortalClassID, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
 		r.CreatedAt, r.UpdatedAt)
 }
 
 func agendaEventoFromUpdate(r db.UpdateAgendaEventoRow) AgendaEvento {
 	return mkAgendaEvento(r.ID, r.Tipo, r.Titulo, r.AlunoOuGrupo, r.ProfessorOuResponsavelID, r.ProfessorOuResponsavelNome,
 		r.Conteudo, r.Jogo, r.QtdPessoas, r.ComputadoresUsados, r.DataInicio, r.HoraInicio, r.HoraFim,
-		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.DataFim, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
+		r.Recorrencia, r.DiaSemana, r.DataFimRecorrencia, r.DataFim, r.PortalClassID, r.StatusPreparo, r.Notas, r.CreatedBy, r.CreatedByNome,
 		r.CreatedAt, r.UpdatedAt)
 }
 
