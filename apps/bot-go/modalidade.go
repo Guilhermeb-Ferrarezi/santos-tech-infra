@@ -67,7 +67,18 @@ func (q Qualificacao) BlocoDaModalidade() string {
 	b.WriteString("Como apresentar o curso particular (sempre que ele for a indicação):\n")
 	b.WriteString("- Muita gente imagina, sem perceber, que um bom curso é numa sala com um professor e muitos alunos. Não discuta essa imagem — ANCORE nela: diga que é o MESMO curso, o mesmo conteúdo e a mesma qualidade que a pessoa faria numa turma dividindo a atenção do professor com outros alunos; a diferença é que aqui ela faz sozinha com o professor.\n")
 	b.WriteString("- Depois da âncora, mostre o que muda para ELA: atenção exclusiva; o professor começa do nível que ela já tem, mira no objetivo dela e se adapta ao jeito e ao ritmo dela de aprender, acompanhando a evolução aula a aula.\n")
-	b.WriteString("- NÃO cite número de alunos de turma (nem da escola, nem de outras). NÃO diminua a turma: ela é o caminho principal para crianças e adolescentes; compare só para mostrar o ganho do particular.\n")
+	b.WriteString("- NÃO cite número de alunos de turma (nem da escola, nem de outras).\n")
+	// O quanto se pode contrastar com a turma depende de a turma ser ou não
+	// produto NOSSO para esta pessoa (Henrique, 25/09/2026). Com idade de
+	// turma, diminuir a turma é agredir o que a própria escola vende. A partir
+	// de 17 anos a turma não é opção aqui — a alternativa real do cliente é uma
+	// turma em OUTRA escola, e mostrar por que ela serve menos é o que segura a
+	// venda. O contraste é sempre com o FORMATO, nunca com um concorrente.
+	if q.AlunoIdade >= idadeAdultoParticular {
+		b.WriteString("- Para esta pessoa a turma NÃO é opção aqui — a alternativa real dela é um curso em turma em outro lugar. Então você pode mostrar com franqueza por que a turma serve menos a ela: horário fixo que a rotina dela talvez não comporte, esperar a turma fechar para começar, ritmo e conteúdo pensados para a média da turma, atenção do professor dividida. Faça isso se ela comparar ou hesitar, sem exagero. NUNCA fale mal de uma escola específica e NÃO afirme o que outras escolas oferecem ou deixam de oferecer.\n")
+	} else {
+		b.WriteString("- NÃO diminua a turma: ela é o caminho principal para crianças e adolescentes e é produto da escola; compare só para mostrar o ganho do particular.\n")
+	}
 	b.WriteString("- NÃO escreva \"professor ou professora\": é redundante. Use \"o professor\".\n\n")
 
 	b.WriteString("Por que é assim (raciocínio interno — use para montar uma fala de VALOR, não de preço):\n")

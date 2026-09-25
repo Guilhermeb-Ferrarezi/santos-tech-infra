@@ -124,3 +124,30 @@ func TestModalidadeSemRedundanciaProfessorOuProfessora(t *testing.T) {
 		t.Error("o bloco deveria proibir a redundância \"professor ou professora\"")
 	}
 }
+
+// Henrique, 25/09/2026: quando a turma NÃO é opção (17+), a alternativa real do
+// cliente é uma turma em outra escola — aí o contraste com a turma trabalha a
+// favor, e o bot pode mostrar com franqueza por que ela serve menos a ele.
+// Quando o aluno tem idade de turma, a turma é produto nosso: nunca diminuir.
+func TestModalidadeContrasteComTurmaSoQuandoTurmaNaoEOpcao(t *testing.T) {
+	adulto := Qualificacao{AlunoIdade: 45}.BlocoDaModalidade()
+	if !strings.Contains(adulto, "pode mostrar com franqueza por que a turma serve menos") {
+		t.Errorf("45 anos: o contraste com turma deveria estar liberado:\n%s", adulto)
+	}
+	if strings.Contains(adulto, "NÃO diminua a turma") {
+		t.Error("45 anos: a proibição de diminuir a turma não se aplica")
+	}
+	if !strings.Contains(adulto, "NUNCA fale mal de uma escola específica") {
+		t.Error("o contraste é com o formato turma, nunca com um concorrente nomeado")
+	}
+
+	for _, q := range []Qualificacao{{AlunoIdade: 12}, {AlunoIdade: 16}, {}} {
+		b := q.BlocoDaModalidade()
+		if !strings.Contains(b, "NÃO diminua a turma") {
+			t.Errorf("idade %d: a turma é produto nosso e não pode ser diminuída", q.AlunoIdade)
+		}
+		if strings.Contains(b, "pode mostrar com franqueza") {
+			t.Errorf("idade %d: contraste com turma não pode estar liberado", q.AlunoIdade)
+		}
+	}
+}
