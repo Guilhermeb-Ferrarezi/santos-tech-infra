@@ -72,6 +72,8 @@ func TestRotasDeVendasSemCredencialDa401(t *testing.T) {
 		{"POST", "/api/vendas/situacoes"},
 		{"PATCH", "/api/vendas/situacoes/x"},
 		{"GET", "/api/vendas/indicadores"},
+		{"POST", "/api/conversations/x/aprendizado"},
+		{"GET", "/api/vendas/revisar"},
 	} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(rota.metodo, rota.url, strings.NewReader("{}")))

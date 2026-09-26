@@ -32,6 +32,9 @@ func (s *Server) rotasDeVendas(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/vendas/situacoes/{id}", da(s.handleEditaSituacao))
 	// Indicadores (indicadores.go)
 	mux.Handle("GET /api/vendas/indicadores", da(s.handleIndicadores))
+	// Virar aprendizado: a IA propõe uma ficha (rascunho) a partir de uma conversa
+	mux.Handle("POST /api/conversations/{id}/aprendizado", da(s.handleAprendizado))
+	mux.Handle("GET /api/vendas/revisar", da(s.handleRevisar))
 }
 
 // versaoNaTela — o que a tela precisa saber da versão em vigor.
