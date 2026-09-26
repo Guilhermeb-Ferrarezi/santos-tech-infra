@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS build
+FROM golang:alpine AS build
 ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY apps/cameras-go/go.mod apps/cameras-go/go.sum ./apps/cameras-go/
