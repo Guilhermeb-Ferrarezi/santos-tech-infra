@@ -15,7 +15,7 @@ type Go2RTCClient struct {
 }
 
 func NewGo2RTCClient() *Go2RTCClient {
-	apiURL := os.Getenv("GO2RTC_URL") // ex: http://localhost:1984
+	apiURL := os.Getenv("GO2RTC_API_URL") // ex: http://go2rtc:1984
 	if apiURL == "" {
 		apiURL = "http://localhost:1984"
 	}
@@ -66,6 +66,10 @@ func (g *Go2RTCClient) ProxyStream(cameraName string) http.HandlerFunc {
 		q := r.URL.Query()
 		q.Set("src", cameraName)
 		r.URL.RawQuery = q.Encode()
+
+		// Strip Origin to bypass go2rtc CheckOrigin, as we already authenticated
+		r.Header.Del("Origin")
+
 		proxy.ServeHTTP(w, r)
 	}
 }

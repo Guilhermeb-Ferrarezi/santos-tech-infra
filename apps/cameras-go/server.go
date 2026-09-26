@@ -64,7 +64,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /cameras", auth(s.handleListCameras))
 	mux.HandleFunc("POST /cameras", s.requireAdmin(s.handleCreateCamera))
 	mux.HandleFunc("GET /cameras/{id}", auth(s.handleGetCamera))
-	// mux.HandleFunc("PUT /cameras/{id}", s.requireAdmin(s.handleUpdateCamera))
+	mux.HandleFunc("PUT /cameras/{id}", s.requireAdmin(s.handleUpdateCamera))
 	mux.HandleFunc("DELETE /cameras/{id}", s.requireAdmin(s.handleDeleteCamera))
 	mux.HandleFunc("GET /cameras/{id}/stream", auth(s.handleProxyStream))
 
@@ -76,7 +76,7 @@ func (s *Server) Routes() http.Handler {
 	// Settings e OAuth (Admin)
 	mux.HandleFunc("GET /settings", s.requireAdmin(s.handleGetSettings))
 	mux.HandleFunc("GET /oauth/url", s.requireAdmin(s.handleOAuthUrl))
-	mux.HandleFunc("GET /oauth/callback", s.requireAdmin(s.handleOAuthCallback))
+	mux.HandleFunc("GET /auth/callback", s.handleOAuthCallback)
 
 	return mux
 }
@@ -86,7 +86,7 @@ func (s *Server) Run() error {
 		Addr:         ":" + s.cfg.Port,
 		Handler:      s.Routes(),
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 0, // 0 para permitir conexões WebSocket/streaming de longa duração
 		IdleTimeout:  120 * time.Second,
 	}
 

@@ -8,6 +8,7 @@ CREATE TABLE cameras (
     quality_sub TEXT NOT NULL,
     record_mode TEXT NOT NULL,
     motion_sensitivity INT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

@@ -23,5 +23,14 @@ func bearerToken(r *http.Request) string {
 	if len(auth) > 7 && auth[:7] == "Bearer " {
 		return auth[7:]
 	}
-	return ""
+	if cookie, err := r.Cookie("access_token"); err == nil {
+		return cookie.Value
+	}
+	if cookie, err := r.Cookie("st_token"); err == nil {
+		return cookie.Value
+	}
+	if cookie, err := r.Cookie("santos_token"); err == nil {
+		return cookie.Value
+	}
+	return r.URL.Query().Get("token")
 }

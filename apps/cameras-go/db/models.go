@@ -18,6 +18,7 @@ type Camera struct {
 	QualitySub            string             `json:"quality_sub"`
 	RecordMode            string             `json:"record_mode"`
 	MotionSensitivity     int32              `json:"motion_sensitivity"`
+	IsActive              bool               `json:"is_active"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 }

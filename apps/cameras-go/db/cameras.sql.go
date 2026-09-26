@@ -13,10 +13,10 @@ import (
 
 const createCamera = `-- name: CreateCamera :one
 INSERT INTO cameras (
-    name, ip, rtsp_user, rtsp_password_encrypted, quality_main, quality_sub, record_mode, motion_sensitivity
+    name, ip, rtsp_user, rtsp_password_encrypted, quality_main, quality_sub, record_mode, motion_sensitivity, is_active
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8
-) RETURNING id, name, ip, rtsp_user, rtsp_password_encrypted, quality_main, quality_sub, record_mode, motion_sensitivity, created_at, updated_at
+    $1, $2, $3, $4, $5, $6, $7, $8, $9
+) RETURNING id, name, ip, rtsp_user, rtsp_password_encrypted, quality_main, quality_sub, record_mode, motion_sensitivity, is_active, created_at, updated_at
 `
 
 type CreateCameraParams struct {
@@ -28,6 +28,7 @@ type CreateCameraParams struct {
 	QualitySub            string `json:"quality_sub"`
 	RecordMode            string `json:"record_mode"`
 	MotionSensitivity     int32  `json:"motion_sensitivity"`
+	IsActive              bool   `json:"is_active"`
 }
 
 func (q *Queries) CreateCamera(ctx context.Context, arg CreateCameraParams) (Camera, error) {
@@ -40,6 +41,7 @@ func (q *Queries) CreateCamera(ctx context.Context, arg CreateCameraParams) (Cam
 		arg.QualitySub,
 		arg.RecordMode,
 		arg.MotionSensitivity,
+		arg.IsActive,
 	)
 	var i Camera
 	err := row.Scan(
@@ -52,6 +54,7 @@ func (q *Queries) CreateCamera(ctx context.Context, arg CreateCameraParams) (Cam
 		&i.QualitySub,
 		&i.RecordMode,
 		&i.MotionSensitivity,
+		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -68,7 +71,7 @@ func (q *Queries) DeleteCamera(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getCamera = `-- name: GetCamera :one
-SELECT id, name, ip, rtsp_user, rtsp_password_encrypted, quality_main, quality_sub, record_mode, motion_sensitivity, created_at, updated_at FROM cameras WHERE id = $1
+SELECT id, name, ip, rtsp_user, rtsp_password_encrypted, quality_main, quality_sub, record_mode, motion_sensitivity, is_active, created_at, updated_at FROM cameras WHERE id = $1
 `
 
 func (q *Queries) GetCamera(ctx context.Context, id pgtype.UUID) (Camera, error) {
@@ -84,6 +87,7 @@ func (q *Queries) GetCamera(ctx context.Context, id pgtype.UUID) (Camera, error)
 		&i.QualitySub,
 		&i.RecordMode,
 		&i.MotionSensitivity,
+		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -91,7 +95,7 @@ func (q *Queries) GetCamera(ctx context.Context, id pgtype.UUID) (Camera, error)
 }
 
 const listCameras = `-- name: ListCameras :many
-SELECT id, name, ip, rtsp_user, rtsp_password_encrypted, quality_main, quality_sub, record_mode, motion_sensitivity, created_at, updated_at FROM cameras ORDER BY name
+SELECT id, name, ip, rtsp_user, rtsp_password_encrypted, quality_main, quality_sub, record_mode, motion_sensitivity, is_active, created_at, updated_at FROM cameras ORDER BY name
 `
 
 func (q *Queries) ListCameras(ctx context.Context) ([]Camera, error) {
@@ -113,6 +117,7 @@ func (q *Queries) ListCameras(ctx context.Context) ([]Camera, error) {
 			&i.QualitySub,
 			&i.RecordMode,
 			&i.MotionSensitivity,
+			&i.IsActive,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -136,9 +141,10 @@ UPDATE cameras SET
     quality_sub = $7,
     record_mode = $8,
     motion_sensitivity = $9,
+    is_active = $10,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, ip, rtsp_user, rtsp_password_encrypted, quality_main, quality_sub, record_mode, motion_sensitivity, created_at, updated_at
+RETURNING id, name, ip, rtsp_user, rtsp_password_encrypted, quality_main, quality_sub, record_mode, motion_sensitivity, is_active, created_at, updated_at
 `
 
 type UpdateCameraParams struct {
@@ -151,6 +157,7 @@ type UpdateCameraParams struct {
 	QualitySub            string      `json:"quality_sub"`
 	RecordMode            string      `json:"record_mode"`
 	MotionSensitivity     int32       `json:"motion_sensitivity"`
+	IsActive              bool        `json:"is_active"`
 }
 
 func (q *Queries) UpdateCamera(ctx context.Context, arg UpdateCameraParams) (Camera, error) {
@@ -164,6 +171,7 @@ func (q *Queries) UpdateCamera(ctx context.Context, arg UpdateCameraParams) (Cam
 		arg.QualitySub,
 		arg.RecordMode,
 		arg.MotionSensitivity,
+		arg.IsActive,
 	)
 	var i Camera
 	err := row.Scan(
@@ -176,6 +184,7 @@ func (q *Queries) UpdateCamera(ctx context.Context, arg UpdateCameraParams) (Cam
 		&i.QualitySub,
 		&i.RecordMode,
 		&i.MotionSensitivity,
+		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
