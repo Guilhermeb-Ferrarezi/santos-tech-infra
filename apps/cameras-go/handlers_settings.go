@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 
@@ -65,14 +66,23 @@ func (s *Server) handleOAuthUrl(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// Offline access para receber o refresh_token, prompt consent para forçar a tela.
-	url := cfg.AuthCodeURL("state", oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
-	writeJSON(w, http.StatusOK, map[string]string{"url": url})
+	authURL := cfg.AuthCodeURL("state", oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
+	writeJSON(w, http.StatusOK, map[string]string{"url": authURL})
 }
 
 func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	dashURL := os.Getenv("DASHBOARD_URL")
+	if dashURL == "" {
+		dashURL = "https://santos-tech.com/dashboard/admin/seguranca/configuracoes"
+	}
+
+	redirectError := func(msg string) {
+		http.Redirect(w, r, dashURL+"?error="+url.QueryEscape(msg), http.StatusFound)
+	}
+
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		writeError(w, http.StatusBadRequest, "missing_code", "Código ausente")
+		redirectError("Código de autorização ausente")
 		return
 	}
 
@@ -84,18 +94,18 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	token, err := cfg.Exchange(r.Context(), code)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "exchange_failed", "Falha ao trocar código")
+		redirectError("Falha ao trocar código do Google OAuth")
 		return
 	}
 
 	if token.RefreshToken == "" {
-		writeError(w, http.StatusBadRequest, "no_refresh_token", "Nenhum refresh token recebido. Tente revogar o acesso no Google e tentar novamente.")
+		redirectError("Nenhum refresh token recebido. Revogue a permissão no Google e tente novamente.")
 		return
 	}
 
 	encToken, err := encryptSymmetric(token.RefreshToken, []byte(s.cfg.EncryptionKey))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "crypto_error", "Erro ao criptografar token")
+		redirectError("Erro ao criptografar token")
 		return
 	}
 
@@ -129,12 +139,11 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		DriveRefreshTokenEncrypted: encToken,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		redirectError("Erro ao salvar configurações no banco de dados")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"ok":true, "message":"Drive conectado com sucesso"}`))
+	http.Redirect(w, r, dashURL+"?connected=true", http.StatusFound)
 }
 
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {

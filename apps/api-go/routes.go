@@ -259,6 +259,9 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 	// ver drive_access.go.
 	s.registerDriveRoutes(mux)
 
+	// CFTV e Câmeras (proxy para o microserviço cameras-go)
+	s.registerCamerasRoutes(mux)
+
 	// Webhook de "email novo" — chamado pelo docker-mailserver (Contabo, repo
 	// email/), não por um usuário logado. Autenticado por assinatura HMAC
 	// compartilhada (EMAIL_WEBHOOK_SECRET), sem authGuard/adminGuard.
@@ -611,3 +614,21 @@ func (s *Server) registerDriveRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /drive-folders/{id}/uploads/{uploadId}", s.rateLimit(240, min, s.folderAccessGuard("write", s.handlePutDriveUploadChunk)))
 	mux.HandleFunc("GET /drive-folders/{id}/uploads/{uploadId}", s.rateLimit(60, min, s.folderAccessGuard("write", s.handleGetDriveUploadStatus)))
 }
+
+func (s *Server) registerCamerasRoutes(mux *http.ServeMux) {
+	if s.cfg.CamerasURL == "" {
+		return
+	}
+	proxy := s.authGuard(s.handleCamerasProxy)
+	adminProxy := s.adminGuard(s.handleCamerasProxy)
+
+	// Webhook / Redirect callback do Google OAuth (redirecionado pelo navegador, sem auth Bearer/Cookie no request)
+	mux.HandleFunc("GET /cameras/oauth/callback", s.handleCamerasProxy)
+	mux.HandleFunc("GET /oauth/callback", s.handleCamerasProxy)
+
+	// Rotas do módulo de câmeras/CFTV
+	mux.HandleFunc("/cameras/", proxy)
+	mux.HandleFunc("GET /cameras", proxy)
+	mux.HandleFunc("POST /cameras", adminProxy)
+}
+

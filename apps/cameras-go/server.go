@@ -75,9 +75,15 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /cameras/recordings/{id}", s.requireAdmin(s.handleDeleteRecording)) // deve ser sudo depois
 
 	// Settings e OAuth (Admin)
+	mux.HandleFunc("GET /cameras/settings", s.requireAdmin(s.handleGetSettings))
+	mux.HandleFunc("PUT /cameras/settings", s.requireAdmin(s.handleUpdateSettings))
 	mux.HandleFunc("GET /settings", s.requireAdmin(s.handleGetSettings))
 	mux.HandleFunc("PUT /settings", s.requireAdmin(s.handleUpdateSettings))
+
+	mux.HandleFunc("GET /cameras/oauth/url", s.requireAdmin(s.handleOAuthUrl))
 	mux.HandleFunc("GET /oauth/url", s.requireAdmin(s.handleOAuthUrl))
+
+	mux.HandleFunc("GET /cameras/oauth/callback", s.handleOAuthCallback)
 	mux.HandleFunc("GET /auth/callback", s.handleOAuthCallback)
 	mux.HandleFunc("GET /oauth/callback", s.handleOAuthCallback)
 
