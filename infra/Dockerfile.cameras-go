@@ -1,0 +1,15 @@
+FROM golang:1.24-alpine AS build
+WORKDIR /src
+COPY apps/cameras-go/go.mod apps/cameras-go/go.sum ./apps/cameras-go/
+WORKDIR /src/apps/cameras-go
+RUN go mod download
+COPY apps/cameras-go/ .
+RUN CGO_ENABLED=0 go build -trimpath -o /cameras-go .
+
+FROM alpine:latest
+RUN apk add --no-cache ffmpeg tzdata
+COPY --from=build /cameras-go /cameras-go
+EXPOSE 8080
+# O ffmpeg exige permissão pra gravar segmentos locais e chamamos os binários, então não usamos distroless aqui
+# USER nonroot:nonroot (Neste caso, alpine roda como root por padrão, idealmente criaríamos um user se necessário)
+ENTRYPOINT ["/cameras-go"]
