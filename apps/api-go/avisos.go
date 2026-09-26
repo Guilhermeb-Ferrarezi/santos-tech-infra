@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"math"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -89,7 +90,11 @@ type avisoInput struct {
 // só aceita caminho interno ou https do próprio domínio (nada de phishing
 // saindo com a cara da plataforma).
 func validaAvisoInput(in avisoInput) error {
-	if in.UserID <= 0 {
+	// Limite superior: GetUserAvisos/notifyUser recebem int32. Sem este teto,
+	// um userId acima de math.MaxInt32 trunca no cast int64→int32 (dois
+	// complementos) e o aviso vai pra conta errada em vez de falhar com 400 —
+	// mesmo risco já coberto em turmas_ao_vivo.go para PortalClassID.
+	if in.UserID <= 0 || in.UserID > math.MaxInt32 {
 		return errors.New("userId obrigatório")
 	}
 	if strings.TrimSpace(in.Titulo) == "" || len([]rune(in.Titulo)) > avisoTituloMax {
@@ -102,6 +107,18 @@ func validaAvisoInput(in avisoInput) error {
 		return errors.New("link precisa ser da plataforma")
 	}
 	return nil
+}
+
+// stripCRLF remove CR/LF de um texto livre antes de usá-lo como assunto de
+// e-mail: sem isso, um título com \r\n injetaria cabeçalhos SMTP arbitrários
+// (mesma defesa já usada em handlers_social.go para título de post virando subject).
+func stripCRLF(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func linkDeAvisoValido(raw string) bool {
@@ -232,7 +249,7 @@ func (s *Server) handleCreateAviso(w http.ResponseWriter, r *http.Request) {
 		if row.AvisoEmail != nil && *row.AvisoEmail != "" {
 			emailPara = *row.AvisoEmail
 		}
-		s.enqueueEmail("aviso", emailPara, in.Titulo, emailDeAviso(in.Titulo, in.Corpo, in.URL))
+		s.enqueueEmail("aviso", emailPara, stripCRLF(in.Titulo), emailDeAviso(in.Titulo, in.Corpo, in.URL))
 	}
 	telefone := ""
 	if row.AvisoTelefone != nil {

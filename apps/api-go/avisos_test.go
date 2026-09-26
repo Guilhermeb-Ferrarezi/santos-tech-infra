@@ -81,6 +81,10 @@ func TestValidaAvisoInput(t *testing.T) {
 		"link parecido":    {UserID: 30, Titulo: "x", URL: "https://santos-tech.com.golpe.com/"},
 		"link javascript":  {UserID: 30, Titulo: "x", URL: "javascript:alert(1)"},
 		"link sem esquema": {UserID: 30, Titulo: "x", URL: "//golpe.com"},
+		// userId acima de math.MaxInt32: GetUserAvisos/notifyUser recebem
+		// int32, então sem este teto o cast trunca (dois complementos) e o
+		// aviso vai pra conta errada em vez de falhar com 400.
+		"userId acima de int32": {UserID: 1<<32 + 1, Titulo: "x"},
 	} {
 		if err := validaAvisoInput(in); err == nil {
 			t.Errorf("%s: deveria ser inválido", nome)
@@ -90,6 +94,20 @@ func TestValidaAvisoInput(t *testing.T) {
 		in := avisoInput{UserID: 30, Titulo: "x", URL: u}
 		if err := validaAvisoInput(in); err != nil {
 			t.Errorf("link %q deveria valer: %v", u, err)
+		}
+	}
+}
+
+// Assunto de e-mail: um \r\n no título injetaria cabeçalho SMTP arbitrário.
+func TestStripCRLF(t *testing.T) {
+	casos := map[string]string{
+		"Retomar Vivian":           "Retomar Vivian",
+		"x\r\nBcc: golpe@evil.com": "xBcc: golpe@evil.com",
+		"linha1\nlinha2\rlinha3":   "linha1linha2linha3",
+	}
+	for in, want := range casos {
+		if got := stripCRLF(in); got != want {
+			t.Errorf("stripCRLF(%q) = %q, queria %q", in, got, want)
 		}
 	}
 }
