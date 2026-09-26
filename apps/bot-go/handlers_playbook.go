@@ -71,7 +71,11 @@ func (s *Server) handleCriaSituacao(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sit.Origem = "manual"
+	// O painel escreve "manual"; o Claude, a pedido do Henrique, anota
+	// "claude". "ia" e "whatsapp" só o servidor atribui.
+	if sit.Origem != "claude" {
+		sit.Origem = "manual"
+	}
 	sit.ConversaID = ""
 	nova, err := s.playbook.Cria(r.Context(), s.tenantDoPainel(), sit, quemEstaPedindo(r))
 	s.respondeSituacao(w, nova, err, "criar")

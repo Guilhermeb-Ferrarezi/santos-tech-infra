@@ -49,7 +49,9 @@ type Situacao struct {
 
 var (
 	estadosDaFicha = map[string]bool{"rascunho": true, "ativa": true, "arquivada": true}
-	origensDaFicha = map[string]bool{"manual": true, "ia": true, "whatsapp": true}
+	// claude = escrita pelo Claude a pedido do Henrique (anotação: ele usa a
+	// sessão do Henrique). ia e whatsapp só o servidor atribui.
+	origensDaFicha = map[string]bool{"manual": true, "ia": true, "whatsapp": true, "claude": true}
 )
 
 // normalizada tira espaços e preenche os padrões (rascunho, manual).
@@ -198,11 +200,14 @@ func (r *PlaybookRepo) Cria(ctx context.Context, tenant TenantID, s Situacao, qu
 }
 
 // Edita troca o conteúdo e o estado de uma ficha. A origem e a conversa de
-// origem não mudam: são de onde a ficha veio.
+// origem não mudam — com uma exceção: ficha "manual" pode ser anotada como
+// "claude" (quem escreveu foi o Claude pela sessão do painel). Ficha da IA
+// nunca vira outra coisa.
 func (r *PlaybookRepo) Edita(ctx context.Context, tenant TenantID, id string, s Situacao, quem string) (Situacao, error) {
 	if err := s.Valida(); err != nil {
 		return Situacao{}, fmt.Errorf("%w: %s", ErrSituacaoInvalida, err.Error())
 	}
+	anotaClaude := s.Origem == "claude"
 	s = s.normalizada()
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -222,10 +227,11 @@ func (r *PlaybookRepo) Edita(ctx context.Context, tenant TenantID, id string, s 
 	depois, err := scanSituacao(tx.QueryRow(ctx,
 		`UPDATE bot_playbook_situacao SET
 		   titulo = $3, sinais = $4, por_tras = $5, conduzir = $6, evitar = $7, motivos = $8,
-		   para_quem = $9, caso_real = $10, estado = $11, alterado_por = $12, alterado_em = now()
+		   para_quem = $9, caso_real = $10, estado = $11, alterado_por = $12, alterado_em = now(),
+		   origem = CASE WHEN $13 AND origem = 'manual' THEN 'claude' ELSE origem END
 		 WHERE tenant_id = $1 AND id::text = $2
 		 RETURNING `+colunasSituacao,
-		tenant, id, s.Titulo, s.Sinais, s.PorTras, s.Conduzir, s.Evitar, s.Motivos, s.ParaQuem, s.CasoReal, s.Estado, quem))
+		tenant, id, s.Titulo, s.Sinais, s.PorTras, s.Conduzir, s.Evitar, s.Motivos, s.ParaQuem, s.CasoReal, s.Estado, quem, anotaClaude))
 	if err != nil {
 		return Situacao{}, fmt.Errorf("PlaybookRepo.Edita: %w", err)
 	}
