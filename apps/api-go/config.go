@@ -226,7 +226,7 @@ func LoadConfig() Config {
 		AgentURL:            strings.TrimRight(getEnv("AGENT_URL", "https://api.santos-tech.com"), "/"),
 		AgentInternalSecret: getEnv("AGENT_INTERNAL_SECRET", ""),
 		SocialAlertEmail:    getEnv("SOCIAL_ALERT_EMAIL", ""),
-		CamerasURL:          strings.TrimRight(getEnv("CAMERAS_SERVICE_URL", "http://localhost:8089"), "/"),
+		CamerasURL:          strings.TrimRight(getEnv("CAMERAS_SERVICE_URL", "http://cloud.santos-tech.com:8089"), "/"),
 		EmailAPIKey:         mustEnv("EMAIL_API_KEY"),
 		Production:          getEnv("NODE_ENV", "development") == "production",
 		OAuthAudEnforce:     getEnv("OAUTH_AUD_ENFORCE", "") == "1",
