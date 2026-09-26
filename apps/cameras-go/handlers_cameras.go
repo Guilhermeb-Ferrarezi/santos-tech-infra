@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"santos-tech.com/cameras-go/db"
@@ -203,4 +205,38 @@ func (s *Server) handleProxyStream(w http.ResponseWriter, r *http.Request) {
 	// Como o ID da câmera no banco é usado como `name` no go2rtc
 	proxy := s.go2rtc.ProxyStream(idStr)
 	proxy(w, r)
+}
+
+func (s *Server) handleTestCamera(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	var id pgtype.UUID
+	if err := id.Scan(idStr); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "ID inválido")
+		return
+	}
+
+	cam, err := s.q.GetCamera(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Câmera não encontrada")
+		return
+	}
+
+	hostPort := fmt.Sprintf("%s:554", cam.Ip)
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", hostPort, 3*time.Second)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"online":  false,
+			"message": fmt.Sprintf("Sem resposta no IP %s:554 (%v)", cam.Ip, err),
+		})
+		return
+	}
+	conn.Close()
+	latency := time.Since(start).Milliseconds()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"online":     true,
+		"latency_ms": latency,
+		"message":    fmt.Sprintf("Câmera conectada com sucesso (%d ms)", latency),
+	})
 }

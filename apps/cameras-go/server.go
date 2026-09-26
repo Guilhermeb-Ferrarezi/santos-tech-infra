@@ -66,6 +66,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /cameras/{id}", auth(s.handleGetCamera))
 	mux.HandleFunc("PUT /cameras/{id}", s.requireAdmin(s.handleUpdateCamera))
 	mux.HandleFunc("DELETE /cameras/{id}", s.requireAdmin(s.handleDeleteCamera))
+	mux.HandleFunc("POST /cameras/{id}/test", s.requireAdmin(s.handleTestCamera))
 	mux.HandleFunc("GET /cameras/{id}/stream", auth(s.handleProxyStream))
 
 	// Gravações
@@ -75,8 +76,10 @@ func (s *Server) Routes() http.Handler {
 
 	// Settings e OAuth (Admin)
 	mux.HandleFunc("GET /settings", s.requireAdmin(s.handleGetSettings))
+	mux.HandleFunc("PUT /settings", s.requireAdmin(s.handleUpdateSettings))
 	mux.HandleFunc("GET /oauth/url", s.requireAdmin(s.handleOAuthUrl))
 	mux.HandleFunc("GET /auth/callback", s.handleOAuthCallback)
+	mux.HandleFunc("GET /oauth/callback", s.handleOAuthCallback)
 
 	return mux
 }

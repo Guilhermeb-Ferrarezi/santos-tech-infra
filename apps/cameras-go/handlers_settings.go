@@ -136,3 +136,25 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"ok":true, "message":"Drive conectado com sucesso"}`))
 }
+
+func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		StorageQuotaBytes int64 `json:"storage_quota_bytes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.StorageQuotaBytes <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_json", "Cota de armazenamento inválida")
+		return
+	}
+
+	current, _ := s.q.GetSettings(r.Context())
+	updated, err := s.q.UpsertSettings(r.Context(), db.UpsertSettingsParams{
+		StorageQuotaBytes:          req.StorageQuotaBytes,
+		DriveRefreshTokenEncrypted: current.DriveRefreshTokenEncrypted,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, updated)
+}
