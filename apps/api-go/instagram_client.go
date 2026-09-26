@@ -51,12 +51,13 @@ func (c *instagramClient) sendPrivateReply(ctx context.Context, commentID, text 
 	if err != nil {
 		return fmt.Errorf("marshal private reply: %w", err)
 	}
-	endpoint := fmt.Sprintf("%s/%s/messages?access_token=%s", c.baseURL, c.userID, url.QueryEscape(c.token))
+	endpoint := fmt.Sprintf("%s/%s/messages", c.baseURL, c.userID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("criar request de private reply: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.token)
 	res, err := c.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("enviar private reply: %w", err)
@@ -89,12 +90,13 @@ func (c *instagramClient) listRecentMedia(ctx context.Context) ([]InstagramMedia
 	if !c.enabled() {
 		return nil, fmt.Errorf("instagram client não configurado (INSTAGRAM_USER_ID/INSTAGRAM_ACCESS_TOKEN ausentes)")
 	}
-	endpoint := fmt.Sprintf("%s/%s/media?fields=id,caption,media_type,media_url,thumbnail_url,timestamp,permalink&limit=30&access_token=%s",
-		c.baseURL, c.userID, url.QueryEscape(c.token))
+	endpoint := fmt.Sprintf("%s/%s/media?fields=id,caption,media_type,media_url,thumbnail_url,timestamp,permalink&limit=30",
+		c.baseURL, c.userID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("criar request de listagem de mídia: %w", err)
 	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
 	res, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("listar mídia: %w", err)
@@ -242,7 +244,7 @@ func (c *instagramClient) publishCarousel(ctx context.Context, items []carouselM
 func (c *instagramClient) waitMediaFinished(ctx context.Context, creationID string) error {
 	delays := []time.Duration{3 * time.Second, 5 * time.Second, 10 * time.Second, 15 * time.Second,
 		20 * time.Second, 30 * time.Second, 30 * time.Second, 30 * time.Second, 60 * time.Second, 60 * time.Second}
-	endpoint := fmt.Sprintf("%s/%s?fields=status_code&access_token=%s", c.baseURL, creationID, url.QueryEscape(c.token))
+	endpoint := fmt.Sprintf("%s/%s?fields=status_code", c.baseURL, creationID)
 	for _, d := range delays {
 		select {
 		case <-ctx.Done():
@@ -253,6 +255,7 @@ func (c *instagramClient) waitMediaFinished(ctx context.Context, creationID stri
 		if err != nil {
 			return fmt.Errorf("criar request de status: %w", err)
 		}
+		req.Header.Set("Authorization", "Bearer "+c.token)
 		res, err := c.client.Do(req)
 		if err != nil {
 			return fmt.Errorf("consultar status do container: %w", err)
