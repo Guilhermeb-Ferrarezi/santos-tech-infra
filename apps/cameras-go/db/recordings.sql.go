@@ -63,6 +63,27 @@ func (q *Queries) DeleteRecording(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const getRecording = `-- name: GetRecording :one
+SELECT id, camera_id, start_time, end_time, size_bytes, drive_file_id, has_motion, keep_forever, created_at FROM recordings WHERE id = $1
+`
+
+func (q *Queries) GetRecording(ctx context.Context, id pgtype.UUID) (Recording, error) {
+	row := q.db.QueryRow(ctx, getRecording, id)
+	var i Recording
+	err := row.Scan(
+		&i.ID,
+		&i.CameraID,
+		&i.StartTime,
+		&i.EndTime,
+		&i.SizeBytes,
+		&i.DriveFileID,
+		&i.HasMotion,
+		&i.KeepForever,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listOldestRecordings = `-- name: ListOldestRecordings :many
 SELECT id, camera_id, start_time, end_time, size_bytes, drive_file_id, has_motion, keep_forever, created_at FROM recordings
 WHERE keep_forever = false

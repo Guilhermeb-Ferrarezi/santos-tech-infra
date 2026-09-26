@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -78,13 +79,27 @@ func (s *Server) handleDeleteRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Aqui deve checar SUDO, mas por enquanto faz a deleção direta do banco
+	rec, err := s.q.GetRecording(r.Context(), id)
+	if err == nil && rec.DriveFileID != "" {
+		settings, errSettings := s.q.GetSettings(r.Context())
+		if errSettings == nil && settings.DriveRefreshTokenEncrypted != "" {
+			rt, errDec := decryptSymmetric(settings.DriveRefreshTokenEncrypted, []byte(s.cfg.EncryptionKey))
+			if errDec == nil {
+				cfg := getOauthConfig(
+					os.Getenv("GOOGLE_CLIENT_ID"),
+					os.Getenv("GOOGLE_CLIENT_SECRET"),
+					os.Getenv("OAUTH_REDIRECT_URL"),
+				)
+				driveClient := NewDriveClient(r.Context(), cfg, rt)
+				_ = driveClient.DeleteFile(r.Context(), rec.DriveFileID)
+			}
+		}
+	}
+
 	if err := s.q.DeleteRecording(r.Context(), id); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-
-	// TODO: Apagar também do Google Drive
 
 	w.WriteHeader(http.StatusNoContent)
 }

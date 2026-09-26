@@ -16,6 +16,9 @@ UPDATE recordings SET keep_forever = $2 WHERE id = $1;
 -- name: DeleteRecording :exec
 DELETE FROM recordings WHERE id = $1;
 
+-- name: GetRecording :one
+SELECT * FROM recordings WHERE id = $1;
+
 -- name: ListOldestRecordings :many
 SELECT * FROM recordings
 WHERE keep_forever = false
