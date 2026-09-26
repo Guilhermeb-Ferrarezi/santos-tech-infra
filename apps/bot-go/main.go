@@ -241,6 +241,8 @@ func main() {
 	server.regrasFonte = regrasVendaFonte
 	server.playbook = playbookRepo
 	server.playbookFonte = playbookFonte
+	server.agentGo = agentClient
+	server.limiteAprendizado = server.rateLimit
 
 	// 14. Inicia worker em background; workerDone fecha quando ele drena no shutdown.
 	workerDone := make(chan struct{})

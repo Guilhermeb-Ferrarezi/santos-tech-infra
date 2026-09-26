@@ -167,6 +167,10 @@ type Server struct {
 	// o engine lê — criar/editar invalida para a próxima mensagem.
 	playbook      *PlaybookRepo
 	playbookFonte *PlaybookFonte
+	// "Virar aprendizado" (aprendizado.go): a IA que propõe a ficha e o limite
+	// de uso. nil = rota responde 503 / sem limite.
+	agentGo           geradorDeTexto
+	limiteAprendizado limiteDoAprendizado
 	// session valida a sessão do painel (cookie access_token) no auth central.
 	session *SessionAuth
 	// bg roda o processamento dos webhooks fora do handler, com paralelismo
