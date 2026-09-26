@@ -30,6 +30,8 @@ func (s *Server) rotasDeVendas(mux *http.ServeMux) {
 	mux.Handle("GET /api/vendas/situacoes", da(s.handleSituacoes))
 	mux.Handle("POST /api/vendas/situacoes", da(s.handleCriaSituacao))
 	mux.Handle("PATCH /api/vendas/situacoes/{id}", da(s.handleEditaSituacao))
+	// Indicadores (indicadores.go)
+	mux.Handle("GET /api/vendas/indicadores", da(s.handleIndicadores))
 }
 
 // versaoNaTela — o que a tela precisa saber da versão em vigor.
